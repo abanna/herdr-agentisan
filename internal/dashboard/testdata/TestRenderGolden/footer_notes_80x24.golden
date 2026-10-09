@@ -1,0 +1,24 @@
+ ◆ agentisan · 15 agents   ◐6 ●4 ⚠1 ✔2 ⟳1 ?1                              17:19
+ boss ▸ #867 release · review · ctx ▓▓░░░░░░ 23%
+╭ coders 9 ───────────────────────────╮ ╭ precheck 2 ─────────────────────────╮
+│◐ pee01              opus ▓▓░░░  38% │ │◐ precheck           son  ▓▓░░░  37% │
+│  r2 · J1 re-run                     │ │  running                            │
+│◐ pee02              opus ▓▓░░░  30% │ │● precheck2          son  ▓░░░░  10% │
+│  J1 re-queued                       │ │                                     │
+│● pee03              opus ▓░░░░  22% │ ╰─────────────────────────────────────╯
+│  PR3a · committed                   │
+│◐ pee04              opus ▓▓▓░░  61% │
+│  NERD-5255 · go-review              │
+│⚠ pee05              opus ▓▓▓▓░  78% │
+│  NERD-5247 · waiting on boss        │
+│  …4 more                            │
+╰─────────────────────────────────────╯
+╭ qa 1 ───────────────────────────────╮ ╭ codex 1 ────────────────────────────╮
+│✔ qa                 son  ▓░░░░  12% │ │◐ codex              gpt- ▓▓░░░  41% │
+│  queue empty                        │ │  #868 · triage                      │
+╰─────────────────────────────────────╯ ╰─────────────────────────────────────╯
+╭ research 1 ─────────────────────────╮ ╭ clerk 1 ────────────────────────────╮
+│● research           hai  ░░░░░   5% │ │? clerk              hai  ░░░░░   -- │
+│  herdr 0.9.3 events                 │ │                                     │
+╰─────────────────────────────────────╯ ╰─────────────────────────────────────╯
+ ✖ snapshot: snapshot source is unavailable · focus off: HERDR_SOCKET_PATH is …

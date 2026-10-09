@@ -322,3 +322,74 @@ func (c Client) PaneProcessInfo(ctx context.Context, paneID string) (ProcessInfo
 	}
 	return *out.ProcessInfo, nil
 }
+
+// AgentInfo is one agent in an agent_info result, limited to the fields this
+// plugin reads. Name is null in herdr's schema for an unnamed agent, which
+// decodes to "".
+type AgentInfo struct {
+	// PaneID is the agent's current pane id, even when the target named it
+	// by an alias.
+	PaneID string `json:"pane_id"`
+	Name   string `json:"name"`
+}
+
+// FocusAgent focuses the agent herdr knows as target (its name or pane id),
+// switching workspace and tab as needed. herdr 0.9.3 answers agent.focus with
+// an agent_info result; `herdr api schema` lists that type but does not map
+// it to the method, so the type was read from herdr's handle_agent_focus.
+func (c Client) FocusAgent(ctx context.Context, target string) (AgentInfo, error) {
+	params := struct {
+		Target string `json:"target"`
+	}{Target: target}
+	var out struct {
+		Type  string     `json:"type"`
+		Agent *AgentInfo `json:"agent"`
+	}
+	if err := c.Call(ctx, "agent.focus", params, &out); err != nil {
+		return AgentInfo{}, err
+	}
+	if out.Type != "agent_info" {
+		return AgentInfo{}, fmt.Errorf("%w: agent.focus: result type %q, want \"agent_info\"", ErrProtocol, out.Type)
+	}
+	if out.Agent == nil || out.Agent.PaneID == "" {
+		return AgentInfo{}, fmt.Errorf("%w: agent.focus: result has no agent.pane_id", ErrProtocol)
+	}
+	return *out.Agent, nil
+}
+
+// PaneZoom is the result of pane.zoom, limited to the fields this plugin
+// reads. Zoomed=false is not an error: Reason says why ("single_pane" for a
+// pane alone in its tab).
+type PaneZoom struct {
+	// PaneID is the pane's current id, even when the request named an alias.
+	PaneID  string `json:"pane_id"`
+	Zoomed  bool   `json:"zoomed"`
+	Changed bool   `json:"changed"`
+	// Reason is null in herdr's schema when the zoom applied, which decodes
+	// to "".
+	Reason string `json:"reason"`
+}
+
+// ZoomPane zooms one pane on; an already zoomed pane stays zoomed. paneID is
+// always sent as a string: herdr reads a null pane_id as the focused pane,
+// which is never what a caller naming a pane means.
+func (c Client) ZoomPane(ctx context.Context, paneID string) (PaneZoom, error) {
+	params := struct {
+		PaneID string `json:"pane_id"`
+		Mode   string `json:"mode"`
+	}{PaneID: paneID, Mode: "on"}
+	var out struct {
+		Type string    `json:"type"`
+		Zoom *PaneZoom `json:"zoom"`
+	}
+	if err := c.Call(ctx, "pane.zoom", params, &out); err != nil {
+		return PaneZoom{}, err
+	}
+	if out.Type != "pane_zoom" {
+		return PaneZoom{}, fmt.Errorf("%w: pane.zoom: result type %q, want \"pane_zoom\"", ErrProtocol, out.Type)
+	}
+	if out.Zoom == nil || out.Zoom.PaneID == "" {
+		return PaneZoom{}, fmt.Errorf("%w: pane.zoom: result has no zoom.pane_id", ErrProtocol)
+	}
+	return *out.Zoom, nil
+}

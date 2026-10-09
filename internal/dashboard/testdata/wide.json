@@ -1,0 +1,15 @@
+{
+  "v": 1,
+  "at": "2026-10-09T17:19:00Z",
+  "team": "﻿チーム​",
+  "boss": {"name": "boss", "pane_id": "w1:p1", "status": "working", "model": "opus", "ctx": 50, "item": "仕様書の確認", "stage": "レビュー"},
+  "groups": [
+    {"name": "日本語", "agents": [
+      {"name": "エージェント", "pane_id": "w2:p1", "status": "working", "model": "日本モデル", "ctx": 40, "item": "課題-1", "stage": "とても長い段階名がカードからはみ出します"},
+      {"name": "👍👍👍", "pane_id": "w2:p2", "status": "idle", "model": "opus", "ctx": 60, "item": "emoji 👍 item", "stage": "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀"}
+    ]},
+    {"name": "café", "agents": [
+      {"name": "nfd-é", "pane_id": "w3:p1", "status": "blocked", "model": "sonnet", "ctx": 80, "stage": "a​b​c"}
+    ]}
+  ]
+}
