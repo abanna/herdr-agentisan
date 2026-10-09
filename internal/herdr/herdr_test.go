@@ -676,3 +676,74 @@ func TestFocusAndZoomFailureClasses(t *testing.T) {
 		})
 	}
 }
+
+// silentSocket accepts connections and never answers, like a wedged herdr.
+func silentSocket(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "hd")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "s.sock")
+	ln, err := net.Listen("unix", path)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				<-t.Context().Done()
+				_ = conn.Close()
+			}()
+		}
+	}()
+	return path
+}
+
+// TestEveryCallIsBounded: the client bounds each call by its own timeout, so
+// a long-running caller such as the daemon cannot forget to and hang on a
+// wedged herdr. A caller's earlier deadline still wins.
+func TestEveryCallIsBounded(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		timeout time.Duration
+		ctx     func() (context.Context, context.CancelFunc)
+		within  time.Duration
+	}{
+		"no caller deadline: the client's timeout": {
+			timeout: 150 * time.Millisecond,
+			ctx:     func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) },
+			within:  2 * time.Second,
+		},
+		"an earlier caller deadline wins": {
+			timeout: time.Hour,
+			ctx: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), 150*time.Millisecond)
+			},
+			within: 2 * time.Second,
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := tc.ctx()
+			defer cancel()
+
+			start := time.Now()
+			_, err := herdr.Client{SocketPath: silentSocket(t), Timeout: tc.timeout}.Ping(ctx)
+			require.Error(t, err)
+			// The socket deadline and the context deadline are the same
+			// instant; whichever the read notices first names the error.
+			assert.True(t, errors.Is(err, context.DeadlineExceeded) || errors.Is(err, herdr.ErrUnavailable), "got %v", err)
+			assert.Less(t, time.Since(start), tc.within)
+		})
+	}
+}
+
+func TestCallTimeoutIsFiveSeconds(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, 5*time.Second, herdr.CallTimeout, "the zero Client bounds each call by CallTimeout")
+}

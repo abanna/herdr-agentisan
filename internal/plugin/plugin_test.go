@@ -173,6 +173,9 @@ platforms = ["linux", "macos"]
 [[build]]
 command = ["go", "build", "-o", "bin/herdr-agentisan", "./cmd/herdr-agentisan"]
 
+[[startup]]
+command = ["bin/herdr-agentisan", "daemon", "start"]
+
 [[actions]]
 id = "ping"
 title = "Ping"
@@ -196,6 +199,8 @@ func TestLoadManifest(t *testing.T) {
 	assert.Equal(t, "bin/herdr-agentisan", m.BuildOutput())
 	require.Len(t, m.Actions, 1)
 	assert.Equal(t, "nerdsrun.agentisan.ping", m.QualifiedActionID(m.Actions[0]))
+	require.Len(t, m.Startup, 1)
+	assert.Equal(t, []string{"bin/herdr-agentisan", "daemon", "start"}, m.Startup[0].Command)
 }
 
 // TestManifestRejections: herdr only warns about many of these at link time,
@@ -208,16 +213,19 @@ func TestManifestRejections(t *testing.T) {
 		return strings.Replace(validManifest, old, repl, 1)
 	}
 	tests := map[string]string{
-		"unknown top-level key (typo)": replace(`min_herdr_version`, `min_herd_version`),
-		"invalid plugin id":            replace(`id = "nerdsrun.agentisan"`, `id = "nerds run"`),
-		"missing name":                 replace(`name = "Agentisan"`, ``),
-		"unknown platform":             replace(`["linux", "macos"]`, `["linux", "plan9"]`),
-		"dotted action id":             replace(`id = "ping"`, `id = "p.ing"`),
-		"action without command":       replace(`command = ["bin/herdr-agentisan", "action", "ping"]`, `command = []`),
-		"unknown action context":       replace(`contexts = ["global"]`, `contexts = ["galaxy"]`),
-		"duplicate action id":          validManifest + "\n[[actions]]\nid = \"ping\"\ntitle = \"again\"\ncommand = [\"x\"]\n",
-		"build without -o target":      replace(`"-o", "bin/herdr-agentisan", `, ``),
-		"not TOML":                     "id = [",
+		"unknown top-level key (typo)":  replace(`min_herdr_version`, `min_herd_version`),
+		"invalid plugin id":             replace(`id = "nerdsrun.agentisan"`, `id = "nerds run"`),
+		"missing name":                  replace(`name = "Agentisan"`, ``),
+		"unknown platform":              replace(`["linux", "macos"]`, `["linux", "plan9"]`),
+		"dotted action id":              replace(`id = "ping"`, `id = "p.ing"`),
+		"action without command":        replace(`command = ["bin/herdr-agentisan", "action", "ping"]`, `command = []`),
+		"unknown action context":        replace(`contexts = ["global"]`, `contexts = ["galaxy"]`),
+		"duplicate action id":           validManifest + "\n[[actions]]\nid = \"ping\"\ntitle = \"again\"\ncommand = [\"x\"]\n",
+		"build without -o target":       replace(`"-o", "bin/herdr-agentisan", `, ``),
+		"startup without command":       replace(`command = ["bin/herdr-agentisan", "daemon", "start"]`, `command = []`),
+		"startup with unknown platform": replace(`command = ["bin/herdr-agentisan", "daemon", "start"]`, `command = ["x"]`+"\n"+`platforms = ["beos"]`),
+		"startup with an unknown key":   replace(`command = ["bin/herdr-agentisan", "daemon", "start"]`, `command = ["x"]`+"\n"+`when = "boot"`),
+		"not TOML":                      "id = [",
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -271,7 +279,7 @@ func TestPingBoundsTheHerdrCall(t *testing.T) {
 	}{
 		"no caller deadline gets the default": {
 			ctx:  func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) },
-			want: plugin.CallTimeout,
+			want: herdr.CallTimeout,
 		},
 		"an earlier caller deadline wins": {
 			ctx: func() (context.Context, context.CancelFunc) {

@@ -1,9 +1,11 @@
 package config_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -24,6 +26,8 @@ func TestLoadDefaults(t *testing.T) {
 	assert.Equal(t, "herdr-agentisan", cfg.ServiceName)
 	assert.Empty(t, cfg.OTLPEndpoint, "tracing export must be off until a collector is named")
 	assert.InDelta(t, 1.0, cfg.TraceSampleRatio, 0)
+	assert.Equal(t, 15*time.Second, cfg.DaemonLockWait)
+	assert.False(t, cfg.AllowUnverified, "the protocol pin is on unless overridden")
 }
 
 func TestLoadReadsEnvironment(t *testing.T) {
@@ -58,6 +62,7 @@ func TestValidate(t *testing.T) {
 	base := config.Config{
 		Env: "development", LogLevel: "info", LogFormat: "console",
 		ServiceName: "herdr-agentisan", TraceSampleRatio: 1,
+		DaemonLockWait: 15 * time.Second,
 	}
 
 	tests := map[string]struct {
@@ -195,4 +200,86 @@ func TestInvalidEnvIsRejectedByLoad(t *testing.T) {
 
 	_, err := config.Load()
 	require.Error(t, err)
+}
+
+// TestDaemonLockWaitClasses: how long a new daemon waits for a lock still held
+// by a daemon bound to a herdr socket that has since been replaced (ADR-001
+// A3). It is a Go duration, more than zero and at most five minutes: a wait
+// that long means the old daemon is wedged, and waiting longer only delays the
+// error that says so.
+func TestDaemonLockWaitClasses(t *testing.T) {
+	tests := map[string]struct {
+		value   string
+		want    time.Duration
+		wantErr bool
+	}{
+		"a Go duration":          {value: "30s", want: 30 * time.Second},
+		"sub-second":             {value: "250ms", want: 250 * time.Millisecond},
+		"exactly five minutes":   {value: "5m", want: 5 * time.Minute},
+		"empty uses the default": {value: "", want: 15 * time.Second},
+		"just past five minutes": {value: "5m1s", wantErr: true},
+		"zero":                   {value: "0s", wantErr: true},
+		"negative":               {value: "-1s", wantErr: true},
+		"a bare number":          {value: "15", wantErr: true},
+		"not a duration":         {value: "soon", wantErr: true},
+		"overflows a duration":   {value: "9999999999h", wantErr: true},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("HERDR_AGENTISAN_DAEMON_LOCK_WAIT", tc.value)
+
+			cfg, err := config.Load()
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, cfg.DaemonLockWait)
+		})
+	}
+}
+
+// TestConfigTravelsInTheContext: main loads the config once and the commands
+// read it from the context, so a command never re-reads the environment.
+func TestConfigTravelsInTheContext(t *testing.T) {
+	t.Parallel()
+
+	_, ok := config.From(context.Background())
+	assert.False(t, ok, "a context without a config says so")
+
+	want := config.Config{Env: "staging", DaemonLockWait: time.Minute}
+	got, ok := config.From(config.Into(context.Background(), want))
+	require.True(t, ok)
+	assert.Equal(t, want, got)
+}
+
+// TestAllowUnverifiedClasses: HERDR_AGENTISAN_ALLOW_UNVERIFIED lets the
+// daemon run against a herdr protocol this build was not verified against
+// (ADR-001 A4). Only a boolean is accepted.
+func TestAllowUnverifiedClasses(t *testing.T) {
+	tests := map[string]struct {
+		value   string
+		want    bool
+		wantErr bool
+	}{
+		"1":                      {value: "1", want: true},
+		"true":                   {value: "true", want: true},
+		"0":                      {value: "0"},
+		"false":                  {value: "false"},
+		"empty":                  {value: ""},
+		"not a bool":             {value: "maybe", wantErr: true},
+		"surrounding whitespace": {value: " 1", wantErr: true},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("HERDR_AGENTISAN_ALLOW_UNVERIFIED", tc.value)
+			cfg, err := config.Load()
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, cfg.AllowUnverified)
+		})
+	}
 }

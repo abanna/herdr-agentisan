@@ -79,6 +79,7 @@ func run() int {
 		}
 	}()
 	ctx = logging.Into(ctx, logger)
+	ctx = config.Into(ctx, cfg)
 
 	if err := fang.Execute(ctx, cli.Root(),
 		fang.WithVersion(config.Version),

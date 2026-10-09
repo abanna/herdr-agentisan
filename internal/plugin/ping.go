@@ -3,20 +3,12 @@ package plugin
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 )
 
 // PingTitle is the toast title the ping action shows.
 const PingTitle = "agentisan plugin alive"
-
-// CallTimeout bounds every herdr call an action makes. A plugin action holds
-// one of herdr's in-flight slots until it exits, and the process context
-// carries no deadline of its own, so without this a herdr that accepts the
-// connection and never answers would hold the slot forever. A caller's
-// earlier deadline still wins.
-const CallTimeout = 5 * time.Second
 
 // Notifier is the slice of the herdr client Ping needs.
 type Notifier interface {
@@ -34,7 +26,7 @@ type PingResult struct {
 // rate-limited, no foreground client, busy) still proves both, so it is a
 // successful ping that reports the reason, not an error.
 func Ping(ctx context.Context, n Notifier, version string) (PingResult, error) {
-	ctx, cancel := context.WithTimeout(ctx, CallTimeout)
+	ctx, cancel := context.WithTimeout(ctx, herdr.CallTimeout)
 	defer cancel()
 	res, err := n.ShowNotification(ctx, herdr.Notification{
 		Title: PingTitle,
