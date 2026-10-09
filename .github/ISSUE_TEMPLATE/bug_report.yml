@@ -13,8 +13,8 @@ body:
       label: What happened
       description: Observed behaviour, and what you expected instead.
       placeholder: |
-        Expected: `go-agents notes add ""` exits non-zero with a validation error.
-        Actual:   it exits 0.
+        Expected: `herdr plugin action invoke nerdsrun.agentisan.ping` shows a toast.
+        Actual:   it exits 0 and nothing appears.
     validations:
       required: true
   - type: textarea
@@ -30,8 +30,8 @@ body:
     attributes:
       label: Which surface
       options:
-        - Product CLI (cmd/go-agents)
-        - Domain (internal/notes)
+        - Plugin binary (cmd/herdr-agentisan)
+        - Domain (internal/)
         - devctl / repository tooling
         - Not sure
     validations:
@@ -46,4 +46,4 @@ body:
     id: version
     attributes:
       label: Version / commit
-      description: Output of `go-agents --version` or the commit SHA.
+      description: Output of `herdr-agentisan version` or the commit SHA.

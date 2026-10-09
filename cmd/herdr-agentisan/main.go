@@ -1,4 +1,7 @@
-// Package main is the entrypoint for `devctl`, the development operations CLI.
+// Package main is the entrypoint for the `herdr-agentisan` plugin binary.
+//
+// It stays a thin shim: signal handling and fang styling only. The command
+// tree lives in internal/cli so it is testable without spawning a process.
 package main
 
 import (
@@ -10,8 +13,8 @@ import (
 
 	"github.com/charmbracelet/fang"
 
+	"github.com/abanna/herdr-agentisan/internal/cli"
 	"github.com/abanna/herdr-agentisan/internal/config"
-	"github.com/abanna/herdr-agentisan/internal/devcli"
 )
 
 func main() {
@@ -28,12 +31,14 @@ func run() int {
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	go func() {
 		<-sigCh
-		fmt.Fprintln(os.Stderr, "\ninterrupted")
+		fmt.Fprintln(os.Stderr, "\ninterrupted (Ctrl+C again to force quit)")
 		cancel()
+		// Restore the default disposition so a second signal kills the
+		// process immediately, matching docker, kubectl and git.
 		signal.Reset(os.Interrupt, syscall.SIGTERM)
 	}()
 
-	if err := fang.Execute(ctx, devcli.Root(),
+	if err := fang.Execute(ctx, cli.Root(),
 		fang.WithVersion(config.Version),
 		fang.WithCommit(config.Commit),
 	); err != nil {

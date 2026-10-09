@@ -1,8 +1,8 @@
 # AGENTS.md
 
-Go CLI and its development tooling, structured so autonomous coding agents
-can change it safely. Every rule below is enforced by a gate — if you break
-one, CI blocks the merge.
+A herdr plugin written in Go (`herdr-agentisan`) and its development tooling,
+structured so autonomous coding agents can change it safely. Every rule below
+is enforced by a gate — if you break one, CI blocks the merge.
 
 ## Bootstrap
 
@@ -76,11 +76,11 @@ exempts whatever is later added under that name.
 
 ## Layout
 
-- `cmd/go-agents/` — product CLI entrypoint. A thin shim; no logic.
+- `cmd/herdr-agentisan/` — the plugin binary's entrypoint. A thin shim; no logic.
 - `cmd/devctl/` — development operations CLI entrypoint. A thin shim.
-- `internal/notes/` — **the domain.** Validation and storage behind `Store`.
-  The CLI drives this; no command holds a rule of its own.
-- `internal/cli/` — the `go-agents` cobra tree. Parses, calls the domain, renders.
+- `internal/cli/` — the `herdr-agentisan` cobra tree. Parses, calls a domain
+  package, renders. Domain packages live beside it under `internal/`, one per
+  concern; no command holds a rule of its own.
 - `internal/devcli/` — the `devctl` cobra tree: the coverage floor, the
   docs-parity check and the large-file ceiling, none of which the Go toolchain
   provides.
@@ -110,17 +110,18 @@ task tdaddy:impact    # what your working-tree changes affect
 ```
 
 **Run it on demand, not on every edit — and do not add a PostToolUse hook.**
-Measured in this repo: one impact query takes ~20s, while the entire test
-suite (144 tests) runs in ~1.3s (~2.5s with `-race`). Asking which tests to
+Measured in this repo: one impact query takes ~12s, while the entire test
+suite (84 tests) runs in ~0.7s (~2.2s with `-race`). Asking which tests to
 run costs about 15x more than running all of them, so an edit-loop hook is
 pure tax here. The hooks tdaddy can install (`tdaddy hook claude|codex
 install`) were tried and deliberately removed.
 
-Selectivity is weak on the files you edit most: `notes.go` flagged 43 of 144
-tests (~30%) when last measured, which does not narrow much. Only leaf
-packages narrow usefully (`coverage.go` -> 27 of 144, ~19%). These counts will
-keep moving as the suite grows; re-measure with `tdaddy impact --files <path>
---max-tests 0` rather than trusting the numbers here indefinitely.
+Selectivity is weak on widely imported files: `config.go` flags 41 of 84
+tests (~49%), which does not narrow much. Leaf files narrow better
+(`coverage.go` -> 23 of 84, ~27%; `parity.go` -> 25 of 84, ~30%). These
+counts will keep moving as the suite grows; re-measure with `tdaddy impact
+--files <path> --max-tests 0` rather than trusting the numbers here
+indefinitely.
 
 tdaddy earns its keep on repositories whose suites take minutes; its cost is
 roughly constant (BadgerDB open dominates), so the ratio is what decides. Use
@@ -155,11 +156,12 @@ Three traps, all encoded as comments in `Taskfile.yml`:
    (rule 3 keeps them that way), and counting them would let real gaps in the
    domain hide behind untestable `main` bodies. Do not lower it, and do not write assertion-free tests to
    clear it — a test that cannot fail is worse than no test.
-3. **Business logic goes in `internal/notes/`, never in a command.** A rule
-   implemented in a cobra command is a rule no other caller has. Commands
-   parse, delegate and render.
+3. **Business logic goes in a domain package under `internal/`, never in a
+   command.** A rule implemented in a cobra command is a rule no other caller
+   has — not a herdr event hook, not a test. Commands parse, delegate and
+   render.
 4. **Return wrapped errors; map them with `errors.Is`.** Domain code returns
-   `ErrNotFound`/`ErrInvalid` wrapped with `%w`. Callers branch on those
+   exported sentinel errors wrapped with `%w`. Callers branch on those
    sentinels with `errors.Is` — never by matching on error strings.
    `wrapcheck` enforces the wrapping.
 5. **Never edit files on `main`.** Branch first.

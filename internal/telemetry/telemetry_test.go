@@ -14,12 +14,12 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
 
-	"github.com/nerds-run/go-agents/internal/telemetry"
+	"github.com/abanna/herdr-agentisan/internal/telemetry"
 )
 
 func testConfig() telemetry.Config {
 	return telemetry.Config{
-		ServiceName: "go-agents",
+		ServiceName: "herdr-agentisan",
 		Version:     "v1.2.3",
 		Commit:      "deadbeef",
 		Env:         "development",
@@ -83,7 +83,7 @@ func TestSetupTracingExportsSpansOverOTLP(t *testing.T) {
 	case got := <-received:
 		assert.Contains(t, got, "/v1/traces")
 		assert.Contains(t, got, "unit-test-span", "the span name must be in the payload")
-		assert.Contains(t, got, "go-agents", "the resource must carry service.name")
+		assert.Contains(t, got, "herdr-agentisan", "the resource must carry service.name")
 		assert.Contains(t, got, "deadbeef", "the resource must carry the commit")
 	default:
 		t.Fatal("no export body captured")

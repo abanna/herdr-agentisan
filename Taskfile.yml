@@ -22,7 +22,7 @@ vars:
         if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
           COMMIT="${COMMIT}-dirty"
         fi
-        printf '%s' "-X github.com/nerds-run/go-agents/internal/config.Commit=${COMMIT}"
+        printf '%s' "-X github.com/abanna/herdr-agentisan/internal/config.Commit=${COMMIT}"
       fi
 
 tasks:
@@ -36,9 +36,9 @@ tasks:
     deps: [build:cli, build:devctl]
 
   build:cli:
-    desc: Build the go-agents product CLI
+    desc: Build the herdr-agentisan plugin binary
     cmds:
-      - go build {{if .PROVENANCE_LDFLAGS}}-ldflags "{{.PROVENANCE_LDFLAGS}}"{{end}} -o {{.BINARY_DIR}}/go-agents ./cmd/go-agents
+      - go build {{if .PROVENANCE_LDFLAGS}}-ldflags "{{.PROVENANCE_LDFLAGS}}"{{end}} -o {{.BINARY_DIR}}/herdr-agentisan ./cmd/herdr-agentisan
 
   build:devctl:
     desc: Build the devctl development CLI
@@ -51,14 +51,14 @@ tasks:
       - |
         DEST="$(go env GOBIN)"
         [ -z "$DEST" ] && DEST="$(go env GOPATH)/bin"
-        for c in go-agents devctl; do
+        for c in herdr-agentisan devctl; do
           go build {{if .PROVENANCE_LDFLAGS}}-ldflags "{{.PROVENANCE_LDFLAGS}}"{{end}} -o "$DEST/$c" ./cmd/$c
         done
 
   run:cli:
     desc: Run the product CLI locally (pass args after --)
     cmds:
-      - go run ./cmd/go-agents {{.CLI_ARGS}}
+      - go run ./cmd/herdr-agentisan {{.CLI_ARGS}}
 
   lint:
     desc: Lint the code

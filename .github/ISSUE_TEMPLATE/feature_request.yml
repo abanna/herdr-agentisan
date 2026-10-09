@@ -21,8 +21,8 @@ body:
     attributes:
       label: Where it belongs
       options:
-        - Domain (internal/notes)
-        - Product CLI only
+        - Domain (internal/)
+        - Plugin binary / herdr manifest
         - devctl / repository tooling
         - Docs or CI
     validations:
@@ -33,4 +33,4 @@ body:
       label: Contract impact
       options:
         - label: This adds or changes a gate (needs AGENTS.md + Taskfile.yml + ci.yml together)
-        - label: This changes the public shape of internal/notes
+        - label: This changes the plugin manifest or a command herdr invokes

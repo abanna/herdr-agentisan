@@ -6,7 +6,7 @@
 # a developer types inside the dev container, so the two names are named here
 # rather than relying on someone noticing an untracked executable.
 /devctl
-/go-agents
+/herdr-agentisan
 *.out
 coverage.out
 coverage.html

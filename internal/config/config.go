@@ -16,7 +16,7 @@ import (
 )
 
 // EnvPrefix namespaces every environment variable this service reads.
-const EnvPrefix = "GO_AGENTS"
+const EnvPrefix = "HERDR_AGENTISAN"
 
 // dotenvFile is the optional developer file Load reads from the working
 // directory.
@@ -63,7 +63,7 @@ func Load() (Config, error) {
 	v.SetDefault("env", "development")
 	v.SetDefault("log_level", "info")
 	v.SetDefault("log_format", "console")
-	v.SetDefault("service_name", "go-agents")
+	v.SetDefault("service_name", "herdr-agentisan")
 	v.SetDefault("otlp_endpoint", "")
 	v.SetDefault("trace_sample_ratio", 1.0)
 

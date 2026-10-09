@@ -1,22 +1,24 @@
-# go-agents
+# herdr-agentisan
 
-A Go CLI and its development tooling, structured so autonomous coding agents
-can change it safely. Two binaries:
+An Agentisan plugin for [herdr](https://herdr.dev), written in Go, plus the
+development tooling that keeps it safe for autonomous coding agents to change.
+Two binaries:
 
 | Binary | Purpose |
 |--------|---------|
-| `go-agents` | Product CLI — create, list, read and delete notes |
+| `herdr-agentisan` | The plugin binary herdr invokes from its manifest |
 | `devctl` | Development operations: coverage floor, docs parity, large files |
 
-The CLI drives `internal/notes`; no command holds a rule of its own.
+The plugin skeleton (manifest, socket client, first action) lands next; see
+[herdr's plugin docs](https://herdr.dev/docs/plugins/) for the model it follows.
 
 ## Quick start
 
 ```bash
 go mod download && task build
 
-task run:cli -- notes add "first" -b "hello"
-task run:cli -- notes list
+task run:cli -- version
+task run:cli -- version --json
 ```
 
 Requires Go 1.26.9+ and [Task](https://taskfile.dev). Linters and scanners are
@@ -26,8 +28,8 @@ pinned in `go.mod` under the `tool` directive — nothing to install globally.
 
 `task check` runs most of what CI runs: lint, format, vet, gosec, gitleaks,
 govulncheck, race-enabled unit tests, the coverage floor, the large-file
-ceiling, the docs parity check, and the pre-commit hooks. `go mod tidy` and `go tool modernize` are
-separate CI jobs (`task tidy`, `task modernize`) not included in `check` — see
+ceiling, the docs parity check, and the pre-commit hooks. `go mod tidy` and
+`go tool modernize` are separate CI jobs (`task tidy`, `task modernize`) not included in `check` — see
 the command table in [AGENTS.md](AGENTS.md#commands) for the full, CI-verified
 list.
 

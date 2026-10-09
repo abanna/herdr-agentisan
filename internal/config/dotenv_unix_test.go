@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/nerds-run/go-agents/internal/config"
+	"github.com/abanna/herdr-agentisan/internal/config"
 )
 
 // TestLoadDotenvFileClasses covers the shapes ./.env can take beyond a plain
@@ -26,7 +26,7 @@ func TestLoadDotenvFileClasses(t *testing.T) {
 	}{
 		"symlink to a regular file is followed": {
 			setup: func(t *testing.T, dir string) {
-				require.NoError(t, os.WriteFile(filepath.Join(dir, "real.env"), []byte("GO_AGENTS_LOG_LEVEL=debug\n"), 0o600))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, "real.env"), []byte("HERDR_AGENTISAN_LOG_LEVEL=debug\n"), 0o600))
 				require.NoError(t, os.Symlink("real.env", filepath.Join(dir, ".env")))
 			},
 			wantLevel: "debug",
@@ -36,7 +36,7 @@ func TestLoadDotenvFileClasses(t *testing.T) {
 				if os.Geteuid() == 0 {
 					t.Skip("root ignores file permission bits")
 				}
-				require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte("GO_AGENTS_LOG_LEVEL=debug\n"), 0o000))
+				require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte("HERDR_AGENTISAN_LOG_LEVEL=debug\n"), 0o000))
 			},
 			wantLevel: "info",
 		},
@@ -56,8 +56,8 @@ func TestLoadDotenvFileClasses(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			t.Setenv("GO_AGENTS_LOG_LEVEL", "")
-			require.NoError(t, os.Unsetenv("GO_AGENTS_LOG_LEVEL"))
+			t.Setenv("HERDR_AGENTISAN_LOG_LEVEL", "")
+			require.NoError(t, os.Unsetenv("HERDR_AGENTISAN_LOG_LEVEL"))
 			dir := t.TempDir()
 			tc.setup(t, dir)
 			t.Chdir(dir)
