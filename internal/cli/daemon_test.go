@@ -241,7 +241,7 @@ func TestDaemonRunLogsToItsCappedFile(t *testing.T) {
 		_, err := runCtx(ctx, "daemon", "run")
 		done <- err
 	}()
-	paths, err := daemon.PathsFor(e.stateDir)
+	paths, err := daemon.PathsFor(e.stateDir, e.herdrSock)
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		_, err := daemon.Health(t.Context(), paths.Socket)
@@ -288,7 +288,7 @@ func TestDaemonRunRefusesAnUnverifiedProtocol(t *testing.T) {
 		_, err := runCtx(ctx, "daemon", "run")
 		done <- err
 	}()
-	paths, err := daemon.PathsFor(e.stateDir)
+	paths, err := daemon.PathsFor(e.stateDir, e.herdrSock)
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		info, err := daemon.Health(t.Context(), paths.Socket)

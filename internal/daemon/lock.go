@@ -92,6 +92,9 @@ func readInfo(path string) LockInfo {
 // lock for an instant when it is free.
 func held(path string) (bool, error) {
 	f, err := openLock(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil // no daemon has ever run for this server
+	}
 	if err != nil {
 		return false, err
 	}

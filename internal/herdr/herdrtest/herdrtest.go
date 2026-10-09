@@ -105,6 +105,15 @@ func StartAt(t testing.TB, path string, handle Handler) *Server {
 	return s
 }
 
+// Crash stops the server but leaves its socket file behind, as a herdr that
+// was killed does: the file still names a socket, and nothing answers it.
+func (s *Server) Crash() {
+	if ul, ok := s.ln.(*net.UnixListener); ok {
+		ul.SetUnlinkOnClose(false)
+	}
+	s.Close()
+}
+
 // Close stops the server and removes its socket file, as a herdr that exits
 // does. It is safe to call more than once.
 func (s *Server) Close() {

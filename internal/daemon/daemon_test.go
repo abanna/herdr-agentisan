@@ -63,6 +63,10 @@ func (f *fakeHerdr) restart() {
 
 func (f *fakeHerdr) stop() { f.srv.Close() }
 
+// crash kills the server but leaves its socket file behind, as a herdr that
+// was SIGKILLed does: the identity is unchanged, nothing answers.
+func (f *fakeHerdr) crash() { f.srv.Crash() }
+
 // procs is a fake process table for start times: pid -> start.
 type procs struct {
 	mu    sync.Mutex
@@ -157,20 +161,20 @@ func mustIdentity(t *testing.T, sock string) daemon.Identity {
 	return id
 }
 
-func socketPath(t *testing.T, stateDir string) string {
+func socketPath(t *testing.T, stateDir, herdrSocket string) string {
 	t.Helper()
-	p, err := daemon.PathsFor(stateDir)
+	p, err := daemon.PathsFor(stateDir, herdrSocket)
 	require.NoError(t, err)
 	return p.Socket
 }
 
-// healthy waits until the daemon in stateDir answers health.
-func healthy(t *testing.T, stateDir string) daemon.HealthInfo {
+// healthy waits until h's daemon in stateDir answers health.
+func healthy(t *testing.T, stateDir string, h *fakeHerdr) daemon.HealthInfo {
 	t.Helper()
 	var info daemon.HealthInfo
 	require.Eventually(t, func() bool {
 		var err error
-		info, err = daemon.Health(t.Context(), socketPath(t, stateDir))
+		info, err = daemon.Health(t.Context(), socketPath(t, stateDir, h.path))
 		return err == nil
 	}, 3*time.Second, 10*time.Millisecond, "the daemon never answered health")
 	return info
@@ -179,36 +183,60 @@ func healthy(t *testing.T, stateDir string) daemon.HealthInfo {
 func TestPathsForClasses(t *testing.T) {
 	t.Parallel()
 
-	// A directory whose socket path (dir + "/daemon.sock") is exactly n bytes.
+	const herdrSock = "/run/user/1000/herdr.sock"
+	// A state dir whose socket path ("<dir>/srv-<12 hex>/daemon.sock") is
+	// exactly n bytes.
 	dirFor := func(n int) string {
-		return "/" + strings.Repeat("d", n-len("/daemon.sock")-1)
+		return "/" + strings.Repeat("d", n-len("/srv-0123456789ab/daemon.sock")-1)
 	}
 	tests := map[string]struct {
-		dir  string
-		want error
+		dir, sock string
+		want      error
 	}{
-		"socket path of 103 bytes":         {dir: dirFor(103)},
-		"socket path of 104 bytes":         {dir: dirFor(104), want: daemon.ErrSocketPathTooLong},
-		"socket path of 105 bytes":         {dir: dirFor(105), want: daemon.ErrSocketPathTooLong},
-		"empty state dir":                  {dir: "", want: daemon.ErrNoStateDir},
-		"relative state dir":               {dir: "state/agentisan", want: daemon.ErrNoStateDir},
-		"non-ASCII counts bytes not runes": {dir: "/" + strings.Repeat("é", 46), want: daemon.ErrSocketPathTooLong},
+		"socket path of 103 bytes":         {dir: dirFor(103), sock: herdrSock},
+		"socket path of 104 bytes":         {dir: dirFor(104), sock: herdrSock, want: daemon.ErrSocketPathTooLong},
+		"socket path of 105 bytes":         {dir: dirFor(105), sock: herdrSock, want: daemon.ErrSocketPathTooLong},
+		"empty state dir":                  {dir: "", sock: herdrSock, want: daemon.ErrNoStateDir},
+		"relative state dir":               {dir: "state/agentisan", sock: herdrSock, want: daemon.ErrNoStateDir},
+		"non-ASCII counts bytes not runes": {dir: "/" + strings.Repeat("é", 37), sock: herdrSock, want: daemon.ErrSocketPathTooLong},
+		"no herdr socket":                  {dir: "/state", sock: "", want: daemon.ErrHerdrGone},
+		"relative herdr socket":            {dir: "/state", sock: "herdr.sock", want: daemon.ErrHerdrGone},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			p, err := daemon.PathsFor(tc.dir)
+			p, err := daemon.PathsFor(tc.dir, tc.sock)
 			if tc.want != nil {
 				require.ErrorIs(t, err, tc.want)
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, filepath.Join(tc.dir, "daemon.lock"), p.Lock)
-			assert.Equal(t, filepath.Join(tc.dir, "daemon.log"), p.Log)
-			assert.Equal(t, filepath.Join(tc.dir, "daemon.sock"), p.Socket)
+			assert.Equal(t, tc.dir, filepath.Dir(p.Dir), "each server's files live one level under the state dir")
+			assert.Regexp(t, `^srv-[0-9a-f]{12}$`, filepath.Base(p.Dir))
+			assert.Equal(t, filepath.Join(p.Dir, "daemon.lock"), p.Lock)
+			assert.Equal(t, filepath.Join(p.Dir, "daemon.log"), p.Log)
+			assert.Equal(t, filepath.Join(p.Dir, "daemon.sock"), p.Socket)
 			assert.Len(t, p.Socket, 103)
 		})
 	}
+}
+
+// TestPathsForKeysEachServer is D3's "one daemon per herdr server": every
+// herdr session has its own socket path, and the daemon's files live in a
+// directory keyed by it. The same server always maps to the same directory,
+// across a live handoff too, because herdr keeps the socket path.
+func TestPathsForKeysEachServer(t *testing.T) {
+	t.Parallel()
+
+	key := func(sock string) string {
+		p, err := daemon.PathsFor("/state", sock)
+		require.NoError(t, err)
+		return p.Dir
+	}
+	a := key("/home/u/.config/herdr/herdr.sock")
+	assert.Equal(t, a, key("/home/u/.config/herdr/herdr.sock"), "stable for one server")
+	assert.Equal(t, a, key("/home/u/.config/herdr//herdr.sock"), "the path is cleaned first")
+	assert.NotEqual(t, a, key("/home/u/.config/herdr/sessions/work/herdr.sock"), "each named session has its own")
 }
 
 // TestRunServesHealthUntilCancelled: a running daemon answers health over
@@ -220,7 +248,7 @@ func TestRunServesHealthUntilCancelled(t *testing.T) {
 	dir := shortDir(t)
 	r := run(t, opts(t, dir, h))
 
-	info := healthy(t, dir)
+	info := healthy(t, dir, h)
 	assert.Equal(t, os.Getpid(), info.PID)
 	assert.Equal(t, "v-test", info.Version)
 	assert.Equal(t, "c-test", info.Commit)
@@ -229,14 +257,14 @@ func TestRunServesHealthUntilCancelled(t *testing.T) {
 	assert.Equal(t, mustIdentity(t, h.path), info.Herdr)
 	assert.WithinDuration(t, time.Now(), info.StartedAt, 5*time.Second)
 
-	st, err := os.Stat(socketPath(t, dir))
+	st, err := os.Stat(socketPath(t, dir, h.path))
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), st.Mode().Perm(), "the socket is the owner's only")
 
 	r.cancel()
 	require.NoError(t, r.wait(t, 3*time.Second), "a cancelled daemon stops cleanly")
-	assert.NoFileExists(t, socketPath(t, dir))
-	_, err = daemon.Health(t.Context(), socketPath(t, dir))
+	assert.NoFileExists(t, socketPath(t, dir, h.path))
+	_, err = daemon.Health(t.Context(), socketPath(t, dir, h.path))
 	require.ErrorIs(t, err, daemon.ErrUnavailable)
 }
 
@@ -247,21 +275,82 @@ func TestRunExitsWhenHerdrGoes(t *testing.T) {
 	t.Parallel()
 
 	for name, end := range map[string]func(*fakeHerdr){
-		"socket removed":                  (*fakeHerdr).stop,
-		"socket replaced (inode changes)": (*fakeHerdr).restart,
+		"socket removed": (*fakeHerdr).stop,
+		// ext4 often hands the new socket the old inode number; the birth
+		// time still tells them apart.
+		"socket replaced (inode often reused)":        (*fakeHerdr).restart,
+		"server crashed, its socket file left behind": (*fakeHerdr).crash,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			h := newHerdr(t, 22)
 			dir := shortDir(t)
 			r := run(t, opts(t, dir, h))
-			healthy(t, dir)
+			healthy(t, dir, h)
 
 			end(h)
 			require.ErrorIs(t, r.wait(t, 3*time.Second), daemon.ErrHerdrGone)
-			assert.NoFileExists(t, socketPath(t, dir))
+			assert.NoFileExists(t, socketPath(t, dir, h.path))
 		})
 	}
+}
+
+// TestHerdrIdentityClasses: the identity tells one bound socket from every
+// later one at the same path, even when the filesystem reuses the inode
+// number, and does not change for the same socket.
+func TestHerdrIdentityClasses(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(shortDir(t), "h.sock")
+	bind := func() {
+		ln, err := net.Listen("unix", path)
+		require.NoError(t, err)
+		ln.(*net.UnixListener).SetUnlinkOnClose(false)
+		require.NoError(t, ln.Close())
+	}
+
+	bind()
+	first := mustIdentity(t, path)
+	assert.Equal(t, first, mustIdentity(t, path), "stable for the same socket")
+	require.NoError(t, os.Chmod(path, 0o600))
+	assert.Equal(t, first, mustIdentity(t, path), "a chmod is not a new server")
+
+	reused := false
+	for range 20 {
+		require.NoError(t, os.Remove(path))
+		bind()
+		next := mustIdentity(t, path)
+		assert.NotEqual(t, first, next, "every bind is a new server")
+		reused = reused || next.Ino == first.Ino
+		first = next
+	}
+	t.Logf("inode number reused across rebinds: %v", reused)
+
+	plain := filepath.Join(shortDir(t), "f")
+	require.NoError(t, os.WriteFile(plain, nil, 0o600))
+	_, err := daemon.HerdrIdentity(plain)
+	require.ErrorIs(t, err, daemon.ErrHerdrGone, "a regular file is no server")
+	_, err = daemon.HerdrIdentity(filepath.Join(shortDir(t), "absent.sock"))
+	require.ErrorIs(t, err, daemon.ErrHerdrGone)
+}
+
+// TestTwoServersEachGetTheirOwnDaemon: two herdr sessions share the plugin
+// state dir. Each gets its own daemon, health answers for the caller's
+// server, and stopping one leaves the other running.
+func TestTwoServersEachGetTheirOwnDaemon(t *testing.T) {
+	t.Parallel()
+	dir := shortDir(t)
+	a, b := newHerdr(t, 22), newHerdr(t, 22)
+	ra, rb := run(t, opts(t, dir, a)), run(t, opts(t, dir, b))
+
+	assert.Equal(t, mustIdentity(t, a.path), healthy(t, dir, a).Herdr)
+	assert.Equal(t, mustIdentity(t, b.path), healthy(t, dir, b).Herdr)
+
+	ob := opts(t, dir, b)
+	ob.Hooks.Signal = func(int) error { rb.cancel(); return nil }
+	require.NoError(t, daemon.Stop(t.Context(), ob))
+	require.NoError(t, rb.wait(t, time.Second))
+	assert.True(t, ra.alive(), "stopping B's daemon leaves A's running")
+	assert.Equal(t, mustIdentity(t, a.path), healthy(t, dir, a).Herdr)
 }
 
 // TestRunNeedsHerdr: a daemon with no herdr socket to belong to never starts.
@@ -287,7 +376,7 @@ func TestTwoRunsLeaveOneDaemon(t *testing.T) {
 	o := opts(t, dir, h)
 
 	a, b := run(t, o), run(t, o)
-	healthy(t, dir)
+	healthy(t, dir, h)
 	require.Eventually(t, func() bool { return a.alive() != b.alive() }, 3*time.Second, 10*time.Millisecond,
 		"exactly one daemon must keep running")
 	loser := a
@@ -299,10 +388,11 @@ func TestTwoRunsLeaveOneDaemon(t *testing.T) {
 
 // holdLock takes daemon.lock the way a daemon does and writes info into it,
 // standing in for a daemon of some other herdr server.
-func holdLock(t *testing.T, stateDir string, info string) (release func()) {
+func holdLock(t *testing.T, stateDir string, h *fakeHerdr, info string) (release func()) {
 	t.Helper()
-	p, err := daemon.PathsFor(stateDir)
+	p, err := daemon.PathsFor(stateDir, h.path)
 	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(p.Dir, 0o700))
 	f, err := os.OpenFile(p.Lock, os.O_RDWR|os.O_CREATE, 0o600)
 	require.NoError(t, err)
 	require.NoError(t, syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB))
@@ -329,7 +419,7 @@ func TestRunWaitsForAStaleHolder(t *testing.T) {
 		t.Parallel()
 		h := newHerdr(t, 22)
 		dir := shortDir(t)
-		release := holdLock(t, dir, staleHolder)
+		release := holdLock(t, dir, h, staleHolder)
 		o := opts(t, dir, h)
 		o.LockWait = 5 * time.Second
 		r := run(t, o)
@@ -337,7 +427,7 @@ func TestRunWaitsForAStaleHolder(t *testing.T) {
 		time.Sleep(150 * time.Millisecond)
 		require.True(t, r.alive(), "the new daemon waits while the stale one holds the lock")
 		release()
-		info := healthy(t, dir)
+		info := healthy(t, dir, h)
 		assert.Equal(t, os.Getpid(), info.PID)
 	})
 
@@ -351,7 +441,7 @@ func TestRunWaitsForAStaleHolder(t *testing.T) {
 			t.Parallel()
 			h := newHerdr(t, 22)
 			dir := shortDir(t)
-			holdLock(t, dir, holder)
+			holdLock(t, dir, h, holder)
 			o := opts(t, dir, h)
 			o.LockWait = 300 * time.Millisecond
 
@@ -374,7 +464,7 @@ func TestRunProtocolPin(t *testing.T) {
 		h := newHerdr(t, 22)
 		dir := shortDir(t)
 		run(t, opts(t, dir, h))
-		healthy(t, dir)
+		healthy(t, dir, h)
 	})
 	t.Run("unverified protocol stops with an error", func(t *testing.T) {
 		t.Parallel()
@@ -391,7 +481,7 @@ func TestRunProtocolPin(t *testing.T) {
 		o := opts(t, dir, h)
 		o.AllowUnverified = true
 		run(t, o)
-		assert.EqualValues(t, 23, healthy(t, dir).HerdrProtocol)
+		assert.EqualValues(t, 23, healthy(t, dir, h).HerdrProtocol)
 	})
 	t.Run("herdr not answering ping stops with its error", func(t *testing.T) {
 		t.Parallel()
@@ -440,7 +530,7 @@ func TestStartClasses(t *testing.T) {
 		dir := shortDir(t)
 		o := opts(t, dir, h)
 		run(t, o)
-		healthy(t, dir)
+		healthy(t, dir, h)
 		o.Hooks.Spawn = func(context.Context) (int, error) {
 			t.Error("Start spawned a second daemon")
 			return 0, nil
@@ -460,7 +550,7 @@ func TestStartClasses(t *testing.T) {
 		old := opts(t, dir, h)
 		old.Poll = time.Hour // it never notices the restart below
 		oldRun := run(t, old)
-		healthy(t, dir)
+		healthy(t, dir, h)
 		h.restart()
 
 		o := opts(t, dir, h)
@@ -476,7 +566,7 @@ func TestStartClasses(t *testing.T) {
 
 		oldRun.cancel()
 		require.Eventually(t, func() bool {
-			info, err := daemon.Health(t.Context(), socketPath(t, dir))
+			info, err := daemon.Health(t.Context(), socketPath(t, dir, h.path))
 			return err == nil && info.Herdr == mustIdentity(t, h.path)
 		}, 3*time.Second, 10*time.Millisecond, "the new daemon takes over once the old one lets go")
 	})
@@ -567,7 +657,7 @@ func TestStopClasses(t *testing.T) {
 		dir := shortDir(t)
 		o := opts(t, dir, h)
 		r := run(t, o)
-		healthy(t, dir)
+		healthy(t, dir, h)
 		var got int
 		o.Hooks.Signal = func(pid int) error { got = pid; r.cancel(); return nil }
 
@@ -581,8 +671,8 @@ func TestStopClasses(t *testing.T) {
 		dir := shortDir(t)
 		o := opts(t, dir, h)
 		r := run(t, o)
-		healthy(t, dir)
-		require.NoError(t, os.Remove(socketPath(t, dir)))
+		healthy(t, dir, h)
+		require.NoError(t, os.Remove(socketPath(t, dir, h.path)))
 		o.Hooks.Signal = func(int) error { r.cancel(); return nil }
 
 		require.NoError(t, daemon.Stop(t.Context(), o))
@@ -591,7 +681,7 @@ func TestStopClasses(t *testing.T) {
 		t.Parallel()
 		h := newHerdr(t, 22)
 		dir := shortDir(t)
-		holdLock(t, dir, `{"v":1,"pid":4242,"start":5,"herdr":{"dev":1,"ino":1},"started_at":"2026-10-09T00:00:00Z"}`)
+		holdLock(t, dir, h, `{"v":1,"pid":4242,"start":5,"herdr":{"dev":1,"ino":1},"started_at":"2026-10-09T00:00:00Z"}`)
 		o := opts(t, dir, h)
 		o.Hooks.StartTime = (&procs{start: map[int]uint64{4242: 6}}).startTime
 		o.Hooks.Signal = func(int) error {
@@ -604,7 +694,7 @@ func TestStopClasses(t *testing.T) {
 		t.Parallel()
 		h := newHerdr(t, 22)
 		dir := shortDir(t)
-		holdLock(t, dir, `garbage`)
+		holdLock(t, dir, h, `garbage`)
 		o := opts(t, dir, h)
 		o.StopWait = 200 * time.Millisecond
 		o.Hooks.Signal = func(int) error {
@@ -619,7 +709,7 @@ func TestStopClasses(t *testing.T) {
 		dir := shortDir(t)
 		o := opts(t, dir, h)
 		run(t, o)
-		healthy(t, dir)
+		healthy(t, dir, h)
 		o.StopWait = 200 * time.Millisecond
 		o.Hooks.Signal = func(int) error { return nil }
 
@@ -631,7 +721,7 @@ func TestStopClasses(t *testing.T) {
 		dir := shortDir(t)
 		o := opts(t, dir, h)
 		run(t, o)
-		healthy(t, dir)
+		healthy(t, dir, h)
 		o.Hooks.Signal = func(int) error { return syscall.EPERM }
 
 		require.ErrorIs(t, daemon.Stop(t.Context(), o), syscall.EPERM)
@@ -664,8 +754,8 @@ func TestSocketProtocolClasses(t *testing.T) {
 	h := newHerdr(t, 22)
 	dir := shortDir(t)
 	run(t, opts(t, dir, h))
-	healthy(t, dir)
-	sock := socketPath(t, dir)
+	healthy(t, dir, h)
+	sock := socketPath(t, dir, h.path)
 
 	tests := map[string]struct {
 		line string
@@ -787,9 +877,11 @@ func TestRunReplacesAStaleSocket(t *testing.T) {
 			t.Parallel()
 			h := newHerdr(t, 22)
 			dir := shortDir(t)
-			plant(t, socketPath(t, dir))
+			sock := socketPath(t, dir, h.path)
+			require.NoError(t, os.MkdirAll(filepath.Dir(sock), 0o700))
+			plant(t, sock)
 			run(t, opts(t, dir, h))
-			healthy(t, dir)
+			healthy(t, dir, h)
 		})
 	}
 }

@@ -9,11 +9,11 @@
 package daemon
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
-	"syscall"
 )
 
 // File names inside the plugin state directory.
@@ -42,7 +42,12 @@ var (
 	ErrHerdrGone = errors.New("herdr server socket is gone")
 )
 
-// Paths are the daemon's files in the plugin state directory.
+// Paths are one herdr server's daemon files: a directory under the plugin
+// state directory, keyed by the server's socket path. herdr gives every
+// session its own socket path and shares the plugin state directory between
+// them, so the key is what makes the daemon one per server (D3). A live
+// handoff keeps the socket path, so the directory, and the lock in it, carry
+// across it (A3).
 type Paths struct {
 	Dir    string
 	Lock   string
@@ -50,16 +55,22 @@ type Paths struct {
 	Socket string
 }
 
-// PathsFor returns the daemon's paths under stateDir.
-func PathsFor(stateDir string) (Paths, error) {
+// PathsFor returns the paths of the daemon for the herdr server at
+// herdrSocket, under stateDir.
+func PathsFor(stateDir, herdrSocket string) (Paths, error) {
 	if stateDir == "" || !filepath.IsAbs(stateDir) {
 		return Paths{}, fmt.Errorf("%w: %q", ErrNoStateDir, stateDir)
 	}
+	if herdrSocket == "" || !filepath.IsAbs(herdrSocket) {
+		return Paths{}, fmt.Errorf("%w: HERDR_SOCKET_PATH %q is not an absolute path", ErrHerdrGone, herdrSocket)
+	}
+	sum := sha256.Sum256([]byte(filepath.Clean(herdrSocket)))
+	dir := filepath.Join(stateDir, "srv-"+hex.EncodeToString(sum[:6]))
 	p := Paths{
-		Dir:    stateDir,
-		Lock:   filepath.Join(stateDir, lockName),
-		Log:    filepath.Join(stateDir, logName),
-		Socket: filepath.Join(stateDir, socketName),
+		Dir:    dir,
+		Lock:   filepath.Join(dir, lockName),
+		Log:    filepath.Join(dir, logName),
+		Socket: filepath.Join(dir, socketName),
 	}
 	if len(p.Socket) > MaxSocketPath {
 		return Paths{}, fmt.Errorf("%w: %d bytes, at most %d: %s", ErrSocketPathTooLong, len(p.Socket), MaxSocketPath, p.Socket)
@@ -67,12 +78,15 @@ func PathsFor(stateDir string) (Paths, error) {
 	return p, nil
 }
 
-// Identity names one herdr server by its socket file. herdr binds a new socket
-// on every start, live handoff included, so the inode changes whenever the
-// server does.
+// Identity names one herdr server by the socket it bound. herdr binds a new
+// socket on every start, live handoff included. The inode number alone is
+// not enough: a filesystem may hand the new socket the old one's number, so
+// the socket's birth time (its change time where the filesystem keeps no
+// birth time) tells them apart.
 type Identity struct {
-	Dev uint64 `json:"dev"`
-	Ino uint64 `json:"ino"`
+	Dev  uint64 `json:"dev"`
+	Ino  uint64 `json:"ino"`
+	Born int64  `json:"born"`
 }
 
 // HerdrIdentity returns the identity of the herdr socket at path.
@@ -80,13 +94,12 @@ func HerdrIdentity(path string) (Identity, error) {
 	if path == "" {
 		return Identity{}, fmt.Errorf("%w: HERDR_SOCKET_PATH is not set", ErrHerdrGone)
 	}
-	st, err := os.Stat(path)
+	id, isSocket, err := socketIdentity(path)
 	if err != nil {
 		return Identity{}, fmt.Errorf("%w: %w", ErrHerdrGone, err)
 	}
-	sys, ok := st.Sys().(*syscall.Stat_t)
-	if st.Mode()&os.ModeSocket == 0 || !ok {
+	if !isSocket {
 		return Identity{}, fmt.Errorf("%w: %s is not a socket", ErrHerdrGone, path)
 	}
-	return Identity{Dev: uint64(sys.Dev), Ino: sys.Ino}, nil //nolint:unconvert // Dev is int32 on darwin
+	return id, nil
 }

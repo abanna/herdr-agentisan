@@ -148,9 +148,9 @@ func newDaemonRunCmd(opts func(*cobra.Command) (daemon.Options, error)) *cobra.C
 			if err != nil {
 				return err
 			}
-			paths, err := daemon.PathsFor(o.StateDir)
+			paths, err := daemon.PathsFor(o.StateDir, o.HerdrSocket)
 			if err != nil {
-				return fmt.Errorf("daemon run: %w", err)
+				return fmt.Errorf("daemon run: %w", noHerdr(err))
 			}
 			if err := os.MkdirAll(paths.Dir, 0o700); err != nil {
 				return fmt.Errorf("daemon run: create %s: %w", paths.Dir, err)
@@ -204,6 +204,8 @@ func newDaemonStopCmd(opts func(*cobra.Command) (daemon.Options, error)) *cobra.
 func stopDaemon(cmd *cobra.Command, o daemon.Options) error {
 	err := daemon.Stop(cmd.Context(), o)
 	switch {
+	case errors.Is(err, daemon.ErrHerdrGone):
+		return fmt.Errorf("daemon stop: %w", noHerdr(err))
 	case errors.Is(err, daemon.ErrNotRunning):
 		return printf(cmd.OutOrStdout(), "no daemon running\n")
 	case err != nil:
@@ -245,9 +247,9 @@ func newDaemonHealthCmd(opts func(*cobra.Command) (daemon.Options, error)) *cobr
 			if err != nil {
 				return err
 			}
-			paths, err := daemon.PathsFor(o.StateDir)
+			paths, err := daemon.PathsFor(o.StateDir, o.HerdrSocket)
 			if err != nil {
-				return fmt.Errorf("daemon health: %w", err)
+				return fmt.Errorf("daemon health: %w", noHerdr(err))
 			}
 			info, err := daemon.Health(cmd.Context(), paths.Socket)
 			if errors.Is(err, daemon.ErrUnavailable) {

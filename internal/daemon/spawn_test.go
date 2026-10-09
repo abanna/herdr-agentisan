@@ -83,7 +83,7 @@ func helperModes() {
 		}
 	}()
 
-	p, err := daemon.PathsFor(stateDir)
+	p, err := daemon.PathsFor(stateDir, herdrSock)
 	if err != nil {
 		os.Exit(5)
 	}
@@ -112,7 +112,7 @@ func helperModes() {
 	_ = w.Close()
 
 	modes := map[string]string{}
-	for name, path := range map[string]string{"dir": stateDir, "lock": p.Lock, "socket": p.Socket, "log": p.Log} {
+	for name, path := range map[string]string{"dir": stateDir, "server dir": p.Dir, "lock": p.Lock, "socket": p.Socket, "log": p.Log} {
 		st, err := os.Stat(path)
 		if err != nil {
 			modes[name] = "missing"
@@ -225,7 +225,7 @@ func TestCreatedFilesKeepTheirModesUnderAnyUmask(t *testing.T) {
 	require.NoError(t, err, "helper failed")
 	var modes map[string]string
 	require.NoError(t, json.Unmarshal(raw, &modes))
-	assert.Equal(t, map[string]string{"dir": "700", "lock": "600", "socket": "600", "log": "600"}, modes)
+	assert.Equal(t, map[string]string{"dir": "700", "server dir": "700", "lock": "600", "socket": "600", "log": "600"}, modes)
 }
 
 func execHelper(t *testing.T, mode string, env ...string) *execCmd {

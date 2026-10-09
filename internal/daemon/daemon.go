@@ -172,7 +172,7 @@ func (o Options) liveHolder(path string) (LockInfo, bool, error) {
 // run before the old daemon notices its server has gone (A3).
 func Run(ctx context.Context, o Options) error {
 	o = o.withDefaults()
-	paths, err := PathsFor(o.StateDir)
+	paths, err := PathsFor(o.StateDir, o.HerdrSocket)
 	if err != nil {
 		return err
 	}
@@ -223,13 +223,34 @@ func Run(ctx context.Context, o Options) error {
 			o.Logger.Info().Msg("daemon stopping")
 			return nil
 		case <-tick.C:
-			now, err := HerdrIdentity(o.HerdrSocket)
-			if err != nil || now != ident {
+			if err := o.stillServed(ctx, ident, pong.Protocol); err != nil {
 				o.Logger.Info().Err(err).Msg("herdr server gone; daemon exiting")
-				return fmt.Errorf("%w: the socket the daemon belongs to was removed or replaced", ErrHerdrGone)
+				return err
 			}
 		}
 	}
+}
+
+// stillServed reports ErrHerdrGone unless the daemon's herdr server is still
+// there: the same socket (identity), answering (a refused connection means it
+// died and left its socket file behind), on the protocol it was pinned at. A
+// ping that fails any other way, such as a busy herdr timing out, is not
+// taken as the server going.
+func (o Options) stillServed(ctx context.Context, ident Identity, protocol uint32) error {
+	now, err := HerdrIdentity(o.HerdrSocket)
+	if err != nil || now != ident {
+		return fmt.Errorf("%w: the socket the daemon belongs to was removed or replaced", ErrHerdrGone)
+	}
+	pong, err := o.Herdr.Ping(ctx)
+	switch {
+	case errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENOENT):
+		return fmt.Errorf("%w: nothing answers its socket: %w", ErrHerdrGone, err)
+	case err != nil:
+		o.Logger.Debug().Err(err).Msg("herdr ping failed; still treating the server as up")
+	case pong.Protocol != protocol:
+		return fmt.Errorf("%w: the server now speaks protocol %d, not %d", ErrHerdrGone, pong.Protocol, protocol)
+	}
+	return nil
 }
 
 // acquire takes the lock, or reports why not.
@@ -272,7 +293,7 @@ type StartResult struct {
 // so the daemon it spawns cannot end up waiting on its parent.
 func Start(ctx context.Context, o Options) (StartResult, error) {
 	o = o.withDefaults()
-	paths, err := PathsFor(o.StateDir)
+	paths, err := PathsFor(o.StateDir, o.HerdrSocket)
 	if err != nil {
 		return StartResult{}, err
 	}
@@ -326,7 +347,7 @@ func (o Options) awaitHealth(ctx context.Context, socket string, ident Identity,
 // is not consulted, so a wedged daemon is still stopped.
 func Stop(ctx context.Context, o Options) error {
 	o = o.withDefaults()
-	paths, err := PathsFor(o.StateDir)
+	paths, err := PathsFor(o.StateDir, o.HerdrSocket)
 	if err != nil {
 		return err
 	}
