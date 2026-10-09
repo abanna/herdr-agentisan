@@ -1,8 +1,9 @@
 package config_test
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,12 +17,10 @@ func TestLoadDefaults(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "development", cfg.Env)
-	assert.Equal(t, ":8080", cfg.HTTPAddr)
 	assert.Equal(t, "info", cfg.LogLevel)
-	assert.Equal(t, 15*time.Second, cfg.ReadTimeout)
+	assert.Equal(t, "console", cfg.LogFormat)
 	assert.False(t, cfg.IsProduction())
 
-	assert.Equal(t, ":9090", cfg.AdminAddr)
 	assert.Equal(t, "go-agents", cfg.ServiceName)
 	assert.Empty(t, cfg.OTLPEndpoint, "tracing export must be off until a collector is named")
 	assert.InDelta(t, 1.0, cfg.TraceSampleRatio, 0)
@@ -29,20 +28,18 @@ func TestLoadDefaults(t *testing.T) {
 
 func TestLoadReadsEnvironment(t *testing.T) {
 	t.Setenv("GO_AGENTS_ENV", "production")
-	t.Setenv("GO_AGENTS_HTTP_ADDR", ":9999")
+	t.Setenv("GO_AGENTS_LOG_LEVEL", "debug")
 	t.Setenv("GO_AGENTS_LOG_FORMAT", "json")
-	t.Setenv("GO_AGENTS_API_TOKEN", "tok")
 
 	cfg, err := config.Load()
 	require.NoError(t, err)
 
-	assert.Equal(t, ":9999", cfg.HTTPAddr)
+	assert.Equal(t, "debug", cfg.LogLevel)
 	assert.Equal(t, "json", cfg.LogFormat)
 	assert.True(t, cfg.IsProduction())
 }
 
 func TestLoadReadsTelemetryEnvironment(t *testing.T) {
-	t.Setenv("GO_AGENTS_ADMIN_ADDR", ":9101")
 	t.Setenv("GO_AGENTS_OTLP_ENDPOINT", "otel-collector:4318")
 	t.Setenv("GO_AGENTS_TRACE_SAMPLE_RATIO", "0.25")
 	t.Setenv("GO_AGENTS_SERVICE_NAME", "go-agents-canary")
@@ -50,45 +47,17 @@ func TestLoadReadsTelemetryEnvironment(t *testing.T) {
 	cfg, err := config.Load()
 	require.NoError(t, err)
 
-	assert.Equal(t, ":9101", cfg.AdminAddr)
 	assert.Equal(t, "otel-collector:4318", cfg.OTLPEndpoint)
 	assert.InDelta(t, 0.25, cfg.TraceSampleRatio, 0)
 	assert.Equal(t, "go-agents-canary", cfg.ServiceName)
-}
-
-// TestProductionRequiresAToken is the point of the whole package: a deployed
-// environment must not silently fall back to an unauthenticated service.
-func TestProductionRequiresAToken(t *testing.T) {
-	t.Setenv("GO_AGENTS_ENV", "production")
-	t.Setenv("GO_AGENTS_API_TOKEN", "")
-
-	_, err := config.Load()
-	require.ErrorIs(t, err, config.ErrMissingSecret)
-}
-
-func TestStagingRequiresATokenToo(t *testing.T) {
-	t.Setenv("GO_AGENTS_ENV", "staging")
-	t.Setenv("GO_AGENTS_API_TOKEN", "")
-
-	_, err := config.Load()
-	require.ErrorIs(t, err, config.ErrMissingSecret)
-}
-
-func TestDevelopmentMayRunUnauthenticated(t *testing.T) {
-	t.Setenv("GO_AGENTS_ENV", "development")
-	t.Setenv("GO_AGENTS_API_TOKEN", "")
-
-	cfg, err := config.Load()
-	require.NoError(t, err)
-	assert.Empty(t, cfg.APIToken)
 }
 
 func TestValidate(t *testing.T) {
 	t.Parallel()
 
 	base := config.Config{
-		Env: "development", LogLevel: "info", LogFormat: "console", HTTPAddr: ":8080",
-		AdminAddr: ":9090", ServiceName: "go-agents", TraceSampleRatio: 1,
+		Env: "development", LogLevel: "info", LogFormat: "console",
+		ServiceName: "go-agents", TraceSampleRatio: 1,
 	}
 
 	tests := map[string]struct {
@@ -98,14 +67,6 @@ func TestValidate(t *testing.T) {
 		"valid":              {mutate: func(*config.Config) {}},
 		"unknown env":        {mutate: func(c *config.Config) { c.Env = "qa" }, wantErr: true},
 		"unknown log format": {mutate: func(c *config.Config) { c.LogFormat = "xml" }, wantErr: true},
-		"empty addr":         {mutate: func(c *config.Config) { c.HTTPAddr = "" }, wantErr: true},
-		"empty admin addr":   {mutate: func(c *config.Config) { c.AdminAddr = "" }, wantErr: true},
-		// The invariant worth a test of its own: one listener for both would
-		// publish /debug/pprof on the port users reach.
-		"admin addr shared with the api": {
-			mutate:  func(c *config.Config) { c.AdminAddr = c.HTTPAddr },
-			wantErr: true,
-		},
 		"empty service name": {mutate: func(c *config.Config) { c.ServiceName = "" }, wantErr: true},
 		"negative sample ratio": {
 			mutate:  func(c *config.Config) { c.TraceSampleRatio = -0.1 },
@@ -116,13 +77,8 @@ func TestValidate(t *testing.T) {
 			wantErr: true,
 		},
 		"zero sample ratio is valid": {mutate: func(c *config.Config) { c.TraceSampleRatio = 0 }},
-		"production without a token": {
-			mutate:  func(c *config.Config) { c.Env = "production" },
-			wantErr: true,
-		},
-		"production with a token": {
-			mutate: func(c *config.Config) { c.Env = "production"; c.APIToken = "t" },
-		},
+		"staging is valid":           {mutate: func(c *config.Config) { c.Env = "staging" }},
+		"production is valid":        {mutate: func(c *config.Config) { c.Env = "production" }},
 	}
 
 	for name, tc := range tests {
@@ -137,6 +93,86 @@ func TestValidate(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+		})
+	}
+}
+
+// TestProductionNeedsNoAPIToken: the plugin serves no API, so a deployed
+// environment has no token to demand. Requiring one would refuse to start a
+// binary that has nothing to authenticate.
+func TestProductionNeedsNoAPIToken(t *testing.T) {
+	t.Setenv("GO_AGENTS_ENV", "production")
+
+	cfg, err := config.Load()
+	require.NoError(t, err)
+	assert.True(t, cfg.IsProduction())
+}
+
+// TestLoadEnvironmentClasses walks what Load observes besides explicit
+// values: an empty variable, an unprefixed look-alike inherited from the
+// parent, malformed values, and the .env file in the working directory.
+// Not parallel: Load reads process environment and the working directory.
+func TestLoadEnvironmentClasses(t *testing.T) {
+	tests := map[string]struct {
+		env       map[string]string
+		dotenv    string // written to ./.env when non-empty; "<dir>" makes it a directory
+		wantErr   bool
+		wantEnv   string
+		wantLevel string
+	}{
+		"empty value falls back to the default": {
+			env: map[string]string{"GO_AGENTS_ENV": ""}, wantEnv: "development", wantLevel: "info",
+		},
+		"unprefixed look-alike is ignored": {
+			env: map[string]string{"ENV": "production", "LOG_LEVEL": "debug"}, wantEnv: "development", wantLevel: "info",
+		},
+		"value with whitespace is rejected": {
+			env: map[string]string{"GO_AGENTS_ENV": " production"}, wantErr: true,
+		},
+		"value with invalid UTF-8 is rejected": {
+			env: map[string]string{"GO_AGENTS_LOG_FORMAT": "js\xffon"}, wantErr: true,
+		},
+		".env in the working directory is read": {
+			dotenv: "GO_AGENTS_LOG_LEVEL=debug\n", wantEnv: "development", wantLevel: "debug",
+		},
+		"real environment wins over .env": {
+			env:    map[string]string{"GO_AGENTS_LOG_LEVEL": "warn"},
+			dotenv: "GO_AGENTS_LOG_LEVEL=debug\n", wantEnv: "development", wantLevel: "warn",
+		},
+		"a .env directory is ignored, not fatal": {
+			dotenv: "<dir>", wantEnv: "development", wantLevel: "info",
+		},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			// godotenv.Load writes into the process environment. Registering
+			// the key with t.Setenv first and then unsetting it lets the
+			// cleanup restore the original state whatever .env sets.
+			t.Setenv("GO_AGENTS_LOG_LEVEL", "")
+			require.NoError(t, os.Unsetenv("GO_AGENTS_LOG_LEVEL"))
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+
+			dir := t.TempDir()
+			switch tc.dotenv {
+			case "":
+			case "<dir>":
+				require.NoError(t, os.Mkdir(filepath.Join(dir, ".env"), 0o750))
+			default:
+				require.NoError(t, os.WriteFile(filepath.Join(dir, ".env"), []byte(tc.dotenv), 0o600))
+			}
+			t.Chdir(dir)
+
+			cfg, err := config.Load()
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantEnv, cfg.Env)
+			assert.Equal(t, tc.wantLevel, cfg.LogLevel)
 		})
 	}
 }

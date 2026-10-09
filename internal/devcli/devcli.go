@@ -15,7 +15,6 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nerds-run/go-agents/internal/api"
 	"github.com/nerds-run/go-agents/internal/config"
 )
 
@@ -29,16 +28,12 @@ func Root() *cobra.Command {
 		Use:   "devctl",
 		Short: "Development operations and helpers for this repository",
 		Long: "devctl holds the repository's own tooling: the gates that have no\n" +
-			"Go builtin (coverage floor, docs parity) and the generators whose\n" +
-			"output is committed and drift-checked.",
+			"Go builtin (coverage floor, docs parity, large files).",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       fmt.Sprintf("%s (%s)", config.Version, config.Commit),
 	}
-	root.AddCommand(
-		newParityCmd(), newCoverageCmd(), newOpenAPICmd(),
-		newRoutesCmd(), newLargeFilesCmd(), newManifestsCmd(),
-	)
+	root.AddCommand(newParityCmd(), newCoverageCmd(), newLargeFilesCmd())
 	return root
 }
 
@@ -82,6 +77,14 @@ func newParityCmd() *cobra.Command {
 			}
 			if !rep.OK() {
 				return errors.New("docs parity check failed")
+			}
+			stale, err := StaleExemptions(root)
+			if err != nil {
+				return err
+			}
+			if len(stale) > 0 {
+				return fmt.Errorf("docs parity: stale escape-hatch entries in internal/devcli/parity.go:\n  - %s",
+					strings.Join(stale, "\n  - "))
 			}
 			return nil
 		},
@@ -135,56 +138,6 @@ func newCoverageCmd() *cobra.Command {
 	return c
 }
 
-func newOpenAPICmd() *cobra.Command {
-	var write bool
-	c := &cobra.Command{
-		Use:   "openapi",
-		Short: "Generate the OpenAPI document from the bound routes",
-		Long: "Writes docs/openapi.json with --write, otherwise prints it. CI\n" +
-			"regenerates and diffs, so a route added without regenerating fails.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			// A route the server binds but does not document would ship an
-			// incomplete spec that still passes the diff check.
-			if missingDocs, missingRoutes := api.SpecDrift(); len(missingDocs)+len(missingRoutes) > 0 {
-				var b strings.Builder
-				b.WriteString("route table and OpenAPI operations disagree")
-				if len(missingDocs) > 0 {
-					fmt.Fprintf(&b, "\n  bound but undocumented: %s", strings.Join(missingDocs, ", "))
-				}
-				if len(missingRoutes) > 0 {
-					fmt.Fprintf(&b, "\n  documented but not bound: %s", strings.Join(missingRoutes, ", "))
-				}
-				return errors.New(b.String())
-			}
-
-			doc, err := api.Spec()
-			if err != nil {
-				return fmt.Errorf("render openapi document: %w", err)
-			}
-			if !write {
-				_, err := cmd.OutOrStdout().Write(doc)
-				return err //nolint:wrapcheck // trivial write
-			}
-			root, err := repoRoot()
-			if err != nil {
-				return err
-			}
-			dst := filepath.Join(root, api.SpecPath())
-			if err := os.MkdirAll(filepath.Dir(dst), 0o750); err != nil {
-				return fmt.Errorf("create docs directory: %w", err)
-			}
-			if err := os.WriteFile(dst, doc, 0o600); err != nil {
-				return fmt.Errorf("write %s: %w", api.SpecPath(), err)
-			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "wrote %s\n", api.SpecPath())
-			return err //nolint:wrapcheck // trivial write
-		},
-	}
-	c.Flags().BoolVar(&write, "write", false, "write docs/openapi.json instead of printing")
-	return c
-}
-
 func newLargeFilesCmd() *cobra.Command {
 	var maxKB int64
 	c := &cobra.Command{
@@ -215,64 +168,4 @@ func newLargeFilesCmd() *cobra.Command {
 	}
 	c.Flags().Int64Var(&maxKB, "max-kb", DefaultMaxFileKB, "maximum size of a tracked file, in KB")
 	return c
-}
-
-func newManifestsCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "manifests",
-		Short: "Fail if infrastructure/local/k8s contradicts the code it claims to deploy",
-		Long: "Checks the invariants YAML alone cannot: probe paths and ports\n" +
-			"against internal/config, the pod uid against the Dockerfile, the\n" +
-			"rolling-update strategy, and that no Service publishes the admin\n" +
-			"listener carrying /metrics and /debug/pprof.",
-		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			root, err := repoRoot()
-			if err != nil {
-				return err
-			}
-			findings, err := CheckManifests(root)
-			if err != nil {
-				return err
-			}
-			w := cmd.OutOrStdout()
-			if len(findings) == 0 {
-				_, err := fmt.Fprintf(w, "%s agrees with the code it deploys\n", ManifestDir())
-				return err //nolint:wrapcheck // trivial write
-			}
-			for _, f := range findings {
-				if _, err := fmt.Fprintln(w, f); err != nil {
-					return err //nolint:wrapcheck // trivial write
-				}
-			}
-			return fmt.Errorf("%d manifest invariant(s) broken", len(findings))
-		},
-	}
-}
-
-func newRoutesCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "routes",
-		Short: "List every route the API binds, and flag undocumented ones",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			missingDocs, missingRoutes := api.SpecDrift()
-			w := cmd.OutOrStdout()
-			if len(missingDocs) == 0 && len(missingRoutes) == 0 {
-				_, err := fmt.Fprintln(w, "every bound route is documented")
-				return err //nolint:wrapcheck // trivial write
-			}
-			for _, r := range missingDocs {
-				if _, err := fmt.Fprintf(w, "bound but undocumented: %s\n", r); err != nil {
-					return err //nolint:wrapcheck // trivial write
-				}
-			}
-			for _, r := range missingRoutes {
-				if _, err := fmt.Fprintf(w, "documented but not bound: %s\n", r); err != nil {
-					return err //nolint:wrapcheck // trivial write
-				}
-			}
-			return errors.New("route documentation is out of date")
-		},
-	}
 }

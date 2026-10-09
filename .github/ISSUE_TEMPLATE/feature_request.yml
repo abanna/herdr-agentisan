@@ -21,8 +21,7 @@ body:
     attributes:
       label: Where it belongs
       options:
-        - Domain (internal/notes) — affects CLI and API together
-        - REST API only
+        - Domain (internal/notes)
         - Product CLI only
         - devctl / repository tooling
         - Docs or CI
@@ -33,6 +32,5 @@ body:
     attributes:
       label: Contract impact
       options:
-        - label: This adds or changes an HTTP route (needs a spec.go entry and `task openapi:write`)
         - label: This adds or changes a gate (needs AGENTS.md + Taskfile.yml + ci.yml together)
         - label: This changes the public shape of internal/notes

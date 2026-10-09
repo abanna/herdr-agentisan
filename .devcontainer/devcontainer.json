@@ -8,25 +8,12 @@
   },
   "remoteUser": "vscode",
   "postCreateCommand": "go mod download",
-  "forwardPorts": [8080, 9090],
-  "portsAttributes": {
-    "8080": {
-      "label": "api (http)",
-      "onAutoForward": "notify"
-    },
-    "9090": {
-      "label": "admin (metrics, pprof)",
-      "onAutoForward": "silent"
-    }
-  },
   "customizations": {
     "vscode": {
       "extensions": [
         "golang.go",
         "task.vscode-task",
-        "ms-kubernetes-tools.vscode-kubernetes-tools",
-        "redhat.vscode-yaml",
-        "42crunch.vscode-openapi"
+        "redhat.vscode-yaml"
       ],
       "settings": {
         "files.eol": "\n",

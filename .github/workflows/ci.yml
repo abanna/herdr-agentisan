@@ -13,7 +13,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  GO_VERSION: "1.26.6"
+  GO_VERSION: "1.26.9"
 
 jobs:
   lint:
@@ -40,7 +40,6 @@ jobs:
           cache: true
       - run: go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage.out -covermode=atomic ./...
       - run: go run ./cmd/devctl coverage --profile coverage.out --min 75
-      - run: go test -tags=integration -race -timeout 5m ./...
 
   security:
     name: security
@@ -58,18 +57,6 @@ jobs:
       - run: go run github.com/zricethezav/gitleaks/v8@v8.30.1 git . --config .gitleaks.toml --no-banner --redact
       - run: go tool govulncheck ./...
 
-  openapi:
-    name: openapi
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - run: go run ./cmd/devctl openapi --write
-      - run: git diff --exit-code docs/openapi.json
-
   docs:
     name: docs
     runs-on: ubuntu-latest
@@ -81,21 +68,6 @@ jobs:
           cache: true
       - run: go run ./cmd/devctl docs-parity
       - run: go run ./cmd/devctl large-files
-
-  deploy:
-    name: deploy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - run: go run ./cmd/devctl manifests
-      # promtool runs from the pinned Prometheus image; ubuntu-latest runners
-      # already have docker, so this needs no setup step.
-      - run: docker run --rm -v "$PWD/infrastructure/local/observability/alerts:/rules" -w /rules --entrypoint promtool prom/prometheus:v3.6.0 check rules rules.yaml
-      - run: docker run --rm -v "$PWD/infrastructure/local/observability/alerts:/rules" -w /rules --entrypoint promtool prom/prometheus:v3.6.0 test rules rules_test.yaml
 
   tidy:
     name: tidy

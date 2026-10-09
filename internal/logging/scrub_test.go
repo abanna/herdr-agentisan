@@ -1,3 +1,7 @@
+// safety-scan: allow (test fixture — every secret-shaped value here is assembled
+// at runtime from fragments so it can exercise the scrubber; gitleaks still
+// scans this file)
+
 package logging_test
 
 import (
@@ -21,8 +25,7 @@ import (
 // exclude — five coupled exemptions that a fixture rename or an upstream rule
 // rename would break. Concatenation removes the literal, and with it all five.
 var (
-	token       = "sk_" + "live_" + "9fJ2kQ7xVb3nMz8pLw1aTc5R"
-	envToken    = "GO_AGENTS_API" + "_TOKEN=hunter2hunter2"
+	token       = "sk_" + "live_" + "FAKEfixtureNOTaKEY0000000"
 	githubToken = "gh" + "p_" + "abcdefghijklmnopqrstuvwxyz0123456789"
 	pemHeader   = "-----BEGIN " + "RSA PRIVATE KEY-----"
 )
@@ -91,7 +94,6 @@ func TestScrubRedactsSecretShapedValuesUnderInnocuousKeys(t *testing.T) {
 	tests := map[string]string{
 		"bearer in a message":   `{"message":"calling with Bearer ` + token + `"}`,
 		"provider key in a msg": `{"message":"key is ` + token + `"}`,
-		"env assignment":        `{"message":"` + envToken + `"}`,
 		"github token":          `{"message":"` + githubToken + `"}`,
 		"pem header":            `{"message":"` + pemHeader + `"}`,
 	}
@@ -246,13 +248,12 @@ func TestScrubLeavesCleanLinesByteIdentical(t *testing.T) {
 }
 
 // TestCompositeKeysAreRedacted covers the whole-key matching gap: composite
-// spellings were returned byte-identical, including go_agents_api_token — the
-// credential this service itself issues.
+// spellings were returned byte-identical.
 func TestCompositeKeysAreRedacted(t *testing.T) {
 	t.Parallel()
 
 	keys := []string{
-		"auth_token", "secret_key", "http.authorization", "go_agents_api_token",
+		"auth_token", "secret_key", "http.authorization", "service_api_token",
 		"x-api-key", "db_password", "user.session.id", "refresh-token",
 		"CREDIT_CARD", "SIGNATURE", "Ssn", "Set-Cookie", "clientSecret",
 	}
@@ -332,21 +333,23 @@ func TestBatchedDocumentsAreNotTruncated(t *testing.T) {
 	assert.NotContains(t, got, "abc123xyz")
 }
 
-// TestUnbalancedOutputIsNeverEmitted guards the \S+ bug: the pattern ran past
-// the value, ate the closing quote, and ConsoleWriter then refused to decode
-// the event and dropped it entirely.
+// TestUnbalancedOutputIsNeverEmitted guards the \S+ bug: a value pattern that
+// ran past the value ate the closing quote, and ConsoleWriter then refused to
+// decode the event and dropped it entirely. Every value pattern must stop at
+// the end of the secret, whatever follows it.
 func TestUnbalancedOutputIsNeverEmitted(t *testing.T) {
 	t.Parallel()
 
-	bare := "GO_AGENTS_API" + "_TOKEN=abc123xyz"
-	for _, in := range []string{
-		`{"message":"` + bare + `"}`,
-		`{"message":"` + bare + ` and more text"}`,
-	} {
-		got := logging.ScrubJSONLine([]byte(in))
-		var doc map[string]any
-		require.NoErrorf(t, json.Unmarshal(got, &doc), "output must stay valid JSON: %s", got)
-		assert.NotContains(t, string(got), "abc123xyz")
+	for _, secret := range []string{"Bearer " + token, token, githubToken, pemHeader} {
+		for _, in := range []string{
+			`{"message":"` + secret + `"}`,
+			`{"message":"` + secret + ` and more text"}`,
+		} {
+			got := logging.ScrubJSONLine([]byte(in))
+			var doc map[string]any
+			require.NoErrorf(t, json.Unmarshal(got, &doc), "output must stay valid JSON: %s", got)
+			assert.Contains(t, string(got), logging.Redacted)
+		}
 	}
 }
 
@@ -398,5 +401,63 @@ func BenchmarkLoggerScrubbed(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		lg.Info().Str("method", "GET").Str("path", "/healthz").Int("status", 200).Msg("request")
+	}
+}
+
+// TestScrubLineClasses walks the byte-level shapes a log line can take. The
+// property is the same for every class: the scrubber returns, and a secret
+// carried by the line never survives it, whatever surrounds the secret.
+func TestScrubLineClasses(t *testing.T) {
+	t.Parallel()
+
+	deep := strings.Repeat("[", 20000) + `"` + githubToken + `"` + strings.Repeat("]", 20000)
+	tests := map[string]string{
+		"empty line":                  "",
+		"truncated multibyte at end":  `{"message":"` + githubToken + `"}` + "\xe2\x82",
+		"byte-order mark":             "\xef\xbb\xbf" + `{"message":"` + githubToken + `"}`,
+		"CRLF line ending":            `{"message":"` + githubToken + `"}` + "\r\n",
+		"lone CR line ending":         `{"message":"` + githubToken + `"}` + "\r",
+		"embedded NUL":                `{"message":"a\u0000 ` + githubToken + `"}`,
+		"Latin-1 bytes":               "{\"message\":\"caf\xe9 " + githubToken + "\"}",
+		"lone surrogate escape":       `{"message":"\ud800 ` + githubToken + `"}`,
+		"nesting past the json limit": deep,
+		"one megabyte value":          `{"message":"` + strings.Repeat("a", 1<<20) + " " + githubToken + `"}`,
+	}
+	for name, line := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := string(logging.ScrubJSONLine([]byte(line)))
+			assert.NotContains(t, got, githubToken, "the secret survived")
+			if line == "" {
+				assert.Empty(t, got, "an empty line must stay empty")
+			}
+		})
+	}
+}
+
+// TestBearerLengthBoundary pins the bearer pattern's floor: 16 characters is
+// a token, 15 is prose. At a floor of 8 the pattern ate ordinary English.
+func TestBearerLengthBoundary(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		value    string
+		redacted bool
+	}{
+		"one under the floor": {value: strings.Repeat("x", 15), redacted: false},
+		"exactly the floor":   {value: strings.Repeat("x", 16), redacted: true},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := string(logging.ScrubJSONLine([]byte(`{"message":"Bearer ` + tc.value + `"}`)))
+			if tc.redacted {
+				assert.NotContains(t, got, tc.value)
+				return
+			}
+			assert.Contains(t, got, tc.value)
+		})
 	}
 }
