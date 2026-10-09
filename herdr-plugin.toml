@@ -1,0 +1,23 @@
+# herdr plugin manifest. See https://herdr.dev/docs/plugins/.
+#
+# Every command is ONE exec of an argv array with the plugin root as the
+# working directory — no shell. `herdr plugin link` does not run [[build]]
+# (only `herdr plugin install` does), so link with `task plugin:link`, which
+# builds first. internal/cli's TestManifestMatchesTheBinary fails the build if
+# an action stops naming a real command or the build output path drifts.
+id = "nerdsrun.agentisan"
+name = "Agentisan"
+version = "0.1.0"
+min_herdr_version = "0.9.3"
+description = "Agentisan agent orchestration for herdr"
+platforms = ["linux", "macos"]
+
+[[build]]
+command = ["go", "build", "-o", "bin/herdr-agentisan", "./cmd/herdr-agentisan"]
+
+[[actions]]
+id = "ping"
+title = "Agentisan: ping"
+description = "Show a toast proving the plugin is wired up"
+contexts = ["global"]
+command = ["bin/herdr-agentisan", "action", "ping"]

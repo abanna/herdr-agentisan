@@ -10,15 +10,34 @@ cmd/herdr-agentisan ─→ internal/cli    (cobra tree herdr invokes from the ma
 cmd/devctl          ─→ internal/devcli (the repository's own gates)
 ```
 
-`cmd/*` packages are thin shims — signal handling, fang styling, process
-lifecycle. No logic. That is what keeps them outside the coverage denominator
-honest: there is nothing in them worth testing that running the binary does
-not already prove.
+`cmd/*` packages are thin shims — config, logging, tracing, signal handling,
+fang styling. No logic. That is what keeps them outside the coverage
+denominator honest: there is nothing in them worth testing that running the
+binary does not already prove.
 
 The load-bearing decision is that **rules live in domain packages under
 `internal/`, not in commands**. herdr reaches the plugin through several
 doors — actions, event hooks, startup hooks, panes — and each is a command;
 a rule written into one of them is a rule the others do not have.
+
+## How herdr runs the plugin
+
+herdr reads `herdr-plugin.toml` and, for each action, execs one argv array
+with the plugin root as the working directory and no shell. The process gets
+its context through environment variables (`internal/plugin.EnvFrom`) and
+talks back over herdr's unix socket (`internal/herdr`): newline-delimited
+JSON, one request per connection, bounded by the command's context so a herdr
+that never answers cannot hold an action slot open.
+
+Two properties are enforced rather than hoped for:
+
+- **The manifest matches the binary.** `herdr plugin link` runs no build and
+  herdr only warns about a bad manifest, so `TestManifestMatchesTheBinary`
+  checks that every action names a runnable cobra command exactly and execs
+  the path the build writes.
+- **Tests never reach a live herdr.** A developer's shell inside herdr has
+  `HERDR_SOCKET_PATH` set. Commands read the environment through an injected
+  lookup, and tests dial `herdrtest`, an in-process fake socket.
 
 ## Why two CLIs
 

@@ -41,6 +41,8 @@ everything.
 | Check go.mod is tidy | `git diff --exit-code go.mod go.sum` |
 | Install the git pre-commit hook | `uvx pre-commit install` |
 | Run the CLI | `task run:cli` |
+| Link the plugin into the running herdr | `task plugin:link` |
+| Unlink the plugin from herdr | `task plugin:unlink` |
 | Install the binaries | `task install` |
 | Show pinned tool versions | `task tools` |
 | Rebuild the tdaddy graph | `task tdaddy:index` |
@@ -62,8 +64,9 @@ must be one CI runs unless it is declared local-only in
 next agent to "fix" a gate that was never broken.
 
 The last rows are local-only: CI never installs the git hook, runs the
-interactive CLI, or installs into a developer's `GOBIN` — and the tdaddy rows
-need a binary CI cannot install (see below).
+interactive CLI, links into a herdr (it has none), or installs into a
+developer's `GOBIN` — and the tdaddy rows need a binary CI cannot install
+(see below).
 
 Two maps in `internal/devcli/parity.go` are escape hatches from this check:
 `localOnly` (documented commands CI need not run) and `nonGateTasks` (tasks not
@@ -76,11 +79,22 @@ exempts whatever is later added under that name.
 
 ## Layout
 
-- `cmd/herdr-agentisan/` — the plugin binary's entrypoint. A thin shim; no logic.
+- `herdr-plugin.toml` — the plugin manifest herdr reads. Every action execs
+  `bin/herdr-agentisan <subcommand>`; `TestManifestMatchesTheBinary` in
+  `internal/cli` fails the build if an action stops naming a real command or
+  the build output path drifts from the Taskfile's.
+- `cmd/herdr-agentisan/` — the plugin binary's entrypoint. Wires config,
+  logging (stderr only — stdout is the command's output) and tracing; no logic.
 - `cmd/devctl/` — development operations CLI entrypoint. A thin shim.
 - `internal/cli/` — the `herdr-agentisan` cobra tree. Parses, calls a domain
   package, renders. Domain packages live beside it under `internal/`, one per
   concern; no command holds a rule of its own.
+- `internal/plugin/` — the plugin's domain: the runtime environment herdr
+  injects (`EnvFrom`), the manifest (`LoadManifest`) and the actions' logic.
+- `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
+  request per connection). `herdrtest` is an in-process fake server: tests
+  must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real
+  socket set, and a test that reads it would toast a live session.
 - `internal/devcli/` — the `devctl` cobra tree: the coverage floor, the
   docs-parity check and the large-file ceiling, none of which the Go toolchain
   provides.

@@ -9,17 +9,22 @@ Two binaries:
 | `herdr-agentisan` | The plugin binary herdr invokes from its manifest |
 | `devctl` | Development operations: coverage floor, docs parity, large files |
 
-The plugin skeleton (manifest, socket client, first action) lands next; see
-[herdr's plugin docs](https://herdr.dev/docs/plugins/) for the model it follows.
+herdr runs the plugin from `herdr-plugin.toml`; see
+[herdr's plugin docs](https://herdr.dev/docs/plugins/) for the model.
 
 ## Quick start
 
 ```bash
 go mod download && task build
 
-task run:cli -- version
-task run:cli -- version --json
+task plugin:link                                   # build, then link into the running herdr
+herdr plugin action invoke nerdsrun.agentisan.ping # a toast appears
+herdr plugin log list --plugin nerdsrun.agentisan  # exit 0, "notification shown"
+task plugin:unlink
 ```
+
+`herdr plugin link` never builds, which is why `task plugin:link` does. The
+binary also runs by hand: `task run:cli -- version --json`.
 
 Requires Go 1.26.9+ and [Task](https://taskfile.dev). Linters and scanners are
 pinned in `go.mod` under the `tool` directive — nothing to install globally.
