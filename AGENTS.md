@@ -60,7 +60,7 @@ strings. Change a gate and you change all three together.
 `go run ./cmd/devctl docs-parity` enforces exactly that, in every direction: a
 gate CI runs must appear here *and* in a task, and a command documented here
 must be one CI runs unless it is declared local-only in
-`internal/devcli/parity.go`. A command table that drifts from CI teaches the
+`internal/devctl/parity.go`. A command table that drifts from CI teaches the
 next agent to "fix" a gate that was never broken.
 
 The last rows are local-only: CI never installs the git hook, runs the
@@ -68,7 +68,7 @@ interactive CLI, links into a herdr (it has none), or installs into a
 developer's `GOBIN` — and the tdaddy rows need a binary CI cannot install
 (see below).
 
-Two maps in `internal/devcli/parity.go` are escape hatches from this check:
+Two maps in `internal/devctl/parity.go` are escape hatches from this check:
 `localOnly` (documented commands CI need not run) and `nonGateTasks` (tasks not
 compared against CI at all). **Adding an entry to either weakens the gate.**
 Every entry carries a stated reason; if a parity failure tempts you to add a
@@ -95,7 +95,7 @@ exempts whatever is later added under that name.
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real
   socket set, and a test that reads it would toast a live session.
-- `internal/devcli/` — the `devctl` cobra tree: the coverage floor, the
+- `internal/devctl/` — the `devctl` cobra tree: the coverage floor, the
   docs-parity check and the large-file ceiling, none of which the Go toolchain
   provides.
 - `internal/config/` — environment-backed config. No secret has a default.

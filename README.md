@@ -38,7 +38,7 @@ ceiling, the docs parity check, and the pre-commit hooks. `go mod tidy` and
 the command table in [AGENTS.md](AGENTS.md#commands) for the full, CI-verified
 list.
 
-Two of those have no Go builtin and are implemented in `internal/devcli`:
+Two of those have no Go builtin and are implemented in `internal/devctl`:
 
 - **Coverage floor** — `go test` has no `--cov-fail-under`, so `devctl
   coverage` parses `go tool cover -func` and fails under 75%.

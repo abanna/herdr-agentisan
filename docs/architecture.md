@@ -7,7 +7,7 @@ Two binaries:
 ```
 cmd/herdr-agentisan ─→ internal/cli    (cobra tree herdr invokes from the manifest)
                               └─→ internal/<domain> packages (the rules)
-cmd/devctl          ─→ internal/devcli (the repository's own gates)
+cmd/devctl          ─→ internal/devctl (the repository's own gates)
 ```
 
 `cmd/*` packages are thin shims — config, logging, tracing, signal handling,
@@ -50,7 +50,7 @@ exists because three of this repo's gates have no Go builtin:
   parses `go tool cover -func` and fails below the threshold.
 - **Docs parity.** `devctl docs-parity` proves AGENTS.md, `Taskfile.yml` and
   `ci.yml` describe the same gates, and that no escape-hatch entry in
-  `internal/devcli/parity.go` outlives the task or row it exempted.
+  `internal/devctl/parity.go` outlives the task or row it exempted.
 - **Large files.** `devctl large-files` fails on a tracked file above the size
   ceiling, which git itself never enforces.
 

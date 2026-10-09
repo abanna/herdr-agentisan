@@ -11,7 +11,7 @@ import (
 	"github.com/charmbracelet/fang"
 
 	"github.com/abanna/herdr-agentisan/internal/config"
-	"github.com/abanna/herdr-agentisan/internal/devcli"
+	"github.com/abanna/herdr-agentisan/internal/devctl"
 )
 
 func main() {
@@ -33,7 +33,7 @@ func run() int {
 		signal.Reset(os.Interrupt, syscall.SIGTERM)
 	}()
 
-	if err := fang.Execute(ctx, devcli.Root(),
+	if err := fang.Execute(ctx, devctl.Root(),
 		fang.WithVersion(config.Version),
 		fang.WithCommit(config.Commit),
 	); err != nil {

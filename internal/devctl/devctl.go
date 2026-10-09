@@ -1,9 +1,9 @@
-// Package devcli builds the `devctl` command tree: repository operations and
+// Package devctl builds the `devctl` command tree: repository operations and
 // helpers that keep the gates honest.
 //
 // These are development-time verbs, deliberately separate from the product
 // CLI in internal/cli. Nothing here is part of the shipped service.
-package devcli
+package devctl
 
 import (
 	"errors"
@@ -83,7 +83,7 @@ func newParityCmd() *cobra.Command {
 				return err
 			}
 			if len(stale) > 0 {
-				return fmt.Errorf("docs parity: stale escape-hatch entries in internal/devcli/parity.go:\n  - %s",
+				return fmt.Errorf("docs parity: stale escape-hatch entries in internal/devctl/parity.go:\n  - %s",
 					strings.Join(stale, "\n  - "))
 			}
 			return nil

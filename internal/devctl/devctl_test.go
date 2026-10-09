@@ -1,4 +1,4 @@
-package devcli_test
+package devctl_test
 
 import (
 	"strings"
@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/abanna/herdr-agentisan/internal/devcli"
+	"github.com/abanna/herdr-agentisan/internal/devctl"
 )
 
 func TestParseCoverageTotal(t *testing.T) {
@@ -46,7 +46,7 @@ func TestParseCoverageTotal(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := devcli.ParseCoverageTotal(strings.NewReader(tc.in))
+			got, err := devctl.ParseCoverageTotal(strings.NewReader(tc.in))
 			if tc.wantErr {
 				require.Error(t, err)
 				return
@@ -60,16 +60,16 @@ func TestParseCoverageTotal(t *testing.T) {
 func TestCoverageResultMeets(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, devcli.CoverageResult{Percent: 80, Threshold: 75}.Meets())
-	assert.True(t, devcli.CoverageResult{Percent: 75, Threshold: 75}.Meets(), "exactly at the floor passes")
-	assert.False(t, devcli.CoverageResult{Percent: 74.9, Threshold: 75}.Meets())
+	assert.True(t, devctl.CoverageResult{Percent: 80, Threshold: 75}.Meets())
+	assert.True(t, devctl.CoverageResult{Percent: 75, Threshold: 75}.Meets(), "exactly at the floor passes")
+	assert.False(t, devctl.CoverageResult{Percent: 74.9, Threshold: 75}.Meets())
 }
 
 func TestCoverageResultStringReportsVerdict(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, devcli.CoverageResult{Percent: 90, Threshold: 75}.String(), "ok")
-	assert.Contains(t, devcli.CoverageResult{Percent: 10, Threshold: 75}.String(), "FAIL")
+	assert.Contains(t, devctl.CoverageResult{Percent: 90, Threshold: 75}.String(), "ok")
+	assert.Contains(t, devctl.CoverageResult{Percent: 10, Threshold: 75}.String(), "FAIL")
 }
 
 // TestParityHoldsInThisRepo is the gate itself: it fails the build when
@@ -77,7 +77,7 @@ func TestCoverageResultStringReportsVerdict(t *testing.T) {
 func TestParityHoldsInThisRepo(t *testing.T) {
 	t.Parallel()
 
-	rep, err := devcli.CheckParity("../..")
+	rep, err := devctl.CheckParity("../..")
 	require.NoError(t, err)
 	assert.Truef(t, rep.OK(), "%s", rep)
 }
@@ -88,7 +88,7 @@ func TestParityHoldsInThisRepo(t *testing.T) {
 func TestNoStaleParityExemptionsInThisRepo(t *testing.T) {
 	t.Parallel()
 
-	stale, err := devcli.StaleExemptions("../..")
+	stale, err := devctl.StaleExemptions("../..")
 	require.NoError(t, err)
 	assert.Empty(t, stale)
 }
@@ -103,5 +103,5 @@ func TestEveryDevCommandIsDocumented(t *testing.T) {
 			walk(sub)
 		}
 	}
-	walk(devcli.Root())
+	walk(devctl.Root())
 }

@@ -1,6 +1,6 @@
 //go:build unix
 
-package devcli_test
+package devctl_test
 
 import (
 	"os"
@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/abanna/herdr-agentisan/internal/devcli"
+	"github.com/abanna/herdr-agentisan/internal/devctl"
 )
 
 // TestStaleExemptionsRootClasses walks the path and content classes the root
@@ -176,7 +176,7 @@ func TestStaleExemptionsRootClasses(t *testing.T) {
 			)
 			go func() {
 				defer close(done)
-				stale, err = devcli.StaleExemptions(root)
+				stale, err = devctl.StaleExemptions(root)
 			}()
 			select {
 			case <-done:
