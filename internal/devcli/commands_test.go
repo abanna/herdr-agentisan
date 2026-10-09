@@ -2,15 +2,14 @@ package devcli_test
 
 import (
 	"bytes"
-	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/nerds-run/go-agents/internal/api"
 	"github.com/nerds-run/go-agents/internal/devcli"
 )
 
@@ -28,44 +27,10 @@ func runDev(t *testing.T, args ...string) (string, error) {
 	return out.String(), err
 }
 
-func TestRoutesCommandReportsNoDrift(t *testing.T) {
-	out, err := runDev(t, "routes")
-	require.NoError(t, err)
-	assert.Contains(t, out, "every bound route is documented")
-}
-
 func TestDocsParityCommandPasses(t *testing.T) {
 	out, err := runDev(t, "docs-parity")
 	require.NoError(t, err)
 	assert.Contains(t, out, "agree")
-}
-
-func TestOpenAPICommandPrintsValidJSON(t *testing.T) {
-	out, err := runDev(t, "openapi")
-	require.NoError(t, err)
-
-	var doc map[string]any
-	require.NoError(t, json.Unmarshal([]byte(out), &doc))
-	assert.Equal(t, api.SpecVersion, doc["openapi"])
-	assert.Contains(t, doc, "paths")
-}
-
-// TestOpenAPIWriteMatchesTheCommittedFile is the drift gate CI runs, executed
-// in-process: the generated document must equal what is checked in.
-func TestOpenAPIWriteMatchesTheCommittedFile(t *testing.T) {
-	generated, err := api.Spec()
-	require.NoError(t, err)
-
-	committed, err := os.ReadFile(filepath.Join("..", "..", api.SpecPath()))
-	require.NoError(t, err, "docs/openapi.json is missing: run `task openapi:write`")
-
-	assert.Equal(t, string(generated), string(committed),
-		"docs/openapi.json is stale — run `task openapi:write`")
-}
-
-func TestSpecPathIsTheCommittedLocation(t *testing.T) {
-	t.Parallel()
-	assert.Equal(t, "docs/openapi.json", api.SpecPath())
 }
 
 func TestCoverageCommandFailsBelowTheFloor(t *testing.T) {
@@ -186,6 +151,26 @@ func writeParityTree(t *testing.T, agentsRow, taskCmd, ciRun string) string {
 	require.NoError(t, os.MkdirAll(wf, 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(wf, "ci.yml"), []byte(ci), 0o600))
 	return root
+}
+
+// TestStaleExemptionsFlagsEntriesWithNothingBehindThem: the minimal tree has
+// only a `vet` task and one table row, so every real escape-hatch entry points
+// at nothing and must be reported, naming which map to edit.
+func TestStaleExemptionsFlagsEntriesWithNothingBehindThem(t *testing.T) {
+	t.Parallel()
+
+	stale, err := devcli.StaleExemptions(writeParityTree(t, "", "", ""))
+	require.NoError(t, err)
+	assert.Contains(t, stale, `nonGateTasks["build:cli"]: Taskfile.yml has no such task`)
+	assert.Contains(t, stale, `localOnly["task run:cli"]: AGENTS.md does not document this command`)
+	assert.True(t, slices.IsSorted(stale), "report order must be stable")
+}
+
+func TestStaleExemptionsOnABrokenTree(t *testing.T) {
+	t.Parallel()
+
+	_, err := devcli.StaleExemptions(t.TempDir())
+	require.Error(t, err)
 }
 
 const (

@@ -1,18 +1,18 @@
 # syntax=docker/dockerfile:1
 
-# Base: golang:1.26.6-bookworm, not the Microsoft devcontainers Go image.
+# Base: golang:1.26.9-bookworm, not the Microsoft devcontainers Go image.
 #
 # `mcr.microsoft.com/devcontainers/go:1-1.26-bookworm` does not exist — that
 # registry is on its 2.x line and tags as <image>-<go-minor>-<distro>
 # (`2.1-1.26-bookworm`), which floats the Go PATCH. Floating the patch is the
-# one thing this repo cannot tolerate: go.mod pins `toolchain go1.26.6`, so a
+# one thing this repo cannot tolerate: go.mod pins `toolchain go1.26.9`, so a
 # base shipping an older patch makes every `go` invocation download a second
-# toolchain at first use, and AGENTS.md pins 1.26.6 because earlier 1.26
-# patches carry three reachable stdlib advisories `govulncheck` fails on.
-# golang:1.26.6-bookworm is exactly that patch, so `go version` in here is the
+# toolchain at first use, and AGENTS.md pins 1.26.9 because earlier 1.26
+# patches carry reachable stdlib advisories `govulncheck` fails on.
+# golang:1.26.9-bookworm is exactly that patch, so `go version` in here is the
 # version the gates run against. The price is doing the devcontainer chores by
 # hand — non-root user, sudo, GOPATH ownership — which is the rest of this file.
-FROM golang:1.26.6-bookworm
+FROM golang:1.26.9-bookworm
 
 # BuildKit populates this. Declaring it keeps one Dockerfile working on both
 # amd64 and arm64 hosts; every download below is parameterised on it, and an
@@ -25,11 +25,6 @@ ARG TARGETARCH
 # time: an image that builds differently tomorrow is not an environment.
 ARG TASK_VERSION=v3.53.1
 ARG UV_VERSION=0.12.9
-# kubectl tracks the 1.35 line the kind cluster runs, and carries the
-# kustomize the manifests are assembled with (`kubectl version --client`
-# prints both, which is why that is the verification command below).
-ARG KUBECTL_VERSION=v1.35.8
-ARG KIND_VERSION=v0.33.0
 
 ARG USERNAME=vscode
 ARG USER_UID=1000
@@ -44,9 +39,9 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 #
 # sudo is not a convenience. Devcontainer Features run their runtime hooks as
 # the remote user, and docker-outside-of-docker's socket-permission fixup
-# shells out to sudo; without it the mounted socket is unusable and kind cannot
-# create a cluster. Passwordless is deliberate and scoped to a development
-# image that holds no credentials and is never deployed.
+# shells out to sudo; without it the mounted socket is unusable. Passwordless
+# is deliberate and scoped to a development image that holds no credentials
+# and is never deployed.
 #
 # The base leaves GOPATH=/go owned by root while postCreateCommand runs
 # `go mod download` as ${USERNAME}, so ownership is handed over here. The chown
@@ -141,31 +136,6 @@ RUN set -euo pipefail; \
     cd /; rm -rf "${tmp}"; \
     uv --version; \
     uvx --version
-
-# kubectl and kind: the point of this branch is the local kind stack, and a dev
-# container that cannot drive it is a generic Go box. helm is deliberately
-# absent — the stack is plain manifests assembled with kubectl's built-in
-# kustomize, and shipping helm would advertise an option the manifests do not
-# support.
-#
-# dl.k8s.io publishes a bare hash with no filename, so the checksum line is
-# assembled here; GitHub's is already in sha256sum(1) format.
-RUN set -euo pipefail; \
-    tmp="$(mktemp -d)"; cd "${tmp}"; \
-    kbase="https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}"; \
-    curl -fsSLO "${kbase}/kubectl"; \
-    curl -fsSLO "${kbase}/kubectl.sha256"; \
-    echo "$(cat kubectl.sha256)  kubectl" | sha256sum -c -; \
-    install -m 0755 kubectl /usr/local/bin/kubectl; \
-    kind_asset="kind-linux-${TARGETARCH}"; \
-    gbase="https://github.com/kubernetes-sigs/kind/releases/download/${KIND_VERSION}"; \
-    curl -fsSLO "${gbase}/${kind_asset}"; \
-    curl -fsSLO "${gbase}/${kind_asset}.sha256sum"; \
-    sha256sum -c "${kind_asset}.sha256sum"; \
-    install -m 0755 "${kind_asset}" /usr/local/bin/kind; \
-    cd /; rm -rf "${tmp}"; \
-    kubectl version --client; \
-    kind --version
 
 # No USER instruction, deliberately. The devcontainer CLI installs Features and
 # runs the docker-outside-of-docker entrypoint as the container user, and that

@@ -19,9 +19,8 @@ import (
 // ParityReport checks every direction so that cannot happen silently.
 
 // localOnly lists documented commands that legitimately have no CI counterpart,
-// each with the reason. CI never starts a server or installs local hooks.
+// each with the reason. CI never runs the CLI or installs local hooks.
 var localOnly = map[string]string{
-	"task run:server":        "CI never starts the server",
 	"task run:cli":           "CI never runs the interactive CLI",
 	"task install":           "installs into the developer's GOBIN",
 	"task tools":             "local toolchain bootstrap",
@@ -43,44 +42,18 @@ var nonGateTasks = map[string]string{
 	"build":          "aggregate build target",
 	"build:cli":      "produces a binary; CI builds via `go test`/`go vet`",
 	"build:devctl":   "produces a binary",
-	"build:server":   "produces a binary",
 	"install":        "installs into the developer's GOBIN",
-	"run:server":     "CI never starts the server",
 	"run:cli":        "CI never runs the interactive CLI",
 	"check":          "aggregate of the gates below it",
 	"clean":          "deletes build output",
 	"tools":          "prints pinned tool versions",
 	"ci":             "runs the workflow locally via act",
 	"lint:fix":       "mutates source; CI must never auto-fix",
-	"openapi:write":  "regenerates in place; the `openapi` task is the gate",
 	"cover:html":     "opens a report for a human",
 	"hooks:install":  "writes into the developer's .git/, not a gate",
 	"secrets:staged": "reads the git index, which is empty in CI; the security job scans history instead",
 	"tdaddy:index":   "machine-local dependency graph; not a CI gate",
 	"tdaddy:impact":  "machine-local; advisory test selection, not a gate",
-	// The kind tasks create, mutate and destroy a local Kubernetes cluster.
-	// CI has no cluster and must not acquire one to satisfy a docs check: the
-	// gates that DO run in CI over this material are `devctl manifests` and
-	// the promtool rule tests, both of which are static and both of which are
-	// compared normally.
-	"kind:up":     "creates a local kind cluster",
-	"kind:down":   "deletes a local kind cluster",
-	"kind:deploy": "builds an image and rolls it out into a local cluster",
-	"kind:secret": "generates a local Secret from /dev/urandom",
-	"kind:smoke":  "exercises a running local cluster",
-	// The k8s:* family reaches INTO a running cluster: it lists, follows,
-	// port-forwards, execs and pulls profiles. None of it asserts anything, so
-	// none of it is a gate, and CI has no cluster to point it at. The gates
-	// that DO cover this material are `devctl manifests` and the promtool rule
-	// tests, both static.
-	"k8s:status":    "lists what is deployed",
-	"k8s:resources": "lists every object this repo owns",
-	"k8s:ui":        "port-forwards the UIs for a human",
-	"k8s:logs":      "follows logs from a running cluster",
-	"k8s:events":    "reads cluster events",
-	"k8s:shell":     "execs a shell into a pod",
-	"k8s:alerts":    "reads live alert state out of Prometheus",
-	"k8s:profile":   "pulls a pprof profile from a running pod",
 }
 
 // ParityReport is the outcome of the three-way comparison.
@@ -138,6 +111,18 @@ func readUnderRoot(root, name string) ([]byte, error) {
 		return nil, fmt.Errorf("open repository root %s: %w", root, err)
 	}
 	defer r.Close() //nolint:errcheck // read-only root; close error is not actionable
+
+	// Refuse anything but a regular file BEFORE opening it: opening a FIFO for
+	// reading blocks until a writer appears, which would hang the gate rather
+	// than fail it. Stat follows an in-root symlink, so a link to a regular
+	// file under root still passes; os.Root refuses one that escapes.
+	info, err := r.Stat(name)
+	if err != nil {
+		return nil, fmt.Errorf("stat %s: %w", name, err)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("%s is not a regular file (mode %s)", name, info.Mode().Type())
+	}
 
 	f, err := r.Open(name)
 	if err != nil {
@@ -288,14 +273,11 @@ func isGateCommand(c string) bool {
 	// than a false positive: the check would pass while the docs drifted.
 	// Add the runner here rather than routing around it.
 	//
-	// `docker ` earns its place because promtool has no usable Go entrypoint:
-	// `go run github.com/prometheus/prometheus/cmd/promtool@vX` compiles the
-	// whole of Prometheus, and there is no tool-directive form that does not
-	// drag that into this module. Running the pinned prom/prometheus image is
-	// the same binary CI and a laptop both get. Without this prefix the
-	// alert-rule gate would be dropped from the CI side of the comparison and
-	// then reported as drift in two directions at once — which is exactly the
-	// pressure to weaken `localOnly` that this check exists to resist.
+	//
+	// `docker ` stays for gates that run from a pinned image because they have
+	// no usable Go entrypoint (promtool was the first). Without the prefix such
+	// a gate drops out of the CI side and reads as drift in two directions,
+	// which is exactly the pressure to weaken `localOnly` this check resists.
 	for _, prefix := range []string{"task ", "go ", "git ", "uvx ", "docker "} {
 		if strings.HasPrefix(c, prefix) {
 			return true
@@ -363,6 +345,41 @@ func CheckParity(root string) (ParityReport, error) {
 	sort.Strings(rep.TaskGatesNotInCI)
 	sort.Strings(rep.CIGatesNotInTask)
 	return rep, nil
+}
+
+// StaleExemptions lists escape-hatch entries with nothing behind them: a
+// nonGateTasks name Taskfile.yml no longer defines, or a localOnly command
+// AGENTS.md no longer documents. CheckParity cannot see these, because an
+// exemption for something absent changes no comparison — until a task is
+// added under the old name and is silently exempted from the gate.
+func StaleExemptions(root string) ([]string, error) {
+	doc, err := parseDocCommands(root)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := readUnderRoot(root, "Taskfile.yml")
+	if err != nil {
+		return nil, err
+	}
+	var tf taskfile
+	if err := yaml.Unmarshal(raw, &tf); err != nil {
+		return nil, fmt.Errorf("parse Taskfile.yml: %w", err)
+	}
+
+	docSet := toSet(doc)
+	var stale []string
+	for name := range nonGateTasks {
+		if _, ok := tf.Tasks[name]; !ok {
+			stale = append(stale, fmt.Sprintf("nonGateTasks[%q]: Taskfile.yml has no such task", name))
+		}
+	}
+	for c := range localOnly {
+		if !docSet[c] {
+			stale = append(stale, fmt.Sprintf("localOnly[%q]: AGENTS.md does not document this command", c))
+		}
+	}
+	sort.Strings(stale)
+	return stale, nil
 }
 
 func toSet(ss []string) map[string]bool {

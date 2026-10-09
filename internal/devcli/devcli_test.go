@@ -4,19 +4,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gin-gonic/gin"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/nerds-run/go-agents/internal/api"
 	"github.com/nerds-run/go-agents/internal/devcli"
 )
-
-func TestMain(m *testing.M) {
-	gin.SetMode(gin.TestMode)
-	m.Run()
-}
 
 func TestParseCoverageTotal(t *testing.T) {
 	t.Parallel()
@@ -89,29 +82,15 @@ func TestParityHoldsInThisRepo(t *testing.T) {
 	assert.Truef(t, rep.OK(), "%s", rep)
 }
 
-// TestSpecMatchesBoundRoutes fails when a route is added without documenting
-// it, which would otherwise ship an incomplete spec that still passes the
-// committed-file diff check.
-func TestSpecMatchesBoundRoutes(t *testing.T) {
+// TestNoStaleParityExemptionsInThisRepo fails when a task or table row is
+// deleted but its escape-hatch entry is left behind. A dead entry is not
+// harmless: it silently exempts whatever task is later added under that name.
+func TestNoStaleParityExemptionsInThisRepo(t *testing.T) {
 	t.Parallel()
 
-	missingDocs, missingRoutes := api.SpecDrift()
-	assert.Empty(t, missingDocs, "these routes are bound but absent from the OpenAPI operations table")
-	assert.Empty(t, missingRoutes, "these operations are documented but no route binds them")
-}
-
-func TestSpecIsValidJSONAndDiffStable(t *testing.T) {
-	t.Parallel()
-
-	first, err := api.Spec()
+	stale, err := devcli.StaleExemptions("../..")
 	require.NoError(t, err)
-	second, err := api.Spec()
-	require.NoError(t, err)
-
-	// Map iteration order must not leak into the output, or every
-	// regeneration would dirty the committed file.
-	assert.Equal(t, string(first), string(second))
-	assert.True(t, strings.HasSuffix(string(first), "\n"), "file should end with a newline")
+	assert.Empty(t, stale)
 }
 
 func TestEveryDevCommandIsDocumented(t *testing.T) {

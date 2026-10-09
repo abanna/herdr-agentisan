@@ -10,7 +10,6 @@
 
 - [ ] `task check` passes locally
 - [ ] New behaviour has a test that was seen failing before the fix
-- [ ] `docs/openapi.json` regenerated if routes changed
 - [ ] AGENTS.md, Taskfile.yml and ci.yml still agree (`task docs`)
 
 ## Notes for reviewers

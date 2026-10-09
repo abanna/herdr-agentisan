@@ -2,14 +2,6 @@ version: "3"
 
 vars:
   BINARY_DIR: bin
-  # The kind cluster this repository owns. Spelled once and passed explicitly
-  # to every kind and kubectl invocation — see the kind:* tasks.
-  KIND_CLUSTER: go-agents
-  KUBE_CONTEXT: kind-go-agents
-  IMAGE_REPO: go-agents
-  # The tag the manifest carries. `task kind:deploy` overrides it per build
-  # with an immutable, commit-derived tag — see the comment there.
-  IMAGE: go-agents:dev
   COVERAGE_PROFILE: coverage.out
   COVERAGE_MIN: "75"
   # Single source for build provenance: go's own VCS stamping walks past a
@@ -41,7 +33,7 @@ tasks:
 
   build:
     desc: Build every binary into bin/
-    deps: [build:cli, build:devctl, build:server]
+    deps: [build:cli, build:devctl]
 
   build:cli:
     desc: Build the go-agents product CLI
@@ -53,25 +45,15 @@ tasks:
     cmds:
       - go build {{if .PROVENANCE_LDFLAGS}}-ldflags "{{.PROVENANCE_LDFLAGS}}"{{end}} -o {{.BINARY_DIR}}/devctl ./cmd/devctl
 
-  build:server:
-    desc: Build the REST API server
-    cmds:
-      - go build {{if .PROVENANCE_LDFLAGS}}-ldflags "{{.PROVENANCE_LDFLAGS}}"{{end}} -o {{.BINARY_DIR}}/server ./cmd/server
-
   install:
-    desc: Install all three binaries into $GOBIN (or $GOPATH/bin)
+    desc: Install both binaries into $GOBIN (or $GOPATH/bin)
     cmds:
       - |
         DEST="$(go env GOBIN)"
         [ -z "$DEST" ] && DEST="$(go env GOPATH)/bin"
-        for c in go-agents devctl server; do
+        for c in go-agents devctl; do
           go build {{if .PROVENANCE_LDFLAGS}}-ldflags "{{.PROVENANCE_LDFLAGS}}"{{end}} -o "$DEST/$c" ./cmd/$c
         done
-
-  run:server:
-    desc: Run the REST API locally
-    cmds:
-      - go run ./cmd/server
 
   run:cli:
     desc: Run the product CLI locally (pass args after --)
@@ -123,47 +105,6 @@ tasks:
     cmds:
       - go run ./cmd/devctl large-files
 
-  manifests:
-    desc: Fail if infrastructure/local/k8s contradicts the code it claims to deploy
-    # The invariants YAML alone cannot hold: probe paths and ports against
-    # internal/config, the pod uid against the Dockerfile, and that no Service
-    # publishes the admin listener carrying /metrics and /debug/pprof.
-    cmds:
-      - go run ./cmd/devctl manifests
-
-  alerts:
-    desc: Unit-test the Prometheus alert rules
-    # promtool, not a YAML schema check: an alert whose expression is valid
-    # PromQL but never fires is the failure mode that matters, and only
-    # evaluating it against synthetic series can catch that. The tests carry
-    # NEGATIVE cases too — a rule file whose tests only assert firing cannot
-    # notice a threshold typo that makes an alert fire constantly.
-    #
-    # Run through docker rather than `go run`: promtool's module is the whole
-    # of Prometheus, so a tool directive would drag it into this go.mod and a
-    # `go run pkg@version` would compile it on every CI run. The pinned image
-    # is the same binary locally and in CI, and it is the SAME version the
-    # cluster runs — a rules file promtool accepts but the server rejects is
-    # the failure this is designed out of.
-    # Docker is a REAL new requirement of `task check`, which until this gate
-    # needed only Go and task. That trade is deliberate — promtool has no
-    # usable Go entrypoint (see above) and the pinned image is the same binary
-    # locally and in CI — but it must fail with a sentence rather than a raw
-    # daemon error, and it must NOT degrade to a skip. A gate that quietly
-    # reports success on a machine that cannot run it is the vacuous green this
-    # repo has already been bitten by; refusing to run is honest, passing is
-    # not.
-    preconditions:
-      - sh: docker info >/dev/null 2>&1
-        msg: |
-          alerts: needs a running Docker daemon.
-          promtool ships as a container here (no usable Go entrypoint), so
-          `task check` requires docker. Start it, or run the other gates with:
-            task lint fmt vet security vuln docs manifests test:unit cover
-    cmds:
-      - docker run --rm -v "$PWD/infrastructure/local/observability/alerts:/rules" -w /rules --entrypoint promtool prom/prometheus:v3.6.0 check rules rules.yaml
-      - docker run --rm -v "$PWD/infrastructure/local/observability/alerts:/rules" -w /rules --entrypoint promtool prom/prometheus:v3.6.0 test rules rules_test.yaml
-
   hooks:
     desc: Run every pre-commit hook against the whole repo
     # The Go hooks shell out to the same commands CI runs, so this verifies
@@ -193,13 +134,6 @@ tasks:
     cmds:
       - go test -race -timeout 5m -coverpkg=./internal/... -coverprofile={{.COVERAGE_PROFILE}} -covermode=atomic ./...
 
-  test:integration:
-    desc: Run the integration suite (real server, real port, real file store)
-    # Behind //go:build integration so the default suite stays fast; these
-    # bind loopback sockets and write to disk.
-    cmds:
-      - go test -tags=integration -race -timeout 5m ./...
-
   cover:
     desc: Enforce the coverage floor (go test cannot do this itself)
     cmds:
@@ -209,17 +143,6 @@ tasks:
     desc: Open the coverage profile as HTML
     cmds:
       - go tool cover -html={{.COVERAGE_PROFILE}}
-
-  openapi:
-    desc: Regenerate docs/openapi.json and fail if it changed
-    cmds:
-      - go run ./cmd/devctl openapi --write
-      - git diff --exit-code docs/openapi.json
-
-  openapi:write:
-    desc: Regenerate docs/openapi.json in place
-    cmds:
-      - go run ./cmd/devctl openapi --write
 
   docs:
     desc: Fail if AGENTS.md, Taskfile.yml and ci.yml describe different gates
@@ -235,246 +158,16 @@ tasks:
   check:
     desc: Every gate CI runs
     # `deps` execute in PARALLEL. Only read-only gates belong there.
-    deps: [lint, fmt, vet, security, secrets, large-files, vuln, docs, manifests, alerts]
+    deps: [lint, fmt, vet, security, secrets, large-files, vuln, docs]
     cmds:
       - task: test:unit
-      - task: test:integration
       - task: cover
-      - task: openapi
       # `hooks` runs LAST and sequentially, never as a dep: end-of-file-fixer,
       # trailing-whitespace and mixed-line-ending REWRITE files. Run beside the
       # read-only gates they would race them — `fmt --diff` could report a diff
       # another process introduced a moment earlier, and the tree the other
       # gates validated would not be the tree you then commit.
       - task: hooks
-
-  # --- Local kind cluster -------------------------------------------------
-  #
-  # EVERY command below names the cluster and the context explicitly. That is
-  # not verbosity: a developer's current context is routinely some other
-  # cluster, and a task that relies on current-context is a task that will one
-  # day roll a deployment into production. No task here ever leaves the
-  # developer's shell repointed at this cluster — kind:up's own `kubectl
-  # config use-context` below exists only to restore whatever context `kind
-  # create` overwrote, not to select one for later commands to rely on.
-
-  kind:up:
-    desc: Create the local go-agents kind cluster and deploy the whole stack
-    cmds:
-      - |
-        set -eu
-        if ! kind get clusters | grep -qx "{{.KIND_CLUSTER}}"; then
-          # `kind create` sets current-context to the new cluster. Every task
-          # here passes --context explicitly and does not need that, while a
-          # developer running several clusters very much does not want their
-          # shell silently repointed. Capture and restore.
-          PREV="$(kubectl config current-context 2>/dev/null || true)"
-          kind create cluster --name {{.KIND_CLUSTER}} --config infrastructure/local/kind/cluster.yaml
-          if [ -n "$PREV" ]; then kubectl config use-context "$PREV" >/dev/null; fi
-        else
-          echo "cluster {{.KIND_CLUSTER}} already exists"
-        fi
-        kubectl --context {{.KUBE_CONTEXT}} apply -k infrastructure/local/observability
-      - task: kind:secret
-      - task: kind:deploy
-      - |
-        set -eu
-        for d in otel-collector prometheus grafana tempo loki pyroscope; do
-          kubectl --context {{.KUBE_CONTEXT}} -n observability rollout status "deploy/$d" --timeout=240s
-        done
-        # alloy is a DaemonSet, not a Deployment — it reads container logs off
-        # each node, so `rollout status deploy/alloy` would fail NotFound.
-        kubectl --context {{.KUBE_CONTEXT}} -n observability rollout status daemonset/alloy --timeout=240s
-        echo
-        echo "up. see docs/runbooks/README.md for the port-forward commands."
-
-  kind:secret:
-    desc: Create the API token Secret from local randomness if it is not there yet
-    # Generated, never committed: AGENTS.md rule 1. `create --dry-run | apply`
-    # would rotate the token on every run and restart both pods, so this is
-    # deliberately create-if-absent.
-    cmds:
-      - |
-        set -eu
-        kubectl --context {{.KUBE_CONTEXT}} create namespace go-agents \
-          --dry-run=client -o yaml | kubectl --context {{.KUBE_CONTEXT}} apply -f -
-        if kubectl --context {{.KUBE_CONTEXT}} -n go-agents get secret go-agents-api-token >/dev/null 2>&1; then
-          echo "secret go-agents-api-token already exists"
-        else
-          kubectl --context {{.KUBE_CONTEXT}} -n go-agents create secret generic go-agents-api-token \
-            --from-literal=token="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-        fi
-
-  kind:deploy:
-    desc: Build the image under an immutable tag, load it and roll it out
-    # Each deploy gets its OWN tag, derived from the commit. That is what makes
-    # `kubectl rollout undo` a real rollback rather than a restart.
-    #
-    # Under one mutable tag plus `imagePullPolicy: Never`, every Deployment
-    # revision names the same string and the kubelet uses whatever the node
-    # currently holds under it. `undo` then restores a pod template identical
-    # to the running one, new pods start, and they start on the NEW binary —
-    # the rollback appears to succeed and changes nothing. With a distinct tag
-    # per build the old image is still on the node and the old revision still
-    # names it, so undo actually goes back. See docs/runbooks/rollback.md.
-    cmds:
-      - |
-        set -eu
-        COMMIT="$(git rev-parse --verify --quiet --short HEAD 2>/dev/null || echo unknown)"
-        TAG="$COMMIT"
-        VERSION="$COMMIT"
-        if [ -n "$(git status --porcelain 2>/dev/null)" ]; then
-          # A dirty tree would otherwise reuse the tag of the last clean build
-          # and silently pin the rollout to stale bits. The suffix keeps every
-          # build distinguishable and honest about not matching any commit.
-          TAG="${COMMIT}-dirty-$(date -u +%H%M%S)"
-          VERSION="${COMMIT}-dirty"
-        fi
-        IMAGE="{{.IMAGE_REPO}}:${TAG}"
-        docker build -t "$IMAGE" --build-arg VERSION="$VERSION" --build-arg COMMIT="$COMMIT" .
-        kind load docker-image "$IMAGE" --name {{.KIND_CLUSTER}}
-
-        # Render, substitute the tag, apply ONCE. `apply -k` followed by
-        # `set image` looks equivalent and is not: apply writes the manifest's
-        # own {{.IMAGE}} back first, so every deploy produces TWO revisions and
-        # `rollout undo` lands on the intermediate one carrying the placeholder
-        # tag. Measured, not theorised — undo returned {{.IMAGE}} instead of
-        # the previous build.
-        RENDERED="$(kubectl kustomize infrastructure/local/k8s)"
-        PATCHED="$(printf '%s' "$RENDERED" | sed "s|image: {{.IMAGE}}$|image: ${IMAGE}|")"
-        # A renamed image in the manifest would make the substitution a no-op
-        # and silently deploy the placeholder. Fail instead.
-        printf '%s' "$PATCHED" | grep -q "image: ${IMAGE}" || {
-          echo "image substitution did not match; infrastructure/local/k8s no longer uses {{.IMAGE}}" >&2
-          exit 1
-        }
-        printf '%s' "$PATCHED" | kubectl --context {{.KUBE_CONTEXT}} apply -f -
-        kubectl --context {{.KUBE_CONTEXT}} -n go-agents rollout status deploy/go-agents --timeout=180s
-        echo "deployed $IMAGE"
-
-  kind:down:
-    desc: Delete the local go-agents kind cluster
-    cmds:
-      - kind delete cluster --name {{.KIND_CLUSTER}}
-
-  # --- Reaching what is deployed -----------------------------------------
-  #
-  # Every one of these names the context explicitly, for the same reason the
-  # kind:* tasks do. They are read-only except k8s:shell, which execs a shell.
-
-  k8s:status:
-    desc: Everything this repo deploys, at a glance
-    silent: true
-    cmds:
-      - |
-        set -eu
-        for ns in go-agents observability; do
-          echo "== namespace $ns"
-          kubectl --context {{.KUBE_CONTEXT}} -n "$ns" get deploy,daemonset,svc,pods \
-            -o wide --no-headers 2>/dev/null | sed 's/^/  /' || echo "  (absent)"
-          echo
-        done
-
-  k8s:resources:
-    desc: Every object this repo owns, in both namespaces
-    silent: true
-    # `get all` is a lie — it omits ConfigMaps, Secrets, PDBs and RBAC, which is
-    # most of what this repo actually creates. The explicit list is the point.
-    cmds:
-      - |
-        set -eu
-        KINDS=deploy,daemonset,rs,pods,svc,cm,secret,sa,pdb,ingress
-        for ns in go-agents observability; do
-          echo "== namespace $ns"
-          kubectl --context {{.KUBE_CONTEXT}} -n "$ns" get "$KINDS" --show-kind --no-headers 2>/dev/null \
-            | sed 's/^/  /' || echo "  (absent)"
-          echo
-        done
-        echo "== cluster-scoped (owned by this repo)"
-        kubectl --context {{.KUBE_CONTEXT}} get clusterrole,clusterrolebinding --no-headers 2>/dev/null \
-          | grep -E 'prometheus|alloy|go-agents' | sed 's/^/  /' || echo "  (none)"
-
-  k8s:ui:
-    desc: Port-forward every UI at once and print the URLs (pass names to filter)
-    silent: true
-    cmds:
-      - ./scripts/k8s-forward.sh {{.CLI_ARGS}}
-
-  k8s:logs:
-    desc: Follow the app logs from both replicas (pass extra kubectl args after --)
-    silent: true
-    cmds:
-      - kubectl --context {{.KUBE_CONTEXT}} -n go-agents logs -l app.kubernetes.io/name=go-agents --all-containers --prefix -f --tail=50 {{.CLI_ARGS}}
-
-  k8s:events:
-    desc: Recent cluster events, warnings last so they are what you see
-    silent: true
-    cmds:
-      - |
-        set -eu
-        for ns in go-agents observability; do
-          kubectl --context {{.KUBE_CONTEXT}} -n "$ns" get events \
-            --sort-by=.lastTimestamp -o custom-columns=NS:.metadata.namespace,TYPE:.type,REASON:.reason,OBJECT:.involvedObject.name,MSG:.message \
-            --no-headers 2>/dev/null | tail -15
-        done
-
-  k8s:shell:
-    desc: Open a shell in an app pod (the Debian runtime has one; distroless did not)
-    silent: true
-    cmds:
-      - |
-        set -eu
-        POD=$(kubectl --context {{.KUBE_CONTEXT}} -n go-agents get pods \
-          -l app.kubernetes.io/name=go-agents --field-selector=status.phase=Running \
-          -o jsonpath='{.items[0].metadata.name}')
-        echo "exec into $POD (uid 65532, read-only rootfs)"
-        kubectl --context {{.KUBE_CONTEXT}} -n go-agents exec -it "$POD" -- bash
-
-  k8s:alerts:
-    desc: Show every alert rule and its current state
-    silent: true
-    cmds:
-      - |
-        set -eu
-        kubectl --context {{.KUBE_CONTEXT}} -n observability port-forward svc/prometheus 19091:9090 >/dev/null 2>&1 &
-        PF=$!; trap 'kill $PF 2>/dev/null' EXIT
-        for i in $(seq 1 60); do curl -sf -o /dev/null --max-time 2 localhost:19091/-/ready && break; sleep 0.5; done
-        curl -sf localhost:19091/api/v1/rules | python3 -c "
-        import json,sys
-        for g in json.load(sys.stdin)['data']['groups']:
-            for r in g['rules']:
-                print(f\"  {r['state']:8s} {r['name']:28s} for={r['duration']}s {r['labels'].get('severity','')} health={r['health']}\")"
-
-  k8s:profile:
-    desc: Pull a pprof profile from a pod's admin port (default heap; pass cpu, goroutine, ...)
-    silent: true
-    # The Service deliberately does not route 9090, so this forwards the POD.
-    cmds:
-      - |
-        set -eu
-        WHAT="{{.CLI_ARGS}}"; [ -z "$WHAT" ] && WHAT=heap
-        POD=$(kubectl --context {{.KUBE_CONTEXT}} -n go-agents get pods \
-          -l app.kubernetes.io/name=go-agents --field-selector=status.phase=Running \
-          -o jsonpath='{.items[0].metadata.name}')
-        kubectl --context {{.KUBE_CONTEXT}} -n go-agents port-forward "pod/$POD" 19090:9090 >/dev/null 2>&1 &
-        PF=$!; trap 'kill $PF 2>/dev/null' EXIT
-        for i in $(seq 1 60); do curl -sf -o /dev/null --max-time 2 localhost:19090/metrics && break; sleep 0.5; done
-        # net/http/pprof serves CPU profiles at /debug/pprof/profile, not
-        # /debug/pprof/cpu — every other named profile (heap, goroutine, ...)
-        # is served under its own name.
-        ENDPOINT="$WHAT"; [ "$WHAT" = cpu ] && ENDPOINT=profile
-        OUT="$(mktemp -d)/${WHAT}.pprof"
-        curl -sf "localhost:19090/debug/pprof/${ENDPOINT}" -o "$OUT"
-        echo "wrote $OUT ($(wc -c < "$OUT") bytes) from $POD"
-        echo "inspect with: go tool pprof -http=: $OUT"
-
-  kind:smoke:
-    desc: Prove the deployed stack actually works end to end
-    # Reads values out of the running components — a scraped series, a trace in
-    # Jaeger, a 401 on an unauthenticated write. `kubectl apply` exiting 0 says
-    # nothing about any of that.
-    cmds:
-      - ./scripts/kind-smoke.sh
 
   tdaddy:index:
     desc: Rebuild the tdaddy dependency graph (purges first — see the comment)
@@ -494,7 +187,7 @@ tasks:
     # note, which reads as "these are all the affected tests" when it is not.
     # Requires at least one commit: --changed diffs against HEAD.
     cmds:
-      - tdaddy impact --changed --max-tests 0 --endpoints ./internal/api/...
+      - tdaddy impact --changed --max-tests 0
 
   tools:
     desc: Show the pinned tool versions

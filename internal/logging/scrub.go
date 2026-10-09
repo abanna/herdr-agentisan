@@ -36,12 +36,11 @@ const Redacted = "[REDACTED]"
 //
 //	auth_token          -> auth | token | authtoken           -> match
 //	secret_key          -> secret | key | secretkey           -> match
-//	go_agents_api_token -> ... apitoken | goagentsapitoken   -> match
+//	service_api_token   -> ... apitoken | serviceapitoken    -> match
 //	author              -> author                             -> NO match
 //
 // Plain substring matching would redact "author" because it contains "auth".
-// Whole-key matching — the previous behaviour — missed every composite above,
-// including go_agents_api_token, the very credential this service issues.
+// Whole-key matching — the previous behaviour — missed every composite above.
 var sensitiveWords = map[string]struct{}{
 	"authorization": {}, "auth": {}, "token": {}, "apitoken": {},
 	"accesstoken": {}, "refreshtoken": {}, "idtoken": {}, "bearer": {},
@@ -77,11 +76,6 @@ var valuePatterns = []*regexp.Regexp{
 	// "Bearer <token>". The length floor is 16, not 8: at 8 this matched
 	// ordinary prose — "Bearer authentication is required" lost its subject.
 	regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._\-+/=]{16,}\b`),
-	// This service's own token, however it is spelled into a message. The
-	// terminator is a bounded class, NOT \S+: \S+ ran past the value and ate
-	// the closing quote, so the fallback path emitted unbalanced JSON that
-	// ConsoleWriter then refused to decode, dropping the event entirely.
-	regexp.MustCompile(`(?i)\bGO_AGENTS_API_TOKEN\s*[:=]\s*[^\s"',}\]]+`),
 	// PEM private key headers.
 	regexp.MustCompile(`(?i)-----BEGIN [A-Z ]*PRIVATE KEY-----`),
 	// Common provider key shapes.
@@ -92,7 +86,7 @@ var valuePatterns = []*regexp.Regexp{
 // valueLiterals are the fixed fragments the patterns above key off. They feed
 // the prefilter so a new pattern cannot silently bypass it.
 var valueLiterals = []string{
-	"bearer", "goagentsapitoken", "beginprivate", "begin ",
+	"bearer", "beginprivate", "begin ",
 	"sk_", "pk_", "rk_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_",
 }
 

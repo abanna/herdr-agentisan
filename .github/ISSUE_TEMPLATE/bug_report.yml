@@ -13,15 +13,15 @@ body:
       label: What happened
       description: Observed behaviour, and what you expected instead.
       placeholder: |
-        Expected: POST /v1/notes with an empty title returns 400.
-        Actual:   it returns 500.
+        Expected: `go-agents notes add ""` exits non-zero with a validation error.
+        Actual:   it exits 0.
     validations:
       required: true
   - type: textarea
     id: repro
     attributes:
       label: Reproduction
-      description: The smallest command or request sequence that shows it.
+      description: The smallest command sequence that shows it.
       render: shell
     validations:
       required: true
@@ -29,12 +29,10 @@ body:
     id: surface
     attributes:
       label: Which surface
-      description: The CLI and the API share internal/notes, so a domain bug shows in both.
       options:
-        - REST API (cmd/server)
         - Product CLI (cmd/go-agents)
+        - Domain (internal/notes)
         - devctl / repository tooling
-        - Both CLI and API (likely the domain)
         - Not sure
     validations:
       required: true

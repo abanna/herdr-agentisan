@@ -9,7 +9,6 @@ import (
 	"syscall"
 
 	"github.com/charmbracelet/fang"
-	"github.com/gin-gonic/gin"
 
 	"github.com/nerds-run/go-agents/internal/config"
 	"github.com/nerds-run/go-agents/internal/devcli"
@@ -22,10 +21,6 @@ func main() {
 // run holds the body so deferred cleanup executes before the process exits;
 // calling os.Exit directly from main would skip every defer.
 func run() int {
-	// devctl inspects the router to check route/spec drift; release mode
-	// keeps gin's debug banner out of generated output and CI logs.
-	gin.SetMode(gin.ReleaseMode)
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
