@@ -103,6 +103,10 @@ exempts whatever is later added under that name.
   detached `daemon run`; herdr's `[[startup]]` hook runs it, and the
   `daemon-restart` action covers linking. Tests run daemons in process against
   herdrtest and a scratch state dir, never the real ones.
+- `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
+  D9, D12) behind `config resolve`: layered precedence with provenance, secret
+  references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check.
+  Sample in `docs/config/herdr-agentisan.example.toml`.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real
