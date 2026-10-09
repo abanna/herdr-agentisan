@@ -15,7 +15,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nerds-run/go-agents/internal/config"
+	"github.com/abanna/herdr-agentisan/internal/config"
 )
 
 // DefaultCoverageFloor is the repository's minimum statement coverage.

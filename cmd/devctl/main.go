@@ -10,8 +10,8 @@ import (
 
 	"github.com/charmbracelet/fang"
 
-	"github.com/nerds-run/go-agents/internal/config"
-	"github.com/nerds-run/go-agents/internal/devcli"
+	"github.com/abanna/herdr-agentisan/internal/config"
+	"github.com/abanna/herdr-agentisan/internal/devcli"
 )
 
 func main() {

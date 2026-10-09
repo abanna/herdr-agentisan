@@ -15,7 +15,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/nerds-run/go-agents/internal/logging"
+	"github.com/abanna/herdr-agentisan/internal/logging"
 )
 
 // Fixtures are ASSEMBLED AT RUNTIME rather than written as literals. A literal

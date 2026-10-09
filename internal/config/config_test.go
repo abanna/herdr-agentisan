@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/nerds-run/go-agents/internal/config"
+	"github.com/abanna/herdr-agentisan/internal/config"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -21,15 +21,15 @@ func TestLoadDefaults(t *testing.T) {
 	assert.Equal(t, "console", cfg.LogFormat)
 	assert.False(t, cfg.IsProduction())
 
-	assert.Equal(t, "go-agents", cfg.ServiceName)
+	assert.Equal(t, "herdr-agentisan", cfg.ServiceName)
 	assert.Empty(t, cfg.OTLPEndpoint, "tracing export must be off until a collector is named")
 	assert.InDelta(t, 1.0, cfg.TraceSampleRatio, 0)
 }
 
 func TestLoadReadsEnvironment(t *testing.T) {
-	t.Setenv("GO_AGENTS_ENV", "production")
-	t.Setenv("GO_AGENTS_LOG_LEVEL", "debug")
-	t.Setenv("GO_AGENTS_LOG_FORMAT", "json")
+	t.Setenv("HERDR_AGENTISAN_ENV", "production")
+	t.Setenv("HERDR_AGENTISAN_LOG_LEVEL", "debug")
+	t.Setenv("HERDR_AGENTISAN_LOG_FORMAT", "json")
 
 	cfg, err := config.Load()
 	require.NoError(t, err)
@@ -40,16 +40,16 @@ func TestLoadReadsEnvironment(t *testing.T) {
 }
 
 func TestLoadReadsTelemetryEnvironment(t *testing.T) {
-	t.Setenv("GO_AGENTS_OTLP_ENDPOINT", "otel-collector:4318")
-	t.Setenv("GO_AGENTS_TRACE_SAMPLE_RATIO", "0.25")
-	t.Setenv("GO_AGENTS_SERVICE_NAME", "go-agents-canary")
+	t.Setenv("HERDR_AGENTISAN_OTLP_ENDPOINT", "otel-collector:4318")
+	t.Setenv("HERDR_AGENTISAN_TRACE_SAMPLE_RATIO", "0.25")
+	t.Setenv("HERDR_AGENTISAN_SERVICE_NAME", "herdr-agentisan-canary")
 
 	cfg, err := config.Load()
 	require.NoError(t, err)
 
 	assert.Equal(t, "otel-collector:4318", cfg.OTLPEndpoint)
 	assert.InDelta(t, 0.25, cfg.TraceSampleRatio, 0)
-	assert.Equal(t, "go-agents-canary", cfg.ServiceName)
+	assert.Equal(t, "herdr-agentisan-canary", cfg.ServiceName)
 }
 
 func TestValidate(t *testing.T) {
@@ -57,7 +57,7 @@ func TestValidate(t *testing.T) {
 
 	base := config.Config{
 		Env: "development", LogLevel: "info", LogFormat: "console",
-		ServiceName: "go-agents", TraceSampleRatio: 1,
+		ServiceName: "herdr-agentisan", TraceSampleRatio: 1,
 	}
 
 	tests := map[string]struct {
@@ -101,7 +101,7 @@ func TestValidate(t *testing.T) {
 // environment has no token to demand. Requiring one would refuse to start a
 // binary that has nothing to authenticate.
 func TestProductionNeedsNoAPIToken(t *testing.T) {
-	t.Setenv("GO_AGENTS_ENV", "production")
+	t.Setenv("HERDR_AGENTISAN_ENV", "production")
 
 	cfg, err := config.Load()
 	require.NoError(t, err)
@@ -121,23 +121,23 @@ func TestLoadEnvironmentClasses(t *testing.T) {
 		wantLevel string
 	}{
 		"empty value falls back to the default": {
-			env: map[string]string{"GO_AGENTS_ENV": ""}, wantEnv: "development", wantLevel: "info",
+			env: map[string]string{"HERDR_AGENTISAN_ENV": ""}, wantEnv: "development", wantLevel: "info",
 		},
 		"unprefixed look-alike is ignored": {
 			env: map[string]string{"ENV": "production", "LOG_LEVEL": "debug"}, wantEnv: "development", wantLevel: "info",
 		},
 		"value with whitespace is rejected": {
-			env: map[string]string{"GO_AGENTS_ENV": " production"}, wantErr: true,
+			env: map[string]string{"HERDR_AGENTISAN_ENV": " production"}, wantErr: true,
 		},
 		"value with invalid UTF-8 is rejected": {
-			env: map[string]string{"GO_AGENTS_LOG_FORMAT": "js\xffon"}, wantErr: true,
+			env: map[string]string{"HERDR_AGENTISAN_LOG_FORMAT": "js\xffon"}, wantErr: true,
 		},
 		".env in the working directory is read": {
-			dotenv: "GO_AGENTS_LOG_LEVEL=debug\n", wantEnv: "development", wantLevel: "debug",
+			dotenv: "HERDR_AGENTISAN_LOG_LEVEL=debug\n", wantEnv: "development", wantLevel: "debug",
 		},
 		"real environment wins over .env": {
-			env:    map[string]string{"GO_AGENTS_LOG_LEVEL": "warn"},
-			dotenv: "GO_AGENTS_LOG_LEVEL=debug\n", wantEnv: "development", wantLevel: "warn",
+			env:    map[string]string{"HERDR_AGENTISAN_LOG_LEVEL": "warn"},
+			dotenv: "HERDR_AGENTISAN_LOG_LEVEL=debug\n", wantEnv: "development", wantLevel: "warn",
 		},
 		"a .env directory is ignored, not fatal": {
 			dotenv: "<dir>", wantEnv: "development", wantLevel: "info",
@@ -149,8 +149,8 @@ func TestLoadEnvironmentClasses(t *testing.T) {
 			// godotenv.Load writes into the process environment. Registering
 			// the key with t.Setenv first and then unsetting it lets the
 			// cleanup restore the original state whatever .env sets.
-			t.Setenv("GO_AGENTS_LOG_LEVEL", "")
-			require.NoError(t, os.Unsetenv("GO_AGENTS_LOG_LEVEL"))
+			t.Setenv("HERDR_AGENTISAN_LOG_LEVEL", "")
+			require.NoError(t, os.Unsetenv("HERDR_AGENTISAN_LOG_LEVEL"))
 			for k, v := range tc.env {
 				t.Setenv(k, v)
 			}
@@ -177,8 +177,21 @@ func TestLoadEnvironmentClasses(t *testing.T) {
 	}
 }
 
+// TestEnvPrefixIsTheRepositoryName: variables are namespaced by the binary
+// they configure. Any other prefix is ignored — see the "unprefixed look-alike"
+// case in TestLoadEnvironmentClasses.
+func TestEnvPrefixIsTheRepositoryName(t *testing.T) {
+	t.Setenv("HERDR_AGENTISAN_LOG_LEVEL", "debug")
+
+	cfg, err := config.Load()
+	require.NoError(t, err)
+	assert.Equal(t, "HERDR_AGENTISAN", config.EnvPrefix)
+	assert.Equal(t, "debug", cfg.LogLevel)
+	assert.Equal(t, "herdr-agentisan", cfg.ServiceName)
+}
+
 func TestInvalidEnvIsRejectedByLoad(t *testing.T) {
-	t.Setenv("GO_AGENTS_ENV", "qa")
+	t.Setenv("HERDR_AGENTISAN_ENV", "qa")
 
 	_, err := config.Load()
 	require.Error(t, err)

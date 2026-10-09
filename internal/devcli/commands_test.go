@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/nerds-run/go-agents/internal/devcli"
+	"github.com/abanna/herdr-agentisan/internal/devcli"
 )
 
 // runDev executes the devctl tree with args and returns its output.
@@ -61,8 +61,8 @@ func TestCoverageCommandPassesAboveTheFloor(t *testing.T) {
 // resolves it against real sources, so the exact percentage it reports is not
 // the point — only that the command parses a total and applies the floor.
 const lowCoverageProfile = `mode: atomic
-github.com/nerds-run/go-agents/internal/notes/notes.go:10.20,12.2 1 1
-github.com/nerds-run/go-agents/internal/notes/notes.go:14.20,16.2 1 0
+github.com/abanna/herdr-agentisan/internal/devcli/coverage.go:10.20,12.2 1 1
+github.com/abanna/herdr-agentisan/internal/devcli/coverage.go:14.20,16.2 1 0
 `
 
 func TestCoverageCommandRejectsAMissingProfile(t *testing.T) {

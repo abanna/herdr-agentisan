@@ -1,5 +1,5 @@
 {
-  "name": "go-agents",
+  "name": "herdr-agentisan",
   "build": {
     "dockerfile": "Dockerfile"
   },

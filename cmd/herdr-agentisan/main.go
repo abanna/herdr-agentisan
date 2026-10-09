@@ -1,4 +1,4 @@
-// Package main is the entrypoint for the `go-agents` product CLI.
+// Package main is the entrypoint for the `herdr-agentisan` plugin binary.
 //
 // It stays a thin shim: signal handling and fang styling only. The command
 // tree lives in internal/cli so it is testable without spawning a process.
@@ -13,8 +13,8 @@ import (
 
 	"github.com/charmbracelet/fang"
 
-	"github.com/nerds-run/go-agents/internal/cli"
-	"github.com/nerds-run/go-agents/internal/config"
+	"github.com/abanna/herdr-agentisan/internal/cli"
+	"github.com/abanna/herdr-agentisan/internal/config"
 )
 
 func main() {

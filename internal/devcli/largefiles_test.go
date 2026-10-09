@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/nerds-run/go-agents/internal/devcli"
+	"github.com/abanna/herdr-agentisan/internal/devcli"
 )
 
 // newGitRepo builds a throwaway repo so the check is exercised against real

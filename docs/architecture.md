@@ -2,13 +2,12 @@
 
 ## The shape
 
-Two binaries, one domain:
+Two binaries:
 
 ```
-cmd/go-agents ─→ internal/notes (domain: validation + Store interface)
-                        ├─ MemStore   (in-process, used by tests)
-                        └─ FileStore  (JSON on disk, used by the CLI)
-cmd/devctl    ─→ internal/devcli (the repository's own gates)
+cmd/herdr-agentisan ─→ internal/cli    (cobra tree herdr invokes from the manifest)
+                              └─→ internal/<domain> packages (the rules)
+cmd/devctl          ─→ internal/devcli (the repository's own gates)
 ```
 
 `cmd/*` packages are thin shims — signal handling, fang styling, process
@@ -16,15 +15,14 @@ lifecycle. No logic. That is what keeps them outside the coverage denominator
 honest: there is nothing in them worth testing that running the binary does
 not already prove.
 
-The load-bearing decision is that **rules live in `internal/notes`, not in
-commands**. A validation rule added to `Draft.Validate` applies to every
-caller at once. `notes.Store` is the seam: swapping the in-memory or file
-store for something else means implementing four methods, not editing
-commands.
+The load-bearing decision is that **rules live in domain packages under
+`internal/`, not in commands**. herdr reaches the plugin through several
+doors — actions, event hooks, startup hooks, panes — and each is a command;
+a rule written into one of them is a rule the others do not have.
 
 ## Why two CLIs
 
-`go-agents` is the product. `devctl` is the repository's own tooling, and it
+`herdr-agentisan` is the product. `devctl` is the repository's own tooling, and it
 exists because three of this repo's gates have no Go builtin:
 
 - **Coverage floor.** `go test` has no `--cov-fail-under`. `devctl coverage`
@@ -59,11 +57,7 @@ rough edge.
 
 ## Deliberate limits
 
-- **`MemStore` and `FileStore` are not production storage.** `FileStore`
-  rewrites the whole file under a mutex; correct for one developer on one
-  machine, and honest about its ceiling. Concurrent writers across processes
-  would need a lock file or a database.
-- **Tracing exports only when told to.** `GO_AGENTS_OTLP_ENDPOINT` is empty by
+- **Tracing exports only when told to.** `HERDR_AGENTISAN_OTLP_ENDPOINT` is empty by
   default, so `task run:cli` on a laptop records no spans and needs no
   collector. W3C propagation is installed either way, so a trace context still
   passes through to the next hop.
