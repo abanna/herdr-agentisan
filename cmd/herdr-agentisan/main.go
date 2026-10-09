@@ -1,7 +1,8 @@
 // Package main is the entrypoint for the `herdr-agentisan` plugin binary.
 //
-// It stays a thin shim: signal handling and fang styling only. The command
-// tree lives in internal/cli so it is testable without spawning a process.
+// It stays a thin shim: config, logging, tracing, signal handling and fang
+// styling only. The command tree lives in internal/cli so it is testable
+// without spawning a process.
 package main
 
 import (
@@ -10,12 +11,20 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/charmbracelet/fang"
 
 	"github.com/abanna/herdr-agentisan/internal/cli"
 	"github.com/abanna/herdr-agentisan/internal/config"
+	"github.com/abanna/herdr-agentisan/internal/logging"
+	"github.com/abanna/herdr-agentisan/internal/telemetry"
 )
+
+// flushTimeout bounds the tracer flush on exit. A plugin process is
+// short-lived and holds one of herdr's in-flight slots until it exits, so an
+// unreachable collector must not stall it.
+const flushTimeout = 3 * time.Second
 
 func main() {
 	os.Exit(run())
@@ -37,6 +46,39 @@ func run() int {
 		// process immediately, matching docker, kubectl and git.
 		signal.Reset(os.Interrupt, syscall.SIGTERM)
 	}()
+
+	cfg, err := config.Load()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "herdr-agentisan:", err)
+		return 1
+	}
+	// Logs go to stderr only: stdout carries command output and the --json
+	// contract herdr and scripts parse.
+	logger, err := logging.New(os.Stderr, cfg.LogLevel, cfg.LogFormat)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "herdr-agentisan:", err)
+		return 1
+	}
+	shutdown, err := telemetry.SetupTracing(ctx, telemetry.Config{
+		ServiceName:  cfg.ServiceName,
+		Version:      config.Version,
+		Commit:       config.Commit,
+		Env:          cfg.Env,
+		OTLPEndpoint: cfg.OTLPEndpoint,
+		SampleRatio:  cfg.TraceSampleRatio,
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "herdr-agentisan:", err)
+		return 1
+	}
+	defer func() {
+		flushCtx, cancelFlush := context.WithTimeout(context.Background(), flushTimeout)
+		defer cancelFlush()
+		if err := shutdown(flushCtx); err != nil {
+			logger.Warn().Err(err).Msg("flush traces")
+		}
+	}()
+	ctx = logging.Into(ctx, logger)
 
 	if err := fang.Execute(ctx, cli.Root(),
 		fang.WithVersion(config.Version),

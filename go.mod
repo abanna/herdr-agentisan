@@ -7,6 +7,7 @@ toolchain go1.26.9
 require (
 	github.com/charmbracelet/fang v1.0.0
 	github.com/joho/godotenv v1.5.1
+	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/rs/zerolog v1.35.1
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
@@ -178,7 +179,6 @@ require (
 	github.com/nunnatsa/ginkgolinter v0.24.0 // indirect
 	github.com/openai/openai-go/v3 v3.52.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
-	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/prometheus/client_golang v1.24.1 // indirect
 	github.com/prometheus/client_model v0.6.3 // indirect
 	github.com/prometheus/common v0.70.1 // indirect

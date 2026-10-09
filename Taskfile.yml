@@ -60,6 +60,21 @@ tasks:
     cmds:
       - go run ./cmd/herdr-agentisan {{.CLI_ARGS}}
 
+  plugin:link:
+    desc: Build the binary and link this checkout into the running herdr
+    # `herdr plugin link` never runs [[build]] (only `herdr plugin install`
+    # does), so the binary the manifest's actions exec must be built first.
+    # Registration is global to your herdr: unlink before deleting a worktree
+    # you linked, or herdr keeps a plugin pointing at nothing.
+    deps: [build:cli]
+    cmds:
+      - herdr plugin link .
+
+  plugin:unlink:
+    desc: Unlink the plugin from the running herdr
+    cmds:
+      - herdr plugin unlink nerdsrun.agentisan
+
   lint:
     desc: Lint the code
     cmds:
