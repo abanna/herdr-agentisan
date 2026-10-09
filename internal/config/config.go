@@ -6,10 +6,12 @@
 package config
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/joho/godotenv"
 	"github.com/spf13/viper"
@@ -38,6 +40,33 @@ type Config struct {
 	OTLPEndpoint string `mapstructure:"otlp_endpoint"`
 	// TraceSampleRatio is the head-sampling ratio in [0,1].
 	TraceSampleRatio float64 `mapstructure:"trace_sample_ratio"`
+
+	// DaemonLockWait is how long a new daemon waits for the lock while it is
+	// held by a daemon bound to a herdr socket that has since been replaced, as
+	// during a live handoff (ADR-001 A3). More than zero, at most five minutes.
+	DaemonLockWait time.Duration `mapstructure:"daemon_lock_wait"`
+	// AllowUnverified lets the daemon run against a herdr protocol version
+	// this build has not been verified against, after a herdr update and
+	// until the pin is bumped (ADR-001 A4).
+	AllowUnverified bool `mapstructure:"allow_unverified"`
+}
+
+// MaxDaemonLockWait caps DaemonLockWait: a wait that long means the old daemon
+// is wedged, and waiting longer only delays the error that says so.
+const MaxDaemonLockWait = 5 * time.Minute
+
+type configKey struct{}
+
+// Into returns a context carrying cfg, so commands read the configuration main
+// loaded instead of the environment again.
+func Into(ctx context.Context, cfg Config) context.Context {
+	return context.WithValue(ctx, configKey{}, cfg)
+}
+
+// From returns the configuration Into stored, and whether there was one.
+func From(ctx context.Context) (Config, bool) {
+	cfg, ok := ctx.Value(configKey{}).(Config)
+	return cfg, ok
 }
 
 // IsProduction reports whether the process is running in a deployed environment.
@@ -66,6 +95,8 @@ func Load() (Config, error) {
 	v.SetDefault("service_name", "herdr-agentisan")
 	v.SetDefault("otlp_endpoint", "")
 	v.SetDefault("trace_sample_ratio", 1.0)
+	v.SetDefault("daemon_lock_wait", "15s")
+	v.SetDefault("allow_unverified", false)
 
 	// AutomaticEnv only resolves keys viper already knows about, and
 	// SetDefault is what registers them — so every key above must have a
@@ -97,6 +128,9 @@ func (c Config) Validate() error {
 	}
 	if c.TraceSampleRatio < 0 || c.TraceSampleRatio > 1 {
 		return fmt.Errorf("invalid trace_sample_ratio %v: want a ratio in [0,1]", c.TraceSampleRatio)
+	}
+	if c.DaemonLockWait <= 0 || c.DaemonLockWait > MaxDaemonLockWait {
+		return fmt.Errorf("invalid daemon_lock_wait %v: want more than 0 and at most %v", c.DaemonLockWait, MaxDaemonLockWait)
 	}
 	return nil
 }

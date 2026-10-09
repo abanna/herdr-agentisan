@@ -96,6 +96,13 @@ exempts whatever is later added under that name.
   `report statusline` turns Claude's statusline JSON into `ctx`. It reads
   `HERDR_PANE_ID`, a pane-shell variable, which is why it is not in
   `plugin.Env`.
+- `internal/daemon/` — the daemon's lifecycle (ADR-001 D3, A3, A4): one daemon
+  per herdr server, enforced by a flock'd `daemon.lock` that records the
+  server's socket inode; the protocol pin; `daemon.log` capped at 10 MB; and
+  the plugin socket (D6) that answers `health`. `daemon start` spawns a
+  detached `daemon run`; herdr's `[[startup]]` hook runs it, and the
+  `daemon-restart` action covers linking. Tests run daemons in process against
+  herdrtest and a scratch state dir, never the real ones.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
   references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check.
