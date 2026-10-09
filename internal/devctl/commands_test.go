@@ -1,4 +1,4 @@
-package devcli_test
+package devctl_test
 
 import (
 	"bytes"
@@ -10,14 +10,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/abanna/herdr-agentisan/internal/devcli"
+	"github.com/abanna/herdr-agentisan/internal/devctl"
 )
 
 // runDev executes the devctl tree with args and returns its output.
 func runDev(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 
-	root := devcli.Root()
+	root := devctl.Root()
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&out)
@@ -61,8 +61,8 @@ func TestCoverageCommandPassesAboveTheFloor(t *testing.T) {
 // resolves it against real sources, so the exact percentage it reports is not
 // the point — only that the command parses a total and applies the floor.
 const lowCoverageProfile = `mode: atomic
-github.com/abanna/herdr-agentisan/internal/devcli/coverage.go:10.20,12.2 1 1
-github.com/abanna/herdr-agentisan/internal/devcli/coverage.go:14.20,16.2 1 0
+github.com/abanna/herdr-agentisan/internal/devctl/coverage.go:10.20,12.2 1 1
+github.com/abanna/herdr-agentisan/internal/devctl/coverage.go:14.20,16.2 1 0
 `
 
 func TestCoverageCommandRejectsAMissingProfile(t *testing.T) {
@@ -78,7 +78,7 @@ func TestCheckCoverageFile(t *testing.T) {
 	path := filepath.Join(dir, "summary.txt")
 	require.NoError(t, os.WriteFile(path, []byte("total:\t(statements)\t88.0%\n"), 0o600))
 
-	res, err := devcli.CheckCoverageFile(path, 75)
+	res, err := devctl.CheckCoverageFile(path, 75)
 	require.NoError(t, err)
 	assert.InDelta(t, 88.0, res.Percent, 0.001)
 	assert.True(t, res.Meets())
@@ -87,7 +87,7 @@ func TestCheckCoverageFile(t *testing.T) {
 func TestCheckCoverageFileMissing(t *testing.T) {
 	t.Parallel()
 
-	_, err := devcli.CheckCoverageFile(filepath.Join(t.TempDir(), "absent"), 75)
+	_, err := devctl.CheckCoverageFile(filepath.Join(t.TempDir(), "absent"), 75)
 	require.Error(t, err)
 }
 
@@ -96,7 +96,7 @@ func TestCheckCoverageFileMissing(t *testing.T) {
 func TestParityReportStringNamesEveryDirection(t *testing.T) {
 	t.Parallel()
 
-	rep := devcli.ParityReport{
+	rep := devctl.ParityReport{
 		UndocumentedCIGates: []string{"go vet ./..."},
 		DocumentedNotInCI:   []string{"go build ./..."},
 		TaskGatesNotInCI:    []string{"lint: go tool golangci-lint run ./..."},
@@ -119,7 +119,7 @@ func TestParityReportStringNamesEveryDirection(t *testing.T) {
 func TestParityReportOKMessage(t *testing.T) {
 	t.Parallel()
 
-	rep := devcli.ParityReport{}
+	rep := devctl.ParityReport{}
 	assert.True(t, rep.OK())
 	assert.Contains(t, rep.String(), "agree")
 }
@@ -128,7 +128,7 @@ func TestCheckParityOnABrokenTree(t *testing.T) {
 	t.Parallel()
 
 	// A tree with no AGENTS.md must error rather than silently report parity.
-	_, err := devcli.CheckParity(t.TempDir())
+	_, err := devctl.CheckParity(t.TempDir())
 	require.Error(t, err)
 	assert.ErrorContains(t, err, "AGENTS.md")
 }
@@ -159,7 +159,7 @@ func writeParityTree(t *testing.T, agentsRow, taskCmd, ciRun string) string {
 func TestStaleExemptionsFlagsEntriesWithNothingBehindThem(t *testing.T) {
 	t.Parallel()
 
-	stale, err := devcli.StaleExemptions(writeParityTree(t, "", "", ""))
+	stale, err := devctl.StaleExemptions(writeParityTree(t, "", "", ""))
 	require.NoError(t, err)
 	assert.Contains(t, stale, `nonGateTasks["build:cli"]: Taskfile.yml has no such task`)
 	assert.Contains(t, stale, `localOnly["task run:cli"]: AGENTS.md does not document this command`)
@@ -169,7 +169,7 @@ func TestStaleExemptionsFlagsEntriesWithNothingBehindThem(t *testing.T) {
 func TestStaleExemptionsOnABrokenTree(t *testing.T) {
 	t.Parallel()
 
-	_, err := devcli.StaleExemptions(t.TempDir())
+	_, err := devctl.StaleExemptions(t.TempDir())
 	require.Error(t, err)
 }
 
@@ -188,7 +188,7 @@ const (
 func TestParitySeesADockerRunner(t *testing.T) {
 	t.Parallel()
 
-	rep, err := devcli.CheckParity(writeParityTree(t, dockerAgentRow, dockerTaskCmd, dockerCIRun))
+	rep, err := devctl.CheckParity(writeParityTree(t, dockerAgentRow, dockerTaskCmd, dockerCIRun))
 	require.NoError(t, err)
 	assert.Truef(t, rep.OK(), "a consistent docker gate must pass: %s", rep)
 }
@@ -196,7 +196,7 @@ func TestParitySeesADockerRunner(t *testing.T) {
 func TestParityCatchesADockerGateMissingFromCI(t *testing.T) {
 	t.Parallel()
 
-	rep, err := devcli.CheckParity(writeParityTree(t, dockerAgentRow, dockerTaskCmd, ""))
+	rep, err := devctl.CheckParity(writeParityTree(t, dockerAgentRow, dockerTaskCmd, ""))
 	require.NoError(t, err)
 	require.False(t, rep.OK())
 	assert.Contains(t, rep.DocumentedNotInCI, dockerGateCmd)
@@ -206,7 +206,7 @@ func TestParityCatchesADockerGateMissingFromCI(t *testing.T) {
 func TestParityCatchesADockerGateMissingFromTheDocs(t *testing.T) {
 	t.Parallel()
 
-	rep, err := devcli.CheckParity(writeParityTree(t, "", dockerTaskCmd, dockerCIRun))
+	rep, err := devctl.CheckParity(writeParityTree(t, "", dockerTaskCmd, dockerCIRun))
 	require.NoError(t, err)
 	require.False(t, rep.OK())
 	assert.Contains(t, rep.UndocumentedCIGates, dockerGateCmd)
@@ -215,7 +215,7 @@ func TestParityCatchesADockerGateMissingFromTheDocs(t *testing.T) {
 func TestParityCatchesADockerGateMissingFromTheTaskfile(t *testing.T) {
 	t.Parallel()
 
-	rep, err := devcli.CheckParity(writeParityTree(t, dockerAgentRow, "", dockerCIRun))
+	rep, err := devctl.CheckParity(writeParityTree(t, dockerAgentRow, "", dockerCIRun))
 	require.NoError(t, err)
 	require.False(t, rep.OK())
 	assert.Contains(t, rep.CIGatesNotInTask, dockerGateCmd)

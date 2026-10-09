@@ -1,4 +1,4 @@
-package devcli
+package devctl
 
 import (
 	"bufio"

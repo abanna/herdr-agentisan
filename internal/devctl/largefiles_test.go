@@ -1,4 +1,4 @@
-package devcli_test
+package devctl_test
 
 import (
 	"os"
@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/abanna/herdr-agentisan/internal/devcli"
+	"github.com/abanna/herdr-agentisan/internal/devctl"
 )
 
 // newGitRepo builds a throwaway repo so the check is exercised against real
@@ -39,7 +39,7 @@ func writeTracked(t *testing.T, dir, name string, size int) {
 func TestFindLargeFilesEmptyRepo(t *testing.T) {
 	t.Parallel()
 
-	got, err := devcli.FindLargeFiles(t.Context(), newGitRepo(t), 512)
+	got, err := devctl.FindLargeFiles(t.Context(), newGitRepo(t), 512)
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
@@ -51,7 +51,7 @@ func TestFindLargeFilesFlagsOversizeFile(t *testing.T) {
 	writeTracked(t, dir, "big.bin", 700*1024)
 	writeTracked(t, dir, "small.go", 10)
 
-	got, err := devcli.FindLargeFiles(t.Context(), dir, 512)
+	got, err := devctl.FindLargeFiles(t.Context(), dir, 512)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.Equal(t, "big.bin", got[0].Path)
@@ -66,7 +66,7 @@ func TestFindLargeFilesIgnoresUntracked(t *testing.T) {
 	dir := newGitRepo(t)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "untracked.bin"), make([]byte, 900*1024), 0o600))
 
-	got, err := devcli.FindLargeFiles(t.Context(), dir, 512)
+	got, err := devctl.FindLargeFiles(t.Context(), dir, 512)
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
@@ -78,7 +78,7 @@ func TestFindLargeFilesHonoursAllowlist(t *testing.T) {
 	dir := newGitRepo(t)
 	writeTracked(t, dir, "go.sum", 900*1024)
 
-	got, err := devcli.FindLargeFiles(t.Context(), dir, 512)
+	got, err := devctl.FindLargeFiles(t.Context(), dir, 512)
 	require.NoError(t, err)
 	assert.Empty(t, got)
 }
@@ -89,7 +89,7 @@ func TestFindLargeFilesThresholdIsInclusive(t *testing.T) {
 	dir := newGitRepo(t)
 	writeTracked(t, dir, "exactly.bin", 512*1024) // 512KB exactly
 
-	got, err := devcli.FindLargeFiles(t.Context(), dir, 512)
+	got, err := devctl.FindLargeFiles(t.Context(), dir, 512)
 	require.NoError(t, err)
 	assert.Empty(t, got, "a file exactly at the ceiling is allowed; only over fails")
 }
@@ -101,7 +101,7 @@ func TestFindLargeFilesSortsBiggestFirst(t *testing.T) {
 	writeTracked(t, dir, "medium.bin", 600*1024)
 	writeTracked(t, dir, "huge.bin", 900*1024)
 
-	got, err := devcli.FindLargeFiles(t.Context(), dir, 512)
+	got, err := devctl.FindLargeFiles(t.Context(), dir, 512)
 	require.NoError(t, err)
 	require.Len(t, got, 2)
 	assert.Equal(t, "huge.bin", got[0].Path, "biggest offender should be reported first")
@@ -111,7 +111,7 @@ func TestFindLargeFilesOutsideGitRepoErrors(t *testing.T) {
 	t.Parallel()
 
 	// A silent empty result outside a repo would make the gate vacuous.
-	_, err := devcli.FindLargeFiles(t.Context(), t.TempDir(), 512)
+	_, err := devctl.FindLargeFiles(t.Context(), t.TempDir(), 512)
 	require.Error(t, err)
 }
 
@@ -130,7 +130,7 @@ func TestFindLargeFilesCatchesJustOverTheCeiling(t *testing.T) {
 	dir := newGitRepo(t)
 	writeTracked(t, dir, "justover.bin", 512*1024+1)
 
-	got, err := devcli.FindLargeFiles(t.Context(), dir, 512)
+	got, err := devctl.FindLargeFiles(t.Context(), dir, 512)
 	require.NoError(t, err)
 	require.Len(t, got, 1, "one byte over the ceiling must fail")
 	assert.Equal(t, int64(512*1024+1), got[0].Bytes)
@@ -145,7 +145,7 @@ func TestFindLargeFilesAgreesWithPreCommitCeiling(t *testing.T) {
 	dir := newGitRepo(t)
 	writeTracked(t, dir, "half-kb-over.bin", 524800) // 512.5KB
 
-	got, err := devcli.FindLargeFiles(t.Context(), dir, 512)
+	got, err := devctl.FindLargeFiles(t.Context(), dir, 512)
 	require.NoError(t, err)
 	require.Len(t, got, 1, "pre-commit rejects 524800 bytes at --maxkb=512; so must this")
 	assert.Equal(t, int64(513), got[0].KB(), "display size rounds up, never down")
@@ -168,7 +168,7 @@ func TestFindLargeFilesSeesIndexNotWorkingTree(t *testing.T) {
 		"--skip-worktree", "hidden.bin").Run())
 	require.NoError(t, os.Remove(filepath.Join(dir, "hidden.bin")))
 
-	got, err := devcli.FindLargeFiles(t.Context(), dir, 512)
+	got, err := devctl.FindLargeFiles(t.Context(), dir, 512)
 	require.NoError(t, err)
 	require.Len(t, got, 1, "a blob in the index must be measured even when absent from disk")
 	assert.Equal(t, "hidden.bin", got[0].Path)
