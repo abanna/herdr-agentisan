@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
-	"github.com/abanna/herdr-agentisan/internal/plugin"
 )
 
 // The ctx token contract (ADR-001, token contract).
@@ -152,7 +151,7 @@ func isCharDevice(r io.Reader) bool {
 // Outside a pane it returns ErrNotInPane before reading r; on unusable input
 // it returns before calling herdr.
 //
-// One plugin.CallTimeout bounds the whole report, finding the pane included:
+// One herdr.CallTimeout bounds the whole report, finding the pane included:
 // the caller runs it in the background on every statusline refresh, and a
 // herdr that never answered must not keep one process per refresh alive.
 func Statusline(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (Result, error) {
@@ -164,7 +163,7 @@ func Statusline(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (Resu
 		return Result{}, err
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, plugin.CallTimeout)
+	ctx, cancel := context.WithTimeout(ctx, herdr.CallTimeout)
 	defer cancel()
 	target, err := resolvePane(ctx, rep, pane)
 	if err != nil {

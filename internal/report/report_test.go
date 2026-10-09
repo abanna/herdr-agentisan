@@ -18,7 +18,6 @@ import (
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
-	"github.com/abanna/herdr-agentisan/internal/plugin"
 	"github.com/abanna/herdr-agentisan/internal/report"
 )
 
@@ -357,7 +356,7 @@ func TestStatuslineBoundsTheCallByCallTimeout(t *testing.T) {
 		require.False(t, d.IsZero(), "call %d must run under a deadline", i)
 		assert.Equal(t, rep.deadlines[0], d, "call %d must share the one report deadline", i)
 	}
-	assert.WithinDuration(t, start.Add(plugin.CallTimeout), rep.deadlines[0], time.Second)
+	assert.WithinDuration(t, start.Add(herdr.CallTimeout), rep.deadlines[0], time.Second)
 }
 
 // TestStatuslineConcurrentReportsAreIndependent: the statusline backgrounds

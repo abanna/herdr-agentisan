@@ -15,9 +15,22 @@ platforms = ["linux", "macos"]
 [[build]]
 command = ["go", "build", "-o", "bin/herdr-agentisan", "./cmd/herdr-agentisan"]
 
+# One daemon per herdr server (ADR-001 D3). herdr runs this on every server
+# start and live handoff, never on link: after `task plugin:link`, run the
+# daemon-restart action.
+[[startup]]
+command = ["bin/herdr-agentisan", "daemon", "start"]
+
 [[actions]]
 id = "ping"
 title = "Agentisan: ping"
 description = "Show a toast proving the plugin is wired up"
 contexts = ["global"]
 command = ["bin/herdr-agentisan", "action", "ping"]
+
+[[actions]]
+id = "daemon-restart"
+title = "Agentisan: restart daemon"
+description = "Stop the agentisan daemon if it runs, then start it"
+contexts = ["global"]
+command = ["bin/herdr-agentisan", "daemon", "restart"]

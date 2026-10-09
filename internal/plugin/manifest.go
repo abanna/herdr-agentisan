@@ -29,10 +29,14 @@ type Manifest struct {
 	Description     string    `toml:"description"`
 	Platforms       []string  `toml:"platforms"`
 	Build           []Command `toml:"build"`
-	Actions         []Action  `toml:"actions"`
+	// Startup runs on every herdr server start and live handoff, never on
+	// link, enable or config reload.
+	Startup []Command `toml:"startup"`
+	Actions []Action  `toml:"actions"`
 }
 
-// Command is a [[build]] step: one exec of an argv array, no shell.
+// Command is a [[build]] or [[startup]] step: one exec of an argv array, no
+// shell.
 type Command struct {
 	Command   []string `toml:"command"`
 	Platforms []string `toml:"platforms"`
@@ -95,6 +99,14 @@ func (m Manifest) Validate() error {
 	}
 	if m.BuildOutput() == "" {
 		return bad("no [[build]] step names an output with -o")
+	}
+	for i, st := range m.Startup {
+		if len(st.Command) == 0 {
+			return bad("startup hook %d needs a non-empty command", i)
+		}
+		if err := checkPlatforms(st.Platforms); err != nil {
+			return bad("startup hook %d: %w", i, err)
+		}
 	}
 	seen := map[string]bool{}
 	for _, a := range m.Actions {

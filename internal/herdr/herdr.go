@@ -64,9 +64,26 @@ func (e *APIError) Is(target error) bool {
 	return target == ErrPaneNotFound && e.Code == codePaneNotFound
 }
 
+// CallTimeout bounds every herdr call a Client makes unless its Timeout says
+// otherwise. A plugin action holds one of herdr's in-flight slots until it
+// exits, and a daemon runs for days, so neither may wait forever on a herdr
+// that accepts the connection and never answers. A caller's earlier deadline
+// still wins.
+const CallTimeout = 5 * time.Second
+
 // Client talks to one herdr socket. The zero value has no socket configured.
 type Client struct {
 	SocketPath string
+	// Timeout bounds each call; zero means CallTimeout.
+	Timeout time.Duration
+}
+
+// timeout is the bound for one call.
+func (c Client) timeout() time.Duration {
+	if c.Timeout > 0 {
+		return c.Timeout
+	}
+	return CallTimeout
 }
 
 // requestSeq makes request ids unique within a process.
@@ -93,6 +110,8 @@ func (c Client) Call(ctx context.Context, method string, params, out any) error 
 	if c.SocketPath == "" {
 		return ErrNoSocket
 	}
+	ctx, cancel := context.WithTimeout(ctx, c.timeout())
+	defer cancel()
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", c.SocketPath)
 	if err != nil {

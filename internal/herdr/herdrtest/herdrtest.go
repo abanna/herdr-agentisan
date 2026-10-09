@@ -52,6 +52,10 @@ type Server struct {
 
 	mu       sync.Mutex
 	requests []Request
+
+	ln    net.Listener
+	wg    sync.WaitGroup
+	close sync.Once
 }
 
 // Requests returns every request received so far, in arrival order.
@@ -72,29 +76,42 @@ func Start(t testing.TB, handle Handler) *Server {
 	if err != nil {
 		t.Fatalf("herdrtest: temp dir: %v", err)
 	}
-	s := &Server{Path: filepath.Join(dir, "s.sock")}
-	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", s.Path)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return StartAt(t, filepath.Join(dir, "s.sock"), handle)
+}
+
+// StartAt serves at path, which must not exist yet. Closing a server and
+// starting another at the same path is how a test restarts herdr: the socket
+// file is new, so its inode changes, as it does across a herdr live handoff.
+func StartAt(t testing.TB, path string, handle Handler) *Server {
+	t.Helper()
+
+	s := &Server{Path: path}
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", path)
 	if err != nil {
-		_ = os.RemoveAll(dir)
 		t.Fatalf("herdrtest: listen: %v", err)
 	}
-
-	var wg sync.WaitGroup
-	wg.Go(func() {
+	s.ln = ln
+	s.wg.Go(func() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return // listener closed
 			}
-			wg.Go(func() { s.serve(conn, handle) })
+			s.wg.Go(func() { s.serve(conn, handle) })
 		}
 	})
-	t.Cleanup(func() {
-		_ = ln.Close()
-		wg.Wait()
-		_ = os.RemoveAll(dir)
-	})
+	t.Cleanup(s.Close)
 	return s
+}
+
+// Close stops the server and removes its socket file, as a herdr that exits
+// does. It is safe to call more than once.
+func (s *Server) Close() {
+	s.close.Do(func() {
+		_ = s.ln.Close() // a unix listener unlinks its socket file on close
+		s.wg.Wait()
+	})
 }
 
 func (s *Server) serve(conn net.Conn, handle Handler) {
