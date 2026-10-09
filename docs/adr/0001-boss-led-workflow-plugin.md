@@ -93,6 +93,7 @@ flowchart LR
     SL["statusline"] -->|report statusline| R1(("ctx"))
     AG["Agentisan pipeline"] -->|report stage| R2(("item, stage"))
     BOSS["Boss"] -->|"team / worker / boss handoff / send"| CLI["herdr-agentisan CLI"]
+    WRK["Workers"] -->|"send"| CLI
   end
   R1 --> HT[("Herdr tokens")]
   R2 --> HT
@@ -107,7 +108,7 @@ flowchart LR
   HT --> SB["Herdr sidebar"]
 ```
 
-Diagram added at acceptance in place of the draft's missing figure. It already reflects amendment A1 (`state.db`).
+Diagram added at acceptance in place of the draft's missing figure. It already reflects amendments A1 (`state.db`) and A2 (any agent sends messages with `send`).
 
 Agents push their own state. The daemon is the only component that polls Herdr and GitHub, writes derived tokens and serves the dashboard. Every workflow decision still goes through the boss.
 
@@ -424,20 +425,20 @@ Accepted 2026-10-09 after review. The text above is kept as proposed, apart from
 
 ### A1. New D13: runtime state lives in one SQLite database
 
-*Overrides:* the runtime-state contract table, and "runtime state files" in D3.
+*Overrides:* the runtime-state contract table, "runtime state files" in D3, and "D1 to D12" in the metadata section. The decisions now run from D1 to D13.
 
 - **Location.** One file, `state.db`, under `HERDR_PLUGIN_STATE_DIR`, opened with `modernc.org/sqlite`. That driver is pure Go, so the binary stays static with no cgo.
 - **Durability.** WAL mode with `synchronous=FULL`. Write volume is tiny, so FULL costs nothing.
 - **Schema versioning.** Migrations are numbered, embedded in the binary, and tracked with `PRAGMA user_version`. The daemon refuses to start on a schema version newer than the one it knows.
 - **One writer.** The daemon holds the only write connection. The CLI always goes through the daemon socket. The one exception is a read-only `doctor` command, and people and the debugger agent can also open the file read-only with `sqlite3`.
-- **Retention.** Delivered messages and finished handoffs are deleted after 14 days. Elastic keeps the long-term history.
+- **Retention.** Messages in the `delivered` or `failed` state, and finished handoffs, are deleted after 14 days. Elastic keeps the long-term history.
 - **Tests.** Every test opens a fresh database in a temporary directory, alongside herdrtest. The database is never mocked.
 - **Plain files remain** for two things only: `daemon.lock`, because flock needs a real file, and `daemon.log`, capped at 10 MB with one rotated file, because logs should not live in the database being debugged.
 
 | Table | Holds |
 | --- | --- |
 | `workers` | Logical ID, project, group, current pane ID, generation, status, created and retired times |
-| `messages` | ULID, recipient logical ID, sender, body, state (`queued`, `dispatching` or `delivered`), attempt count, timestamps |
+| `messages` | ULID, recipient logical ID, sender, body, state (`queued`, `dispatching`, `delivered` or `failed`), attempt count, timestamps |
 | `handoffs` | ID, logical ID, old pane, new pane, state (`pending`, `acknowledged` or `failed`), timestamps |
 | `focus` | Recently focused panes, used by Back, capped at 32 rows |
 
@@ -445,14 +446,15 @@ This replaces `workers.json`, `focus.json` and `inbox/*.jsonl`. The four version
 
 ### A2. D8 is replaced: messages go through the plugin
 
-*Overrides:* D8, and the "A messaging service built up front" row in Alternatives considered.
+*Overrides:* D8, and the "A messaging service built up front" row in Alternatives considered. *Clarifies:* I3, as described under the crash rule below.
 
 Workers reach the boss today with `herdr agent prompt boss "…"`, which types text straight into whichever pane holds that name. Nothing queues it, so D8's test would fail by construction, and the inbox is built rather than gated.
 
 - **Sending.** A sender runs `herdr-agentisan send <logical-id> <body>` over the daemon socket, addressing a logical ID rather than a pane or agent name. The daemon stores the message in `messages` and delivers it with `agent.prompt` to the recipient's current pane.
-- **States.** A message moves from `queued` to `dispatching` to `delivered`.
+- **States.** A message moves from `queued` to `dispatching` to `delivered`. Its only other end state is `failed`, which the crash rule below sets.
 - **Atomic rebind (I3).** Rebinding a logical ID to its replacement pane and draining that worker's inbox happen in one SQLite transaction.
-- **Crash rule.** After a daemon crash, a row still marked `dispatching` is marked failed and returned to its sender. It is never redelivered, because the receiving pane has no way to discard a duplicate prompt.
+- **Crash rule.** After a daemon crash, a row still marked `dispatching` is set to `failed` and returned to its sender. It is never redelivered, because the receiving pane has no way to discard a duplicate prompt.
+- **What I3 guarantees.** "Exactly once" holds whenever the daemon does not crash in the middle of a dispatch, and that includes every rotation and handoff. If the daemon crashes during a dispatch, delivery becomes at most once: the message may or may not have reached the pane, and the sender is told it failed so it can decide whether to send it again.
 - **Fallback.** `herdr agent prompt` stays available for when the daemon is down, but messages sent that way are not durable.
 
 ### A3. D3 lifecycle: the lock records the server, and a new daemon waits
@@ -462,7 +464,7 @@ Workers reach the boss today with `herdr agent prompt boss "…"`, which types t
 - **The race.** During Herdr's live handoff, the new server's startup hook can run `daemon start` while the old daemon still holds the lock, because the old daemon only notices the socket change on its next poll.
 - **The fix.** The lock file records the PID and the inode of the Herdr socket. A new `run` that finds the lock held by a daemon bound to a different, stale inode waits for the lock, with a time limit, instead of exiting. A `run` that finds the lock held by a daemon bound to the current server still exits 0.
 - **Event loss.** On `events_lost`, the daemon resubscribes and re-reads a fresh snapshot.
-- **Socket path.** The daemon checks that its socket path is under 108 bytes, the Unix socket path limit.
+- **Socket path.** The daemon checks that its socket path is under 104 bytes. That is the macOS limit; Linux allows 108, and the plugin ships for both.
 
 ### A4. D2 pin: an explicit override
 
@@ -492,7 +494,7 @@ When a replacement session acknowledges its handoff, it runs `report stage` with
 
 *Adds to:* D7.
 
-Herdr resolves agents by unique name. The new boss starts under a temporary name, and takes `boss` (via `/rename boss`) only after the old boss's pane has closed. This follows the rule today's `handover.sh` already uses.
+Herdr resolves an agent target by its current pane ID or by a unique agent name (verified against the Herdr source at v0.9.3, `src/app/terminal_targets.rs`). The new boss starts under a temporary name, and takes `boss` (via `/rename boss`) only after the old boss's pane has closed. This follows the rule today's `handover.sh` already uses.
 
 ### A8. D5 sidebar grouping is no longer deferred
 
@@ -539,7 +541,7 @@ The daemon writes the group and project header tokens (A5). When the first agent
 
 ### A13. Implementation plan
 
-*Overrides:* the Implementation plan table, its backlog list and the "On approval" checklist.
+*Overrides:* the whole Implementation plan section: its opening paragraph ("12 issues"), the table, the backlog list and the "On approval" checklist.
 
 Each item is one generation, with no stacked PRs and a 1,000-line review gate. The given/when/then for each item lives on its Linear issue.
 
@@ -579,6 +581,6 @@ The Linear hook chore is already tracked as NERD-5236.
 
 ### A14. Acceptance
 
-*Overrides:* "then move it to Done" in the original "On approval" checklist.
+*Clarifies:* when NERD-5244 closes. A13 replaces the original "On approval" checklist, which said to move it to Done on approval.
 
 NERD-5244 delivers this document. It moves to Done when the pull request that adds this file merges, not when the plan was approved.
