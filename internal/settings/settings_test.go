@@ -1,3 +1,5 @@
+// safety-scan: allow (test fixture: plain-string secrets such as "hunter2" are written into token fields on purpose, to prove the loader rejects them)
+
 package settings_test
 
 import (
