@@ -50,14 +50,28 @@ var (
 	// than piped JSON, unreadable, over MaxStatuslineBytes, not one JSON
 	// object, or a percentage that is not a JSON number from 0 to 100.
 	ErrMalformed = errors.New("malformed statusline input")
+	// ErrPaneUnresolved means no pane runs the reporting process: its lineage
+	// reaches no pane's shell or foreground job. That is the case when the
+	// statusline exited first and the report was re-parented to init.
+	ErrPaneUnresolved = errors.New("no pane runs the reporting process")
+	// ErrAmbiguousPane means more than one pane claims the reporting process.
+	// Nothing is reported rather than guessing which.
+	ErrAmbiguousPane = errors.New("more than one pane runs the reporting process")
 )
 
 // Pane is where a report goes: herdr's socket and the pane the reporting
-// process runs in. Both come from the pane's shell, not from a plugin
+// process runs in. They come from the pane's shell, not from a plugin
 // invocation, which is why they are not part of plugin.Env.
 type Pane struct {
 	SocketPath string
-	PaneID     string
+	// PaneID is HERDR_PANE_ID. herdr sets it when the process spawns and
+	// never updates it, so a pane moved to another workspace has a new id
+	// and this one is stale.
+	PaneID string
+	// Lineage is the reporting process and its ancestors (SelfLineage). A
+	// report lands only on a pane one of them runs in. Nil means the OS cannot
+	// read a lineage: the report then trusts PaneID unchecked.
+	Lineage *Lineage
 }
 
 // PaneFrom reads HERDR_SOCKET_PATH and HERDR_PANE_ID through lookup
@@ -69,9 +83,20 @@ func PaneFrom(lookup func(string) (string, bool)) Pane {
 	return Pane{SocketPath: sock, PaneID: pane}
 }
 
-// Reporter is the slice of the herdr client a report needs.
+// Reporter is the slice of the herdr client a report needs: the report
+// itself, and the queries that find the pane it belongs on.
 type Reporter interface {
 	ReportPaneMetadata(ctx context.Context, m herdr.PaneMetadata) error
+	PaneProcessInfo(ctx context.Context, paneID string) (herdr.ProcessInfo, error)
+	ListPanes(ctx context.Context) ([]herdr.PaneInfo, error)
+}
+
+// Result is what a report pushed, and where.
+type Result struct {
+	Ctx int
+	// PaneID is the pane the token landed on: Pane.PaneID, or the pane's
+	// current id when Pane.PaneID is stale or an alias.
+	PaneID string
 }
 
 // ParseContext reads Claude's statusline JSON from r and returns
@@ -122,31 +147,86 @@ func isCharDevice(r io.Reader) bool {
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
-// Statusline pushes the ctx token for pane from Claude's statusline JSON in
-// r, and returns the value it pushed. Outside a pane it returns ErrNotInPane
-// before reading r; on unusable input it returns before calling herdr. The
-// call is bounded by plugin.CallTimeout: the caller runs it in the background
-// on every statusline refresh, and a herdr that never answered must not keep
-// one process per refresh alive.
-func Statusline(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (int, error) {
+// Statusline pushes the ctx token from Claude's statusline JSON in r to the
+// pane the reporting process runs in, and returns what it pushed where.
+// Outside a pane it returns ErrNotInPane before reading r; on unusable input
+// it returns before calling herdr.
+//
+// One plugin.CallTimeout bounds the whole report, finding the pane included:
+// the caller runs it in the background on every statusline refresh, and a
+// herdr that never answered must not keep one process per refresh alive.
+func Statusline(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (Result, error) {
 	if pane.SocketPath == "" || pane.PaneID == "" {
-		return 0, ErrNotInPane
+		return Result{}, ErrNotInPane
 	}
 	pct, err := ParseContext(r)
 	if err != nil {
-		return 0, err
+		return Result{}, err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, plugin.CallTimeout)
 	defer cancel()
+	target, err := resolvePane(ctx, rep, pane)
+	if err != nil {
+		return Result{}, err
+	}
 	err = rep.ReportPaneMetadata(ctx, herdr.PaneMetadata{
-		PaneID:    pane.PaneID,
+		PaneID:    target,
 		Source:    Source,
 		Tokens:    map[string]string{CtxKey: strconv.Itoa(pct)},
 		TTLMillis: uint64(CtxTTL / time.Millisecond),
 	})
 	if err != nil {
-		return 0, fmt.Errorf("report %s: %w", CtxKey, err)
+		return Result{}, fmt.Errorf("report %s to %s: %w", CtxKey, target, err)
 	}
-	return pct, nil
+	return Result{Ctx: pct, PaneID: target}, nil
+}
+
+// resolvePane returns the current id of the pane the reporting process runs
+// in (NERD-5268). Without a lineage it can only trust pane.PaneID.
+//
+// It checks pane.PaneID first: a pane that never moved costs that one query.
+// An id that answers proves nothing by itself, because after a live handoff
+// herdr can reissue a closed workspace's ids to new panes; it counts only if
+// one of the pane's processes is in the lineage. Otherwise every pane is
+// asked, and the report goes to the one pane that runs the process, or
+// nowhere.
+func resolvePane(ctx context.Context, rep Reporter, pane Pane) (string, error) {
+	if pane.Lineage == nil {
+		return pane.PaneID, nil
+	}
+
+	info, err := rep.PaneProcessInfo(ctx, pane.PaneID)
+	switch {
+	case err == nil && pane.Lineage.runsIn(info):
+		return info.PaneID, nil
+	case err != nil && !errors.Is(err, herdr.ErrPaneNotFound):
+		return "", fmt.Errorf("check pane %s: %w", pane.PaneID, err)
+	}
+
+	panes, err := rep.ListPanes(ctx)
+	if err != nil {
+		return "", fmt.Errorf("find the reporting pane: %w", err)
+	}
+	var found []string
+	for _, p := range panes {
+		info, err := rep.PaneProcessInfo(ctx, p.PaneID)
+		if errors.Is(err, herdr.ErrPaneNotFound) {
+			continue // closed since the list
+		}
+		if err != nil {
+			return "", fmt.Errorf("check pane %s: %w", p.PaneID, err)
+		}
+		if pane.Lineage.runsIn(info) {
+			found = append(found, info.PaneID)
+		}
+	}
+	switch len(found) {
+	case 0:
+		return "", fmt.Errorf("%w: lineage %v, HERDR_PANE_ID %s", ErrPaneUnresolved, pane.Lineage.PIDs(), pane.PaneID)
+	case 1:
+		return found[0], nil
+	default:
+		return "", fmt.Errorf("%w: %v", ErrAmbiguousPane, found)
+	}
 }

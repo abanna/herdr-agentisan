@@ -39,6 +39,27 @@ func lookupEnvFrom(ctx context.Context) func(string) (string, bool) {
 	return os.LookupEnv
 }
 
+// lineageKey addresses the lineage reader stashed in the command context.
+// Tests inject one so a report never matches panes against the real process
+// table.
+type lineageKey struct{}
+
+// WithLineage returns a context whose commands read the reporting process's
+// lineage through read instead of report.SelfLineage.
+func WithLineage(ctx context.Context, read func() *report.Lineage) context.Context {
+	return context.WithValue(ctx, lineageKey{}, read)
+}
+
+// lineageFrom returns the injected lineage reader, or one that reads the real
+// process table anchored on the command's environment.
+func lineageFrom(ctx context.Context) func() *report.Lineage {
+	if f, ok := ctx.Value(lineageKey{}).(func() *report.Lineage); ok && f != nil {
+		return f
+	}
+	lookup := lookupEnvFrom(ctx)
+	return func() *report.Lineage { return report.SelfLineage(lookup) }
+}
+
 // Root builds the `herdr-agentisan` command tree.
 func Root() *cobra.Command {
 	root := &cobra.Command{
@@ -177,17 +198,22 @@ func newReportStatuslineCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
+			// Read the lineage first: the statusline backgrounds this process
+			// and may exit, and once it has, only CLAUDE_PID still reaches the
+			// pane.
+			lineage := lineageFrom(ctx)()
 			logger := logging.From(ctx)
 			pane := report.PaneFrom(lookupEnvFrom(ctx))
-			pct, err := report.Statusline(ctx, herdr.Client{SocketPath: pane.SocketPath}, pane, cmd.InOrStdin())
+			pane.Lineage = lineage
+			res, err := report.Statusline(ctx, herdr.Client{SocketPath: pane.SocketPath}, pane, cmd.InOrStdin())
 			// The statusline runs this in the background on every refresh, so
 			// a failure is never the user's to see: it would either vanish
 			// into the redirect or, without one, garble the statusline.
 			if err != nil {
-				logger.Debug().Err(err).Str("pane", pane.PaneID).Msg("report statusline: nothing reported")
+				logger.Debug().Err(err).Str("pane", pane.PaneID).Ints("lineage", lineage.PIDs()).Msg("report statusline: nothing reported")
 				return nil
 			}
-			logger.Debug().Str("pane", pane.PaneID).Int(report.CtxKey, pct).Msg("report statusline")
+			logger.Debug().Str("pane", pane.PaneID).Str("reported_to", res.PaneID).Int(report.CtxKey, res.Ctx).Msg("report statusline")
 			return nil
 		},
 	}

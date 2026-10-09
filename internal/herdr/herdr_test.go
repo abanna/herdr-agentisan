@@ -331,3 +331,194 @@ func TestResponseFramingClasses(t *testing.T) {
 		})
 	}
 }
+
+// TestErrPaneNotFoundMatchesOnlyThatCode: a caller tells "this pane id names
+// nothing" apart from every other herdr error with errors.Is, never by
+// reading the code string. The match is exact: herdr's codes are snake_case
+// constants, so anything else is a different error.
+func TestErrPaneNotFoundMatchesOnlyThatCode(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		code string
+		want bool
+	}{
+		"pane_not_found":      {code: "pane_not_found", want: true},
+		"another code":        {code: "pane_move_failed"},
+		"a different case":    {code: "PANE_NOT_FOUND"},
+		"a longer code":       {code: "pane_not_found_x"},
+		"workspace_not_found": {code: "workspace_not_found"},
+		"empty code":          {code: ""},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: tc.code, Message: "m"}}
+			})
+
+			err := herdr.Client{SocketPath: srv.Path}.ReportPaneMetadata(t.Context(),
+				herdr.PaneMetadata{PaneID: "w9:p9", Source: "agentisan", Tokens: map[string]string{"ctx": "1"}})
+			require.ErrorIs(t, err, herdr.ErrAPI, "every error body stays an ErrAPI")
+			assert.Equal(t, tc.want, errors.Is(err, herdr.ErrPaneNotFound))
+		})
+	}
+}
+
+func TestListPanesSendsTheSchemaShape(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		panes []map[string]any
+		want  []herdr.PaneInfo
+	}{
+		"several panes across workspaces": {
+			panes: []map[string]any{
+				{"pane_id": "w1:p1", "terminal_id": "term_a", "workspace_id": "w1", "tab_id": "w1:t1", "focused": true, "agent_status": "idle", "revision": 3},
+				{"pane_id": "wN:p2", "terminal_id": "term_b", "workspace_id": "wN", "tab_id": "wN:t1", "focused": false, "agent_status": "working", "revision": 9, "agent": "claude"},
+			},
+			want: []herdr.PaneInfo{{PaneID: "w1:p1"}, {PaneID: "wN:p2"}},
+		},
+		"no panes": {panes: []map[string]any{}, want: []herdr.PaneInfo{}},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
+				return herdrtest.Reply{Result: map[string]any{"type": "pane_list", "panes": tc.panes}}
+			})
+
+			got, err := herdr.Client{SocketPath: srv.Path}.ListPanes(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+
+			reqs := srv.Requests()
+			require.Len(t, reqs, 1)
+			assert.Equal(t, "pane.list", reqs[0].Method)
+			// No workspace_id: herdr lists every workspace's panes.
+			assert.JSONEq(t, `{}`, string(reqs[0].Params))
+		})
+	}
+}
+
+func TestPaneProcessInfoSendsTheSchemaShape(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		paneID string
+		info   map[string]any
+		want   herdr.ProcessInfo
+	}{
+		"a shell running a foreground job": {
+			paneID: "w14:p1",
+			info: map[string]any{
+				"pane_id": "w14:p1", "shell_pid": 599895, "foreground_process_group_id": 894377, "tty": nil,
+				"foreground_processes": []map[string]any{
+					{"pid": 894377, "name": "claude", "argv": []string{"claude"}, "cmdline": "claude", "cwd": "/src"},
+					{"pid": 919306, "name": "uv"},
+				},
+			},
+			want: herdr.ProcessInfo{
+				PaneID: "w14:p1", ShellPID: 599895, ForegroundProcessGroupID: 894377,
+				ForegroundProcesses: []herdr.Process{{PID: 894377, Name: "claude"}, {PID: 919306, Name: "uv"}},
+			},
+		},
+		// herdr answers an alias with the pane's current id.
+		"an alias answers with the current id": {
+			paneID: "wP:p1",
+			info:   map[string]any{"pane_id": "wN:p2", "shell_pid": 10, "foreground_process_group_id": 11, "foreground_processes": []map[string]any{}},
+			want:   herdr.ProcessInfo{PaneID: "wN:p2", ShellPID: 10, ForegroundProcessGroupID: 11, ForegroundProcesses: []herdr.Process{}},
+		},
+		// A pane whose shell has exited reports nulls: they decode to 0, which
+		// names no process.
+		"null pids decode to zero": {
+			paneID: "w1:p1",
+			info:   map[string]any{"pane_id": "w1:p1", "shell_pid": nil, "foreground_process_group_id": nil},
+			want:   herdr.ProcessInfo{PaneID: "w1:p1"},
+		},
+		// Pane ids come from the environment: whatever bytes they hold, the
+		// request stays one valid JSON line.
+		"pane id with a newline":                {paneID: "w1\np1", info: map[string]any{"pane_id": "w1:p1"}, want: herdr.ProcessInfo{PaneID: "w1:p1"}},
+		"pane id with invalid UTF-8":            {paneID: "w1\xff", info: map[string]any{"pane_id": "w1:p1"}, want: herdr.ProcessInfo{PaneID: "w1:p1"}},
+		"pane id with a truncated multibyte":    {paneID: "w1\xe2\x82", info: map[string]any{"pane_id": "w1:p1"}, want: herdr.ProcessInfo{PaneID: "w1:p1"}},
+		"pane id with an embedded NUL":          {paneID: "w1\x00p1", info: map[string]any{"pane_id": "w1:p1"}, want: herdr.ProcessInfo{PaneID: "w1:p1"}},
+		"pane id with non-ASCII and shell meta": {paneID: "wé:p1;$(x) *", info: map[string]any{"pane_id": "w1:p1"}, want: herdr.ProcessInfo{PaneID: "w1:p1"}},
+		"pids at the uint32 maximum": {
+			paneID: "w1:p1",
+			info:   map[string]any{"pane_id": "w1:p1", "shell_pid": uint32(1<<32 - 1), "foreground_processes": []map[string]any{{"pid": uint32(1<<32 - 1), "name": "x"}}},
+			want:   herdr.ProcessInfo{PaneID: "w1:p1", ShellPID: 1<<32 - 1, ForegroundProcesses: []herdr.Process{{PID: 1<<32 - 1, Name: "x"}}},
+		},
+		// A null pane_id would make herdr answer for the focused pane, so an
+		// empty id must still be sent as a string.
+		"empty pane id is sent as a string, never null": {
+			paneID: "",
+			info:   map[string]any{"pane_id": "w1:p1"},
+			want:   herdr.ProcessInfo{PaneID: "w1:p1"},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
+				return herdrtest.Reply{Result: map[string]any{"type": "pane_process_info", "process_info": tc.info}}
+			})
+
+			got, err := herdr.Client{SocketPath: srv.Path}.PaneProcessInfo(t.Context(), tc.paneID)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+
+			reqs := srv.Requests()
+			require.Len(t, reqs, 1)
+			assert.Equal(t, "pane.process_info", reqs[0].Method)
+			want, mErr := json.Marshal(map[string]string{"pane_id": tc.paneID})
+			require.NoError(t, mErr)
+			assert.JSONEq(t, string(want), string(reqs[0].Params))
+		})
+	}
+}
+
+// TestPaneQueryFailureClasses: both queries fail the way every call does, and
+// a pid that is not a non-negative integer is a protocol violation rather
+// than a silently wrong process.
+func TestPaneQueryFailureClasses(t *testing.T) {
+	t.Parallel()
+
+	reply := func(result map[string]any) herdrtest.Handler {
+		return func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Result: result} }
+	}
+	notFound := func(herdrtest.Request) herdrtest.Reply {
+		return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "pane_not_found", Message: "pane not found"}}
+	}
+	list := func(c herdr.Client) error { _, err := c.ListPanes(t.Context()); return err }
+	info := func(c herdr.Client) error { _, err := c.PaneProcessInfo(t.Context(), "w1:p1"); return err }
+
+	tests := map[string]struct {
+		handler herdrtest.Handler
+		call    func(herdr.Client) error
+		want    error
+	}{
+		"list: wrong result type":      {handler: reply(map[string]any{"type": "pane_info"}), call: list, want: herdr.ErrProtocol},
+		"list: panes missing":          {handler: reply(map[string]any{"type": "pane_list"}), call: list, want: herdr.ErrProtocol},
+		"list: a pane without an id":   {handler: reply(map[string]any{"type": "pane_list", "panes": []map[string]any{{"pane_id": ""}}}), call: list, want: herdr.ErrProtocol},
+		"list: panes is not an array":  {handler: reply(map[string]any{"type": "pane_list", "panes": "w1:p1"}), call: list, want: herdr.ErrProtocol},
+		"list: closed without a reply": {handler: func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Silent: true} }, call: list, want: herdr.ErrUnavailable},
+		"info: pane not found":         {handler: notFound, call: info, want: herdr.ErrPaneNotFound},
+		"info: wrong result type":      {handler: reply(map[string]any{"type": "pane_list", "panes": []any{}}), call: info, want: herdr.ErrProtocol},
+		"info: negative pid":           {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w1:p1", "shell_pid": -1}}), call: info, want: herdr.ErrProtocol},
+		"info: fractional pid":         {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w1:p1", "shell_pid": 1.5}}), call: info, want: herdr.ErrProtocol},
+		"info: pid as a string":        {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w1:p1", "foreground_process_group_id": "7"}}), call: info, want: herdr.ErrProtocol},
+		"info: pid one past uint32":    {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w1:p1", "foreground_processes": []map[string]any{{"pid": 1 << 32, "name": "x"}}}}), call: info, want: herdr.ErrProtocol},
+		"info: pane_id empty":          {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": ""}}), call: info, want: herdr.ErrProtocol},
+		"info: process_info missing":   {handler: reply(map[string]any{"type": "pane_process_info"}), call: info, want: herdr.ErrProtocol},
+		"info: closed without a reply": {handler: func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Silent: true} }, call: info, want: herdr.ErrUnavailable},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, tc.handler)
+
+			err := tc.call(herdr.Client{SocketPath: srv.Path})
+			require.ErrorIs(t, err, tc.want)
+		})
+	}
+}

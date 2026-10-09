@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -266,10 +269,52 @@ func reportCtx(t *testing.T, socket, pane string, logs *bytes.Buffer) context.Co
 	logger, err := logging.New(logs, "debug", "json")
 	require.NoError(t, err)
 	ctx := logging.Into(t.Context(), logger)
+	ctx = cli.WithLineage(ctx, testLineage)
 	return cli.WithLookupEnv(ctx, func(k string) (string, bool) {
 		v, ok := env[k]
 		return v, ok
 	})
+}
+
+// testLineage stands in for the reporting process's lineage, so a test never
+// matches panes against the real process table: report (5000) -> statusline
+// (4999) -> claude (900) -> pane shell (600).
+func testLineage() *report.Lineage {
+	procs := map[int]report.Stat{
+		5000: {PPID: 4999, Start: 90}, 4999: {PPID: 900, Start: 90}, 900: {PPID: 600, Start: 50}, 600: {PPID: 1, Start: 40},
+	}
+	return report.ReadLineage(5000, func(pid int) (report.Stat, error) {
+		s, ok := procs[pid]
+		if !ok {
+			return report.Stat{}, errors.New("no such process")
+		}
+		return s, nil
+	})
+}
+
+// paneHerdr answers like a herdr whose only pane, current, runs the test
+// lineage's shell and is also reachable as each of aliases.
+func paneHerdr(current string, aliases ...string) herdrtest.Handler {
+	known := map[string]bool{current: true}
+	for _, a := range aliases {
+		known[a] = true
+	}
+	return func(r herdrtest.Request) herdrtest.Reply {
+		var params struct {
+			PaneID string `json:"pane_id"`
+		}
+		_ = json.Unmarshal(r.Params, &params)
+		switch {
+		case r.Method == "pane.list":
+			return herdrtest.Reply{Result: map[string]any{"type": "pane_list", "panes": []map[string]any{{"pane_id": current}}}}
+		case !known[params.PaneID]:
+			return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "pane_not_found", Message: "pane not found"}}
+		case r.Method == "pane.process_info":
+			return herdrtest.Reply{Result: map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": current, "shell_pid": 600}}}
+		default:
+			return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
+		}
+	}
 }
 
 // runReport executes `report statusline` with stdin and returns everything the
@@ -289,9 +334,7 @@ const statusline426 = `{"model":{"display_name":"Opus"},"context_window":{"used_
 
 func TestReportStatuslinePushesCtx(t *testing.T) {
 	t.Parallel()
-	srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
-		return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
-	})
+	srv := herdrtest.Start(t, paneHerdr("w14:p1"))
 	var logs bytes.Buffer
 
 	out, err := runReport(reportCtx(t, srv.Path, "w14:p1", &logs), statusline426+"\n")
@@ -299,10 +342,55 @@ func TestReportStatuslinePushesCtx(t *testing.T) {
 	assert.Empty(t, out, "the statusline runs this on every refresh: it must print nothing")
 
 	reqs := srv.Requests()
-	require.Len(t, reqs, 1)
-	assert.Equal(t, "pane.report_metadata", reqs[0].Method)
-	assert.JSONEq(t, `{"pane_id":"w14:p1","source":"agentisan","tokens":{"ctx":"43"},"ttl_ms":180000}`, string(reqs[0].Params))
+	require.Len(t, reqs, 2, "check the pane runs this process, then report")
+	assert.Equal(t, "pane.process_info", reqs[0].Method)
+	assert.Equal(t, "pane.report_metadata", reqs[1].Method)
+	assert.JSONEq(t, `{"pane_id":"w14:p1","source":"agentisan","tokens":{"ctx":"43"},"ttl_ms":180000}`, string(reqs[1].Params))
 	assert.Contains(t, logs.String(), `"ctx":43`)
+}
+
+// TestReportStatuslineLogsWhereAStalePaneReported: the debug log names both
+// the stale HERDR_PANE_ID and the pane ctx actually landed on, which is the
+// evidence the live check reads.
+func TestReportStatuslineLogsWhereAStalePaneReported(t *testing.T) {
+	t.Parallel()
+	srv := herdrtest.Start(t, paneHerdr("wN:p2"))
+	var logs bytes.Buffer
+
+	out, err := runReport(reportCtx(t, srv.Path, "wP:p1", &logs), statusline426)
+	require.NoError(t, err)
+	assert.Empty(t, out)
+
+	var reported []string
+	for _, r := range srv.Requests() {
+		if r.Method == "pane.report_metadata" {
+			reported = append(reported, string(r.Params))
+		}
+	}
+	require.Len(t, reported, 1)
+	assert.Contains(t, reported[0], `"pane_id":"wN:p2"`)
+	assert.Contains(t, logs.String(), `"pane":"wP:p1"`)
+	assert.Contains(t, logs.String(), `"reported_to":"wN:p2"`)
+}
+
+// TestReportStatuslineReadsTheLineageOnce: the lineage is read when the
+// command runs, before herdr is asked anything, because the statusline
+// backgrounds the report and may exit at any moment after.
+func TestReportStatuslineReadsTheLineageOnce(t *testing.T) {
+	t.Parallel()
+	srv := herdrtest.Start(t, paneHerdr("w14:p1"))
+	var logs bytes.Buffer
+	reads := 0
+	ctx := cli.WithLineage(reportCtx(t, srv.Path, "w14:p1", &logs), func() *report.Lineage {
+		reads++
+		assert.Empty(t, srv.Requests(), "the lineage must be read before any herdr call")
+		return testLineage()
+	})
+
+	_, err := runReport(ctx, statusline426)
+	require.NoError(t, err)
+	assert.Equal(t, 1, reads)
+	assert.Len(t, srv.Requests(), 2)
 }
 
 // TestReportStatuslineDoesNothing covers every case the issue says must do
@@ -346,20 +434,126 @@ func TestReportStatuslineDoesNothing(t *testing.T) {
 	}
 }
 
-// TestReportStatuslineSwallowsHerdrErrors: a herdr failure is logged at debug
-// level and nowhere else, and the command still exits 0.
-func TestReportStatuslineSwallowsHerdrErrors(t *testing.T) {
+// TestReportStatuslineReadsTheRealLineageByDefault: with no reader injected
+// (or a nil one), the command reads the real process table. The fake pane's
+// shell is this test binary, so on Linux the lineage proves the pane is
+// ours; off Linux there is no lineage and the report trusts HERDR_PANE_ID.
+func TestReportStatuslineReadsTheRealLineageByDefault(t *testing.T) {
 	t.Parallel()
-	srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
-		return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "pane_not_found", Message: "pane w1:p1 not found"}}
+	srv := herdrtest.Start(t, func(r herdrtest.Request) herdrtest.Reply {
+		if r.Method == "pane.process_info" {
+			return herdrtest.Reply{Result: map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w14:p1", "shell_pid": os.Getpid()}}}
+		}
+		return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
 	})
 	var logs bytes.Buffer
 
-	out, err := runReport(reportCtx(t, srv.Path, "w1:p1", &logs), statusline426)
+	_, err := runReport(cli.WithLineage(reportCtx(t, srv.Path, "w14:p1", &logs), nil), statusline426)
 	require.NoError(t, err)
-	assert.Empty(t, out)
-	require.Len(t, srv.Requests(), 1)
-	assert.Contains(t, logs.String(), "pane_not_found")
+
+	want := []string{"pane.process_info", "pane.report_metadata"}
+	if runtime.GOOS != "linux" {
+		want = []string{"pane.report_metadata"}
+	}
+	var got []string
+	for _, r := range srv.Requests() {
+		got = append(got, r.Method)
+	}
+	assert.Equal(t, want, got)
+	assert.Contains(t, logs.String(), `"reported_to":"w14:p1"`)
+}
+
+// TestReportStatuslineAnchorsOnCLAUDE_PID: the default reader passes the
+// command's environment to SelfLineage, so CLAUDE_PID reaches the pane even
+// for a report whose own parents no longer do. The fake pane's foreground job
+// is an older process outside this test's lineage, named by CLAUDE_PID.
+func TestReportStatuslineAnchorsOnCLAUDE_PID(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "linux" {
+		t.Skip("no /proc to read a lineage from")
+	}
+	own := report.SelfLineage(func(string) (string, bool) { return "", false })
+	stranger := 0
+	in := map[int]bool{}
+	for _, p := range own.Procs {
+		in[p.PID] = true
+	}
+	entries, err := os.ReadDir("/proc")
+	require.NoError(t, err)
+	stat := report.ProcStat(os.DirFS("/proc"))
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid <= 1 || in[pid] {
+			continue
+		}
+		if s, err := stat(pid); err == nil && s.Start <= own.Procs[0].Start {
+			stranger = pid
+			break
+		}
+	}
+	if stranger == 0 {
+		t.Skip("no older process outside this test's lineage")
+	}
+	srv := herdrtest.Start(t, func(r herdrtest.Request) herdrtest.Reply {
+		if r.Method == "pane.process_info" {
+			return herdrtest.Reply{Result: map[string]any{"type": "pane_process_info", "process_info": map[string]any{
+				"pane_id": "w14:p1", "foreground_process_group_id": stranger,
+			}}}
+		}
+		return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
+	})
+	var logs bytes.Buffer
+	env := map[string]string{"HERDR_SOCKET_PATH": srv.Path, "HERDR_PANE_ID": "w14:p1", "CLAUDE_PID": strconv.Itoa(stranger)}
+	ctx := cli.WithLineage(reportCtx(t, srv.Path, "w14:p1", &logs), nil)
+	ctx = cli.WithLookupEnv(ctx, func(k string) (string, bool) { v, ok := env[k]; return v, ok })
+
+	_, err = runReport(ctx, statusline426)
+	require.NoError(t, err)
+	assert.Contains(t, logs.String(), `"reported_to":"w14:p1"`)
+}
+
+// TestReportStatuslineSwallowsHerdrErrors: a herdr failure, or a pane that
+// cannot be found, is logged at debug level and nowhere else, and the command
+// still exits 0.
+func TestReportStatuslineSwallowsHerdrErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		handler herdrtest.Handler
+		want    string
+	}{
+		"herdr errors": {
+			handler: func(herdrtest.Request) herdrtest.Reply {
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "busy", Message: "try later"}}
+			},
+			want: "busy",
+		},
+		"no pane runs the process": {
+			handler: func(r herdrtest.Request) herdrtest.Reply {
+				if r.Method == "pane.list" {
+					return herdrtest.Reply{Result: map[string]any{"type": "pane_list", "panes": []map[string]any{}}}
+				}
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "pane_not_found", Message: "pane w1:p1 not found"}}
+			},
+			want: report.ErrPaneUnresolved.Error(),
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, tc.handler)
+			var logs bytes.Buffer
+
+			out, err := runReport(reportCtx(t, srv.Path, "w1:p1", &logs), statusline426)
+			require.NoError(t, err)
+			assert.Empty(t, out)
+			assert.NotEmpty(t, srv.Requests())
+			for _, r := range srv.Requests() {
+				assert.NotEqual(t, "pane.report_metadata", r.Method, "nothing may be reported")
+			}
+			assert.Contains(t, logs.String(), tc.want)
+		})
+	}
 }
 
 func TestReportRejectsArguments(t *testing.T) {
