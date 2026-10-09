@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -601,20 +602,54 @@ func TestManifestMatchesTheBinary(t *testing.T) {
 	assert.Equal(t, "bin/herdr-agentisan", m.BuildOutput())
 	assert.Contains(t, string(taskfile), "-o {{.BINARY_DIR}}/herdr-agentisan ./cmd/herdr-agentisan")
 
-	root := cli.Root()
+	// Every argv herdr runs: the actions, and the startup hooks.
+	argvs := map[string][]string{}
 	for _, a := range m.Actions {
-		t.Run(a.ID, func(t *testing.T) {
-			require.NotEmpty(t, a.Command)
-			assert.Equal(t, m.BuildOutput(), a.Command[0], "action must run the binary the build step produces")
+		argvs["action "+a.ID] = a.Command
+	}
+	require.NotEmpty(t, m.Startup, "the manifest declares no startup hook")
+	for i, s := range m.Startup {
+		argvs["startup "+strconv.Itoa(i)] = s.Command
+	}
 
-			cmd, rest, err := root.Find(a.Command[1:])
+	root := cli.Root()
+	for name, argv := range argvs {
+		t.Run(name, func(t *testing.T) {
+			require.NotEmpty(t, argv)
+			assert.Equal(t, m.BuildOutput(), argv[0], "herdr must run the binary the build step produces")
+
+			cmd, rest, err := root.Find(argv[1:])
 			require.NoError(t, err)
 			// Find stops at the deepest match and returns the remainder, so
 			// "action bogus" resolves to `action` with ["bogus"] left over.
-			assert.Empty(t, rest, "argv %v does not name a command exactly", a.Command[1:])
-			assert.NotSame(t, root, cmd, "argv %v resolves to the root", a.Command[1:])
+			assert.Empty(t, rest, "argv %v does not name a command exactly", argv[1:])
+			assert.NotSame(t, root, cmd, "argv %v resolves to the root", argv[1:])
 			assert.True(t, cmd.Runnable(), "%q is not runnable", cmd.CommandPath())
 			assert.False(t, cmd.HasSubCommands(), "%q is a group, not an action", cmd.CommandPath())
 		})
 	}
+}
+
+// TestManifestStartsTheDaemon: herdr's startup hook starts the daemon, and
+// the daemon-restart action exists because linking fires no startup hook
+// (ADR-001 D3).
+func TestManifestStartsTheDaemon(t *testing.T) {
+	t.Parallel()
+	m, err := plugin.LoadManifest(filepath.Join("..", "..", plugin.ManifestFile))
+	require.NoError(t, err)
+
+	var starts bool
+	for _, s := range m.Startup {
+		starts = starts || slices.Equal(s.Command, []string{m.BuildOutput(), "daemon", "start"})
+	}
+	assert.True(t, starts, "a startup hook runs `daemon start`")
+
+	var restart *plugin.Action
+	for i := range m.Actions {
+		if m.Actions[i].ID == "daemon-restart" {
+			restart = &m.Actions[i]
+		}
+	}
+	require.NotNil(t, restart, "a daemon-restart action exists")
+	assert.Equal(t, []string{m.BuildOutput(), "daemon", "restart"}, restart.Command)
 }
