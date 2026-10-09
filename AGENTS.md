@@ -96,6 +96,10 @@ exempts whatever is later added under that name.
   `report statusline` turns Claude's statusline JSON into `ctx`. It reads
   `HERDR_PANE_ID`, a pane-shell variable, which is why it is not in
   `plugin.Env`.
+- `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
+  D9, D12) behind `config resolve`: layered precedence with provenance, secret
+  references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check.
+  Sample in `docs/config/herdr-agentisan.example.toml`.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real
