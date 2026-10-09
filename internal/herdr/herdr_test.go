@@ -58,6 +58,106 @@ func TestShowNotificationSendsTheSchemaShape(t *testing.T) {
 		"unset optional fields must be omitted, not sent as empty strings herdr would reject")
 }
 
+func okReply(herdrtest.Request) herdrtest.Reply {
+	return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
+}
+
+func TestReportPaneMetadataSendsTheSchemaShape(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		meta herdr.PaneMetadata
+		want string
+	}{
+		"tokens with a TTL": {
+			meta: herdr.PaneMetadata{PaneID: "w1:p2", Source: "agentisan", Tokens: map[string]string{"ctx": "43"}, TTLMillis: 180_000},
+			want: `{"pane_id":"w1:p2","source":"agentisan","tokens":{"ctx":"43"},"ttl_ms":180000}`,
+		},
+		// herdr reads an absent ttl_ms as "never expires" but rejects 0, so a
+		// zero TTL must be omitted rather than sent.
+		"no TTL omits ttl_ms": {
+			meta: herdr.PaneMetadata{PaneID: "w1:p2", Source: "agentisan", Tokens: map[string]string{"ctx": "0"}},
+			want: `{"pane_id":"w1:p2","source":"agentisan","tokens":{"ctx":"0"}}`,
+		},
+		// Pane ids come from the environment. Whatever bytes they hold, the
+		// request must stay one valid JSON line.
+		"pane id with a newline stays one request line": {
+			meta: herdr.PaneMetadata{PaneID: "w1\np2", Source: "agentisan", Tokens: map[string]string{"ctx": "1"}},
+			want: `{"pane_id":"w1\np2","source":"agentisan","tokens":{"ctx":"1"}}`,
+		},
+		"pane id with invalid UTF-8 is sent as valid JSON": {
+			meta: herdr.PaneMetadata{PaneID: "w1\xff", Source: "agentisan", Tokens: map[string]string{"ctx": "1"}},
+			want: `{"pane_id":"w1\ufffd","source":"agentisan","tokens":{"ctx":"1"}}`,
+		},
+		"pane id with a truncated multibyte sequence": {
+			meta: herdr.PaneMetadata{PaneID: "w1\xe2\x82", Source: "agentisan", Tokens: map[string]string{"ctx": "1"}},
+			want: `{"pane_id":"w1\ufffd\ufffd","source":"agentisan","tokens":{"ctx":"1"}}`,
+		},
+		"pane id with an embedded NUL is escaped": {
+			meta: herdr.PaneMetadata{PaneID: "w1\x00p2", Source: "agentisan", Tokens: map[string]string{"ctx": "1"}},
+			want: `{"pane_id":"w1\u0000p2","source":"agentisan","tokens":{"ctx":"1"}}`,
+		},
+		"pane id with non-ASCII and shell metacharacters": {
+			meta: herdr.PaneMetadata{PaneID: "wé:p1;$(x) *", Source: "agentisan", Tokens: map[string]string{"ctx": "1"}},
+			want: `{"pane_id":"wé:p1;$(x) *","source":"agentisan","tokens":{"ctx":"1"}}`,
+		},
+		// An empty value is how herdr clears a token, so it must be sent.
+		"empty value is sent to clear the token": {
+			meta: herdr.PaneMetadata{PaneID: "w1:p2", Source: "agentisan", Tokens: map[string]string{"ctx": ""}},
+			want: `{"pane_id":"w1:p2","source":"agentisan","tokens":{"ctx":""}}`,
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, okReply)
+
+			require.NoError(t, herdr.Client{SocketPath: srv.Path}.ReportPaneMetadata(t.Context(), tc.meta))
+
+			reqs := srv.Requests()
+			require.Len(t, reqs, 1)
+			assert.Equal(t, "pane.report_metadata", reqs[0].Method)
+			assert.JSONEq(t, tc.want, string(reqs[0].Params))
+		})
+	}
+}
+
+func TestReportPaneMetadataFailureClasses(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		handler herdrtest.Handler
+		want    error
+	}{
+		"pane not found": {
+			handler: func(herdrtest.Request) herdrtest.Reply {
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "pane_not_found", Message: "pane w9:p9 not found"}}
+			},
+			want: herdr.ErrAPI,
+		},
+		"wrong result type": {
+			handler: func(herdrtest.Request) herdrtest.Reply {
+				return herdrtest.Reply{Result: map[string]any{"type": "pong"}}
+			},
+			want: herdr.ErrProtocol,
+		},
+		"closed without a reply": {
+			handler: func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Silent: true} },
+			want:    herdr.ErrUnavailable,
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, tc.handler)
+
+			err := herdr.Client{SocketPath: srv.Path}.ReportPaneMetadata(t.Context(),
+				herdr.PaneMetadata{PaneID: "w9:p9", Source: "agentisan", Tokens: map[string]string{"ctx": "1"}})
+			require.ErrorIs(t, err, tc.want)
+		})
+	}
+}
+
 // TestCallFailureClasses walks every way a call can fail. Each must surface as
 // an error a caller can branch on with errors.Is, never as a zero result.
 func TestCallFailureClasses(t *testing.T) {

@@ -18,6 +18,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/logging"
 	"github.com/abanna/herdr-agentisan/internal/plugin"
+	"github.com/abanna/herdr-agentisan/internal/report"
 )
 
 // lookupEnvKey addresses the environment lookup stashed in the command
@@ -50,7 +51,7 @@ func Root() *cobra.Command {
 		SilenceErrors: true,
 		Version:       fmt.Sprintf("%s (%s)", config.Version, config.Commit),
 	}
-	root.AddCommand(newVersionCmd(), newActionCmd())
+	root.AddCommand(newVersionCmd(), newActionCmd(), newReportCmd())
 	return root
 }
 
@@ -147,4 +148,47 @@ func newActionPingCmd() *cobra.Command {
 	}
 	addJSONFlag(c, &asJSON)
 	return c
+}
+
+func newReportCmd() *cobra.Command {
+	c := &cobra.Command{
+		Use:   "report",
+		Short: "Push the calling agent's own state to its herdr pane",
+		// Same guard as `action`: an unknown verb must fail, not print help
+		// and exit 0.
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return fmt.Errorf("%s needs a subcommand; see --help", cmd.CommandPath())
+		},
+	}
+	c.AddCommand(newReportStatuslineCmd())
+	return c
+}
+
+func newReportStatuslineCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "statusline",
+		Short: "Push ctx from Claude's statusline JSON on stdin",
+		Long: "Reads Claude Code's statusline JSON on stdin and sets this pane's ctx\n" +
+			"token. Add one line to the statusline script:\n\n" +
+			"  herdr-agentisan report statusline <<<\"$input\" >/dev/null 2>&1 &\n\n" +
+			"It prints nothing and always exits 0; why it reported nothing goes to\n" +
+			"the debug log (HERDR_AGENTISAN_LOG_LEVEL=debug).",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx := cmd.Context()
+			logger := logging.From(ctx)
+			pane := report.PaneFrom(lookupEnvFrom(ctx))
+			pct, err := report.Statusline(ctx, herdr.Client{SocketPath: pane.SocketPath}, pane, cmd.InOrStdin())
+			// The statusline runs this in the background on every refresh, so
+			// a failure is never the user's to see: it would either vanish
+			// into the redirect or, without one, garble the statusline.
+			if err != nil {
+				logger.Debug().Err(err).Str("pane", pane.PaneID).Msg("report statusline: nothing reported")
+				return nil
+			}
+			logger.Debug().Str("pane", pane.PaneID).Int(report.CtxKey, pct).Msg("report statusline")
+			return nil
+		},
+	}
 }

@@ -29,6 +29,22 @@ binary also runs by hand: `task run:cli -- version --json`.
 Requires Go 1.26.9+ and [Task](https://taskfile.dev). Linters and scanners are
 pinned in `go.mod` under the `tool` directive — nothing to install globally.
 
+## Report `$ctx` from Claude's statusline
+
+Each Claude agent pushes its own context use to its pane as the `ctx` token:
+a bare integer from 0 to 100, source `agentisan`, with a 180 s TTL. After
+`task install` puts `herdr-agentisan` on your `PATH`, add one line to the
+statusline script (`~/.claude/statusline.sh`), after it has read stdin into
+`$input`:
+
+```bash
+herdr-agentisan report statusline <<<"$input" >/dev/null 2>&1 &
+```
+
+It prints nothing and always exits 0. Outside a herdr pane, or when the
+statusline has no context percentage yet, it reports nothing. Set
+`HERDR_AGENTISAN_LOG_LEVEL=debug` and drop the redirect to see why.
+
 ## Gates
 
 `task check` runs most of what CI runs: lint, format, vet, gosec, gitleaks,
