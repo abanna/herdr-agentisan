@@ -91,6 +91,11 @@ exempts whatever is later added under that name.
   concern; no command holds a rule of its own.
 - `internal/plugin/` — the plugin's domain: the runtime environment herdr
   injects (`EnvFrom`), the manifest (`LoadManifest`) and the actions' logic.
+- `internal/report/` — an agent pushing its own state to its pane as herdr
+  tokens (ADR-001 D4), and the token contract for the keys it writes.
+  `report statusline` turns Claude's statusline JSON into `ctx`. It reads
+  `HERDR_PANE_ID`, a pane-shell variable, which is why it is not in
+  `plugin.Env`.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real

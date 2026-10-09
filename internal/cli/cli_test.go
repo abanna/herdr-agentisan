@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -16,7 +17,9 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/config"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
+	"github.com/abanna/herdr-agentisan/internal/logging"
 	"github.com/abanna/herdr-agentisan/internal/plugin"
+	"github.com/abanna/herdr-agentisan/internal/report"
 )
 
 // run executes a fresh command tree with args and returns combined output.
@@ -245,6 +248,146 @@ func TestActionPingSurfacesHerdrErrors(t *testing.T) {
 
 	_, err := runCtx(pingCtx(t, srv.Path), "action", "ping")
 	require.ErrorIs(t, err, herdr.ErrAPI)
+}
+
+// reportCtx injects a pane environment pointing at socket and a debug logger
+// writing to logs. Empty values stay unset, so a test never sees the
+// developer's real HERDR_SOCKET_PATH or HERDR_PANE_ID and cannot push a token
+// into a live pane.
+func reportCtx(t *testing.T, socket, pane string, logs *bytes.Buffer) context.Context {
+	t.Helper()
+	env := map[string]string{}
+	if socket != "" {
+		env["HERDR_SOCKET_PATH"] = socket
+	}
+	if pane != "" {
+		env["HERDR_PANE_ID"] = pane
+	}
+	logger, err := logging.New(logs, "debug", "json")
+	require.NoError(t, err)
+	ctx := logging.Into(t.Context(), logger)
+	return cli.WithLookupEnv(ctx, func(k string) (string, bool) {
+		v, ok := env[k]
+		return v, ok
+	})
+}
+
+// runReport executes `report statusline` with stdin and returns everything the
+// command wrote to stdout and stderr together.
+func runReport(ctx context.Context, stdin string, args ...string) (string, error) {
+	root := cli.Root()
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&out)
+	root.SetIn(strings.NewReader(stdin))
+	root.SetArgs(append([]string{"report", "statusline"}, args...))
+	err := root.ExecuteContext(ctx)
+	return out.String(), err
+}
+
+const statusline426 = `{"model":{"display_name":"Opus"},"context_window":{"used_percentage":42.6}}`
+
+func TestReportStatuslinePushesCtx(t *testing.T) {
+	t.Parallel()
+	srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
+		return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
+	})
+	var logs bytes.Buffer
+
+	out, err := runReport(reportCtx(t, srv.Path, "w14:p1", &logs), statusline426+"\n")
+	require.NoError(t, err)
+	assert.Empty(t, out, "the statusline runs this on every refresh: it must print nothing")
+
+	reqs := srv.Requests()
+	require.Len(t, reqs, 1)
+	assert.Equal(t, "pane.report_metadata", reqs[0].Method)
+	assert.JSONEq(t, `{"pane_id":"w14:p1","source":"agentisan","tokens":{"ctx":"43"},"ttl_ms":180000}`, string(reqs[0].Params))
+	assert.Contains(t, logs.String(), `"ctx":43`)
+}
+
+// TestReportStatuslineDoesNothing covers every case the issue says must do
+// nothing: exit 0, no herdr call, and no output at all, so a statusline that
+// forgot the redirect still renders cleanly. The socket points at herdrtest
+// wherever it is set, so "no herdr call" is observed, not assumed.
+func TestReportStatuslineDoesNothing(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		noSocket bool
+		pane     string
+		stdin    string
+		want     error
+	}{
+		"HERDR_SOCKET_PATH unset": {noSocket: true, pane: "w1:p1", stdin: statusline426, want: report.ErrNotInPane},
+		"HERDR_PANE_ID unset":     {stdin: statusline426, want: report.ErrNotInPane},
+		"percentage missing":      {pane: "w1:p1", stdin: `{"context_window":{}}`, want: report.ErrNoContext},
+		"percentage malformed":    {pane: "w1:p1", stdin: `{"context_window":{"used_percentage":"42%"}}`, want: report.ErrMalformed},
+		"stdin empty":             {pane: "w1:p1", stdin: "", want: report.ErrMalformed},
+		"percentage out of range": {pane: "w1:p1", stdin: `{"context_window":{"used_percentage":101}}`, want: report.ErrMalformed},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
+				return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
+			})
+			socket := srv.Path
+			if tc.noSocket {
+				socket = ""
+			}
+			var logs bytes.Buffer
+
+			out, err := runReport(reportCtx(t, socket, tc.pane, &logs), tc.stdin)
+			require.NoError(t, err)
+			assert.Empty(t, out)
+			assert.Empty(t, srv.Requests(), "no herdr call")
+			assert.Contains(t, logs.String(), tc.want.Error(), "the reason goes to the debug log")
+		})
+	}
+}
+
+// TestReportStatuslineSwallowsHerdrErrors: a herdr failure is logged at debug
+// level and nowhere else, and the command still exits 0.
+func TestReportStatuslineSwallowsHerdrErrors(t *testing.T) {
+	t.Parallel()
+	srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
+		return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "pane_not_found", Message: "pane w1:p1 not found"}}
+	})
+	var logs bytes.Buffer
+
+	out, err := runReport(reportCtx(t, srv.Path, "w1:p1", &logs), statusline426)
+	require.NoError(t, err)
+	assert.Empty(t, out)
+	require.Len(t, srv.Requests(), 1)
+	assert.Contains(t, logs.String(), "pane_not_found")
+}
+
+func TestReportRejectsArguments(t *testing.T) {
+	t.Parallel()
+
+	for name, args := range map[string][]string{
+		"positional":   {"report", "statusline", "extra"},
+		"unknown flag": {"report", "statusline", "--bogus"},
+		"unknown verb": {"report", "bogus"},
+		"bare group":   {"report"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
+				return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
+			})
+			var logs bytes.Buffer
+
+			root := cli.Root()
+			var out bytes.Buffer
+			root.SetOut(&out)
+			root.SetErr(&out)
+			root.SetIn(strings.NewReader(statusline426))
+			root.SetArgs(args)
+			require.Error(t, root.ExecuteContext(reportCtx(t, srv.Path, "w1:p1", &logs)))
+			assert.Empty(t, srv.Requests(), "a rejected invocation must not reach herdr")
+		})
+	}
 }
 
 // TestManifestMatchesTheBinary is the drift gate between herdr-plugin.toml and

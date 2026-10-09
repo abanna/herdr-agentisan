@@ -196,6 +196,36 @@ type NotificationResult struct {
 	Reason string `json:"reason"`
 }
 
+// PaneMetadata is the payload of pane.report_metadata, limited to the token
+// fields this plugin sends.
+type PaneMetadata struct {
+	PaneID string `json:"pane_id"`
+	// Source names the writer. herdr keeps one value per key and the last
+	// write wins across sources, so every key needs exactly one writer.
+	Source string `json:"source"`
+	// Tokens maps key to value. An empty value clears the key.
+	Tokens map[string]string `json:"tokens,omitempty"`
+	// TTLMillis expires the tokens. Zero is omitted, which herdr reads as
+	// "never expires"; herdr rejects an explicit 0 and anything over 24 h.
+	TTLMillis uint64 `json:"ttl_ms,omitempty"`
+}
+
+// ReportPaneMetadata sets tokens on a pane. herdr answers ok without applying
+// a report it considers stale or blocked, so success means accepted, not
+// necessarily displayed.
+func (c Client) ReportPaneMetadata(ctx context.Context, m PaneMetadata) error {
+	var out struct {
+		Type string `json:"type"`
+	}
+	if err := c.Call(ctx, "pane.report_metadata", m, &out); err != nil {
+		return err
+	}
+	if out.Type != "ok" {
+		return fmt.Errorf("%w: pane.report_metadata: result type %q, want \"ok\"", ErrProtocol, out.Type)
+	}
+	return nil
+}
+
 // ShowNotification asks herdr to display a toast.
 func (c Client) ShowNotification(ctx context.Context, n Notification) (NotificationResult, error) {
 	var out struct {
