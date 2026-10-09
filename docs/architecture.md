@@ -26,8 +26,10 @@ herdr reads `herdr-plugin.toml` and, for each action, execs one argv array
 with the plugin root as the working directory and no shell. The process gets
 its context through environment variables (`internal/plugin.EnvFrom`) and
 talks back over herdr's unix socket (`internal/herdr`): newline-delimited
-JSON, one request per connection, bounded by the command's context so a herdr
-that never answers cannot hold an action slot open.
+JSON, one request per connection. Every call is bounded by
+`plugin.CallTimeout` (5s), because the process context carries no deadline
+of its own and a herdr that accepts and never answers would otherwise hold
+one of its in-flight action slots open indefinitely.
 
 Two properties are enforced rather than hoped for:
 

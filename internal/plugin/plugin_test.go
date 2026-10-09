@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -242,6 +243,55 @@ func TestLoadManifestReadFailures(t *testing.T) {
 			_, err := plugin.LoadManifest(path)
 			require.Error(t, err)
 			assert.False(t, errors.Is(err, plugin.ErrInvalidManifest), "an I/O failure is not an invalid manifest")
+		})
+	}
+}
+
+// deadlineNotifier records the deadline Ping hands to herdr.
+type deadlineNotifier struct {
+	deadline time.Time
+	ok       bool
+}
+
+func (d *deadlineNotifier) ShowNotification(ctx context.Context, _ herdr.Notification) (herdr.NotificationResult, error) {
+	d.deadline, d.ok = ctx.Deadline()
+	return herdr.NotificationResult{Shown: true, Reason: "shown"}, nil
+}
+
+// TestPingBoundsTheHerdrCall: a plugin action holds one of herdr's in-flight
+// slots until it exits, so a herdr that accepts and never answers must not
+// hold it forever. The production context carries no deadline of its own;
+// Ping has to add one.
+func TestPingBoundsTheHerdrCall(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		ctx  func() (context.Context, context.CancelFunc)
+		want time.Duration
+	}{
+		"no caller deadline gets the default": {
+			ctx:  func() (context.Context, context.CancelFunc) { return context.WithCancel(context.Background()) },
+			want: plugin.CallTimeout,
+		},
+		"an earlier caller deadline wins": {
+			ctx: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), time.Second)
+			},
+			want: time.Second,
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx, cancel := tc.ctx()
+			defer cancel()
+			n := &deadlineNotifier{}
+
+			start := time.Now()
+			_, err := plugin.Ping(ctx, n, "dev")
+			require.NoError(t, err)
+			require.True(t, n.ok, "the herdr call must carry a deadline")
+			assert.WithinDuration(t, start.Add(tc.want), n.deadline, 500*time.Millisecond)
 		})
 	}
 }
