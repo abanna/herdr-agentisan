@@ -528,6 +528,7 @@ func TestStatuslineResolvesTheReportingPane(t *testing.T) {
 		// lineage is read from table (oursProcs when nil) unless noLineage or
 		// zeroLineage; mutate then changes the table before the report.
 		table       map[int]report.Stat
+		anchors     []int
 		noLineage   bool
 		zeroLineage bool
 		mutate      func(*procTable)
@@ -588,6 +589,23 @@ func TestStatuslineResolvesTheReportingPane(t *testing.T) {
 			envPane: "w14:p1", table: map[int]report.Stat{5000: {PPID: 1, Start: 900}}, panes: []fakePane{mine, other},
 			err: report.ErrPaneUnresolved, calls: []string{process, list, process, process},
 		},
+		// The statusline exited before the report read its parents, but
+		// CLAUDE_PID still names claude, which runs in the pane.
+		"re-parented, anchored by CLAUDE_PID": {
+			envPane: "w14:p1", table: map[int]report.Stat{5000: {PPID: 1, Start: 900}, 900: {PPID: 600, Start: 500}},
+			anchors: []int{900}, panes: []fakePane{mine, other},
+			want: "w14:p1", calls: []string{process, reportM},
+		},
+		"re-parented and moved, anchored by CLAUDE_PID": {
+			envPane: "wP:p1", table: map[int]report.Stat{5000: {PPID: 1, Start: 900}, 900: {PPID: 600, Start: 500}},
+			anchors: []int{900}, panes: []fakePane{other, {id: "wN:p2", pgid: 900, fg: []uint32{900}}},
+			want: "wN:p2", calls: []string{process, list, process, process, reportM},
+		},
+		"an anchor reused since the lineage was read is not ours": {
+			envPane: "w14:p1", table: map[int]report.Stat{5000: {PPID: 1, Start: 900}, 900: {PPID: 600, Start: 500}},
+			anchors: []int{900}, mutate: claudeExited, panes: []fakePane{{id: "w14:p1", fg: []uint32{900}}},
+			err: report.ErrPaneUnresolved, calls: []string{process, list, process},
+		},
 		"a zero Lineage verifies against nothing": {
 			envPane: "w14:p1", zeroLineage: true, panes: []fakePane{mine},
 			err: report.ErrPaneUnresolved, calls: []string{process, list, process},
@@ -643,7 +661,7 @@ func TestStatuslineResolvesTheReportingPane(t *testing.T) {
 					procs = oursProcs()
 				}
 				table := newProcTable(procs)
-				lineage = report.ReadLineage(5000, table.stat)
+				lineage = report.ReadLineage(5000, table.stat, tc.anchors...)
 				if tc.mutate != nil {
 					tc.mutate(table)
 				}

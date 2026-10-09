@@ -137,6 +137,134 @@ func TestReadLineageClasses(t *testing.T) {
 	})
 }
 
+// TestReadLineageAnchors: an anchor is a process the reporting one descends
+// from by construction, named by its environment (CLAUDE_PID). Claude runs the
+// statusline under setsid and the statusline backgrounds the report, so a
+// statusline that exits first leaves the report re-parented to init with a
+// lineage of itself alone; the anchor still reaches the pane. It is admitted
+// only when it is a readable process other than init that started no later
+// than the report: a pid reissued after the anchor exited starts later.
+func TestReadLineageAnchors(t *testing.T) {
+	t.Parallel()
+
+	reparented := func() map[int]report.Stat {
+		return map[int]report.Stat{
+			5000: {PPID: 1, Start: 900},   // the report, adopted by init
+			900:  {PPID: 600, Start: 500}, // claude
+			600:  {PPID: 100, Start: 400}, // the pane shell
+			2:    {PPID: 0, Start: 0},
+		}
+	}
+
+	tests := map[string]struct {
+		table   map[int]report.Stat
+		anchors []int
+		want    []report.Proc
+	}{
+		"a re-parented report reaches claude through the anchor": {
+			table: reparented(), anchors: []int{900},
+			want: []report.Proc{{PID: 5000, Start: 900}, {PID: 900, Start: 500}},
+		},
+		"an anchor that started in the same tick is admitted": {
+			table: map[int]report.Stat{5000: {PPID: 1, Start: 900}, 900: {PPID: 1, Start: 900}}, anchors: []int{900},
+			want: []report.Proc{{PID: 5000, Start: 900}, {PID: 900, Start: 900}},
+		},
+		"an anchor that started after the report is a reused pid": {
+			table: map[int]report.Stat{5000: {PPID: 1, Start: 900}, 900: {PPID: 1, Start: 901}}, anchors: []int{900},
+			want: []report.Proc{{PID: 5000, Start: 900}},
+		},
+		"an anchor already in the chain is not repeated": {
+			table: map[int]report.Stat{5000: {PPID: 900, Start: 900}, 900: {PPID: 1, Start: 500}}, anchors: []int{900},
+			want: []report.Proc{{PID: 5000, Start: 900}, {PID: 900, Start: 500}},
+		},
+		"an anchor that cannot be read is ignored": {
+			table: reparented(), anchors: []int{4321},
+			want: []report.Proc{{PID: 5000, Start: 900}},
+		},
+		"init is never an anchor":  {table: reparented(), anchors: []int{1}, want: []report.Proc{{PID: 5000, Start: 900}}},
+		"pid 0 is never an anchor": {table: reparented(), anchors: []int{0}, want: []report.Proc{{PID: 5000, Start: 900}}},
+		"a negative anchor is ignored": {
+			table: reparented(), anchors: []int{-900}, want: []report.Proc{{PID: 5000, Start: 900}},
+		},
+		"the report itself is not repeated as an anchor": {
+			table: reparented(), anchors: []int{5000}, want: []report.Proc{{PID: 5000, Start: 900}},
+		},
+		"with the report unreadable there is nothing to anchor": {
+			table: map[int]report.Stat{900: {PPID: 600, Start: 500}}, anchors: []int{900},
+			want: []report.Proc{},
+		},
+		"several anchors are each admitted once": {
+			table: reparented(), anchors: []int{900, 600, 900},
+			want: []report.Proc{{PID: 5000, Start: 900}, {PID: 900, Start: 500}, {PID: 600, Start: 400}},
+		},
+		"no anchors": {table: reparented(), want: []report.Proc{{PID: 5000, Start: 900}}},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := report.ReadLineage(5000, newProcTable(tc.table).stat, tc.anchors...)
+			assert.Equal(t, tc.want, got.Procs)
+		})
+	}
+}
+
+// TestAnchorsFromTheEnvironment walks what CLAUDE_PID can hold. Claude Code
+// sets it to its own pid in every child's environment (it overwrites an
+// inherited one); anything that is not a decimal pid names no anchor.
+func TestAnchorsFromTheEnvironment(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		env  map[string]string
+		want []int
+	}{
+		"set by claude":           {env: map[string]string{"CLAUDE_PID": "894377"}, want: []int{894377}},
+		"unset":                   {env: map[string]string{}, want: nil},
+		"empty":                   {env: map[string]string{"CLAUDE_PID": ""}, want: nil},
+		"not a number":            {env: map[string]string{"CLAUDE_PID": "claude"}, want: nil},
+		"surrounding whitespace":  {env: map[string]string{"CLAUDE_PID": " 894377\n"}, want: nil},
+		"a sign":                  {env: map[string]string{"CLAUDE_PID": "+894377"}, want: nil},
+		"negative":                {env: map[string]string{"CLAUDE_PID": "-5"}, want: nil},
+		"overflows an int":        {env: map[string]string{"CLAUDE_PID": "99999999999999999999"}, want: nil},
+		"non-ASCII digits":        {env: map[string]string{"CLAUDE_PID": "８９４"}, want: nil},
+		"invalid UTF-8":           {env: map[string]string{"CLAUDE_PID": "89\xff4"}, want: nil},
+		"embedded NUL":            {env: map[string]string{"CLAUDE_PID": "89\x004"}, want: nil},
+		"other variables ignored": {env: map[string]string{"CLAUDE_CODE_PID": "1", "claude_pid": "2", "PPID": "3"}, want: nil},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got := report.AnchorsFrom(func(k string) (string, bool) { v, ok := tc.env[k]; return v, ok })
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// olderStranger finds a live process that is not in lineage and started no
+// later than its first entry: what CLAUDE_PID names for a re-parented report.
+// It returns 0 when the process table holds none, as in a minimal container.
+func olderStranger(t *testing.T, lineage *report.Lineage) int {
+	t.Helper()
+	require.NotEmpty(t, lineage.Procs)
+	in := map[int]bool{}
+	for _, p := range lineage.Procs {
+		in[p.PID] = true
+	}
+	entries, err := os.ReadDir("/proc")
+	require.NoError(t, err)
+	stat := report.ProcStat(os.DirFS("/proc"))
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid <= 1 || in[pid] {
+			continue
+		}
+		if s, err := stat(pid); err == nil && s.Start <= lineage.Procs[0].Start {
+			return pid
+		}
+	}
+	return 0
+}
+
 // stat builds a /proc/<pid>/stat line: pid, comm in parentheses, then the
 // fields from state (field 3) on.
 func stat(pid int, comm, rest string) *fstest.MapFile {
@@ -256,7 +384,7 @@ func TestProcStatUnreadableFile(t *testing.T) {
 func TestSelfLineageReadsTheRealProcessTable(t *testing.T) {
 	t.Parallel()
 
-	got := report.SelfLineage()
+	got := report.SelfLineage(func(string) (string, bool) { return "", false })
 	if runtime.GOOS != "linux" {
 		assert.Nil(t, got)
 		return
@@ -271,4 +399,27 @@ func TestSelfLineageReadsTheRealProcessTable(t *testing.T) {
 	for i := 1; i < len(got.Procs); i++ {
 		assert.LessOrEqual(t, got.Procs[i].Start, got.Procs[i-1].Start, "an ancestor never starts after its child")
 	}
+}
+
+// TestSelfLineageAdmitsCLAUDE_PID: on the real process table, the pid the
+// environment names joins the lineage when it is an older process outside it.
+func TestSelfLineageAdmitsCLAUDE_PID(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "linux" {
+		t.Skip("no /proc to read a lineage from")
+	}
+	none := func(string) (string, bool) { return "", false }
+	stranger := olderStranger(t, report.SelfLineage(none))
+	if stranger == 0 {
+		t.Skip("no older process outside this test's lineage")
+	}
+
+	got := report.SelfLineage(func(k string) (string, bool) {
+		if k == report.ClaudePIDEnv {
+			return strconv.Itoa(stranger), true
+		}
+		return "", false
+	})
+	require.NotEmpty(t, got.Procs)
+	assert.Equal(t, stranger, got.Procs[len(got.Procs)-1].PID)
 }

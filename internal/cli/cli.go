@@ -50,11 +50,14 @@ func WithLineage(ctx context.Context, read func() *report.Lineage) context.Conte
 	return context.WithValue(ctx, lineageKey{}, read)
 }
 
+// lineageFrom returns the injected lineage reader, or one that reads the real
+// process table anchored on the command's environment.
 func lineageFrom(ctx context.Context) func() *report.Lineage {
 	if f, ok := ctx.Value(lineageKey{}).(func() *report.Lineage); ok && f != nil {
 		return f
 	}
-	return report.SelfLineage
+	lookup := lookupEnvFrom(ctx)
+	return func() *report.Lineage { return report.SelfLineage(lookup) }
 }
 
 // Root builds the `herdr-agentisan` command tree.
@@ -196,7 +199,8 @@ func newReportStatuslineCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			// Read the lineage first: the statusline backgrounds this process
-			// and exits, and once it has, the chain no longer reaches the pane.
+			// and may exit, and once it has, only CLAUDE_PID still reaches the
+			// pane.
 			lineage := lineageFrom(ctx)()
 			logger := logging.From(ctx)
 			pane := report.PaneFrom(lookupEnvFrom(ctx))

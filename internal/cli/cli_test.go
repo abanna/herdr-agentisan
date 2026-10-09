@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -459,6 +460,55 @@ func TestReportStatuslineReadsTheRealLineageByDefault(t *testing.T) {
 		got = append(got, r.Method)
 	}
 	assert.Equal(t, want, got)
+	assert.Contains(t, logs.String(), `"reported_to":"w14:p1"`)
+}
+
+// TestReportStatuslineAnchorsOnCLAUDE_PID: the default reader passes the
+// command's environment to SelfLineage, so CLAUDE_PID reaches the pane even
+// for a report whose own parents no longer do. The fake pane's foreground job
+// is an older process outside this test's lineage, named by CLAUDE_PID.
+func TestReportStatuslineAnchorsOnCLAUDE_PID(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "linux" {
+		t.Skip("no /proc to read a lineage from")
+	}
+	own := report.SelfLineage(func(string) (string, bool) { return "", false })
+	stranger := 0
+	in := map[int]bool{}
+	for _, p := range own.Procs {
+		in[p.PID] = true
+	}
+	entries, err := os.ReadDir("/proc")
+	require.NoError(t, err)
+	stat := report.ProcStat(os.DirFS("/proc"))
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid <= 1 || in[pid] {
+			continue
+		}
+		if s, err := stat(pid); err == nil && s.Start <= own.Procs[0].Start {
+			stranger = pid
+			break
+		}
+	}
+	if stranger == 0 {
+		t.Skip("no older process outside this test's lineage")
+	}
+	srv := herdrtest.Start(t, func(r herdrtest.Request) herdrtest.Reply {
+		if r.Method == "pane.process_info" {
+			return herdrtest.Reply{Result: map[string]any{"type": "pane_process_info", "process_info": map[string]any{
+				"pane_id": "w14:p1", "foreground_process_group_id": stranger,
+			}}}
+		}
+		return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
+	})
+	var logs bytes.Buffer
+	env := map[string]string{"HERDR_SOCKET_PATH": srv.Path, "HERDR_PANE_ID": "w14:p1", "CLAUDE_PID": strconv.Itoa(stranger)}
+	ctx := cli.WithLineage(reportCtx(t, srv.Path, "w14:p1", &logs), nil)
+	ctx = cli.WithLookupEnv(ctx, func(k string) (string, bool) { v, ok := env[k]; return v, ok })
+
+	_, err = runReport(ctx, statusline426)
+	require.NoError(t, err)
 	assert.Contains(t, logs.String(), `"reported_to":"w14:p1"`)
 }
 

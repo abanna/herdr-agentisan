@@ -17,6 +17,10 @@ import (
 // is about eight processes from init; the cap only stops a pathological chain.
 const MaxLineage = 64
 
+// ClaudePIDEnv names the variable Claude Code sets to its own pid in every
+// child's environment, overwriting any value it inherited.
+const ClaudePIDEnv = "CLAUDE_PID"
+
 // ErrProcStat means a process's /proc stat could not be read or parsed, as
 // when the process has already exited.
 var ErrProcStat = errors.New("unreadable /proc stat")
@@ -54,9 +58,20 @@ type Lineage struct {
 // and any reaper that adopts an orphan, always started first, so a later one
 // holds the pid of a parent that has exited.
 //
+// anchors are processes pid descends from by construction, named by its
+// environment (AnchorsFrom). Claude runs the statusline under setsid and the
+// statusline backgrounds the report, so a statusline that exits first leaves
+// the report adopted by init, its parents out of reach; an anchor still names
+// claude. Each is appended once, unless the walk already holds it, if it is
+// readable, not init, and started no later than pid: a pid reissued after the
+// anchor exited starts later. The one gap is a reissue in the milliseconds
+// between claude starting the statusline and the report starting, which needs
+// claude to exit and the kernel to wrap its pids round to claude's in that
+// window.
+//
 // It never fails. A lineage cut short matches fewer panes, so whatever cannot
 // be read can only make a report go nowhere, never to the wrong pane.
-func ReadLineage(pid int, stat StatFunc) *Lineage {
+func ReadLineage(pid int, stat StatFunc, anchors ...int) *Lineage {
 	l := &Lineage{Procs: []Proc{}, stat: stat}
 	seen := map[int]bool{}
 	for pid > 1 && !seen[pid] && len(l.Procs) < MaxLineage {
@@ -71,7 +86,36 @@ func ReadLineage(pid int, stat StatFunc) *Lineage {
 		seen[pid] = true
 		pid = s.PPID
 	}
+	if len(l.Procs) == 0 {
+		return l
+	}
+	self := l.Procs[0]
+	for _, a := range anchors {
+		if a <= 1 || seen[a] {
+			continue
+		}
+		s, err := stat(a)
+		if err != nil || s.Start > self.Start {
+			continue
+		}
+		l.Procs = append(l.Procs, Proc{PID: a, Start: s.Start})
+		seen[a] = true
+	}
 	return l
+}
+
+// AnchorsFrom reads the lineage anchors from the environment through lookup:
+// CLAUDE_PID when it is a plain decimal pid, nothing otherwise.
+func AnchorsFrom(lookup func(string) (string, bool)) []int {
+	v, ok := lookup(ClaudePIDEnv)
+	if !ok || v == "" || strings.TrimLeft(v, "0123456789") != "" {
+		return nil
+	}
+	pid, err := strconv.Atoi(v)
+	if err != nil {
+		return nil
+	}
+	return []int{pid}
 }
 
 // PIDs lists the lineage's pids, nearest first; nil for a nil Lineage.
@@ -151,12 +195,13 @@ func parseStat(pid int, raw []byte) (Stat, error) {
 	return Stat{PPID: ppid, Start: start}, nil
 }
 
-// SelfLineage is the running process's lineage, read from /proc. It is nil
+// SelfLineage is the running process's lineage, read from /proc and anchored
+// on the environment lookup reads (os.LookupEnv in production). It is nil
 // where the OS has no procfs: a report given no lineage trusts HERDR_PANE_ID
 // unchecked, as it did before lineage existed.
-func SelfLineage() *Lineage {
+func SelfLineage(lookup func(string) (string, bool)) *Lineage {
 	if !procfs {
 		return nil
 	}
-	return ReadLineage(os.Getpid(), ProcStat(os.DirFS("/proc")))
+	return ReadLineage(os.Getpid(), ProcStat(os.DirFS("/proc")), AnchorsFrom(lookup)...)
 }
