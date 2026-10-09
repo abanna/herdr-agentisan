@@ -31,7 +31,13 @@ var (
 	ErrProtocol = errors.New("herdr protocol violation")
 	// ErrAPI means herdr answered with an error body; see APIError.
 	ErrAPI = errors.New("herdr returned an error")
+	// ErrPaneNotFound means herdr has no pane by the id it was given. It is an
+	// ErrAPI too: an APIError whose code is pane_not_found matches both.
+	ErrPaneNotFound = errors.New("herdr pane not found")
 )
+
+// codePaneNotFound is herdr's error code for an id that names no pane.
+const codePaneNotFound = "pane_not_found"
 
 // maxResponseBytes bounds one response line. The largest response this client
 // asks for is a few hundred bytes; the cap stops a misbehaving peer from
@@ -51,6 +57,12 @@ func (e *APIError) Error() string {
 
 // Unwrap lets errors.Is(err, ErrAPI) match.
 func (e *APIError) Unwrap() error { return ErrAPI }
+
+// Is lets errors.Is(err, ErrPaneNotFound) match herdr's pane_not_found code,
+// so callers never compare code strings themselves.
+func (e *APIError) Is(target error) bool {
+	return target == ErrPaneNotFound && e.Code == codePaneNotFound
+}
 
 // Client talks to one herdr socket. The zero value has no socket configured.
 type Client struct {
@@ -239,4 +251,74 @@ func (c Client) ShowNotification(ctx context.Context, n Notification) (Notificat
 		return NotificationResult{}, fmt.Errorf("%w: notification.show: result type %q, want \"notification_show\"", ErrProtocol, out.Type)
 	}
 	return out.NotificationResult, nil
+}
+
+// PaneInfo is one pane in pane.list, limited to the fields this plugin reads.
+type PaneInfo struct {
+	PaneID string `json:"pane_id"`
+}
+
+// ListPanes returns every pane in every workspace.
+func (c Client) ListPanes(ctx context.Context) ([]PaneInfo, error) {
+	var out struct {
+		Type  string     `json:"type"`
+		Panes []PaneInfo `json:"panes"`
+	}
+	if err := c.Call(ctx, "pane.list", struct{}{}, &out); err != nil {
+		return nil, err
+	}
+	if out.Type != "pane_list" {
+		return nil, fmt.Errorf("%w: pane.list: result type %q, want \"pane_list\"", ErrProtocol, out.Type)
+	}
+	if out.Panes == nil {
+		return nil, fmt.Errorf("%w: pane.list: result has no panes", ErrProtocol)
+	}
+	for _, p := range out.Panes {
+		if p.PaneID == "" {
+			return nil, fmt.Errorf("%w: pane.list: a pane has no pane_id", ErrProtocol)
+		}
+	}
+	return out.Panes, nil
+}
+
+// Process is one process in a pane's foreground job.
+type Process struct {
+	PID  uint32 `json:"pid"`
+	Name string `json:"name"`
+}
+
+// ProcessInfo is the result of pane.process_info, limited to the processes
+// this plugin matches on. herdr reports a pid it does not know as null, which
+// decodes to 0: no process has pid 0.
+type ProcessInfo struct {
+	// PaneID is the pane's current id, even when the request named an alias.
+	PaneID string `json:"pane_id"`
+	// ShellPID is the process herdr spawned for the pane.
+	ShellPID uint32 `json:"shell_pid"`
+	// ForegroundProcessGroupID is the pane terminal's foreground job.
+	ForegroundProcessGroupID uint32    `json:"foreground_process_group_id"`
+	ForegroundProcesses      []Process `json:"foreground_processes"`
+}
+
+// PaneProcessInfo returns the processes running in one pane. paneID is always
+// sent as a string: herdr reads a null pane_id as the focused pane, which is
+// never what a caller naming a pane means.
+func (c Client) PaneProcessInfo(ctx context.Context, paneID string) (ProcessInfo, error) {
+	params := struct {
+		PaneID string `json:"pane_id"`
+	}{PaneID: paneID}
+	var out struct {
+		Type        string       `json:"type"`
+		ProcessInfo *ProcessInfo `json:"process_info"`
+	}
+	if err := c.Call(ctx, "pane.process_info", params, &out); err != nil {
+		return ProcessInfo{}, err
+	}
+	if out.Type != "pane_process_info" {
+		return ProcessInfo{}, fmt.Errorf("%w: pane.process_info: result type %q, want \"pane_process_info\"", ErrProtocol, out.Type)
+	}
+	if out.ProcessInfo == nil || out.ProcessInfo.PaneID == "" {
+		return ProcessInfo{}, fmt.Errorf("%w: pane.process_info: result has no process_info.pane_id", ErrProtocol)
+	}
+	return *out.ProcessInfo, nil
 }
