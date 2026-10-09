@@ -1,0 +1,38 @@
+name: Feature request
+description: Propose new behaviour or a new surface.
+labels: ["feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What is hard or impossible today. Describe the situation, not the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behaviour
+      description: What should happen instead.
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where it belongs
+      options:
+        - Domain (internal/notes) — affects CLI and API together
+        - REST API only
+        - Product CLI only
+        - devctl / repository tooling
+        - Docs or CI
+    validations:
+      required: true
+  - type: checkboxes
+    id: contract
+    attributes:
+      label: Contract impact
+      options:
+        - label: This adds or changes an HTTP route (needs a spec.go entry and `task openapi:write`)
+        - label: This adds or changes a gate (needs AGENTS.md + Taskfile.yml + ci.yml together)
+        - label: This changes the public shape of internal/notes

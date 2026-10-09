@@ -1,0 +1,180 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pyroscope-config
+  labels:
+    app.kubernetes.io/name: pyroscope
+    app.kubernetes.io/component: profiling-backend
+data:
+  # Deliberately close to the image's baked default, which is two lines
+  # (`server: {http_listen_port: 4040}`). Everything added here exists because
+  # readOnlyRootFilesystem forces the writable paths to be named, not because
+  # the defaults were wrong — Pyroscope's storage schema is not something to
+  # hand-author when the vendor ships a working one.
+  config.yaml: |
+    server:
+      # Explicit bind host, same reasoning as tempo.yaml and loki.yaml.
+      http_listen_address: 0.0.0.0
+      http_listen_port: 4040
+
+    storage:
+      # Filesystem on an emptyDir. Same honesty argument as the other two
+      # backends: this cluster is deleted and recreated, so a PVC would claim
+      # a durability the cluster does not have. Profiles are a live debugging
+      # aid here, not a historical record.
+      backend: filesystem
+      filesystem:
+        dir: /data/blocks
+
+    # The local ingester's own database, separate from the object store above.
+    # The two are split into sibling directories rather than nested because
+    # each is a distinct emptyDir mount below — see the volumes comment for
+    # why that separation is load-bearing and not cosmetic.
+    pyroscopedb:
+      data_path: /data/pyroscopedb
+
+    # Off for the same reason as Tempo's and Loki's.
+    analytics:
+      reporting_enabled: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pyroscope
+  labels:
+    app.kubernetes.io/name: pyroscope
+    app.kubernetes.io/component: profiling-backend
+spec:
+  replicas: 1
+  # Recreate: storage is an emptyDir owned by one process, so two replicas
+  # would each hold a fraction of the profiles.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pyroscope
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pyroscope
+        app.kubernetes.io/component: profiling-backend
+      annotations:
+        # pyroscope_distributor_received_decompressed_bytes_total here answers
+        # "is Alloy actually pushing profiles, or is the flame graph empty
+        # because nothing arrived?". Queries as job="pyroscope".
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "4040"
+        prometheus.io/path: /metrics
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        # The image declares `USER pyroscope`, which the kubelet cannot resolve
+        # from outside the image. Read out of the image's own /etc/passwd:
+        # pyroscope:x:10001:10001, home /data — which is why the writable
+        # mounts below live under /data.
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: pyroscope
+          # 1.17.1, verified with `docker manifest inspect`, and booted against
+          # this config with a read-only rootfs before committing: Pyroscope
+          # rejects unknown config keys, so an invented one is a CrashLoop.
+          image: grafana/pyroscope:1.17.1
+          imagePullPolicy: IfNotPresent
+          args:
+            - -config.file=/etc/pyroscope/config.yaml
+            - -target=all
+          ports:
+            - name: http
+              containerPort: 4040
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            # Measured: /ready answers 18s after start. startupProbe rather
+            # than initialDelaySeconds, per deployment.yaml's rationale.
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 6
+          volumeMounts:
+            - name: config
+              mountPath: /etc/pyroscope
+              readOnly: true
+            # TWO mounts, not one emptyDir at /data. Pyroscope's retention loop
+            # starts before any profile arrives and stats data_path directly;
+            # with a single mount at /data the subdirectories do not exist yet
+            # and every cycle logs `failed to delete uploaded blocks, could not
+            # read tenant ids: no such file or directory` until the first push.
+            # Mounting each path makes the kubelet create both up front, which
+            # was verified to silence it. Merging them is also wrong the other
+            # way round: pointing data_path at /data would make the retention
+            # scan treat the object-store directory as a tenant id.
+            - name: db
+              mountPath: /data/pyroscopedb
+            - name: blocks
+              mountPath: /data/blocks
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: pyroscope-config
+        - name: db
+          emptyDir: {}
+        - name: blocks
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pyroscope
+  labels:
+    app.kubernetes.io/name: pyroscope
+    app.kubernetes.io/component: profiling-backend
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: pyroscope
+  ports:
+    # 4040 carries both directions: Alloy pushes profiles here over the
+    # Pyroscope ingest API, and Grafana's pyroscope datasource queries the
+    # same port for flame graphs.
+    - name: http
+      port: 4040
+      targetPort: http
+      protocol: TCP
+  # The internal gRPC port (9095 by default) is not published: single-binary
+  # mode uses it between Pyroscope's own modules and nothing else should reach
+  # it by name.

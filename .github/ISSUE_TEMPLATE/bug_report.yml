@@ -1,0 +1,51 @@
+name: Bug report
+description: Something behaves differently from what the docs or tests promise.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing: run `task check`. If it fails, paste the failing gate
+        below — that output is usually the whole report.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Observed behaviour, and what you expected instead.
+      placeholder: |
+        Expected: POST /v1/notes with an empty title returns 400.
+        Actual:   it returns 500.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: The smallest command or request sequence that shows it.
+      render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Which surface
+      description: The CLI and the API share internal/notes, so a domain bug shows in both.
+      options:
+        - REST API (cmd/server)
+        - Product CLI (cmd/go-agents)
+        - devctl / repository tooling
+        - Both CLI and API (likely the domain)
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: gate-output
+    attributes:
+      label: Relevant gate output
+      description: Output of the failing `task check` step, if any.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Output of `go-agents --version` or the commit SHA.

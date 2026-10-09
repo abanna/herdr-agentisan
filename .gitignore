@@ -1,0 +1,37 @@
+# Build output
+/bin/
+/dist/
+# `go build ./cmd/<x>` with no -o writes the binary into the CURRENT directory,
+# not bin/. That is one keystroke away from `task build` and it is exactly what
+# a developer types inside the dev container, so the three names are named here
+# rather than relying on someone noticing an untracked executable.
+/devctl
+/go-agents
+/server
+*.out
+coverage.out
+coverage.html
+
+# Local env
+.env
+*.local
+
+# tdaddy dependency-graph store (BadgerDB, ~100MB, machine-local).
+# Rebuild with `task tdaddy:index`.
+/.tdad/
+
+# Agent tooling — the agentisan bundle installs UNTRACKED into .claude/.
+# Never `git add .` here; the bundle is distributed via OCI, not this repo.
+/.claude/*
+/.mcp.json
+# ...except settings.json, which is OUR config, not the bundle's: it carries
+# the tdaddy PostToolUse hook and is worth sharing. The agentisan installer
+# lists it in PRESERVE_FILES, so a bundle reinstall does not clobber it.
+!/.claude/settings.json
+/generations/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

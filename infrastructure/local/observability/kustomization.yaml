@@ -1,0 +1,57 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: observability
+
+resources:
+  - namespace.yaml
+  # Order is load-bearing only for the namespace, which kubectl applies first
+  # because it is listed first. The rest is declarative and self-healing: the
+  # collector retries its export until Tempo answers, Alloy retries its push
+  # until Loki and Pyroscope answer, and Prometheus reports up == 0 for a
+  # target that is not up yet.
+  #
+  # Four signals, four stores, and two collectors between them: traces go
+  # app -> otel-collector -> Tempo, metrics go Prometheus -> app by direct
+  # scrape, and logs and profiles both go through the Alloy DaemonSet -> Loki
+  # and Pyroscope. Nothing here has an ordering dependency on anything else.
+  - otel-collector.yaml
+  - tempo.yaml
+  - loki.yaml
+  - pyroscope.yaml
+  - alloy.yaml
+  - prometheus.yaml
+  - grafana.yaml
+
+configMapGenerator:
+  # The alert rules are generated rather than embedded so the rules file stays
+  # a plain YAML file that `promtool check rules` can read directly. Inlined in
+  # a ConfigMap they would be a string inside a manifest, and the gate would
+  # have to parse the manifest to reach them — or, more likely, would stop
+  # checking them.
+  #
+  # The file is named ONE BY ONE rather than as `alerts/` or a glob, and that
+  # is not tidiness. alerts/ also holds rules_test.yaml, which is
+  # `promtool test rules` input: its top-level key is `tests`, not `groups`.
+  # Swept into this ConfigMap it would land in /etc/prometheus/rules/, match
+  # the server's *.yaml glob, and fail rule loading at startup — after
+  # `promtool check rules` had passed on the real file. Add rules files here
+  # explicitly, one line each.
+  - name: prometheus-alert-rules
+    files:
+      - rules.yaml=alerts/rules.yaml
+
+generatorOptions:
+  # Prometheus's Deployment names this ConfigMap in a volume, so the name has
+  # to be predictable. The cost is that editing the rules no longer rolls the
+  # pod: the kubelet refreshes the mounted file within a minute or so, and
+  # `curl -XPOST .../-/reload` (enabled by --web.enable-lifecycle) is what
+  # makes Prometheus read it. The alternative — a hashed name — rolls the pod
+  # and discards the TSDB on every rules edit.
+  disableNameSuffixHash: true
+
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/part-of: go-agents
+      app.kubernetes.io/managed-by: kustomize

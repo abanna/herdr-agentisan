@@ -1,0 +1,146 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.26.6"
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go tool golangci-lint run ./...
+      - run: go tool golangci-lint fmt --diff ./...
+      - run: go vet ./...
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage.out -covermode=atomic ./...
+      - run: go run ./cmd/devctl coverage --profile coverage.out --min 75
+      - run: go test -tags=integration -race -timeout 5m ./...
+
+  security:
+    name: security
+    runs-on: ubuntu-latest
+    steps:
+      # gitleaks git mode walks commit history; a shallow clone would hide it.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go tool gosec -quiet ./...
+      - run: go run github.com/zricethezav/gitleaks/v8@v8.30.1 git . --config .gitleaks.toml --no-banner --redact
+      - run: go tool govulncheck ./...
+
+  openapi:
+    name: openapi
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go run ./cmd/devctl openapi --write
+      - run: git diff --exit-code docs/openapi.json
+
+  docs:
+    name: docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go run ./cmd/devctl docs-parity
+      - run: go run ./cmd/devctl large-files
+
+  deploy:
+    name: deploy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go run ./cmd/devctl manifests
+      # promtool runs from the pinned Prometheus image; ubuntu-latest runners
+      # already have docker, so this needs no setup step.
+      - run: docker run --rm -v "$PWD/infrastructure/local/observability/alerts:/rules" -w /rules --entrypoint promtool prom/prometheus:v3.6.0 check rules rules.yaml
+      - run: docker run --rm -v "$PWD/infrastructure/local/observability/alerts:/rules" -w /rules --entrypoint promtool prom/prometheus:v3.6.0 test rules rules_test.yaml
+
+  tidy:
+    name: tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go mod tidy
+      - run: git diff --exit-code go.mod go.sum
+
+  hooks:
+    name: hooks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: astral-sh/setup-uv@v7
+      # The local hooks invoke task targets so Taskfile stays the single
+      # source of gate truth; that makes `task` a dependency of this job.
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - run: uvx pre-commit run --all-files
+        # gitleaks-staged reads the git index, which is empty in CI: it would
+        # report Passed having scanned nothing. The security job scans full
+        # history instead. Skipping by id keeps the hook useful locally, and
+        # setting it in env rather than inline keeps the `run:` line identical
+        # to the one AGENTS.md and the Taskfile document.
+        env:
+          SKIP: gitleaks-staged
+
+  modernize:
+    name: modernize
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go tool modernize ./...

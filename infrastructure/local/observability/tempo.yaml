@@ -1,0 +1,245 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tempo-config
+  labels:
+    app.kubernetes.io/name: tempo
+    app.kubernetes.io/component: tracing-backend
+data:
+  # Tempo has no baked-in config file (unlike loki and pyroscope, whose images
+  # ship a default), so -config.file below is mandatory rather than an
+  # override. Nothing here is inherited; what is absent is absent.
+  #
+  # Tempo does not watch this file. Editing it and re-applying updates the
+  # ConfigMap only; the process keeps its startup config until `kubectl
+  # --context kind-go-agents -n observability rollout restart deploy/tempo`.
+  tempo.yaml: |
+    server:
+      # Both listen addresses are spelled out. Tempo defaults them to 0.0.0.0
+      # today, but the collector next door already carries a long comment about
+      # components that quietly moved to a localhost default — a bind host that
+      # is written down cannot regress into one that accepts nothing from
+      # another pod.
+      http_listen_address: 0.0.0.0
+      http_listen_port: 3200
+      grpc_listen_address: 0.0.0.0
+      grpc_listen_port: 9095
+
+    distributor:
+      receivers:
+        otlp:
+          protocols:
+            # gRPC only, and 0.0.0.0 explicitly. This is the ONE port the
+            # collector exports to; an omitted endpoint here would bind
+            # 127.0.0.1 inside the pod netns and refuse the collector's
+            # connection with no error on the collector's side — exactly the
+            # silent failure otel-collector.yaml documents for its own
+            # receivers. No HTTP receiver: nothing in this cluster speaks OTLP
+            # to Tempo except the collector, and a second unused listener is a
+            # second thing to get wrong.
+            grpc:
+              endpoint: 0.0.0.0:4317
+
+    ingester:
+      # Cut a block every 5 minutes instead of the 30-minute default. A trace
+      # is not queryable until its block is flushed, and on a laptop the gap
+      # between "I sent a request" and "I can see the trace" is the whole
+      # value of the stack.
+      max_block_duration: 5m
+
+    compactor:
+      compaction:
+        # Matches Prometheus's --storage.tsdb.retention.time=6h. The two stores
+        # are read side by side in one Grafana; a metric that outlives its
+        # trace turns "click through from the spike" into a dead end.
+        block_retention: 6h
+
+    storage:
+      trace:
+        # backend: local, i.e. the pod's own filesystem, on an emptyDir. This
+        # is the honest configuration, not a shortcut. This kind cluster is
+        # created and destroyed by `task kind:up`/`kind delete cluster`, so a
+        # PVC would claim a durability the CLUSTER does not have: the volume
+        # would go with the node, and the first person to recreate the cluster
+        # would lose the traces anyway — after having been told they were
+        # persisted. Traces die with the pod, and the manifest says so rather
+        # than implying otherwise with a storage class.
+        backend: local
+        local:
+          path: /var/tempo/traces
+        wal:
+          path: /var/tempo/wal
+
+    # Tempo phones home with anonymous usage statistics by default. A local
+    # cluster on a developer's laptop is not a fleet worth reporting on, and
+    # an outbound call that nobody asked for is a surprise in a tcpdump.
+    usage_report:
+      reporting_enabled: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tempo
+  labels:
+    app.kubernetes.io/name: tempo
+    app.kubernetes.io/component: tracing-backend
+spec:
+  replicas: 1
+  # Recreate, for the same reason Prometheus uses it: storage is an emptyDir
+  # owned by one process. Two replicas would each hold half the traces and the
+  # answer would depend on which pod the query landed on, which is worse than
+  # having one pod that is briefly down.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tempo
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tempo
+        app.kubernetes.io/component: tracing-backend
+      annotations:
+        # Tempo serves /metrics on its HTTP port. tempo_distributor_spans_
+        # received_total there is the direct answer to "did the collector's
+        # export land?" — the question you ask when Grafana looks empty and
+        # you cannot tell whether the app, the collector or Tempo is at fault.
+        # Prometheus relabels app.kubernetes.io/name onto job, so it queries as
+        # job="tempo".
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3200"
+        prometheus.io/path: /metrics
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        # Verified against the image: Config.User is 10001:10001.
+        runAsUser: 10001
+        runAsGroup: 10001
+        # The emptyDirs below are created root-owned; fsGroup hands them to the
+        # running process. Without it the WAL path is unwritable and Tempo
+        # exits during startup.
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: tempo
+          # 2.9.1, verified to exist with `docker manifest inspect`, and the
+          # config above was booted against this exact tag before it was
+          # committed — Tempo rejects unknown config keys outright, so a
+          # guessed key is a CrashLoop rather than a warning.
+          image: grafana/tempo:2.9.1
+          imagePullPolicy: IfNotPresent
+          args:
+            - -config.file=/etc/tempo/tempo.yaml
+            # `all` is already the default target, and it is written down
+            # anyway: this is the single-binary mode, and a future edit that
+            # splits components out should have to delete this line rather than
+            # inherit a distributed topology by accident.
+            - -target=all
+          ports:
+            - name: http
+              containerPort: 3200
+              protocol: TCP
+            - name: otlp-grpc
+              containerPort: 4317
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              # Limited for the reason otel-collector.yaml gives: this is
+              # background infrastructure with no per-request latency budget,
+              # and bounding it is what stops a trace flood from starving the
+              # workload it exists to observe.
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          startupProbe:
+            # startupProbe rather than initialDelaySeconds, for the reason
+            # infrastructure/local/k8s/deployment.yaml gives: a fixed delay is
+            # a number you pay every rollout whether or not it was needed,
+            # and it is wrong in both directions — too short and the pod is
+            # killed mid-start, too long and every deploy waits for the worst
+            # case. Measured here: Tempo answers /ready 17s after start, and
+            # the ingester deliberately holds it a further 15s ("waiting for
+            # 15s after being ready") so it does not accept writes it might
+            # immediately lose. 60 * 2s covers that with room for a cold image
+            # pull; the pod is only killed if it truly never arrives.
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 2
+            failureThreshold: 60
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            # /ready is the only health endpoint Tempo exposes, so liveness
+            # reuses it — but at a far looser threshold, so a slow flush that
+            # trips readiness (stop querying me) cannot also trip liveness
+            # (restart me) and discard the WAL.
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 6
+          volumeMounts:
+            - name: config
+              mountPath: /etc/tempo
+              readOnly: true
+            - name: data
+              mountPath: /var/tempo
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: tempo-config
+        # readOnlyRootFilesystem leaves nowhere to write, and Tempo needs two
+        # writable trees under this one mount: the WAL and the completed
+        # blocks. Both are configured under /var/tempo above so a single
+        # emptyDir covers them and neither can end up on the read-only rootfs.
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tempo
+  labels:
+    app.kubernetes.io/name: tempo
+    app.kubernetes.io/component: tracing-backend
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: tempo
+  ports:
+    # 3200 is Tempo's HTTP query API — Grafana's tempo datasource points at
+    # this port, NOT at a separate UI: Tempo has no UI of its own, which is
+    # the substantive difference from the all-in-one tracing backend it
+    # replaces, whose UI port a reader of the old manifest may go looking for.
+    - name: http
+      port: 3200
+      targetPort: http
+      protocol: TCP
+    # 4317 is what the collector's otlp/tempo exporter dials.
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc
+      protocol: TCP
+  # 9095 (internal gRPC) is deliberately not published: in single-binary mode
+  # it is how Tempo's own components talk to each other over loopback, and
+  # nothing outside the pod has any business dialling it.

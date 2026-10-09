@@ -1,0 +1,969 @@
+{
+  "repo": "/home/abanna/Development/interviews/interview_go",
+  "registry_version": "1.0.0",
+  "scoring_version": "1.0.0",
+  "timestamp": "2026-09-04T03:25:56.134230+00:00",
+  "detected_language": "Go",
+  "detected_languages": [
+    "Go",
+    "Bash",
+    "YAML"
+  ],
+  "secondary_languages": [
+    "Bash",
+    "YAML"
+  ],
+  "detected_frameworks": [
+    "gin",
+    "cobra",
+    "fang",
+    "zerolog",
+    "viper",
+    "prometheus/client_golang",
+    "opentelemetry-go",
+    "testify"
+  ],
+  "detected_archetype": "service",
+  "ars": {
+    "score": 1.0,
+    "gate_passed": true,
+    "universal_gate_passed": true,
+    "gate_failures": [],
+    "applicable_count": 34,
+    "passing_count": 34,
+    "signals": {
+      "vcs_cli_tools": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "build_system",
+        "confidence": "high",
+        "evidence": "Taskfile.yml at repo root defines meaningful targets including build, build:cli, build:devctl, build:server, test:unit, test:integration, lint, fmt, vet, security, vuln, cover, check, and kind:* deployment helpers, each with descriptions and real command bodies.",
+        "reason": "Task runner (go-task) is configured with substantive, non-stub targets for build, test, and lint (and additional CI/deploy gates), satisfying evaluation_criteria for vcs_cli_tools.",
+        "scope": "primary"
+      },
+      "build_command_documentation": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "build_system",
+        "confidence": "high",
+        "evidence": "README.md 'Quick start' documents `go mod download && task build`, `task run:server`, `task run:cli`; Taskfile.yml defines build/build:cli/build:devctl/build:server/run:server/run:cli/test:unit/test:integration/check with `desc:` fields listed by `task --list`.",
+        "reason": "Build, run and test commands are documented in a canonical Quick start section of README.md and are backed by first-class Taskfile.yml targets with human descriptions. Each is a single-step invocation (`task build`, `task run:server`, `task test:unit`, `task check`) that maps to concrete `go build`/`go run`/`go test` commands, satisfying the BASIC criterion for one-step documented build/run/test.",
+        "scope": "primary"
+      },
+      "dependencies_pinned": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "build_system",
+        "confidence": "high",
+        "evidence": "go.mod and go.sum present at repo root; go.sum contains h1:/go.mod hash entries for all direct+indirect deps; .gitignore does not exclude go.sum or go.mod",
+        "reason": "Go project has a committed lockfile (go.sum) alongside go.mod with pinned versions for all direct and indirect dependencies, satisfying the evaluation criteria that a lockfile exists and is committed.",
+        "scope": "primary"
+      },
+      "agentic_development": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "build_system",
+        "confidence": "high",
+        "evidence": "AGENTS.md (substantive, ~50+ lines with bootstrap, commands table, gates) plus CLAUDE.md importing @AGENTS.md; .claude/ dir present with agents/, commands/, hooks/, skills/",
+        "reason": "Repo has both AGENTS.md and CLAUDE.md at root plus a rich .claude/ directory. AGENTS.md contains substantive, non-placeholder instructions (bootstrap steps, commands table, gate enforcement rules); CLAUDE.md imports it via @AGENTS.md to keep a single source of truth. Meets evaluation criteria for meaningful agent instruction content.",
+        "scope": "primary"
+      },
+      "single_command_setup": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "build_system",
+        "confidence": "high",
+        "evidence": ".devcontainer/devcontainer.json sets `postCreateCommand: \"go mod download\"`; AGENTS.md Bootstrap and README Quick start document `go mod download && task build`; go.mod uses `tool` directive so linters/scanners resolve via `go tool` with no separate install step.",
+        "reason": "Setup is a single canonical command (`go mod download`) that fully hydrates dependencies including all developer tools (golangci-lint, gosec, govulncheck, modernize) because they are pinned as `go tool` entries in go.mod \u2014 no separate global installs are required. The devcontainer's `postCreateCommand` is exactly that one command, and both AGENTS.md and README document it as \"the whole bootstrap\".",
+        "scope": "primary"
+      },
+      "unused_dependencies_detection": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "build_system",
+        "confidence": "high",
+        "evidence": ".github/workflows/ci.yml defines a `tidy` job running `go mod tidy` followed by `git diff --exit-code go.mod go.sum`",
+        "reason": "CI enforces `go mod tidy` cleanliness on every push and PR \u2014 an unused (or missing) dependency in go.mod/go.sum causes `git diff --exit-code` to fail the job, matching the registry's `go mod tidy check in CI` evidence example.",
+        "scope": "primary"
+      },
+      "structured_logging": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "debugging_observability",
+        "confidence": "high",
+        "evidence": "go.mod requires github.com/rs/zerolog v1.35.1; internal/logging/logging.go builds a zerolog JSON logger (zerolog.New(...).With().Timestamp().Logger()) with context helpers Into/From; used in internal/api/api.go, internal/config/config.go, internal/api/spec.go",
+        "reason": "Structured logging is implemented using zerolog (a JSON structured logger listed in language_hints for Go), with a first-class internal/logging package providing JSON output, context propagation, and secret scrubbing; consumed by the API/config/spec packages.",
+        "scope": "primary"
+      },
+      "error_tracking": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "debugging_observability",
+        "confidence": "high",
+        "evidence": "internal/api/api.go centralises errors via s.fail; logs with zerolog `lg.Error().Err(err).Msg(\"unhandled error\")` and readiness probe failures; request logger enriches lines with method, path, trace_id, span_id (OTel); go.mod includes github.com/rs/zerolog and OpenTelemetry SDK/exporters",
+        "reason": "Long-running Gin HTTP server (cmd/server/main.go) tracks errors via structured logging: a single fail() handler maps domain errors and logs unhandled errors with Err(err) plus request-scoped context (method/path/status/trace_id/span_id). Errors are also wrapped with %w through the call stack (fmt.Errorf) preserving cause. This satisfies \"structured error logging with context\" per the criteria.",
+        "scope": "primary"
+      },
+      "health_checks": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "debugging_observability",
+        "confidence": "high",
+        "evidence": "internal/api/api.go registers r.GET(\"/healthz\", s.health) and r.GET(\"/readyz\", s.ready); ready handler checks store.List and returns 503 on dependency failure",
+        "reason": "Gin server exposes both a liveness endpoint (/healthz) returning 200 and a readiness endpoint (/readyz) that verifies the note store and returns 503 when unavailable, satisfying the criterion that health check endpoints exist.",
+        "scope": "primary"
+      },
+      "environment_template": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "development_environment",
+        "confidence": "high",
+        "evidence": ".env.example at repo root; 33 lines documenting 9 INTERVIEW_-prefixed vars (ENV, LOG_LEVEL, LOG_FORMAT, HTTP_ADDR, API_TOKEN, ADMIN_ADDR, SERVICE_NAME, OTLP_ENDPOINT, TRACE_SAMPLE_RATIO) with valid values, defaults, and REQUIRED-in-non-dev notes",
+        "reason": "A substantive .env.example exists at the repository root, satisfying the evaluation criteria \"A .env.example or equivalent exists.\" It is not a stub \u2014 it enumerates each variable the internal/config loader expects, with allowed values and operational guidance.",
+        "scope": "primary"
+      },
+      "readme_file": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "documentation",
+        "confidence": "high",
+        "evidence": "README.md (131 lines) with project description, Quick start (build/run commands), Gates, Agent instructions, Layout, and Dev container sections",
+        "reason": "Substantive README present at repo root covering description of the three binaries, setup (`go mod download && task build`), usage examples (CLI and curl), and additional gates/layout/devcontainer guidance \u2014 well beyond a title stub.",
+        "scope": "primary"
+      },
+      "agents_md_file": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "documentation",
+        "confidence": "high",
+        "evidence": "AGENTS.md at repo root (223 lines) with Bootstrap, Commands, Layout, Rules, and Do-not-touch sections; CLAUDE.md also present.",
+        "reason": "Substantive AGENTS.md exists at the repository root providing concrete agent instructions (bootstrap, task commands, layout, rules, restricted files), satisfying the evaluation criterion.",
+        "scope": "primary"
+      },
+      "service_architecture": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "documentation",
+        "confidence": "high",
+        "evidence": "docs/architecture.md (161 lines) with ASCII diagrams for binaries/domain, request path, and kind cluster topology; sections cover shape, request path, listeners, cluster deployment, and deliberate limits",
+        "reason": "Passes: system architecture is documented in docs/architecture.md with substantive prose plus three ASCII diagrams (component layout, request middleware chain, and cluster topology) and design-decision rationale (two listeners, drift guards, storage limits) \u2014 matches evaluation criteria \"diagram, ADR, or design doc\"",
+        "scope": "primary"
+      },
+      "agents_md_freshness": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "ARS",
+        "category": "documentation",
+        "confidence": "high",
+        "evidence": "AGENTS.md Layout enumerates cmd/{interview,devctl,server}/ and internal/{notes,api,cli,devcli,config,logging,telemetry,buildstamp}/ \u2014 all present; deploy/{kind,k8s,observability/alerts}, scripts/kind-smoke.sh, docs/{openapi.json,api.md,architecture.md,runbooks/} present; Go 1.26.6 in go.mod matches AGENTS.md; command table strings match Taskfile.yml and .github/workflows/ci.yml; internal/devcli/parity.go implements devctl docs-parity gate run in CI to fail on any drift between AGENTS.md, Taskfile, and ci.yml.",
+        "reason": "AGENTS.md's structural claims, command table, and Go toolchain version all match the current filesystem, and the repo carries an active devctl docs-parity gate in CI (internal/devcli/parity.go, docs job in ci.yml) that mechanically enforces AGENTS.md stays in sync with Taskfile and CI \u2014 making drift a build failure.",
+        "scope": "primary"
+      },
+      "gitignore_comprehensive": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "security",
+        "confidence": "high",
+        "evidence": ".gitignore (38 lines) covers Go build output (/bin/, /dist/, /devctl, /interview, /server, *.out), coverage artifacts (coverage.out, coverage.html), secrets (.env, *.local), machine-local dep store (/.tdad/), agent tooling (/.claude/*, /.mcp.json, /generations/), and OS/editor files (.DS_Store, *.swp, .idea/, .vscode/)",
+        "reason": "Project-specific gitignore for a Go repo (go.mod present) that comprehensively covers build artifacts, IDE files, and secrets with named binaries and thoughtful inline rationale \u2014 not a generic template dump; meets the evaluation criteria and defeats the anti-gaming rule",
+        "scope": "primary"
+      },
+      "secrets_management": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "security",
+        "confidence": "high",
+        "evidence": ".env.example at repo root documents INTERVIEW_ prefixed env vars (including INTERVIEW_API_TOKEN bearer token) with placeholders and explicit note 'Copy to .env and fill in. .env is gitignored; never commit real values.'; .gitignore line 16 excludes .env",
+        "reason": "Positive evidence of an env-var-based secrets management strategy: a substantive .env.example with placeholder values documents required secrets, is paired with .env being gitignored, and includes explicit guidance against committing real values \u2014 satisfying the criteria's requirement for a documented secrets strategy beyond mere absence of hardcoded secrets.",
+        "scope": "primary"
+      },
+      "secret_scanning": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "security",
+        "confidence": "high",
+        "evidence": ".github/workflows/ci.yml 'security' job runs `go run github.com/zricethezav/gitleaks/v8@v8.30.1 git . --config .gitleaks.toml`; .gitleaks.toml present; .pre-commit-config.yaml adds detect-private-key and gitleaks-staged (task secrets:staged)",
+        "reason": "Gitleaks is wired into CI (security job scans full git history with fetch-depth: 0 and project-specific .gitleaks.toml) and locally via pre-commit (detect-private-key + gitleaks-staged); satisfies BASIC criterion for CI-executed secret scanning.",
+        "scope": "primary"
+      },
+      "codeowners": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "security",
+        "confidence": "high",
+        "evidence": ".github/CODEOWNERS present; default owner @nerds-run for * plus scoped rules for /.github/workflows/, /.golangci.yml, /AGENTS.md",
+        "reason": "CODEOWNERS file exists at a GitHub-recognized location (.github/CODEOWNERS) with substantive content defining a default owner and additional path-specific owners, satisfying the criterion that a CODEOWNERS file defines ownership for code review.",
+        "scope": "primary"
+      },
+      "dependency_update_automation": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "security",
+        "confidence": "high",
+        "evidence": ".github/dependabot.yml configures weekly updates for gomod (grouped, PR limit 5) and github-actions ecosystems",
+        "reason": "Dependabot is configured with substantive settings covering both Go module dependencies and GitHub Actions on a weekly schedule, satisfying the criterion that dependencies are auto-updated.",
+        "scope": "primary"
+      },
+      "automated_security_review": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "ARS",
+        "category": "security",
+        "confidence": "high",
+        "evidence": ".github/workflows/ci.yml 'security' job runs gosec, gitleaks v8.30.1, and govulncheck; also wired in Taskfile.yml lines 109/119/174",
+        "reason": "Security-focused review is automated in CI via gosec (Go SAST), gitleaks (secrets), and govulncheck (vulnerability scan), invoked from both CI workflow and Taskfile targets \u2014 satisfies the criterion (CodeQL/Snyk/Semgrep are examples, not required tools).",
+        "scope": "primary"
+      },
+      "sensitive_data_log_scrubbing": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "ARS",
+        "category": "security",
+        "confidence": "high",
+        "evidence": "internal/logging/scrub.go defines ScrubJSONLine + NewScrubWriter with sensitiveWords set (authorization, token, password, secret, apikey, cookie, session, csrf, ssn, creditcard, ...) and valuePatterns (Bearer, PEM, sk_/pk_/rk_ live/test, gh[pousr]_); internal/logging/logging.go wires zerolog.New(NewScrubWriter(dest)) so every emitted line is scrubbed at the writer; cmd/server/main.go initializes via logging.New(os.Stdout, ...); internal/logging/scrub_test.go verifies redaction of keys, nested objects, arrays, and fields added by future call sites.",
+        "reason": "Passing: structured logging (zerolog) has enforced, writer-level scrubbing for PII/secrets. Redaction is applied at construction (NewScrubWriter wraps the destination), covers both sensitive field-name matching (with composite-word detection) and secret-shaped value patterns, handles nested/array/console-vs-json outputs, and is used by the actual server binary. A comprehensive test suite exercises the behavior.",
+        "scope": "primary"
+      },
+      "linter_configuration": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "style_validation",
+        "confidence": "high",
+        "evidence": ".golangci.yml (v2) enables ~30 linters (bodyclose, errcheck, errorlint, gocritic, gosec, revive with custom rules, staticcheck, unparam, wrapcheck, etc.) with project-specific settings (exhaustive.default-signifies-exhaustive, nestif.min-complexity=6, revive rules, path/text exclusions); wired via Taskfile `lint`/`fmt` (`go tool golangci-lint run ./...`), .github/workflows/ci.yml lint job, and .pre-commit-config.yaml local `lint`/`fmt` hooks.",
+        "reason": "A language-appropriate linter (golangci-lint) is configured with clearly non-default rules and project-specific exclusions, and it is enforced by both the task runner (`task lint`), CI (lint job in ci.yml), and pre-commit hooks \u2014 satisfying both the configuration and enforcement criteria for this signal.",
+        "scope": "primary"
+      },
+      "code_formatter": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "style_validation",
+        "confidence": "high",
+        "evidence": ".golangci.yml formatters: [gofumpt, goimports]; Taskfile.yml `fmt` runs `go tool golangci-lint fmt --diff ./...`; .github/workflows/ci.yml lint job runs the same fmt --diff command; .pre-commit-config.yaml has a local `fmt` hook that calls `task fmt`",
+        "reason": "Formatter (gofumpt + goimports via golangci-lint) is configured in .golangci.yml and enforced in three places: task runner (`task fmt`), CI (lint job runs `golangci-lint fmt --diff`), and pre-commit hook. Meets evaluation_criteria for configured AND enforced formatting.",
+        "scope": "primary"
+      },
+      "type_checker": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "style_validation",
+        "confidence": "high",
+        "evidence": "Taskfile.yml defines 'vet: go vet ./...' (task 'vet'); .github/workflows/ci.yml 'lint' job runs 'go vet ./...'; .pre-commit-config.yaml has local hook invoking 'task vet' on Go files",
+        "reason": "Go primary language; static type checking via 'go vet' is enforced in both the task runner (Taskfile.yml 'vet' target and 'check' aggregate) and CI (ci.yml lint job), matching the registry's evaluation criterion ('go vet in task runner or CI'). Also wired into pre-commit as a local hook.",
+        "scope": "primary"
+      },
+      "strict_typing": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "style_validation",
+        "confidence": "high",
+        "evidence": "go.mod present (module github.com/nerds-run/interview_go, go 1.26.5); Go compiler statically enforces strict typing natively.",
+        "reason": "Per evaluation_criteria, Go passes strict_typing automatically because the compiler enforces strict typing natively; repository is a Go module.",
+        "scope": "primary"
+      },
+      "pre_commit_hooks": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "style_validation",
+        "confidence": "high",
+        "evidence": ".pre-commit-config.yaml defines local hooks fmt/lint/vet/large-files/gitleaks-staged/docs-parity plus pre-commit-hooks v6.0.0 (trailing-whitespace, end-of-file-fixer, check-yaml, check-json, detect-private-key); wired via Taskfile.yml `hooks`/`hooks:install` targets (uvx pre-commit run --all-files / install) and enforced by .github/workflows/ci.yml `hooks` job running `uvx pre-commit run --all-files`.",
+        "reason": "Pre-commit framework is configured with substantive hooks covering formatting (task fmt \u2192 gofmt), linting (task lint \u2192 golangci-lint), static analysis (task vet), secrets (detect-private-key + gitleaks-staged), and file hygiene; hooks are wired into both the Taskfile and CI (`uvx pre-commit run --all-files`), satisfying the framework-plus-enforcement requirement.",
+        "scope": "primary"
+      },
+      "large_file_detection": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "style_validation",
+        "confidence": "high",
+        "evidence": ".gitattributes declares binary types; .pre-commit-config.yaml runs check-added-large-files --maxkb=512 --enforce-all and a local 'task large-files' hook; CI docs job runs 'go run ./cmd/devctl large-files'",
+        "reason": "Multiple enforcement layers: .gitattributes marks binaries (*.bin/*.png/*.jpg/*.pdf/*.zip/*.gz/*.tar/*.woff etc.), pre-commit hook check-added-large-files enforces 512KB ceiling with --enforce-all, a task-runner-backed 'large-files' hook wraps devctl, and .github/workflows/ci.yml docs job invokes 'devctl large-files' \u2014 meeting the criteria of detection + prevention via .gitattributes + pre-commit + CI check.",
+        "scope": "primary"
+      },
+      "issue_templates": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "task_discovery",
+        "confidence": "high",
+        "evidence": ".github/ISSUE_TEMPLATE/ contains bug_report.yml, feature_request.yml, task.yml (plus config.yml); each has substantive form fields (labels, required textareas, dropdowns).",
+        "reason": "All three required issue templates (bug, feature, task) exist as substantive GitHub issue form YAML with labels and required fields, satisfying the evaluation criteria.",
+        "scope": "primary"
+      },
+      "pr_templates": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "task_discovery",
+        "confidence": "high",
+        "evidence": ".github/pull_request_template.md exists with sections (What changed, Why, Verification, Notes) and a 4-item checkbox checklist under Verification",
+        "reason": "Pull request template is present at .github/pull_request_template.md and contains substantive checklist items (task check passes, failing test before fix, openapi regenerated, docs synchronization), satisfying the criterion that PR templates exist with checklist items.",
+        "scope": "primary"
+      },
+      "unit_tests_exist": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "testing",
+        "confidence": "high",
+        "evidence": "15 *_test.go files under internal/ (e.g., internal/notes/notes_test.go, internal/api/api_test.go, internal/cli/cli_test.go, internal/devcli/devcli_test.go, internal/logging/logging_test.go, internal/config/config_test.go); notes_test.go contains substantive TestDraftValidate cases using testify",
+        "reason": "Go project (go.mod present) has numerous *_test.go files spread across internal packages with real test functions using the standard testing package and testify assertions, satisfying the language hint that *_test.go files exist and demonstrating substantive unit tests.",
+        "scope": "primary"
+      },
+      "test_file_naming": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "testing",
+        "confidence": "high",
+        "evidence": "All 15 test files use Go's standard *_test.go suffix (e.g., internal/api/api_test.go, internal/notes/notes_test.go, internal/logging/scrub_test.go, internal/devcli/commands_test.go); no deviations found.",
+        "reason": "Naming is uniform and consistent with the Go test convention required by `go test`. All test files across internal/api, cli, config, devcli, logging, notes, and telemetry packages follow the same `_test.go` suffix pattern.",
+        "scope": "primary"
+      },
+      "test_coverage_thresholds": {
+        "score": 1,
+        "tier": "BASIC",
+        "score_type": "ARS",
+        "category": "testing",
+        "confidence": "high",
+        "evidence": ".github/workflows/ci.yml test job runs `go test ... -coverprofile=coverage.out` then `go run ./cmd/devctl coverage --profile coverage.out --min 75`; Taskfile.yml sets COVERAGE_MIN=75 with a `cover` task; internal/devcli/coverage.go implements CheckCoverageFile that fails when Percent < Threshold.",
+        "reason": "Coverage is generated via `go test -coverprofile` and a 75% floor is enforced in CI by the devctl `coverage --min 75` subcommand (Go has no native --cov-fail-under, and the repo implements the gate itself). The Taskfile mirrors the same threshold via the `cover` task, so the threshold is both configured and enforced in CI, satisfying the criterion.",
+        "scope": "primary"
+      },
+      "integration_tests_exist": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "ARS",
+        "category": "testing",
+        "confidence": "high",
+        "evidence": "internal/api/integration_test.go has //go:build integration tag; Taskfile.yml defines test:integration running `go test -tags=integration -race -timeout 5m ./...`",
+        "reason": "Project contains a substantive integration test file gated behind the //go:build integration tag exercising a real HTTP server and file store, wired into the task runner via `task test:integration`.",
+        "scope": "primary"
+      },
+      "test_isolation": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "ARS",
+        "category": "testing",
+        "confidence": "high",
+        "evidence": "139 t.Parallel() calls across 13 of 15 *_test.go files; 32 t.TempDir/t.Setenv uses across 7 files; zero os.Setenv or os.Chdir in tests; integration_test.go uses per-test t.TempDir stores and net.Listen('tcp','127.0.0.1:0') ephemeral ports with per-server http.Client and t.Cleanup shutdown; cli_test.go has an explicit TestTwoTreesDoNotShareFlagState guarding against shared global flag state",
+        "reason": "Tests broadly opt into parallelism (t.Parallel) and consistently rely on Go's isolation primitives (t.TempDir, t.Setenv, t.Cleanup, t.Context) with no shared mutable filesystem paths, no process-global env mutations via os.Setenv/os.Chdir, and no sync.Once/init test hooks. Integration tests avoid port collisions via ephemeral :0 listeners and per-server transports. Meets the criteria for isolated, parallel-safe tests.",
+        "scope": "primary"
+      }
+    }
+  },
+  "ems": {
+    "score": 0.4737,
+    "applicable_count": 38,
+    "passing_count": 18,
+    "signals": {
+      "release_notes_automation": {
+        "score": 0,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "build_system",
+        "confidence": "high",
+        "evidence": "No .goreleaser.yml, .github/release.yml, release-drafter config, release-please, changesets, semantic-release, or CHANGELOG.md at repo root; .github/workflows/ci.yml has no release job; Taskfile.yml has no release/changelog target.",
+        "reason": "Repository has no automation that generates release notes from commits or PRs \u2014 no GoReleaser config, no GitHub auto-generated release notes config (.github/release.yml), no release-drafter/release-please/semantic-release/changesets, and no CI workflow or Task target that produces release notes. The only CHANGELOG is under .claude/ (tooling metadata), not a project changelog.",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "Repository has no automation that generates release notes from commits or PRs \u2014 no GoReleaser config, no GitHub auto-generated release notes config (.github/release.yml), no release-drafter/release-please/semantic-release/changesets, and no CI workflow or Task target that produces release notes. The only CHANGELOG is under .claude/ (tooling metadata), not a project changelog."
+      },
+      "release_automation": {
+        "score": 0,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "build_system",
+        "confidence": "high",
+        "evidence": ".github/workflows/ci.yml has only lint/test/security/openapi/docs/deploy/tidy/hooks/modernize jobs (no release triggers on tags); no .goreleaser.yml/.yaml, no semantic-release/.releaserc config, no release.yml workflow, no cargo-release, and no root CHANGELOG (only .claude/CHANGELOG.md for tooling)",
+        "reason": "Fails evaluation_criteria: no automated release pipeline is configured. CI runs only quality gates on push to main and PRs; there is no tag-triggered workflow, no goreleaser config, and no semantic-release setup for automated version/tag/artifact publishing.",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "Fails evaluation_criteria: no automated release pipeline is configured. CI runs only quality gates on push to main and PRs; there is no tag-triggered workflow, no goreleaser config, and no semantic-release setup for automated version/tag/artifact publishing."
+      },
+      "automated_pr_review": {
+        "score": 0,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "build_system",
+        "confidence": "high",
+        "evidence": ".github/ has ci.yml (lint/test/security/openapi/docs/deploy/tidy/hooks/modernize jobs), dependabot.yml (gomod + actions), CODEOWNERS, and a human-fill pull_request_template.md with checkbox sections; no CodeRabbit/PR-Agent/Reviewpad/Codium/Sweep/Graphite/Copilot-review/autopr config or workflow present",
+        "reason": "No automated PR description generator or AI review-summary bot is wired into the repository. The PR template requires the author to manually fill in \"What changed / Why / Verification / Notes\", and no workflow step or bot config posts auto-generated PR bodies or review summaries. Fails the evaluation criterion \"PR descriptions or review summaries are auto-generated.\"",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "No automated PR description generator or AI review-summary bot is wired into the repository. The PR template requires the author to manually fill in \"What changed / Why / Verification / Notes\", and no workflow step or bot config posts auto-generated PR bodies or review summaries. Fails the evaluation criterion \"PR descriptions or review summaries are auto-generated.\""
+      },
+      "build_performance_tracking": {
+        "score": 0,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "build_system",
+        "confidence": "high",
+        "evidence": "Taskfile.yml build:cli/devctl/server tasks invoke `go build` with no timing wrapper; .github/workflows/ci.yml has no build job and no timing/metrics emitter (no buildevents, no gh-workflow-timer action, no benchmark harness); internal/buildstamp only injects Commit ldflag, not durations.",
+        "reason": "Build times are not measured or persisted anywhere. `go build` invocations in Taskfile.yml (build, build:cli, build:devctl, build:server, install, kind:deploy) and CI (only test/lint/security/openapi/docs/deploy/tidy/hooks/modernize jobs \u2014 no build job at all) run without a timer, artifact, or metrics sink. No tool (buildevents, tracing, benchmark store, workflow-timing action) records build durations over time, failing the criterion \"Build times are measured and tracked over time.\"",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "Build times are not measured or persisted anywhere. `go build` invocations in Taskfile.yml (build, build:cli, build:devctl, build:server, install, kind:deploy) and CI (only test/lint/security/openapi/docs/deploy/tidy/hooks/modernize jobs \u2014 no build job at all) run without a timer, artifact, or metrics sink. No tool (buildevents, tracing, benchmark store, workflow-timing action) records build durations over time, failing the criterion \"Build times are measured and tracked over time.\""
+      },
+      "deployment_frequency": {
+        "score": 0,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "build_system",
+        "confidence": "high",
+        "evidence": ".github/workflows/ci.yml jobs are lint/test/security/openapi/docs/deploy(manifest-check only)/tidy/hooks/modernize \u2014 none push to any environment; deploy/k8s and Taskfile `kind:deploy` target only apply to a local kind cluster; no four-keys/dora-agent/sleuth/linearb configs, no deployment-event emitter, no Grafana dashboard/Prometheus recording rule for deployment cadence in deploy/observability/*.",
+        "reason": "Registry criterion is \"Deployment frequency is measured (DORA metrics or equivalent)\". Repo has no production deployment pipeline (CI ends at verification, the `deploy` job only renders manifests and lints Prometheus rules) and no DORA-metric collector or deployment-event stream anywhere in the source tree, so deployment frequency cannot be \u2014 and is not \u2014 measured.",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "Registry criterion is \"Deployment frequency is measured (DORA metrics or equivalent)\". Repo has no production deployment pipeline (CI ends at verification, the `deploy` job only renders manifests and lints Prometheus rules) and no DORA-metric collector or deployment-event stream anywhere in the source tree, so deployment frequency cannot be \u2014 and is not \u2014 measured."
+      },
+      "feature_flag_infrastructure": {
+        "score": 0,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "build_system",
+        "confidence": "high",
+        "evidence": "go.mod has no LaunchDarkly/Unleash/OpenFeature/Flagsmith/Flipt/statsig client; internal/config/config.go Config struct exposes only env/log/timeout/address/token/OTLP fields with no boolean feature toggles; only 'flag' references are cobra CLI flags and 'rollout' refers to k8s manifest rolling updates",
+        "reason": "Repository lacks any feature-flag mechanism: no third-party feature-flag SDK dependency and no typed-config feature toggles in the Config struct. Evaluation criterion requires flag support via LaunchDarkly, Unleash, or typed config, and none is present.",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "Repository lacks any feature-flag mechanism: no third-party feature-flag SDK dependency and no typed-config feature toggles in the Config struct. Evaluation criterion requires flag support via LaunchDarkly, Unleash, or typed config, and none is present."
+      },
+      "rollback_automation": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "build_system",
+        "confidence": "high",
+        "evidence": "docs/runbooks/rollback.md documents single-command rollback `kubectl --context kind-interview-go -n interview-go rollout undo deployment/interview-go`; Taskfile.yml `kind:deploy` builds each release under an immutable commit-derived image tag specifically so `rollout undo` reverts to the previous binary; deploy/k8s/deployment.yaml uses maxSurge:1/maxUnavailable:0 rolling strategy with revisionHistoryLimit default 10.",
+        "reason": "Rollback is a documented, single-command operation (`kubectl rollout undo deployment/interview-go`) with the build/tag pipeline (per-commit immutable tags in `task kind:deploy`) engineered explicitly to make that undo effective, plus a runbook covering targeted revisions, verification checks, and failure modes \u2014 meeting the evaluation criterion that rollback be automated or documented as a single command.",
+        "scope": "primary"
+      },
+      "heavy_dependency_detection": {
+        "score": 0,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "build_system",
+        "confidence": "high",
+        "evidence": ".golangci.yml enables no depguard/gomodguard; Taskfile.yml has only `large-files` (tracked file byte ceiling via git cat-file \u2014 internal/devcli/largefiles.go, go.sum explicitly allowlisted) plus lint/vuln/security/tidy; .github/workflows/ci.yml has no dependency-size job; no goweight/goda/dep-tree/module-size tooling present.",
+        "reason": "Signal requires unusually large dependencies to be flagged. Repo's `large-files` gate measures tracked git blob sizes (not module weight) and explicitly allowlists go.sum so it grows unbounded with new deps; depguard/gomodguard linters are present as indirect deps of golangci-lint but not enabled in .golangci.yml; no CI job, task-runner target, or pre-commit hook invokes a dependency-weight/bloat analyzer against the module graph.",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "Signal requires unusually large dependencies to be flagged. Repo's `large-files` gate measures tracked git blob sizes (not module weight) and explicitly allowlists go.sum so it grows unbounded with new deps; depguard/gomodguard linters are present as indirect deps of golangci-lint but not enabled in .golangci.yml; no CI job, task-runner target, or pre-commit hook invokes a dependency-weight/bloat analyzer against the module graph."
+      },
+      "dead_feature_flag_detection": {
+        "score": 0,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "build_system",
+        "confidence": "high",
+        "evidence": "No feature-flag SDK in go.mod (no LaunchDarkly/OpenFeature/Unleash/Flipt/Flagsmith), no flag fields in internal/config/config.go, and no stale-flag detection tooling (no Piranha, no unflag, no golangci-lint linter for dead flags in .golangci.yml, no Taskfile/CI target for flag cleanup) anywhere in the repo.",
+        "reason": "The prerequisite feature-flag infrastructure is absent \u2014 grep across *.go, Taskfile.yml, .golangci.yml, .pre-commit-config.yaml, and .github/workflows/ci.yml returns no feature-flag runtime nor any dead/stale-flag detector. With no flags defined and no lifecycle-management tooling wired into automation, the INTERMEDIATE criterion \"Stale feature flags are detected and cleaned up\" is unmet.",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "The prerequisite feature-flag infrastructure is absent \u2014 grep across *.go, Taskfile.yml, .golangci.yml, .pre-commit-config.yaml, and .github/workflows/ci.yml returns no feature-flag runtime nor any dead/stale-flag detector. With no flags defined and no lifecycle-management tooling wired into automation, the INTERMEDIATE criterion \"Stale feature flags are detected and cleaned up\" is unmet."
+      },
+      "progressive_rollout": {
+        "score": 1,
+        "tier": "ADVANCED",
+        "score_type": "EMS",
+        "category": "build_system",
+        "confidence": "high",
+        "evidence": "deploy/k8s/deployment.yaml declares strategy.type=RollingUpdate with maxSurge:1, maxUnavailable:0, progressDeadlineSeconds:120, startup/liveness/readiness probes gating pod turnover; deploy/k8s/pdb.yaml sets minAvailable:1",
+        "reason": "Deployment ships with an explicit progressive rolling-update strategy: maxUnavailable:0 forces each new pod to pass its readinessProbe before an old pod is removed, progressDeadlineSeconds bounds stall detection, and a PodDisruptionBudget preserves availability during voluntary disruptions \u2014 matching the criterion of canary/blue-green/rolling deployments",
+        "scope": "primary"
+      },
+      "profiling": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "debugging_observability",
+        "confidence": "high",
+        "evidence": "internal/telemetry/telemetry.go imports net/http/pprof and registers /debug/pprof/{,cmdline,profile,symbol,trace} on AdminHandler; cmd/server/main.go starts AdminServer via metrics.AdminServer(cfg.AdminAddr); telemetry_test.go asserts endpoints and pprof-friendly zero WriteTimeout; runbooks and kind-smoke.sh exercise /debug/pprof/heap and /debug/pprof/profile",
+        "reason": "Signal requires profiling instrumentation available (pprof). Repo exposes the full pprof handler set on a dedicated admin listener wired into the server binary and validated by tests and smoke scripts, satisfying the go language hint (net/http/pprof exposed on endpoint).",
+        "scope": "primary"
+      },
+      "metrics_collection": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "debugging_observability",
+        "confidence": "high",
+        "evidence": "internal/telemetry/telemetry.go builds prometheus.Registry with Go/process collectors + RED metrics (http_requests_total CounterVec, http_request_duration_seconds HistogramVec, http_requests_in_flight Gauge, build_info GaugeVec); exposes /metrics via promhttp on admin server; go.mod requires github.com/prometheus/client_golang v1.24.1 and go.opentelemetry.io/otel; cmd/server/main.go wires telemetry.NewRegistry, metrics.Middleware() into gin, and metrics.AdminServer(cfg.AdminAddr).",
+        "reason": "Application metrics are collected via Prometheus (client_golang) with a dedicated registry, request/latency/inflight instrumentation as gin middleware, and a /metrics scrape endpoint mounted on a separate admin port \u2014 wired end-to-end in cmd/server/main.go. OpenTelemetry is additionally configured. Meets EMS metrics_collection criteria.",
+        "scope": "primary"
+      },
+      "alerting_configured": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "debugging_observability",
+        "confidence": "high",
+        "evidence": "deploy/observability/alerts/rules.yaml defines 7 Prometheus alert rules (InterviewGoNoTargets, InterviewGoAbsent, InterviewGoHighErrorRate, InterviewGoHighLatency, InterviewGoSaturation, InterviewGoReadinessFailing, InterviewGoVersionSkew) with severity labels and runbook URLs; wired via rule_files in deploy/observability/prometheus.yaml and gated in .github/workflows/ci.yml via promtool check rules + promtool test rules; rules_test.yaml provides unit tests.",
+        "reason": "Repository is a Kubernetes-deployed HTTP service (cmd/server) with comprehensive Prometheus alert rules covering critical failure modes (availability, error rate, latency, saturation, dependency health, stuck rollout). Rules include severity labels, for-durations, low-traffic guards, and runbook URLs. Rules are loaded by Prometheus via rule_files glob and validated in CI. The in-file note that no Alertmanager receiver is wired is a routing gap, not a configuration gap: the alerts themselves are configured for critical failures, which is what the evaluation_criteria asks for.",
+        "scope": "primary"
+      },
+      "distributed_tracing": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "debugging_observability",
+        "confidence": "high",
+        "evidence": "go.mod pulls go.opentelemetry.io/otel + sdk + otlptracehttp + otelgin; internal/telemetry/telemetry.go defines SetupTracing (OTLP exporter, ParentBased(TraceIDRatioBased) sampler, resource with service.name/version/env/commit, W3C TraceContext+Baggage propagator, shutdown flush) and TracingMiddleware via otelgin; cmd/server/main.go:59-66 invokes SetupTracing before listeners and mounts TracingMiddleware on the gin router",
+        "reason": "Repo is a REST API server (cmd/server/main.go with gin), so the signal applies. OpenTelemetry tracing is properly configured (OTLP HTTP exporter, sampler, resource attributes, propagator) and actually wired into the request path in main.go, satisfying \"Distributed tracing is configured (OpenTelemetry, Jaeger, Datadog APM).\"",
+        "scope": "primary"
+      },
+      "deployment_observability": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "debugging_observability",
+        "confidence": "high",
+        "evidence": "internal/telemetry/telemetry.go registers Prometheus build_info gauge with version/commit/env labels; Taskfile.yml injects -X buildstamp.Version/Commit via git rev-parse ldflags; OTel resource in SetupTracing sets service.version, service.commit, deployment.environment; deploy/observability/grafana.yaml dashboard queries build_info{job=\"interview-go\"}; deploy/observability/alerts/rules.yaml defines InterviewGoVersionSkew alert on distinct build_info version labels with matching rules_test.yaml unit tests.",
+        "reason": "Deployments are observable: every metric sample carries version/commit/env via build_info, tracing resources carry service.version and service.commit, a Grafana panel visualises rollouts, and a Prometheus alert catches version skew \u2014 satisfying INTERMEDIATE evaluation_criteria for deploy markers and version tags in metrics.",
+        "scope": "primary"
+      },
+      "runbooks_documented": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "debugging_observability",
+        "confidence": "high",
+        "evidence": "docs/runbooks/ contains README.md (index), incident-response.md, health-check-failure.md, rollback.md, on-call-triage.md, deploy.md \u2014 all substantive, mapped to Prometheus alert runbook_urls in deploy/observability/alerts/rules.yaml",
+        "reason": "Repo is a deployable Go REST service (gin, prometheus, otel, k8s deploy manifests), not a library or CLI, so signal applies. Runbook set covers common operational scenarios (deploy, rollback, incident response, health-check failure, per-alert triage) with concrete kubectl commands, severity guidance, and cross-links to alert rules \u2014 clearly beyond stub content.",
+        "scope": "primary"
+      },
+      "code_quality_dashboard": {
+        "score": 0,
+        "tier": "ADVANCED",
+        "score_type": "EMS",
+        "category": "debugging_observability",
+        "confidence": "high",
+        "evidence": "No sonar-project.properties, .codeclimate.yml, codecov.yml, or dashboard uploader step in .github/workflows/ci.yml; ci.yml has lint/test/security/openapi/docs/deploy/tidy/hooks/modernize jobs only, coverage.out is gated locally via devctl coverage --min 75 without upload to any dashboard.",
+        "reason": "No integration with a code quality dashboard (SonarQube, SonarCloud, CodeClimate, Codecov, etc.) is configured. Coverage is measured in CI but only enforced by a local threshold check; results are not published to a metrics dashboard, so the evaluation criterion \"tracked in a dashboard\" is not met.",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "No integration with a code quality dashboard (SonarQube, SonarCloud, CodeClimate, Codecov, etc.) is configured. Coverage is measured in CI but only enforced by a local threshold check; results are not published to a metrics dashboard, so the evaluation criterion \"tracked in a dashboard\" is not met."
+      },
+      "dev_container": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "development_environment",
+        "confidence": "high",
+        "evidence": ".devcontainer/devcontainer.json (named \"interview-go\", build.dockerfile=Dockerfile, remoteUser=vscode, postCreateCommand, forwardPorts, features, vscode extensions/settings) and .devcontainer/Dockerfile (pinned golang:1.26.6-bookworm base plus Task/uv/kubectl/kind installs)",
+        "reason": "A substantive devcontainer.json exists at .devcontainer/devcontainer.json with a companion Dockerfile providing a reproducible Go 1.26.6 development environment, satisfying the criterion that a devcontainer.json or equivalent exists for reproducible environments.",
+        "scope": "primary"
+      },
+      "devcontainer_runnable": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "development_environment",
+        "confidence": "medium",
+        "evidence": ".devcontainer/devcontainer.json (valid, name=interview-go, build.dockerfile=Dockerfile, docker-outside-of-docker feature v1.10.0, remoteUser=vscode, postCreateCommand=go mod download, forwardPorts 8080/9090) + .devcontainer/Dockerfile (FROM golang:1.26.6-bookworm; pinned TASK_VERSION=v3.53.1, UV_VERSION=0.12.9, KUBECTL_VERSION=v1.35.8, KIND_VERSION=v0.33.0; each download sha256-verified and validated with --version in the same RUN layer; vscode user + sudoers + /go ownership setup)",
+        "reason": "Configuration is complete and defensively constructed: pinned base image and tool versions, sha256 checksum verification, and inline --version smoke tests in each RUN layer mean a broken pin, renamed asset, or truncated transfer would fail `docker build` immediately. postCreateCommand and remoteUser are set so the container has a defined runnable state. Confidence is medium rather than high because the verifier did not execute `devcontainer up` / `docker build` in this environment and no CI job builds the devcontainer to provide external attestation.",
+        "scope": "primary"
+      },
+      "documentation_freshness": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "documentation",
+        "confidence": "high",
+        "evidence": "README.md/AGENTS.md/docs/api.md/docs/architecture.md/docs/runbooks/README.md accurately describe present code: three binaries under cmd/{interview,server,devctl}, packages under internal/{notes,api,cli,devcli,config,logging,telemetry,buildstamp}, and the exact routes bound in internal/api/api.go (/healthz, /readyz, /version, /api/v1/notes[/:id]); coverage floor 75 matches Taskfile.yml COVERAGE_MIN and AGENTS.md; docs cite devctl subcommands coverage/docs-parity/manifests/large-files/openapi all present in internal/devcli; example timestamp in docs/api.md dated 2026-09-03 matches today's date",
+        "reason": "Prose docs, command tables, runbooks and OpenAPI companion all describe the code that currently exists \u2014 routes, ports, package layout, thresholds, env vars, and devctl subcommands all verified against source. Repo additionally enforces freshness structurally via devctl docs-parity, api.SpecDrift(), and a committed docs/openapi.json diff-check, so drift would fail CI. No stale references, dead paths, or references to removed features were observed.",
+        "scope": "primary"
+      },
+      "automated_documentation": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "documentation",
+        "confidence": "high",
+        "evidence": "docs/openapi.json auto-generated by `cmd/devctl openapi --write` (internal/api/spec.go builds the OpenAPI 3.0.3 document from the route table with SpecDrift guard); wired into Taskfile.yml (`openapi`, `openapi:write`) and the `openapi` job in .github/workflows/ci.yml which runs the generator and `git diff --exit-code docs/openapi.json` to block drift",
+        "reason": "API reference documentation is generated by a dedicated command, checked in as docs/openapi.json, and enforced in CI via a regenerate-then-diff gate plus an in-code drift check (SpecDrift), satisfying the criterion that documentation is auto-generated where applicable",
+        "scope": "primary"
+      },
+      "skills_configuration": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "documentation",
+        "confidence": "high",
+        "evidence": ".claude/skills/ contains 20+ SKILL.md entries including domain-specific go-review, go-package-refactor, test-coverage-boost, code-review, code-fix, validate-workflow; .claude/commands/ has golang_code_review, golang_quality_gate, golang_design_build prompts tailored to this Go repo (go.mod present).",
+        "reason": "Signal passes: agent skills/prompts are configured and substantive for the project's Go domain \u2014 a versioned go-review SKILL.md (v2.2.0) with dedicated scripts exists, plus Go-specific slash-command prompt suites (golang_code_review, golang_quality_gate, golang_design_build) and supporting hooks (auto-format-go.sh), all aligned with the repo's Go language (go.mod).",
+        "scope": "primary"
+      },
+      "api_schema_docs": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "documentation",
+        "confidence": "high",
+        "evidence": "docs/openapi.json is a substantive OpenAPI 3.0.3 spec documenting /api/v1/notes and /api/v1/notes/{id} endpoints with request/response schemas (Draft, Note, Error, Status, Version), status codes, and bearerAuth security scheme.",
+        "reason": "Signal passes: repo exposes a REST API (cmd/server/main.go wires internal/api into Gin) and ships an OpenAPI 3.0.3 schema at docs/openapi.json covering the API endpoints, request/response bodies, and security, matching the evaluation criteria.",
+        "scope": "primary"
+      },
+      "product_analytics": {
+        "score": 0,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "product_experimentation",
+        "confidence": "high",
+        "evidence": "No product-analytics SDKs found in go.mod/go.sum or source (searched mixpanel, amplitude, posthog, segment, rudderstack, heap, pendo, fullstory, snowplow, june.so, analytics.track); only Prometheus and OpenTelemetry (infra observability) are wired via internal/telemetry.",
+        "reason": "Repo is a Go REST API service + CLI pair (cmd/server/main.go with gin, cmd/interview CLI over the same internal/notes domain), so the archetype is not pure library/CLI/infra and product_analytics applies. No product analytics tool (Mixpanel, Amplitude, PostHog, Segment, etc.) is declared as a dependency or invoked in code \u2014 the only \"heap\" hit refers to Go's memory heap in a pprof comment. Instrumentation is limited to infra telemetry (Prometheus metrics, OTLP traces), which is not product analytics.",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "Repo is a Go REST API service + CLI pair (cmd/server/main.go with gin, cmd/interview CLI over the same internal/notes domain), so the archetype is not pure library/CLI/infra and product_analytics applies. No product analytics tool (Mixpanel, Amplitude, PostHog, Segment, etc.) is declared as a dependency or invoked in code \u2014 the only \"heap\" hit refers to Go's memory heap in a pprof comment. Instrumentation is limited to infra telemetry (Prometheus metrics, OTLP traces), which is not product analytics."
+      },
+      "error_to_insight_pipeline": {
+        "score": 0,
+        "tier": "ADVANCED",
+        "score_type": "EMS",
+        "category": "product_experimentation",
+        "confidence": "high",
+        "evidence": "go.mod has zerolog + OpenTelemetry + prometheus; no Sentry/Rollbar/Bugsnag error-tracking SDK and no PostHog/Segment/Mixpanel/Amplitude product-analytics SDK found in go.mod or internal/**/*.go; grep for CaptureException/analytics.Track/posthog matched only readiness-audit-report.json artifact",
+        "reason": "Signal requires error_tracking AND product_analytics prerequisites plus automated correlation of errors to user impact. Neither an error tracking service nor product analytics is integrated: the repo only has structured logs, OTel traces, and Prometheus metrics, none of which associate errors with user identities or surface user-impact insights. Without both feeds, an error-to-insight pipeline cannot exist.",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "Signal requires error_tracking AND product_analytics prerequisites plus automated correlation of errors to user impact. Neither an error tracking service nor product analytics is integrated: the repo only has structured logs, OTel traces, and Prometheus metrics, none of which associate errors with user identities or surface user-impact insights. Without both feeds, an error-to-insight pipeline cannot exist."
+      },
+      "pii_handling": {
+        "score": 0,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "security",
+        "confidence": "high",
+        "evidence": "No PRIVACY.md/DATA_HANDLING.md/GDPR/CCPA/PII/retention policy in README.md, AGENTS.md, or docs/ (docs/api.md, docs/architecture.md, docs/runbooks/*); notes API (internal/api/api.go, internal/notes/notes.go) persists user-submitted title/body via POST /api/v1/notes with no documented handling policy; only artefact is internal/logging/scrub.go which redacts secret/PII-adjacent field names (ssn, creditcard, cardnumber, session, token) in logs, but that is a log scrubber implementation, not a documented PII policy.",
+        "reason": "Signal applies: the service accepts and stores user-supplied content (notes title/body) via the REST API and CLI, so users may submit PII. Evaluation criterion requires PII to be handled according to a documented policy. No such policy document exists anywhere in the repo (no PRIVACY.md, no data-retention/deletion policy beyond a plain DELETE endpoint, no consent/regulatory-scope statement in README/AGENTS.md/docs). The logging scrubber is an enforcement primitive for secrets/select PII tokens in logs, not a documented handling policy, and it is not referenced by any policy document.",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "Signal applies: the service accepts and stores user-supplied content (notes title/body) via the REST API and CLI, so users may submit PII. Evaluation criterion requires PII to be handled according to a documented policy. No such policy document exists anywhere in the repo (no PRIVACY.md, no data-retention/deletion policy beyond a plain DELETE endpoint, no consent/regulatory-scope statement in README/AGENTS.md/docs). The logging scrubber is an enforcement primitive for secrets/select PII tokens in logs, not a documented handling policy, and it is not referenced by any policy document."
+      },
+      "minimum_dependency_age": {
+        "score": 0,
+        "tier": "ADVANCED",
+        "score_type": "EMS",
+        "category": "security",
+        "confidence": "high",
+        "evidence": ".github/dependabot.yml lacks a `cooldown:` block; no renovate.json/.renovaterc/.renovaterc.json present; grep for `cooldown|minimumReleaseAge|minimum-release-age|min-age|stabilityDays` across the repo returns no matches in config or CI (only appears in prior audit report artifacts)",
+        "reason": "No mechanism enforces a minimum release age for new dependencies. The only dependency-update tooling configured is Dependabot (gomod + github-actions, weekly), which has no `cooldown` block; there is no Renovate config with `minimumReleaseAge`, no CI job in .github/workflows/ci.yml gates dependency PRs by package publish age, and no custom script in the repo enforces such a policy.",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "No mechanism enforces a minimum release age for new dependencies. The only dependency-update tooling configured is Dependabot (gomod + github-actions, weekly), which has no `cooldown` block; there is no Renovate config with `minimumReleaseAge`, no CI job in .github/workflows/ci.yml gates dependency PRs by package publish age, and no custom script in the repo enforces such a policy."
+      },
+      "dast_scanning": {
+        "score": 0,
+        "tier": "ADVANCED",
+        "score_type": "EMS",
+        "category": "security",
+        "confidence": "high",
+        "evidence": "cmd/server/main.go serves HTTP via gin; .github/workflows/ci.yml security job runs gosec, gitleaks, govulncheck only; no ZAP/Nuclei/StackHawk/Burp or other DAST tool referenced anywhere in the repo (Taskfile.yml, workflows, scripts).",
+        "reason": "Signal applies (HTTP service using gin, not a library or CLI). No dynamic application security testing is configured. CI security job covers static analysis (gosec), secret scanning (gitleaks), and vulnerability scanning (govulncheck) \u2014 all SAST/SCA, none of which exercise a running instance. No OWASP ZAP baseline/full-scan action, Nuclei workflow, StackHawk HawkScan, or comparable runtime scanner is present.",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "Signal applies (HTTP service using gin, not a library or CLI). No dynamic application security testing is configured. CI security job covers static analysis (gosec), secret scanning (gitleaks), and vulnerability scanning (govulncheck) \u2014 all SAST/SCA, none of which exercise a running instance. No OWASP ZAP baseline/full-scan action, Nuclei workflow, StackHawk HawkScan, or comparable runtime scanner is present."
+      },
+      "privacy_compliance": {
+        "score": 0,
+        "tier": "ADVANCED",
+        "score_type": "EMS",
+        "category": "security",
+        "confidence": "high",
+        "evidence": "No PRIVACY.md/COMPLIANCE.md/SECURITY.md; grep for privacy|GDPR|CCPA|PII|consent|retention|data subject across repo (excluding .claude/ and prior audit) matches only prometheus.yaml (label 'compliance'); README.md, AGENTS.md, docs/architecture.md, docs/api.md, docs/runbooks/* contain no privacy policy or data-handling documentation; internal/notes and internal/api/api.go persist user-submitted note title/body via POST /api/v1/notes with no documented retention or handling policy; Taskfile.yml `task check` includes no privacy/PII enforcement step.",
+        "reason": "The service accepts and persists user-supplied content (note title/body via POST /api/v1/notes through internal/notes.MemStore/FileStore), so the signal applies. Evaluation criteria require privacy compliance requirements to be documented AND enforced; no privacy policy, data retention, deletion, consent, or regulatory-scope documentation exists anywhere in the repo, and no privacy-related check is wired into `task check` or CI. Log scrubbing in internal/logging/scrub.go addresses secret/PII leakage in logs but is not a privacy compliance program. Fails: neither documentation nor enforcement of privacy compliance is present.",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "The service accepts and persists user-supplied content (note title/body via POST /api/v1/notes through internal/notes.MemStore/FileStore), so the signal applies. Evaluation criteria require privacy compliance requirements to be documented AND enforced; no privacy policy, data retention, deletion, consent, or regulatory-scope documentation exists anywhere in the repo, and no privacy-related check is wired into `task check` or CI. Log scrubbing in internal/logging/scrub.go addresses secret/PII leakage in logs but is not a privacy compliance program. Fails: neither documentation nor enforcement of privacy compliance is present."
+      },
+      "cyclomatic_complexity": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "style_validation",
+        "confidence": "high",
+        "evidence": ".golangci.yml enables nestif (min-complexity: 6) plus nestingReduce/complexity checks via gocritic and nakedret; golangci-lint runs in .github/workflows/ci.yml (lint job: `go tool golangci-lint run ./...`), Taskfile.yml (`task lint`), and .pre-commit-config.yaml (local `lint` hook).",
+        "reason": "Complexity is analyzed and monitored via the nestif linter (nesting/cognitive-complexity gate with an explicit threshold of 6), enabled in .golangci.yml alongside gocritic and nakedret, and wired into all three enforcement paths (CI, task runner, pre-commit) \u2014 meeting the evaluation criteria of complexity being analyzed and monitored by a lint-time tool.",
+        "scope": "primary"
+      },
+      "duplicate_code_detection": {
+        "score": 0,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "style_validation",
+        "confidence": "high",
+        "evidence": ".golangci.yml linters.enable lists bodyclose, errcheck, gocritic, goconst, revive, staticcheck, unparam, etc. but NOT `dupl`; no .jscpd.json, sonar-project.properties, PMD CPD config, or flay/go-duplicates invocation exists; Taskfile.yml and .github/workflows/ci.yml (lint, test, security, openapi, docs, tidy, modernize, hooks) never invoke a clone detector. `github.com/golangci/dupl` appears in go.sum only as a transitive dependency of golangci-lint itself (line 128 `// indirect`).",
+        "reason": "No duplicate/clone detection tool is configured or wired into automation. `goconst` (repeated string/number literals collapsible to constants) is enabled but is not a clone detector, and none of the criteria tools (jscpd, PMD CPD, flay, go-duplicates, SonarQube, or the golangci-lint `dupl` linter) is enabled in .golangci.yml or executed by any Task target, CI job, or pre-commit hook.",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "No duplicate/clone detection tool is configured or wired into automation. `goconst` (repeated string/number literals collapsible to constants) is enabled but is not a clone detector, and none of the criteria tools (jscpd, PMD CPD, flay, go-duplicates, SonarQube, or the golangci-lint `dupl` linter) is enabled in .golangci.yml or executed by any Task target, CI job, or pre-commit hook."
+      },
+      "technical_debt_tracking": {
+        "score": 0,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "style_validation",
+        "confidence": "high",
+        "evidence": ".golangci.yml enables ~30 linters but not godox (godox is only an indirect go.mod dep of golangci-lint, not enabled); Taskfile.yml (targets: lint, fmt, vet, security, secrets, vuln, modernize, large-files, docs, alerts) and .github/workflows/ci.yml expose no TODO/FIXME scan target; no sonar-project.properties or SonarQube step; .github/ISSUE_TEMPLATE/{bug_report,feature_request,task}.yml define labels 'bug','feature','task' only, no tech-debt/debt label; no .github/labels.yml, BACKLOG.md, ROADMAP.md, or TODO.md.",
+        "reason": "None of the three tracking mechanisms in evaluation_criteria are present: (1) no TODO/FIXME scanner is wired into automation \u2014 godox is not enabled in .golangci.yml and no external scanner runs in Taskfile.yml or ci.yml; (2) no SonarQube configuration or debt-ratio gate; (3) no dedicated backlog label for technical debt in issue templates, a labels manifest, or a tracked BACKLOG file. Absence of TODO markers in *.go does not substitute \u2014 the criterion is about a tracking mechanism, not the absence of debt.",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "None of the three tracking mechanisms in evaluation_criteria are present: (1) no TODO/FIXME scanner is wired into automation \u2014 godox is not enabled in .golangci.yml and no external scanner runs in Taskfile.yml or ci.yml; (2) no SonarQube configuration or debt-ratio gate; (3) no dedicated backlog label for technical debt in issue templates, a labels manifest, or a tracked BACKLOG file. Absence of TODO markers in *.go does not substitute \u2014 the criterion is about a tracking mechanism, not the absence of debt."
+      },
+      "naming_consistency": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "style_validation",
+        "confidence": "high",
+        "evidence": ".golangci.yml enables revive with var-naming, error-naming, receiver-naming, time-naming, exported, package-comments rules plus errname linter; wired via Taskfile lint target, .github/workflows/ci.yml (go tool golangci-lint run ./...), and .pre-commit-config.yaml lint hook",
+        "reason": "Naming conventions are enforced by revive rules (var-naming, error-naming, receiver-naming, time-naming, exported, package-comments) and the errname linter inside .golangci.yml, and that linter is wired into the task runner, CI pipeline, and pre-commit hook \u2014 meeting the \"enforced via linter rules\" criterion",
+        "scope": "primary"
+      },
+      "dead_code_detection": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "style_validation",
+        "confidence": "high",
+        "evidence": ".golangci.yml enables `unused` linter (lines 5-36); golangci-lint invoked via Taskfile.yml `go tool golangci-lint run ./...` and .github/workflows/ci.yml",
+        "reason": "The `unused` linter (the modern successor to the deprecated `deadcode` linter in golangci-lint) is explicitly enabled in .golangci.yml and enforced through both the Taskfile lint targets and the CI workflow, satisfying the criterion that unused code is detected.",
+        "scope": "primary"
+      },
+      "code_modularization": {
+        "score": 0,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "style_validation",
+        "confidence": "high",
+        "evidence": ".golangci.yml enables 28 linters (bodyclose, errcheck, revive, staticcheck, etc.) but does not enable depguard or gomodguard and has no rules block for either; no .arch-go.yml, no go-cleanarch invocation in Taskfile.yml (lint/vet/security/vuln/tidy) or .github/workflows/ci.yml; no arch*_test.go architecture-test files; depguard appears only as an indirect dep in go.mod/go.sum via golangci-lint bundling.",
+        "reason": "Fails INTERMEDIATE criterion: no mechanism enforces module/package boundaries. The golangci-lint config lacks depguard/gomodguard entries, no architecture-test framework (arch-go, go-cleanarch) is configured or invoked from Taskfile or CI, and no arch_test.go files exist to assert dependency rules. Import restrictions and dependency rules are therefore not enforced.",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "Fails INTERMEDIATE criterion: no mechanism enforces module/package boundaries. The golangci-lint config lacks depguard/gomodguard entries, no architecture-test framework (arch-go, go-cleanarch) is configured or invoked from Taskfile or CI, and no arch_test.go files exist to assert dependency rules. Import restrictions and dependency rules are therefore not enforced."
+      },
+      "issue_labeling": {
+        "score": 1,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "task_discovery",
+        "confidence": "high",
+        "evidence": ".github/ISSUE_TEMPLATE/{bug_report,feature_request,task}.yml each declare `labels:` ([\\\"bug\\\"], [\\\"feature\\\"], [\\\"task\\\"]); config.yml sets blank_issues_enabled: false so every new issue is auto-labeled.",
+        "reason": "A consistent, small labeling taxonomy (bug / feature / task) is configured via GitHub issue-form templates that auto-apply the label on creation, and blank issues are disabled \u2014 matching the criterion that a consistent labeling system is configured.",
+        "scope": "primary"
+      },
+      "test_performance_tracking": {
+        "score": 0,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "testing",
+        "confidence": "high",
+        "evidence": "Taskfile test:unit runs `go test -race -timeout 5m -coverpkg=... -coverprofile=... ./...` and CI mirrors it; no `-bench`, `-json`, gotestsum, benchstat, or slowest-test reporting anywhere. Only Benchmark* funcs are in internal/logging/scrub_test.go and no task/CI step invokes `go test -bench`.",
+        "reason": "No mechanism tracks per-test execution times or flags regressions: CI captures only coverage, no benchmark job runs the two existing Benchmark* functions, no gotestsum `--slow`/`--jsonfile` or benchstat comparison exists, and no historical timing artifact is stored. Fails EMS criterion \"Test execution times are tracked and regressions flagged.\"",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "No mechanism tracks per-test execution times or flags regressions: CI captures only coverage, no benchmark job runs the two existing Benchmark* functions, no gotestsum `--slow`/`--jsonfile` or benchstat comparison exists, and no historical timing artifact is stored. Fails EMS criterion \"Test execution times are tracked and regressions flagged.\""
+      },
+      "flaky_test_detection": {
+        "score": 0,
+        "tier": "INTERMEDIATE",
+        "score_type": "EMS",
+        "category": "testing",
+        "confidence": "high",
+        "evidence": "Taskfile.yml `test:unit` runs `go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage.out -covermode=atomic ./...` once; .github/workflows/ci.yml `test` job runs the same command; no `-count=N` repetition, no gotestsum/`--rerun-fails`, no quarantine list, no `t.Skip` in any *.go test file, no flaky-test tag/build-constraint convention.",
+        "reason": "No flaky-test detection or quarantine mechanism is wired into the project. `go test` is invoked exactly once in both the Taskfile and CI with no repetition or rerun-on-failure wrapper, no test-runner (e.g., gotestsum) that classifies flakes, no quarantine list or skip convention, and no `t.Skip` calls flagging known-flaky tests. The criterion requires that flaky tests be BOTH detected AND quarantined; neither half is present.",
+        "scope": "primary",
+        "estimated_fix_scope": "M",
+        "fix_hint": "No flaky-test detection or quarantine mechanism is wired into the project. `go test` is invoked exactly once in both the Taskfile and CI with no repetition or rerun-on-failure wrapper, no test-runner (e.g., gotestsum) that classifies flakes, no quarantine list or skip convention, and no `t.Skip` calls flagging known-flaky tests. The criterion requires that flaky tests be BOTH detected AND quarantined; neither half is present."
+      }
+    }
+  },
+  "summary": {
+    "total_signals": 82,
+    "applicable_signals": 76,
+    "not_applicable_signals": 6,
+    "passing_signals": 52,
+    "failing_signals": 20,
+    "insufficient_access_signals": 4,
+    "ars_gate": "PASS",
+    "priority_fixes": [
+      {
+        "signal": "automated_pr_review",
+        "reason": "No automated PR description generator or AI review-summary bot is wired into the repository. The PR template requires the author to manually fill in \"What changed / Why / Verification / Notes\", and no workflow step or bot config posts auto-generated PR bodies or review summaries. Fails the evaluation criterion \"PR descriptions or review summaries are auto-generated.\"",
+        "estimated_scope": "M",
+        "fix_hint": "No automated PR description generator or AI review-summary bot is wired into the repository. The PR template requires the author to manually fill in \"What changed / Why / Verification / Notes\", and no workflow step or bot config posts auto-generated PR bodies or review summaries. Fails the evaluation criterion \"PR descriptions or review summaries are auto-generated.\""
+      },
+      {
+        "signal": "build_performance_tracking",
+        "reason": "Build times are not measured or persisted anywhere. `go build` invocations in Taskfile.yml (build, build:cli, build:devctl, build:server, install, kind:deploy) and CI (only test/lint/security/openapi/docs/deploy/tidy/hooks/modernize jobs \u2014 no build job at all) run without a timer, artifact, or metrics sink. No tool (buildevents, tracing, benchmark store, workflow-timing action) records build durations over time, failing the criterion \"Build times are measured and tracked over time.\"",
+        "estimated_scope": "M",
+        "fix_hint": "Build times are not measured or persisted anywhere. `go build` invocations in Taskfile.yml (build, build:cli, build:devctl, build:server, install, kind:deploy) and CI (only test/lint/security/openapi/docs/deploy/tidy/hooks/modernize jobs \u2014 no build job at all) run without a timer, artifact, or metrics sink. No tool (buildevents, tracing, benchmark store, workflow-timing action) records build durations over time, failing the criterion \"Build times are measured and tracked over time.\""
+      },
+      {
+        "signal": "code_modularization",
+        "reason": "Fails INTERMEDIATE criterion: no mechanism enforces module/package boundaries. The golangci-lint config lacks depguard/gomodguard entries, no architecture-test framework (arch-go, go-cleanarch) is configured or invoked from Taskfile or CI, and no arch_test.go files exist to assert dependency rules. Import restrictions and dependency rules are therefore not enforced.",
+        "estimated_scope": "M",
+        "fix_hint": "Fails INTERMEDIATE criterion: no mechanism enforces module/package boundaries. The golangci-lint config lacks depguard/gomodguard entries, no architecture-test framework (arch-go, go-cleanarch) is configured or invoked from Taskfile or CI, and no arch_test.go files exist to assert dependency rules. Import restrictions and dependency rules are therefore not enforced."
+      },
+      {
+        "signal": "dead_feature_flag_detection",
+        "reason": "The prerequisite feature-flag infrastructure is absent \u2014 grep across *.go, Taskfile.yml, .golangci.yml, .pre-commit-config.yaml, and .github/workflows/ci.yml returns no feature-flag runtime nor any dead/stale-flag detector. With no flags defined and no lifecycle-management tooling wired into automation, the INTERMEDIATE criterion \"Stale feature flags are detected and cleaned up\" is unmet.",
+        "estimated_scope": "M",
+        "fix_hint": "The prerequisite feature-flag infrastructure is absent \u2014 grep across *.go, Taskfile.yml, .golangci.yml, .pre-commit-config.yaml, and .github/workflows/ci.yml returns no feature-flag runtime nor any dead/stale-flag detector. With no flags defined and no lifecycle-management tooling wired into automation, the INTERMEDIATE criterion \"Stale feature flags are detected and cleaned up\" is unmet."
+      },
+      {
+        "signal": "deployment_frequency",
+        "reason": "Registry criterion is \"Deployment frequency is measured (DORA metrics or equivalent)\". Repo has no production deployment pipeline (CI ends at verification, the `deploy` job only renders manifests and lints Prometheus rules) and no DORA-metric collector or deployment-event stream anywhere in the source tree, so deployment frequency cannot be \u2014 and is not \u2014 measured.",
+        "estimated_scope": "M",
+        "fix_hint": "Registry criterion is \"Deployment frequency is measured (DORA metrics or equivalent)\". Repo has no production deployment pipeline (CI ends at verification, the `deploy` job only renders manifests and lints Prometheus rules) and no DORA-metric collector or deployment-event stream anywhere in the source tree, so deployment frequency cannot be \u2014 and is not \u2014 measured."
+      },
+      {
+        "signal": "duplicate_code_detection",
+        "reason": "No duplicate/clone detection tool is configured or wired into automation. `goconst` (repeated string/number literals collapsible to constants) is enabled but is not a clone detector, and none of the criteria tools (jscpd, PMD CPD, flay, go-duplicates, SonarQube, or the golangci-lint `dupl` linter) is enabled in .golangci.yml or executed by any Task target, CI job, or pre-commit hook.",
+        "estimated_scope": "M",
+        "fix_hint": "No duplicate/clone detection tool is configured or wired into automation. `goconst` (repeated string/number literals collapsible to constants) is enabled but is not a clone detector, and none of the criteria tools (jscpd, PMD CPD, flay, go-duplicates, SonarQube, or the golangci-lint `dupl` linter) is enabled in .golangci.yml or executed by any Task target, CI job, or pre-commit hook."
+      },
+      {
+        "signal": "feature_flag_infrastructure",
+        "reason": "Repository lacks any feature-flag mechanism: no third-party feature-flag SDK dependency and no typed-config feature toggles in the Config struct. Evaluation criterion requires flag support via LaunchDarkly, Unleash, or typed config, and none is present.",
+        "estimated_scope": "M",
+        "fix_hint": "Repository lacks any feature-flag mechanism: no third-party feature-flag SDK dependency and no typed-config feature toggles in the Config struct. Evaluation criterion requires flag support via LaunchDarkly, Unleash, or typed config, and none is present."
+      },
+      {
+        "signal": "flaky_test_detection",
+        "reason": "No flaky-test detection or quarantine mechanism is wired into the project. `go test` is invoked exactly once in both the Taskfile and CI with no repetition or rerun-on-failure wrapper, no test-runner (e.g., gotestsum) that classifies flakes, no quarantine list or skip convention, and no `t.Skip` calls flagging known-flaky tests. The criterion requires that flaky tests be BOTH detected AND quarantined; neither half is present.",
+        "estimated_scope": "M",
+        "fix_hint": "No flaky-test detection or quarantine mechanism is wired into the project. `go test` is invoked exactly once in both the Taskfile and CI with no repetition or rerun-on-failure wrapper, no test-runner (e.g., gotestsum) that classifies flakes, no quarantine list or skip convention, and no `t.Skip` calls flagging known-flaky tests. The criterion requires that flaky tests be BOTH detected AND quarantined; neither half is present."
+      },
+      {
+        "signal": "heavy_dependency_detection",
+        "reason": "Signal requires unusually large dependencies to be flagged. Repo's `large-files` gate measures tracked git blob sizes (not module weight) and explicitly allowlists go.sum so it grows unbounded with new deps; depguard/gomodguard linters are present as indirect deps of golangci-lint but not enabled in .golangci.yml; no CI job, task-runner target, or pre-commit hook invokes a dependency-weight/bloat analyzer against the module graph.",
+        "estimated_scope": "M",
+        "fix_hint": "Signal requires unusually large dependencies to be flagged. Repo's `large-files` gate measures tracked git blob sizes (not module weight) and explicitly allowlists go.sum so it grows unbounded with new deps; depguard/gomodguard linters are present as indirect deps of golangci-lint but not enabled in .golangci.yml; no CI job, task-runner target, or pre-commit hook invokes a dependency-weight/bloat analyzer against the module graph."
+      },
+      {
+        "signal": "pii_handling",
+        "reason": "Signal applies: the service accepts and stores user-supplied content (notes title/body) via the REST API and CLI, so users may submit PII. Evaluation criterion requires PII to be handled according to a documented policy. No such policy document exists anywhere in the repo (no PRIVACY.md, no data-retention/deletion policy beyond a plain DELETE endpoint, no consent/regulatory-scope statement in README/AGENTS.md/docs). The logging scrubber is an enforcement primitive for secrets/select PII tokens in logs, not a documented handling policy, and it is not referenced by any policy document.",
+        "estimated_scope": "M",
+        "fix_hint": "Signal applies: the service accepts and stores user-supplied content (notes title/body) via the REST API and CLI, so users may submit PII. Evaluation criterion requires PII to be handled according to a documented policy. No such policy document exists anywhere in the repo (no PRIVACY.md, no data-retention/deletion policy beyond a plain DELETE endpoint, no consent/regulatory-scope statement in README/AGENTS.md/docs). The logging scrubber is an enforcement primitive for secrets/select PII tokens in logs, not a documented handling policy, and it is not referenced by any policy document."
+      },
+      {
+        "signal": "product_analytics",
+        "reason": "Repo is a Go REST API service + CLI pair (cmd/server/main.go with gin, cmd/interview CLI over the same internal/notes domain), so the archetype is not pure library/CLI/infra and product_analytics applies. No product analytics tool (Mixpanel, Amplitude, PostHog, Segment, etc.) is declared as a dependency or invoked in code \u2014 the only \"heap\" hit refers to Go's memory heap in a pprof comment. Instrumentation is limited to infra telemetry (Prometheus metrics, OTLP traces), which is not product analytics.",
+        "estimated_scope": "M",
+        "fix_hint": "Repo is a Go REST API service + CLI pair (cmd/server/main.go with gin, cmd/interview CLI over the same internal/notes domain), so the archetype is not pure library/CLI/infra and product_analytics applies. No product analytics tool (Mixpanel, Amplitude, PostHog, Segment, etc.) is declared as a dependency or invoked in code \u2014 the only \"heap\" hit refers to Go's memory heap in a pprof comment. Instrumentation is limited to infra telemetry (Prometheus metrics, OTLP traces), which is not product analytics."
+      },
+      {
+        "signal": "release_automation",
+        "reason": "Fails evaluation_criteria: no automated release pipeline is configured. CI runs only quality gates on push to main and PRs; there is no tag-triggered workflow, no goreleaser config, and no semantic-release setup for automated version/tag/artifact publishing.",
+        "estimated_scope": "M",
+        "fix_hint": "Fails evaluation_criteria: no automated release pipeline is configured. CI runs only quality gates on push to main and PRs; there is no tag-triggered workflow, no goreleaser config, and no semantic-release setup for automated version/tag/artifact publishing."
+      },
+      {
+        "signal": "release_notes_automation",
+        "reason": "Repository has no automation that generates release notes from commits or PRs \u2014 no GoReleaser config, no GitHub auto-generated release notes config (.github/release.yml), no release-drafter/release-please/semantic-release/changesets, and no CI workflow or Task target that produces release notes. The only CHANGELOG is under .claude/ (tooling metadata), not a project changelog.",
+        "estimated_scope": "M",
+        "fix_hint": "Repository has no automation that generates release notes from commits or PRs \u2014 no GoReleaser config, no GitHub auto-generated release notes config (.github/release.yml), no release-drafter/release-please/semantic-release/changesets, and no CI workflow or Task target that produces release notes. The only CHANGELOG is under .claude/ (tooling metadata), not a project changelog."
+      },
+      {
+        "signal": "technical_debt_tracking",
+        "reason": "None of the three tracking mechanisms in evaluation_criteria are present: (1) no TODO/FIXME scanner is wired into automation \u2014 godox is not enabled in .golangci.yml and no external scanner runs in Taskfile.yml or ci.yml; (2) no SonarQube configuration or debt-ratio gate; (3) no dedicated backlog label for technical debt in issue templates, a labels manifest, or a tracked BACKLOG file. Absence of TODO markers in *.go does not substitute \u2014 the criterion is about a tracking mechanism, not the absence of debt.",
+        "estimated_scope": "M",
+        "fix_hint": "None of the three tracking mechanisms in evaluation_criteria are present: (1) no TODO/FIXME scanner is wired into automation \u2014 godox is not enabled in .golangci.yml and no external scanner runs in Taskfile.yml or ci.yml; (2) no SonarQube configuration or debt-ratio gate; (3) no dedicated backlog label for technical debt in issue templates, a labels manifest, or a tracked BACKLOG file. Absence of TODO markers in *.go does not substitute \u2014 the criterion is about a tracking mechanism, not the absence of debt."
+      },
+      {
+        "signal": "test_performance_tracking",
+        "reason": "No mechanism tracks per-test execution times or flags regressions: CI captures only coverage, no benchmark job runs the two existing Benchmark* functions, no gotestsum `--slow`/`--jsonfile` or benchstat comparison exists, and no historical timing artifact is stored. Fails EMS criterion \"Test execution times are tracked and regressions flagged.\"",
+        "estimated_scope": "M",
+        "fix_hint": "No mechanism tracks per-test execution times or flags regressions: CI captures only coverage, no benchmark job runs the two existing Benchmark* functions, no gotestsum `--slow`/`--jsonfile` or benchstat comparison exists, and no historical timing artifact is stored. Fails EMS criterion \"Test execution times are tracked and regressions flagged.\""
+      },
+      {
+        "signal": "code_quality_dashboard",
+        "reason": "No integration with a code quality dashboard (SonarQube, SonarCloud, CodeClimate, Codecov, etc.) is configured. Coverage is measured in CI but only enforced by a local threshold check; results are not published to a metrics dashboard, so the evaluation criterion \"tracked in a dashboard\" is not met.",
+        "estimated_scope": "M",
+        "fix_hint": "No integration with a code quality dashboard (SonarQube, SonarCloud, CodeClimate, Codecov, etc.) is configured. Coverage is measured in CI but only enforced by a local threshold check; results are not published to a metrics dashboard, so the evaluation criterion \"tracked in a dashboard\" is not met."
+      },
+      {
+        "signal": "dast_scanning",
+        "reason": "Signal applies (HTTP service using gin, not a library or CLI). No dynamic application security testing is configured. CI security job covers static analysis (gosec), secret scanning (gitleaks), and vulnerability scanning (govulncheck) \u2014 all SAST/SCA, none of which exercise a running instance. No OWASP ZAP baseline/full-scan action, Nuclei workflow, StackHawk HawkScan, or comparable runtime scanner is present.",
+        "estimated_scope": "M",
+        "fix_hint": "Signal applies (HTTP service using gin, not a library or CLI). No dynamic application security testing is configured. CI security job covers static analysis (gosec), secret scanning (gitleaks), and vulnerability scanning (govulncheck) \u2014 all SAST/SCA, none of which exercise a running instance. No OWASP ZAP baseline/full-scan action, Nuclei workflow, StackHawk HawkScan, or comparable runtime scanner is present."
+      },
+      {
+        "signal": "error_to_insight_pipeline",
+        "reason": "Signal requires error_tracking AND product_analytics prerequisites plus automated correlation of errors to user impact. Neither an error tracking service nor product analytics is integrated: the repo only has structured logs, OTel traces, and Prometheus metrics, none of which associate errors with user identities or surface user-impact insights. Without both feeds, an error-to-insight pipeline cannot exist.",
+        "estimated_scope": "M",
+        "fix_hint": "Signal requires error_tracking AND product_analytics prerequisites plus automated correlation of errors to user impact. Neither an error tracking service nor product analytics is integrated: the repo only has structured logs, OTel traces, and Prometheus metrics, none of which associate errors with user identities or surface user-impact insights. Without both feeds, an error-to-insight pipeline cannot exist."
+      },
+      {
+        "signal": "minimum_dependency_age",
+        "reason": "No mechanism enforces a minimum release age for new dependencies. The only dependency-update tooling configured is Dependabot (gomod + github-actions, weekly), which has no `cooldown` block; there is no Renovate config with `minimumReleaseAge`, no CI job in .github/workflows/ci.yml gates dependency PRs by package publish age, and no custom script in the repo enforces such a policy.",
+        "estimated_scope": "M",
+        "fix_hint": "No mechanism enforces a minimum release age for new dependencies. The only dependency-update tooling configured is Dependabot (gomod + github-actions, weekly), which has no `cooldown` block; there is no Renovate config with `minimumReleaseAge`, no CI job in .github/workflows/ci.yml gates dependency PRs by package publish age, and no custom script in the repo enforces such a policy."
+      },
+      {
+        "signal": "privacy_compliance",
+        "reason": "The service accepts and persists user-supplied content (note title/body via POST /api/v1/notes through internal/notes.MemStore/FileStore), so the signal applies. Evaluation criteria require privacy compliance requirements to be documented AND enforced; no privacy policy, data retention, deletion, consent, or regulatory-scope documentation exists anywhere in the repo, and no privacy-related check is wired into `task check` or CI. Log scrubbing in internal/logging/scrub.go addresses secret/PII leakage in logs but is not a privacy compliance program. Fails: neither documentation nor enforcement of privacy compliance is present.",
+        "estimated_scope": "M",
+        "fix_hint": "The service accepts and persists user-supplied content (note title/body via POST /api/v1/notes through internal/notes.MemStore/FileStore), so the signal applies. Evaluation criteria require privacy compliance requirements to be documented AND enforced; no privacy policy, data retention, deletion, consent, or regulatory-scope documentation exists anywhere in the repo, and no privacy-related check is wired into `task check` or CI. Log scrubbing in internal/logging/scrub.go addresses secret/PII leakage in logs but is not a privacy compliance program. Fails: neither documentation nor enforcement of privacy compliance is present."
+      }
+    ]
+  },
+  "insufficient_access": [
+    {
+      "signal": "fast_ci_feedback",
+      "tier": "INTERMEDIATE",
+      "score_type": "EMS",
+      "category": "build_system",
+      "evidence": ".github/workflows/ci.yml defines 9 parallel jobs on ubuntu-latest with concurrency cancel-in-progress; test job runs two serial 5m-timeout `go test` invocations (unit+integration) that could each approach the 10m budget; no local record of actual PR run durations.",
+      "required_access": "GitHub Actions API access to list recent workflow runs for .github/workflows/ci.yml on pull_request events and read their total durations (e.g., `gh run list --workflow=ci.yml --event=pull_request --json databaseId,createdAt,updatedAt,conclusion`)."
+    },
+    {
+      "signal": "branch_protection",
+      "tier": "BASIC",
+      "score_type": "ARS",
+      "category": "security",
+      "evidence": "Registry entry has confidence_override: insufficient; branch protection rules live on the remote host and are not inspectable from local repo contents in /home/abanna/Development/interviews/interview_go.",
+      "required_access": "GitHub API with repo admin permissions to read branch protection rules on main/master"
+    },
+    {
+      "signal": "backlog_health",
+      "tier": "INTERMEDIATE",
+      "score_type": "EMS",
+      "category": "task_discovery",
+      "evidence": "Signal registry entry has confidence_override: insufficient; requires issue tracker API access not available from the local filesystem in /home/abanna/Development/interviews/interview_go.",
+      "required_access": "Issue tracker API (GitHub Issues, Jira, Linear, etc.) to enumerate open issues and their last-activity timestamps"
+    },
+    {
+      "signal": "unit_tests_runnable",
+      "tier": "BASIC",
+      "score_type": "ARS",
+      "category": "testing",
+      "evidence": "governed verification did not complete: status=blocked, code=approval_required",
+      "required_access": "approval to run the verification command the signal requires"
+    }
+  ]
+}

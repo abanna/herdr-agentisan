@@ -1,0 +1,70 @@
+# gitleaks configuration for go-agents.
+#
+# Extends the upstream default ruleset rather than replacing it, so new
+# provider rules arrive with tool updates instead of silently going missing.
+#
+# There is deliberately NO top-level [allowlist] block. A global allowlist
+# applies to EVERY rule, including all of the defaults pulled in by
+# `useDefault`, so one broad entry disarms the whole gate:
+#
+#   * an unanchored value regex such as `s3cret` makes ANY credential
+#     containing that substring unflaggable, repo-wide, for every rule;
+#   * a path entry such as `readiness-report.html` exempts that file from
+#     every rule, so a real secret committed there passes both hook and CI.
+#
+# Both shipped in an earlier revision and were caught in review.
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "go-agents-api-token"
+description = "This service's own bearer token (GO_AGENTS_API_TOKEN)"
+# The token guards mutating API routes. config.Load() refuses to start without
+# it outside development, which makes a hardcoded value tempting — catch it.
+regex = '''(?i)GO_AGENTS_API_TOKEN\s*[:=]\s*['"]?[A-Za-z0-9_\-]{8,}['"]?'''
+tags = ["token", "go-agents"]
+
+  [[rules.allowlists]]
+  description = "The .env.example template ships the key with an empty value"
+  regexes = ['''GO_AGENTS_API_TOKEN=\s*$''']
+
+# ---------------------------------------------------------------------------
+# HISTORICAL EXEMPTIONS — PERMANENT. Do not try to delete these.
+#
+# internal/logging/scrub_test.go ASSEMBLES its fake secrets at runtime
+# ("sk_" + "live_" + ...), so no literal enters the tree going forward and no
+# inline //gitleaks:allow directive is needed anywhere.
+#
+# These entries exist because `git` mode scans HISTORY. PR #3 landed as a MERGE
+# COMMIT (d698581), so commits d96e9cd and 22df968 — which still carry the
+# literals from before the runtime-fixture change — are permanently reachable
+# from main. Deleting this block makes `task secrets` and the CI security job
+# fail on those commits forever, with nothing in the working tree to fix.
+#
+# Verified: with this block removed, `gitleaks git .` reports 4 leaks, all in
+# commits that can no longer be rewritten.
+#
+# The entries are pinned to exact values, one path and named rules, so they
+# cannot widen. The one live risk is targetRules: if a gitleaks upgrade renames
+# stripe-access-token or generic-api-key, the exemption stops matching and the
+# gate goes red on history. The fix then is to update the rule name here, not
+# to broaden the allowlist.
+# ---------------------------------------------------------------------------
+
+[[allowlists]]
+description = "Pre-runtime-fixture commits on this branch: provider-shaped fixture"
+targetRules = ["stripe-access-token", "generic-api-key"]
+condition = "AND"
+paths = ['''internal/logging/scrub_test\.go''']
+regexes = ['''sk_live_9fJ2kQ7xVb3nMz8pLw1aTc5R''']
+
+[[allowlists]]
+description = "Pre-runtime-fixture commits on this branch: env-assignment fixtures"
+targetRules = ["go-agents-api-token"]
+condition = "AND"
+paths = ['''internal/logging/scrub_test\.go''']
+regexes = [
+  '''GO_AGENTS_API_TOKEN=hunter2hunter2''',
+  '''GO_AGENTS_API_TOKEN=abc123xyz''',
+]

@@ -1,0 +1,586 @@
+# promtool unit tests for rules.yaml.
+#
+#   promtool test rules rules_test.yaml
+#
+# Every alert has at least one firing case AND at least one case that must not
+# fire. The negative cases are the point: a suite that only ever asserts firing
+# passes just as happily against a threshold typo that makes an alert fire on
+# an idle cluster, and an alert that fires constantly is an alert nobody reads.
+#
+# Series carry only the labels the real scrape produces (job, instance, plus
+# the metric's own labels). Anything extra invented here would propagate into
+# the alert and have to be repeated in every exp_labels block below.
+rule_files:
+  - rules.yaml
+
+# Matches the group interval in rules.yaml, so `for:` durations resolve to the
+# same number of evaluations they will in the cluster.
+evaluation_interval: 30s
+
+tests:
+  # =====================================================================
+  # GoAgentsNoTargets
+  # =====================================================================
+
+  # Nothing is scraped for job="go-agents" at all. The unrelated Prometheus
+  # self-scrape is here only so the test has input; absent() is a statement
+  # about a series that does not exist, which cannot be expressed by supplying
+  # the series.
+  - interval: 15s
+    name: no go-agents targets exist at all
+    input_series:
+      - series: 'up{job="prometheus",instance="localhost:9090"}'
+        values: '1+0x100'
+    alert_rule_test:
+      # One 30s evaluation short of `for: 5m`, on the very series that fires
+      # at 10m below. promtool reports firing alerts only, so a pending one
+      # reads as [] — which is what pins the duration from underneath.
+      # Without this, `for` could be shortened to anything and the suite would
+      # not notice.
+      - eval_time: 4m30s
+        alertname: GoAgentsNoTargets
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: GoAgentsNoTargets
+        exp_alerts:
+          - exp_labels:
+              job: go-agents
+              severity: critical
+            exp_annotations:
+              summary: 'Prometheus has no go-agents targets'
+              description: 'Service discovery has returned zero targets for job go-agents for 5 minutes. Either every pod is gone or the scrape config no longer selects them. Note that GoAgentsAbsent cannot fire in this state, because there is no up series to be zero.'
+              runbook_url: 'https://github.com/nerds-run/go-agents/blob/main/docs/runbooks/on-call-triage.md'
+      # The complement: with no go-agents series there is nothing to be 0,
+      # which is exactly the gap GoAgentsNoTargets exists to cover.
+      - eval_time: 10m
+        alertname: GoAgentsAbsent
+        exp_alerts: []
+
+  # =====================================================================
+  # GoAgentsAbsent
+  # =====================================================================
+
+  - interval: 15s
+    name: a target exists but every scrape fails
+    input_series:
+      - series: 'up{job="go-agents",instance="10.244.1.5:9090"}'
+        values: '0+0x100'
+    alert_rule_test:
+      # Pins `for: 2m` from underneath. up == 0 needs no rate window, so the
+      # condition holds from t=0 and firing lands exactly at 2m.
+      - eval_time: 1m30s
+        alertname: GoAgentsAbsent
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: GoAgentsAbsent
+        exp_alerts:
+          - exp_labels:
+              job: go-agents
+              instance: 10.244.1.5:9090
+              severity: critical
+            exp_annotations:
+              summary: 'go-agents instance 10.244.1.5:9090 is not scrapeable'
+              description: 'Prometheus has failed to scrape 10.244.1.5:9090 (job go-agents) for 2 minutes. The admin listener on :9090 is serving neither /metrics nor anything else, which points at a dead or wedged process rather than an unhealthy dependency.'
+              runbook_url: 'https://github.com/nerds-run/go-agents/blob/main/docs/runbooks/incident-response.md'
+      # The target is present, so absent() must stay quiet. Both rules firing
+      # at once would double-page for one failure.
+      - eval_time: 10m
+        alertname: GoAgentsNoTargets
+        exp_alerts: []
+
+  # Negative: one 45s scrape gap. This is what a node under load or a single
+  # dropped scrape looks like, and `for: 2m` exists to swallow it.
+  - interval: 15s
+    name: a brief scrape gap must not page
+    input_series:
+      - series: 'up{job="go-agents",instance="10.244.1.5:9090"}'
+        values: '1+0x4 0+0x3 1+0x100'
+    alert_rule_test:
+      # Mid-gap: the alert is pending, not firing.
+      - eval_time: 2m
+        alertname: GoAgentsAbsent
+        exp_alerts: []
+      # Recovered.
+      - eval_time: 5m
+        alertname: GoAgentsAbsent
+        exp_alerts: []
+
+  # =====================================================================
+  # GoAgentsHighErrorRate
+  # =====================================================================
+
+  # 3 of every 30 requests fail: a 0.100 ratio at 2 req/s, comfortably over
+  # both the 0.05 threshold and the 0.5 req/s traffic floor.
+  - interval: 15s
+    name: sustained 5xx on real traffic
+    input_series:
+      - series: 'http_requests_total{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",status="200"}'
+        values: '0+27x100'
+      - series: 'http_requests_total{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",status="500"}'
+        values: '0+3x100'
+    alert_rule_test:
+      # Pins `for: 5m` from underneath: 6m is the last silent evaluation
+      # before this series fires at 6m30s. The ratio is 0.100 from the first
+      # evaluation that has two samples to rate over, but the alert does not
+      # go pending until 1m30s, because a series that starts inside the rate
+      # window is not extrapolated back past its first sample — the measured
+      # request rate climbs 0.2, 0.4, 0.6 req/s and only clears the 0.5
+      # traffic guard on the third evaluation.
+      - eval_time: 6m
+        alertname: GoAgentsHighErrorRate
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: GoAgentsHighErrorRate
+        exp_alerts:
+          - exp_labels:
+              job: go-agents
+              severity: critical
+            exp_annotations:
+              summary: 'go-agents is serving 5xx to more than 5% of requests'
+              description: 'The 5xx ratio for job go-agents is 0.100 over the last 5m, against a threshold of 0.050, on more than 0.5 req/s of non-probe traffic.'
+              runbook_url: 'https://github.com/nerds-run/go-agents/blob/main/docs/runbooks/incident-response.md'
+
+  # Negative, threshold edge: 2 failures in 50 requests is a 0.040 ratio on
+  # 3.3 req/s. Traffic is plentiful, so only the threshold can suppress this.
+  # A typo lowering 0.05 to 0.01 fails here and nowhere else.
+  - interval: 15s
+    name: error ratio just under the threshold
+    input_series:
+      - series: 'http_requests_total{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",status="200"}'
+        values: '0+48x100'
+      - series: 'http_requests_total{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",status="500"}'
+        values: '0+2x100'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GoAgentsHighErrorRate
+        exp_alerts: []
+
+  # Negative, traffic floor: one 500 for every 200, a 0.500 ratio, which is ten
+  # times the threshold. It must still stay silent, because the whole service
+  # served 0.13 req/s. This is the "a single 500 in 2 requests is not an
+  # incident" case, and it is the only test the `and` guard can fail.
+  - interval: 15s
+    name: a high error ratio on a trickle of traffic
+    input_series:
+      - series: 'http_requests_total{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",status="200"}'
+        values: '0+1x100'
+      - series: 'http_requests_total{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",status="500"}'
+        values: '0+1x100'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GoAgentsHighErrorRate
+        exp_alerts: []
+
+  # Negative, probe exclusion: /readyz failing every time is 100% 5xx, and it
+  # must not surface as a user-facing error rate. GoAgentsReadinessFailing
+  # is the rule that owns this shape; see its own test below.
+  - interval: 15s
+    name: failing probes are not a user-facing error rate
+    input_series:
+      - series: 'http_requests_total{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",status="503"}'
+        values: '0+30x100'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GoAgentsHighErrorRate
+        exp_alerts: []
+
+  # =====================================================================
+  # GoAgentsHighLatency
+  # =====================================================================
+
+  # 95 of every 100 requests land under 50ms and 5 land between 1s and 2.5s.
+  # p99 interpolates inside that top bucket to 1 + 1.5 * (99-95)/(100-95) =
+  # 2.20s. 100 requests per 15s is 6.7 req/s, far above the traffic guard.
+  - interval: 15s
+    name: p99 well above the threshold with a heavy tail
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.001"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.005"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.01"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.025"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.05"}'
+        values: '0+95x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.1"}'
+        values: '0+95x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.25"}'
+        values: '0+95x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.5"}'
+        values: '0+95x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="1"}'
+        values: '0+95x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="2.5"}'
+        values: '0+100x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="4"}'
+        values: '0+100x100'
+      # Mandatory. Without a +Inf bucket histogram_quantile returns NaN and the
+      # alert can never fire, which is a failure mode a firing-only suite hides.
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="+Inf"}'
+        values: '0+100x100'
+    alert_rule_test:
+      # Pins `for: 10m` from underneath, same reasoning as the error-rate
+      # case: the p99 is over the line from t=30s, so firing lands at 10m30s.
+      - eval_time: 10m
+        alertname: GoAgentsHighLatency
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: GoAgentsHighLatency
+        exp_alerts:
+          - exp_labels:
+              job: go-agents
+              route: /v1/notes
+              severity: warning
+            exp_annotations:
+              summary: 'go-agents p99 latency on /v1/notes is above 500ms'
+              description: 'p99 latency for route /v1/notes (job go-agents) is 2.20s over the last 5m, against a threshold of 0.50s.'
+              runbook_url: 'https://github.com/nerds-run/go-agents/blob/main/docs/runbooks/on-call-triage.md'
+
+  # Negative, threshold edge: 95 requests under 250ms and 5 between 250ms and
+  # 500ms puts p99 at 0.25 + 0.25 * (99-95)/(100-95) = 0.45s. Fifty
+  # milliseconds under the line, so a threshold typo of 0.4 fails here.
+  - interval: 15s
+    name: p99 just under the threshold
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.001"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.005"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.01"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.025"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.05"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.1"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.25"}'
+        values: '0+95x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.5"}'
+        values: '0+100x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="1"}'
+        values: '0+100x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="2.5"}'
+        values: '0+100x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="4"}'
+        values: '0+100x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="+Inf"}'
+        values: '0+100x100'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GoAgentsHighLatency
+        exp_alerts: []
+
+  # Negative, traffic floor: the same fat tail (p99 interpolates to ~2.5s) on
+  # 2 requests per 15s, or 0.13 req/s. A p99 computed from a handful of samples
+  # is not a measurement, and the +Inf guard is what refuses to page on it.
+  - interval: 15s
+    name: a slow p99 measured from almost no requests
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.001"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.005"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.01"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.025"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.05"}'
+        values: '0+1x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.1"}'
+        values: '0+1x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.25"}'
+        values: '0+1x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="0.5"}'
+        values: '0+1x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="1"}'
+        values: '0+1x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="2.5"}'
+        values: '0+2x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="4"}'
+        values: '0+2x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/v1/notes",le="+Inf"}'
+        values: '0+2x100'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GoAgentsHighLatency
+        exp_alerts: []
+
+  # Negative, probe exclusion: the kubelet's own probes are pathologically
+  # slow — every /healthz and /readyz observation lands in the (2.5s, 4s]
+  # bucket, so p99 interpolates to ~3.99s, eight times the threshold, at
+  # 2 req/s per route. Both routes clear the traffic guard on their own, so
+  # `route!~"/healthz|/readyz"` is the only thing keeping this silent. Drop it
+  # and two warnings fire. A slow probe is a readiness problem, not a
+  # user-facing latency problem, and paging on it would mean every idle
+  # cluster pages.
+  - interval: 15s
+    name: slow probe routes are not user-facing latency
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/healthz",le="0.001"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/healthz",le="0.005"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/healthz",le="0.01"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/healthz",le="0.025"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/healthz",le="0.05"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/healthz",le="0.1"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/healthz",le="0.25"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/healthz",le="0.5"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/healthz",le="1"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/healthz",le="2.5"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/healthz",le="4"}'
+        values: '0+30x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/healthz",le="+Inf"}'
+        values: '0+30x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",le="0.001"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",le="0.005"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",le="0.01"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",le="0.025"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",le="0.05"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",le="0.1"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",le="0.25"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",le="0.5"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",le="1"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",le="2.5"}'
+        values: '0+0x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",le="4"}'
+        values: '0+30x100'
+      - series: 'http_request_duration_seconds_bucket{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",le="+Inf"}'
+        values: '0+30x100'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GoAgentsHighLatency
+        exp_alerts: []
+
+  # =====================================================================
+  # GoAgentsSaturation
+  # =====================================================================
+
+  - interval: 15s
+    name: concurrency pinned high for the whole window
+    input_series:
+      - series: 'http_requests_in_flight{job="go-agents",instance="10.244.1.5:9090"}'
+        values: '32+0x100'
+    alert_rule_test:
+      # Pins `for: 5m` from underneath. A gauge needs no rate window, so the
+      # condition is true from t=0 and firing lands exactly at 5m.
+      - eval_time: 4m30s
+        alertname: GoAgentsSaturation
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: GoAgentsSaturation
+        exp_alerts:
+          - exp_labels:
+              job: go-agents
+              instance: 10.244.1.5:9090
+              severity: warning
+            exp_annotations:
+              summary: 'go-agents instance 10.244.1.5:9090 is saturated'
+              description: '10.244.1.5:9090 (job go-agents) averaged 32.0 concurrent in-flight requests over the last 5m, against a threshold of 20. Requests are queueing rather than being served.'
+              runbook_url: 'https://github.com/nerds-run/go-agents/blob/main/docs/runbooks/on-call-triage.md'
+
+  # Negative, threshold edge: two below the line, held forever.
+  - interval: 15s
+    name: concurrency just under the threshold
+    input_series:
+      - series: 'http_requests_in_flight{job="go-agents",instance="10.244.1.5:9090"}'
+        values: '18+0x100'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GoAgentsSaturation
+        exp_alerts: []
+
+  # Negative, shape: a one-minute burst to 80, four times the threshold, on an
+  # otherwise idle service. Peak avg_over_time across the 5m window is 16, so
+  # the average never crosses at all. A bare `http_requests_in_flight > 20`
+  # with the same `for:` would go pending here on every burst.
+  - interval: 15s
+    name: a short burst is not saturation
+    input_series:
+      - series: 'http_requests_in_flight{job="go-agents",instance="10.244.1.5:9090"}'
+        values: '0+0x40 80+0x3 0+0x100'
+    alert_rule_test:
+      # Evaluated at the instant the burst ends, where the 5m average peaks.
+      - eval_time: 11m
+        alertname: GoAgentsSaturation
+        exp_alerts: []
+
+  # Positive, shape: the case that makes avg_over_time load-bearing. Traffic
+  # alternates 40 and 5 in flight, so the 5m mean is 22.5 — over the line —
+  # while every other individual sample sits at 5, far under it. Replace the
+  # expression with a bare `http_requests_in_flight > 20` and this alert goes
+  # pending and resets forever, never firing, which is precisely the failure
+  # the rule's own comment claims to have designed against.
+  #
+  # `interval: 30s` is deliberately unlike its neighbours: it makes rule
+  # evaluations land on the troughs as well as the peaks, so a bare-gauge
+  # mutation never fires at all and the failure reads `got:[]`. At 15s every
+  # evaluation would sample the same phase and see an unbroken 40 — the
+  # mutation would still be CAUGHT, because exp_annotations pins $value and 40
+  # is not 22.5, but the failure would then be an annotation mismatch rather
+  # than a missing alert. 30s buys the clearer failure, not the only one.
+  - interval: 30s
+    name: sawtooth concurrency averaging over the threshold
+    input_series:
+      - series: 'http_requests_in_flight{job="go-agents",instance="10.244.1.5:9090"}'
+        values: '40 5 40 5 40 5 40 5 40 5 40 5 40 5 40 5 40 5 40 5 40 5 40 5 40'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: GoAgentsSaturation
+        exp_alerts:
+          - exp_labels:
+              job: go-agents
+              instance: 10.244.1.5:9090
+              severity: warning
+            exp_annotations:
+              summary: 'go-agents instance 10.244.1.5:9090 is saturated'
+              description: '10.244.1.5:9090 (job go-agents) averaged 22.5 concurrent in-flight requests over the last 5m, against a threshold of 20. Requests are queueing rather than being served.'
+              runbook_url: 'https://github.com/nerds-run/go-agents/blob/main/docs/runbooks/on-call-triage.md'
+
+  # =====================================================================
+  # GoAgentsReadinessFailing
+  # =====================================================================
+
+  # A pod serving 200s on /readyz until 10m, then nothing but 503s: the store
+  # went away. By 22m the whole 5m lookback contains only failures, so the
+  # ratio is 1.00 and it has been over 0.5 for well past the 5m `for:`.
+  - interval: 15s
+    name: readiness failing continuously after a dependency breaks
+    input_series:
+      - series: 'http_requests_total{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",status="200"}'
+        values: '0+3x40 120+0x100'
+      - series: 'http_requests_total{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",status="503"}'
+        values: '0+0x40 0+3x100'
+    alert_rule_test:
+      # Pins `for: 5m` from underneath. The ratio crosses 0.5 partway through
+      # the transition, once the window holds more 503s than 200s, so firing
+      # lands well after the 10m break rather than at it.
+      - eval_time: 17m30s
+        alertname: GoAgentsReadinessFailing
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: GoAgentsReadinessFailing
+        exp_alerts:
+          - exp_labels:
+              job: go-agents
+              instance: 10.244.1.5:9090
+              severity: critical
+            exp_annotations:
+              summary: 'go-agents readiness is failing on 10.244.1.5:9090'
+              description: 'The 503 ratio on /readyz from 10.244.1.5:9090 (job go-agents) is 1.00 over the last 5m, against a threshold of 0.50. The pod is out of the Service because a dependency is unavailable, not because traffic is erroring.'
+              runbook_url: 'https://github.com/nerds-run/go-agents/blob/main/docs/runbooks/health-check-failure.md'
+
+  # Negative: exactly one failed probe, then healthy again. The readinessProbe
+  # tolerates this (failureThreshold is 2) and so must the alert. A
+  # rate(...{status="503"}[5m]) > 0 rule would page here, which is the reason
+  # the expression is a ratio.
+  - interval: 15s
+    name: one failed probe must not page
+    input_series:
+      - series: 'http_requests_total{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",status="200"}'
+        values: '0+3x100'
+      - series: 'http_requests_total{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",status="503"}'
+        values: '0+0x40 1+0x100'
+    alert_rule_test:
+      # Inside the 5m lookback that contains the single 503.
+      - eval_time: 12m
+        alertname: GoAgentsReadinessFailing
+        exp_alerts: []
+      # And after it has aged out.
+      - eval_time: 20m
+        alertname: GoAgentsReadinessFailing
+        exp_alerts: []
+
+  # Negative, threshold edge: 9 of every 20 probes fail, a 0.45 ratio held
+  # from t=0 to the end. Numerator and denominator share the same rate window
+  # and the same extrapolation, so the ratio is exactly 0.45 at every
+  # evaluation — five hundredths under the line, with nothing else in the
+  # expression able to suppress it. Loosening 0.5 to 0.4 or 0.3 fires here and
+  # nowhere else in the suite.
+  #
+  # 0.45 rather than 0.40: the comparison is a strict `>`, so a ratio of
+  # exactly 0.40 would stay silent against a 0.4 threshold and leave that typo
+  # undetected.
+  - interval: 15s
+    name: readiness failure ratio just under the threshold
+    input_series:
+      - series: 'http_requests_total{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",status="200"}'
+        values: '0+11x100'
+      - series: 'http_requests_total{job="go-agents",instance="10.244.1.5:9090",method="GET",route="/readyz",status="503"}'
+        values: '0+9x100'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GoAgentsReadinessFailing
+        exp_alerts: []
+
+  # =====================================================================
+  # GoAgentsVersionSkew
+  # =====================================================================
+
+  # Two versions serving side by side from t=0. The same series prove both
+  # halves of the rule: silent inside the rollout budget, firing once the
+  # rollout has visibly failed to converge.
+  - interval: 15s
+    name: two versions serving, before and after the rollout budget
+    input_series:
+      - series: 'build_info{job="go-agents",instance="10.244.1.5:9090",version="1.4.0",commit="9f2c1ab",env="staging"}'
+        values: '1+0x100'
+      - series: 'build_info{job="go-agents",instance="10.244.1.6:9090",version="1.5.0",commit="3d8e7c4",env="staging"}'
+        values: '1+0x100'
+    alert_rule_test:
+      # Five minutes in, inside `for: 10m`. This is a normal rollout in
+      # progress and must be silent, or every deploy pages.
+      - eval_time: 5m
+        alertname: GoAgentsVersionSkew
+        exp_alerts: []
+      # The last silent evaluation, one 30s step before firing at 10m. The 5m
+      # case above documents intent; this one pins the duration, since 5m
+      # alone would still pass against a `for` shortened to 6m.
+      - eval_time: 9m30s
+        alertname: GoAgentsVersionSkew
+        exp_alerts: []
+      # Fifteen minutes in, seven times progressDeadlineSeconds. Stuck.
+      - eval_time: 15m
+        alertname: GoAgentsVersionSkew
+        exp_alerts:
+          - exp_labels:
+              job: go-agents
+              severity: warning
+            exp_annotations:
+              summary: 'go-agents is running more than one version'
+              description: '2 distinct build_info versions are serving job go-agents and have been for 10 minutes, well past the 120s progressDeadlineSeconds. The rollout is stuck: finish it or roll it back.'
+              runbook_url: 'https://github.com/nerds-run/go-agents/blob/main/docs/runbooks/rollback.md'
+
+  # Negative: the steady state. Two replicas, one version. Counting series
+  # rather than distinct versions would report 2 here and page forever.
+  - interval: 15s
+    name: two replicas on one version
+    input_series:
+      - series: 'build_info{job="go-agents",instance="10.244.1.5:9090",version="1.5.0",commit="3d8e7c4",env="staging"}'
+        values: '1+0x100'
+      - series: 'build_info{job="go-agents",instance="10.244.1.6:9090",version="1.5.0",commit="3d8e7c4",env="staging"}'
+        values: '1+0x100'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: GoAgentsVersionSkew
+        exp_alerts: []

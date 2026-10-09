@@ -1,0 +1,7 @@
+# Default owner for everything in this repository.
+*       @nerds-run
+
+# Gate definitions are a human decision — see AGENTS.md "Do not touch".
+/.github/workflows/    @nerds-run
+/.golangci.yml         @nerds-run
+/AGENTS.md             @nerds-run

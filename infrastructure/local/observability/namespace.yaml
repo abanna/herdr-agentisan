@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+  labels:
+    app.kubernetes.io/name: observability
+    app.kubernetes.io/part-of: go-agents
+    # Same enforcement as the go-agents namespace, for the same reason: the
+    # four workloads here already satisfy restricted (runAsNonRoot with a
+    # numeric UID taken from each image's declared USER, allowPrivilegeEscalation
+    # false, all capabilities dropped, RuntimeDefault seccomp, no hostPath), so
+    # the label costs nothing today and makes a future relaxation fail at
+    # admission instead of landing quietly.
+    #
+    # The UIDs are spelled numerically in every pod spec because the kubelet
+    # cannot resolve a name from inside an image it has not started: prom/
+    # prometheus declares `USER nobody`, which is 65534 in that image, and
+    # runAsNonRoot would be unenforceable without the number.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest

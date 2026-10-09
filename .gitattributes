@@ -1,0 +1,23 @@
+# Normalize line endings so a CRLF checkout cannot produce a spurious diff.
+* text=auto eol=lf
+
+# Generated and committed; mark so diffs collapse by default in review.
+docs/openapi.json          linguist-generated=true
+readiness-audit-report.json linguist-generated=true
+readiness-report.html      linguist-generated=true
+
+# Binary types. Declared so git never tries to merge or line-diff them, and
+# so a reviewer sees "Bin" rather than a wall of mojibake. Committing any of
+# these is separately gated by `devctl large-files`.
+*.bin   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.pdf   binary
+*.zip   binary
+*.gz    binary
+*.tar   binary
+*.woff  binary
+*.woff2 binary

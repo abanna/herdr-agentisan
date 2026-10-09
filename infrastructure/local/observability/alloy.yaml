@@ -1,0 +1,456 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: alloy
+  labels:
+    app.kubernetes.io/name: alloy
+    app.kubernetes.io/component: telemetry-agent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: alloy
+  labels:
+    app.kubernetes.io/name: alloy
+    app.kubernetes.io/component: telemetry-agent
+rules:
+  # Two rules, and every verb here has a caller. The split mirrors the
+  # reasoning in prometheus.yaml: the usual copied-in Alloy ClusterRole grants
+  # nodes, nodes/proxy, namespaces, services and endpoints as well, and none of
+  # those has a caller in the config below.
+  #
+  #   nodes / nodes/proxy would be needed to read logs from each node's KUBELET
+  #     (or from /var/log/pods on the host). Both routes are foreclosed here —
+  #     see the DaemonSet comment on why this agent reads through the API
+  #     server instead — so granting them would widen the role for a call that
+  #     is never made.
+  #   namespaces / services / endpoints belong to discovery roles this config
+  #     does not use. discovery.kubernetes below is role: pod only.
+  #
+  # `list` and `watch` on pods, deliberately without `get`: discovery runs a
+  # client-go informer, which Lists once then Watches, and never fetches a pod
+  # by name.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "watch"]
+  # pods/log is `get` only — a log stream is a GET against the subresource,
+  # and it cannot be Listed or Watched. This is the one grant that is NOT in
+  # the usual minimum set and is not optional: without it loki.source.kubernetes
+  # 403s on every pod and the logs pipeline is silently empty.
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: alloy
+  labels:
+    app.kubernetes.io/name: alloy
+    app.kubernetes.io/component: telemetry-agent
+# Cluster-scoped because the point is to collect logs from the go-agents
+# namespace as well as this one. A Role confined to observability would make
+# the application's logs — the only ones anybody wants — invisible.
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: alloy
+subjects:
+  - kind: ServiceAccount
+    name: alloy
+    namespace: observability
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alloy-config
+  labels:
+    app.kubernetes.io/name: alloy
+    app.kubernetes.io/component: telemetry-agent
+data:
+  # Alloy's own syntax (River/HCL), not YAML: components are nodes in a graph
+  # and each `forward_to` is an edge. Alloy does not reload this on a
+  # ConfigMap update; `kubectl --context kind-go-agents -n observability
+  # rollout restart daemonset/alloy` is what picks up an edit.
+  config.alloy: |
+    logging {
+      level = "info"
+      // logfmt, not json: these are the agent's OWN logs, read with `kubectl
+      // logs` by a human debugging why a pipeline is empty. The application's
+      // logs are JSON because a machine parses them; nothing parses these.
+      format = "logfmt"
+    }
+
+    // ---------------------------------------------------------------------
+    // Discovery, shared by both pipelines below.
+    // ---------------------------------------------------------------------
+
+    // The field selector is what makes a DaemonSet correct rather than
+    // duplicative. Each Alloy instance sees only the pods scheduled onto ITS
+    // node, so three instances collect each log line exactly once and scrape
+    // each pprof endpoint exactly once. Without it every instance would
+    // discover every pod in the cluster and Loki would hold three copies of
+    // every line — the classic DaemonSet-plus-API-discovery mistake.
+    //
+    // NODE_NAME comes from the downward API (see the DaemonSet below); a pod's
+    // own HOSTNAME is the POD name and would match nothing.
+    //
+    // The selector is also a real reduction in work: it is pushed to the API
+    // server, so the informer watches a fraction of the cluster's pods.
+    discovery.kubernetes "node_pods" {
+      role = "pod"
+      selectors {
+        role  = "pod"
+        field = "spec.nodeName=" + sys.env("NODE_NAME")
+      }
+    }
+
+    // ---------------------------------------------------------------------
+    // (a) Logs -> Loki
+    // ---------------------------------------------------------------------
+
+    // The label SET is the design here, not an accident — and it is bigger
+    // than the rules below: `loki.source.kubernetes` adds `instance` on its
+    // own and Loki 3 derives `service_name`, so a stream carries seven labels
+    // (namespace, pod, container, app, job, instance, service_name), not the
+    // five set here. All seven are POD-bounded, which is the property that
+    // matters; counting them wrong is how someone later "adds just one more".
+    //
+    // Loki builds one stream — one index entry, one chunk series — per unique
+    // label SET. Cardinality is multiplicative, so a label whose value differs
+    // per request does not add entries, it multiplies them. A trace_id label
+    // would mint a stream per request: millions of one-line chunks, an index
+    // larger than the data, and queries that time out. The service emits
+    // trace_id and span_id in the JSON log LINE, and that is exactly where
+    // they must stay — Grafana's derived field parses them out of the line at
+    // query time and builds the link to Tempo, which needs no label at all.
+    //
+    // The same argument bars status, method and path. Filter on those with a
+    // LogQL matcher (`| json | status >= 500`) — it costs a scan of an already
+    // narrow stream, and it costs the index nothing.
+    //
+    // `pod` is the one borderline label kept: its cardinality is bounded by
+    // the number of pods and it turns over on each rollout, but without it two
+    // replicas' logs are one interleaved stream and "which pod served this?"
+    // becomes unanswerable.
+    discovery.relabel "pod_logs" {
+      targets = discovery.kubernetes.node_pods.targets
+
+      rule {
+        source_labels = ["__meta_kubernetes_namespace"]
+        target_label  = "namespace"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_name"]
+        target_label  = "pod"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_container_name"]
+        target_label  = "container"
+      }
+      // The regex guard matters for the same reason it does in
+      // prometheus.yaml: a pod without the label would otherwise get app=""
+      // rather than no app label, and an empty-string label is a distinct
+      // stream that quietly merges unrelated workloads under one selector.
+      rule {
+        source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+        regex         = "(.+)"
+        target_label  = "app"
+      }
+      // Overriding `job`, which Alloy otherwise sets to the COMPONENT name:
+      // every stream in Loki would read job="loki.source.kubernetes.pod_logs",
+      // which says where the line was collected rather than what produced it,
+      // and sits confusingly beside Prometheus's job="go-agents" for the very
+      // same pod. namespace/app is Loki's own convention. It adds no
+      // cardinality — it is a function of two labels already on the stream, so
+      // it cannot produce a stream that did not already exist.
+      rule {
+        source_labels = ["__meta_kubernetes_namespace", "__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+        regex         = "(.+);(.+)"
+        replacement   = "$1/$2"
+        target_label  = "job"
+      }
+    }
+
+    // Tails through the Kubernetes API (GET pods/log?follow), NOT by reading
+    // /var/log/pods off the host.
+    //
+    // That is forced, and it is the most consequential decision in this file.
+    // The observability namespace is labelled
+    // pod-security.kubernetes.io/enforce: restricted, whose volume allowlist
+    // excludes hostPath — so the conventional log-tailing DaemonSet
+    // (hostPath /var/log + local.file_match + loki.source.file) is rejected at
+    // ADMISSION here, not merely discouraged. Reading through the API keeps
+    // the pod inside restricted: no host mount, no extra capabilities,
+    // runAsNonRoot, read-only rootfs.
+    //
+    // The trade is real and worth stating: this path costs API-server work per
+    // followed container and loses the log ROTATION history that node files
+    // retain, so it does not scale to a large production cluster the way file
+    // tailing does. On three kind nodes it is strictly the better deal.
+    loki.source.kubernetes "pod_logs" {
+      targets    = discovery.relabel.pod_logs.output
+      forward_to = [loki.write.local.receiver]
+    }
+
+    loki.write "local" {
+      endpoint {
+        url = "http://loki.observability.svc.cluster.local:3100/loki/api/v1/push"
+      }
+    }
+
+    // ---------------------------------------------------------------------
+    // (b) Profiles -> Pyroscope
+    // ---------------------------------------------------------------------
+
+    // Targets the pod IP on the ADMIN port, exactly as Prometheus does, and
+    // for the same reason: 9090 is deliberately absent from the go-agents
+    // Service, so there is no name to resolve. Discovery hands back the pod IP
+    // with the FIRST declared container port (8080, the public API), so the
+    // address has to be rewritten or Alloy would ask the public listener for
+    // /debug/pprof and get a 404.
+    //
+    // The port is hard-coded rather than read from an annotation because
+    // pprof, unlike /metrics, has no annotation convention to read — and a
+    // wrong port here fails loudly on the next scrape, not silently.
+    discovery.relabel "go_agents_pprof" {
+      targets = discovery.kubernetes.node_pods.targets
+
+      rule {
+        source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+        regex         = "go-agents"
+        action        = "keep"
+      }
+      // Terminating and pending pods have no listener; left in they produce
+      // scrape errors indistinguishable from a real outage.
+      rule {
+        source_labels = ["__meta_kubernetes_pod_phase"]
+        regex         = "Running"
+        action        = "keep"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_ip"]
+        regex         = "(.+)"
+        replacement   = "$1:9090"
+        target_label  = "__address__"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_namespace"]
+        target_label  = "namespace"
+      }
+      rule {
+        source_labels = ["__meta_kubernetes_pod_name"]
+        target_label  = "pod"
+      }
+      // service_name is Pyroscope's primary index label — the equivalent of
+      // Prometheus's job. Sourced from the same app.kubernetes.io/name that
+      // Prometheus relabels onto job, so all three stores agree on the name
+      // "go-agents" and a Grafana link can carry it between them.
+      rule {
+        source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+        target_label  = "service_name"
+      }
+    }
+
+    // This is the payoff of the second listener: continuous profiling of a
+    // running service with ZERO application change. internal/telemetry already
+    // registers net/http/pprof on the admin mux, and AdminServer already
+    // leaves WriteTimeout at zero specifically so a CPU profile can block; all
+    // that was missing was something to collect on a schedule.
+    pyroscope.scrape "go_agents" {
+      targets    = discovery.relabel.go_agents_pprof.output
+      forward_to = [pyroscope.write.local.receiver]
+
+      // 15s, and the timeout MUST exceed it.
+      //
+      // /debug/pprof/profile is not a read — it BLOCKS for its `seconds`
+      // parameter while the runtime samples, then writes. Alloy asks for a
+      // delta profile of interval-minus-one, so a 15s interval means each
+      // scrape holds a connection open for ~14s: the scrapes are effectively
+      // back-to-back, which is what makes the coverage continuous rather than
+      // a 14-second sample every minute with blind gaps between. A 20s timeout
+      // shorter than the sample window would abort every CPU profile and yield
+      // nothing at all — the same class of bug as a WriteTimeout on the admin
+      // server, seen from the client side.
+      scrape_interval = "15s"
+      scrape_timeout  = "20s"
+
+      profiling_config {
+        // The three that answer real questions on this service: where CPU
+        // goes, what is retained on the heap, and what every goroutine is
+        // blocked on.
+        profile.process_cpu { enabled = true }
+        profile.memory      { enabled = true }
+        profile.goroutine   { enabled = true }
+
+        // Explicitly OFF, and not out of caution. block and mutex are on by
+        // default and would be scraped successfully — returning a valid,
+        // EMPTY profile forever, because the service never calls
+        // SetBlockProfileRate or SetMutexProfileFraction. An empty flame graph
+        // that looks like "no contention" is worse than an absent one. Turn
+        // these on in the same change that sets the rates, never before.
+        profile.block { enabled = false }
+        profile.mutex { enabled = false }
+        // fgprof and the godeltaprof_* variants need handlers the service does
+        // not register; enabled they would 404 on every scrape.
+        profile.fgprof             { enabled = false }
+        profile.godeltaprof_memory { enabled = false }
+        profile.godeltaprof_block  { enabled = false }
+        profile.godeltaprof_mutex  { enabled = false }
+      }
+    }
+
+    pyroscope.write "local" {
+      endpoint {
+        url = "http://pyroscope.observability.svc.cluster.local:4040"
+      }
+    }
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: alloy
+  labels:
+    app.kubernetes.io/name: alloy
+    app.kubernetes.io/component: telemetry-agent
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: alloy
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: alloy
+        app.kubernetes.io/component: telemetry-agent
+      annotations:
+        # Alloy exports its own pipeline health on the same port as its UI:
+        # loki_write_sent_entries_total and pyroscope_scrape_* answer "is this
+        # agent forwarding anything?" from Prometheus rather than from three
+        # separate `kubectl logs`. Queries as job="alloy".
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "12345"
+        prometheus.io/path: /metrics
+    spec:
+      serviceAccountName: alloy
+      terminationGracePeriodSeconds: 30
+      # A DaemonSet that skips the control plane collects logs from two of
+      # three nodes and looks complete. kind taints its control-plane node
+      # NoSchedule, so without this toleration nothing there is ever tailed and
+      # the gap is invisible — you would only notice when a kube-system log you
+      # went looking for was not in Loki.
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        # The Alloy image declares NO USER, so it would otherwise run as root.
+        # 473 is Grafana's conventional uid for Alloy; unlike the other three
+        # workloads here this number is CHOSEN rather than read out of the
+        # image, which is safe precisely because nothing in this pod touches a
+        # host path whose ownership would have to match. Verified by running
+        # the image as 473 against a read-only rootfs before committing.
+        runAsUser: 473
+        runAsGroup: 473
+        # --storage.path is an emptyDir created root-owned; without fsGroup
+        # Alloy cannot write its WAL and exits at startup.
+        fsGroup: 473
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: alloy
+          # v1.12.1, verified with `docker manifest inspect`. The config above
+          # was loaded by this exact tag before committing — note that
+          # `alloy validate` does NOT catch a wrong export field (it accepts
+          # discovery.kubernetes.x.output, which does not exist; the field is
+          # .targets), so the check that matters is a real `alloy run`.
+          image: grafana/alloy:v1.12.1
+          imagePullPolicy: IfNotPresent
+          # The image's baked CMD already carries `run`, the config path and
+          # --storage.path, so these args restate all of it: args replaces the
+          # CMD wholesale, and an incomplete list would leave Alloy with no
+          # config to run.
+          args:
+            - run
+            - /etc/alloy/config.alloy
+            - --storage.path=/var/lib/alloy/data
+            # Without this the HTTP server binds 127.0.0.1:12345 — inside the
+            # pod's netns, where the kubelet's readiness probe cannot reach it
+            # and Prometheus cannot scrape it. The pod would never go Ready and
+            # the cause would not appear in its logs.
+            - --server.http.listen-addr=0.0.0.0:12345
+            # Alloy reports anonymous usage statistics on start; same objection
+            # as the three backends' analytics blocks.
+            - --disable-reporting
+          env:
+            # Feeds the field selector in the config above. Downward API rather
+            # than a hard-coded value because this is a DaemonSet — one
+            # manifest, a different node per pod.
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          ports:
+            - name: http
+              containerPort: 12345
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              # Per NODE, not per cluster: a DaemonSet's cost is multiplied by
+              # the node count, which is why this is the tightest budget in the
+              # namespace. Memory is what actually needs bounding — the loki
+              # WAL and in-flight profile bodies are the two things that grow.
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:
+            # /-/ready, not /: Alloy serves its UI immediately but reports
+            # ready only once every component in the graph has evaluated. A
+            # probe on / would pass while discovery was still failing on RBAC.
+            httpGet:
+              path: /-/ready
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /-/ready
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 6
+          volumeMounts:
+            - name: config
+              mountPath: /etc/alloy
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/alloy/data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: alloy-config
+        # NOT a hostPath, and that absence is the point — see the
+        # loki.source.kubernetes comment. This is Alloy's own WAL and positions
+        # store, which readOnlyRootFilesystem would otherwise make unwritable.
+        # It is emptyDir rather than a host directory, so a restarted pod
+        # re-reads from the API rather than resuming a file offset: the cost is
+        # a possible duplicate line across a restart, which is the right trade
+        # against keeping the pod inside the restricted policy.
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+# No Service. Nothing dials Alloy: it PUSHES to Loki and Pyroscope, and
+# Prometheus scrapes it by pod IP off the annotations above — the same split
+# the application uses for its admin port. A Service would only make the
+# unauthenticated UI reachable by name.

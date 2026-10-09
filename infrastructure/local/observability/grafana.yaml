@@ -1,0 +1,791 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: dashboards
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      # The uids are fixed rather than generated, and they are load-bearing
+      # twice over. The dashboards below refer to a datasource by uid, and a
+      # generated one differs per install, leaving every panel pointing at a
+      # datasource that does not exist. The correlations are the second use:
+      # Loki's derived field names `tempo`, and Tempo names `loki` and
+      # `prometheus`, so a generated uid would break the log -> trace -> metric
+      # path silently — every datasource still reports healthy, the links just
+      # go nowhere.
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus.observability.svc.cluster.local:9090
+        isDefault: true
+        editable: false
+        jsonData:
+          # Matches Prometheus's global scrape_interval. Grafana uses it to
+          # floor $__rate_interval, which is what stops a zoomed-out panel from
+          # asking rate() for a window shorter than two scrapes and drawing
+          # gaps that look like an outage.
+          timeInterval: 15s
+      - name: Loki
+        uid: loki
+        type: loki
+        access: proxy
+        url: http://loki.observability.svc.cluster.local:3100
+        editable: false
+        jsonData:
+          # No tenant header and no credential: Loki runs auth_enabled: false
+          # in single-tenant local mode, so there is no X-Scope-OrgID to send
+          # and nothing to store. Nothing is omitted for convenience here —
+          # there is nothing to omit.
+          maxLines: 1000
+          derivedFields:
+            # This is the link that makes logs and traces one system: a line in
+            # Loki becomes one click from its trace in Tempo.
+            #
+            # matcherType regex against the RAW LINE, not `label`. A label
+            # matcher reads the row's label set, and every indexed label is
+            # pod-bounded on purpose — namespace, pod, container, app and job
+            # from alloy.yaml, plus instance and service_name added by the
+            # collector and by Loki. trace_id is deliberately NOT among them,
+            # because a per-request label value multiplies streams rather than
+            # adding entries. So there is no trace_id label
+            # to match, only the field a `| json` stage extracts at query time,
+            # and a label matcher would work on the Golden Path panels (which
+            # parse) and vanish the moment anyone typed a bare stream selector
+            # in Explore. Structured metadata is the third option and would
+            # need Alloy to promote the field at ingest, which it does not do.
+            # The raw line always contains it, so the regex form is the one
+            # nothing else can break.
+            #
+            # 32 hex exactly, because span_id sits in the same line as 16 hex
+            # and a \w+ capture would match whichever came first. Probe lines
+            # (/healthz, /readyz) carry no trace_id at all — they are excluded
+            # from tracing in internal/telemetry — so they simply get no link,
+            # which is correct rather than broken.
+            - name: TraceID
+              matcherType: regex
+              matcherRegex: '"trace_id":"([0-9a-f]{32})"'
+              # Doubled $$ deliberately. Grafana expands environment variables
+              # over provisioning FILES before parsing them, so a single $ is
+              # consumed and the link resolves to an empty query — while
+              # provisioning still succeeds and /api/health still reports the
+              # datasource OK. `$$` is the documented escape, and the only way
+              # to confirm it landed is to read jsonData back off the API.
+              url: '$${__value.raw}'
+              urlDisplayLabel: View trace
+              datasourceUid: tempo
+      - name: Tempo
+        uid: tempo
+        type: tempo
+        access: proxy
+        url: http://tempo.observability.svc.cluster.local:3200
+        editable: false
+        jsonData:
+          # Span -> logs. The usual form is a tag mapping (k8s.namespace.name
+          # -> namespace); it would produce an EMPTY stream selector here,
+          # because this app's OTel resource carries service.* and
+          # deployment.environment and nothing k8s.*, and no k8sattributes
+          # processor adds them. A custom query names the stream itself and so
+          # depends on no span attribute at all.
+          tracesToLogsV2:
+            datasourceUid: loki
+            # +/-5m rather than the tighter default: the log agent batches its
+            # pushes, and a span's clock is not the log pipeline's clock.
+            spanStartTimeShift: -5m
+            spanEndTimeShift: 5m
+            # Both ignored when customQuery is set; spelled out so it is clear
+            # the filtering is in the query below and not silently doubled.
+            filterByTraceID: false
+            filterBySpanID: false
+            customQuery: true
+            # Both labels come from alloy.yaml's indexed set, taken verbatim:
+            # `namespace` from __meta_kubernetes_namespace and `app` from
+            # app.kubernetes.io/name — the same pod label Prometheus relabels
+            # onto job, so all three stores agree on the name "go-agents".
+            # namespace alone would work today only because that namespace
+            # holds one workload; naming the app does not depend on it staying
+            # that way.
+            query: '{namespace="go-agents", app="go-agents"} | json | trace_id="$${__span.traceId}"'
+          # Span -> the RED metrics for that span's own route. The tag mapping
+          # is exact, not approximate: otelgin sets http.route to the gin route
+          # TEMPLATE (/v1/notes/:id) and http.request.method to the method,
+          # which are byte-for-byte the `route` and `method` label values
+          # internal/telemetry puts on http_requests_total. Matching on the
+          # span NAME instead is the tempting version and is wrong — otelgin
+          # names the span "GET /v1/notes/:id", which is no label's value.
+          tracesToMetrics:
+            datasourceUid: prometheus
+            spanStartTimeShift: -5m
+            spanEndTimeShift: 5m
+            tags:
+              - key: http.route
+                value: route
+              - key: http.request.method
+                value: method
+            queries:
+              # A literal [5m], not $__rate_interval: the variable would have
+              # to survive provisioning's env expansion as well as the panel's,
+              # and a fixed window is the same one the alert rules average
+              # over. $$__tags expands to route="...", method="..." from the
+              # mapping above.
+              - name: Request rate for this route
+                query: 'sum(rate(http_requests_total{job="go-agents", $$__tags}[5m]))'
+              - name: p99 latency for this route
+                query: 'histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{job="go-agents", $$__tags}[5m])))'
+          # Built in the browser from the trace's own spans. No backend
+          # component, so there is nothing to be wrong about turning it on.
+          nodeGraph:
+            enabled: true
+          # serviceMap is deliberately ABSENT, and absence is how it is turned
+          # off — there is no `enabled: false` for it, the key's presence is
+          # the switch. It needs Tempo's metrics-generator running the
+          # service-graphs processor and remote_writing traces_service_graph_*
+          # into Prometheus, and this stack's Prometheus starts without
+          # --web.enable-remote-write-receiver (see prometheus.yaml), so there
+          # is nowhere for those series to land. Enabling the key anyway would
+          # give a permanently empty Service Graph tab, which reads as "this
+          # service has no dependencies" rather than "this is not wired".
+      - name: Pyroscope
+        uid: pyroscope
+        type: grafana-pyroscope-datasource
+        access: proxy
+        url: http://pyroscope.observability.svc.cluster.local:4040
+        editable: false
+        jsonData:
+          # Single-tenant, auth_enabled: false — same as Loki above, no header
+          # and no credential.
+          #
+          # Matches Prometheus's scrape_interval for the same reason
+          # timeInterval does above: it floors the step on the profile-metrics
+          # series so a zoomed-out range does not ask for a resolution the
+          # data does not have.
+          minStep: 15s
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: dashboards
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: go-agents
+        orgId: 1
+        type: file
+        # The dashboards are files in this repo. Both flags say the same thing:
+        # edits made in the browser are scratch work, because the next
+        # reconcile overwrites them from the ConfigMap. Leaving allowUiUpdates
+        # true would let a change live only in the pod's emptyDir and vanish on
+        # the next restart, which is worse than refusing the edit.
+        disableDeletion: true
+        allowUiUpdates: false
+        updateIntervalSeconds: 30
+        options:
+          # Outside /var/lib/grafana on purpose: that path is the emptyDir
+          # holding Grafana's own database, and mounting a ConfigMap inside it
+          # would nest one volume in another for no gain. The provider path is
+          # configurable, so they can simply be separate.
+          path: /etc/grafana/dashboards
+          foldersFromFilesStructure: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: dashboards
+# One limit worth knowing before reading a latency panel: the histogram's top
+# finite bucket is 4s (see internal/telemetry). histogram_quantile interpolates
+# within buckets, so anything slower than 4s lands in +Inf and every quantile
+# above that boundary reports 4s exactly. A p99 pinned flat at 4 means "slower
+# than the histogram can see", not "consistently 4 seconds".
+data:
+  go-agents-red.json: |
+    {
+      "uid": "go-agents-red",
+      "title": "go-agents RED",
+      "tags": ["go-agents", "red"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "editable": false,
+      "refresh": "10s",
+      "time": {"from": "now-30m", "to": "now"},
+      "annotations": {"list": []},
+      "templating": {"list": []},
+      "panels": [
+        {
+          "id": 1,
+          "type": "timeseries",
+          "title": "Request rate by route",
+          "description": "Rate. route is the gin route template, so /v1/notes/:id is one series rather than one per id.",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+          "fieldConfig": {
+            "defaults": {"unit": "reqps", "min": 0, "custom": {"fillOpacity": 10, "showPoints": "never"}},
+            "overrides": []
+          },
+          "options": {
+            "legend": {"showLegend": true, "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"]},
+            "tooltip": {"mode": "multi", "sort": "desc"}
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "expr": "sum by (route) (rate(http_requests_total{job=\"go-agents\"}[$__rate_interval]))",
+              "legendFormat": "{{route}}"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "type": "timeseries",
+          "title": "Error ratio (5xx)",
+          "description": "Errors. Probe routes are excluded so this is the same ratio GoAgentsHighErrorRate thresholds at 0.05 — but not the same ALERT: the rule differs in two ways on purpose. It requires >0.5 req/s of non-probe traffic, so this panel can sit red on a trickle while nothing pages; and it averages over a fixed [5m] while this panel uses [$__rate_interval], which at a zoomed-in range is closer to a minute, so a short burst reads high here and is diluted below the threshold there. Both gaps are intended and neither is a broken alert; a failing /readyz leaves this panel entirely and belongs to GoAgentsReadinessFailing. No data means one of two things and neither of them is 0%. The first is 0/0: no non-probe traffic at all, which excluding the probes makes genuinely reachable — on an idle service it is the normal state. The second holds only until this deployment's first ever 5xx, because the numerator selector then matches nothing, sum() of an empty vector is empty, and the division has nothing to divide. That second one is one-way: after a single 5xx the series exists for the life of the process, and a quiet period draws a flat 0 rather than a gap. Drawing either as 0% would claim health nobody measured.",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "custom": {"fillOpacity": 10, "showPoints": "never"},
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "red", "value": 0.05}
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"},
+            "tooltip": {"mode": "single", "sort": "none"}
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "expr": "sum(rate(http_requests_total{job=\"go-agents\", route!~\"/healthz|/readyz\", status=~\"5..\"}[$__rate_interval])) / sum(rate(http_requests_total{job=\"go-agents\", route!~\"/healthz|/readyz\"}[$__rate_interval]))",
+              "legendFormat": "5xx ratio"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "timeseries",
+          "title": "Latency p50 / p95 / p99 by route",
+          "description": "Duration, broken out by route and excluding probe routes, because that is what GoAgentsHighLatency alerts on: an aggregate over all routes is dominated by the kubelet's sub-millisecond probes and reads healthy while a real endpoint is over the 0.5s threshold. sum by (route, le) first, then histogram_quantile, because averaging quantiles is not a quantile.",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+          "fieldConfig": {
+            "defaults": {"unit": "s", "min": 0, "custom": {"fillOpacity": 0, "showPoints": "never"}},
+            "overrides": []
+          },
+          "options": {
+            "legend": {"showLegend": true, "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"]},
+            "tooltip": {"mode": "multi", "sort": "desc"}
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "expr": "histogram_quantile(0.50, sum by (route, le) (rate(http_request_duration_seconds_bucket{job=\"go-agents\", route!~\"/healthz|/readyz\"}[$__rate_interval])))",
+              "legendFormat": "p50 {{route}}"
+            },
+            {
+              "refId": "B",
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "expr": "histogram_quantile(0.95, sum by (route, le) (rate(http_request_duration_seconds_bucket{job=\"go-agents\", route!~\"/healthz|/readyz\"}[$__rate_interval])))",
+              "legendFormat": "p95 {{route}}"
+            },
+            {
+              "refId": "C",
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "expr": "histogram_quantile(0.99, sum by (route, le) (rate(http_request_duration_seconds_bucket{job=\"go-agents\", route!~\"/healthz|/readyz\"}[$__rate_interval])))",
+              "legendFormat": "p99 {{route}}"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "type": "timeseries",
+          "title": "In-flight requests",
+          "description": "Concurrency, summed across pods. A gauge that climbs while the rate panel stays flat is the shape of a stall, not of load.",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+          "fieldConfig": {
+            "defaults": {"unit": "short", "min": 0, "custom": {"fillOpacity": 20, "showPoints": "never"}},
+            "overrides": []
+          },
+          "options": {
+            "legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"},
+            "tooltip": {"mode": "single", "sort": "none"}
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "expr": "sum(http_requests_in_flight{job=\"go-agents\"})",
+              "legendFormat": "in flight"
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "type": "table",
+          "title": "Deployed build",
+          "description": "One row per running pod. Two versions here during a rollout is normal; two versions here an hour later is a stuck rollout, which is why a deploy has to be visible on the same screen as the graphs it moved.",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "gridPos": {"h": 6, "w": 24, "x": 0, "y": 16},
+          "fieldConfig": {"defaults": {"custom": {"align": "auto"}}, "overrides": []},
+          "options": {"showHeader": true},
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "expr": "build_info{job=\"go-agents\"}",
+              "instant": true,
+              "format": "table"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {"Time": true, "Value": true, "__name__": true, "instance": true, "job": true},
+                "indexByName": {},
+                "renameByName": {}
+              }
+            }
+          ]
+        }
+      ]
+    }
+  # The second dashboard, and the reason the other three datasources exist:
+  # metrics, logs, traces and profiles on one screen, so "is it healthy?" is
+  # one page rather than four tools. It refreshes at 30s rather than the RED
+  # dashboard's 10s — a flame graph and a trace search are both far more
+  # expensive than a range query, and nothing here is a number you watch tick.
+  go-agents-golden-path.json: |
+    {
+      "uid": "go-agents-golden-path",
+      "title": "go-agents Golden Path",
+      "tags": ["go-agents", "golden-path"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "editable": false,
+      "refresh": "30s",
+      "time": {"from": "now-30m", "to": "now"},
+      "annotations": {"list": []},
+      "templating": {"list": []},
+      "panels": [
+        {
+          "id": 1,
+          "type": "stat",
+          "title": "Requests/s",
+          "description": "Rate, probe routes excluded. Same selector as the RED dashboard so the two cannot disagree; empty on an idle service because excluding the kubelet's probes leaves genuinely nothing.",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "gridPos": {"h": 4, "w": 8, "x": 0, "y": 0},
+          "fieldConfig": {"defaults": {"unit": "reqps", "min": 0, "decimals": 2}, "overrides": []},
+          "options": {
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "colorMode": "none",
+            "graphMode": "area",
+            "textMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "expr": "sum(rate(http_requests_total{job=\"go-agents\", route!~\"/healthz|/readyz\"}[$__rate_interval]))",
+              "legendFormat": "req/s"
+            }
+          ]
+        },
+        {
+          "id": 2,
+          "type": "stat",
+          "title": "Error ratio (5xx)",
+          "description": "Errors. No data is not 0%: with probes excluded, 0/0 is the normal idle state, and before this deployment's first ever 5xx the numerator selector matches nothing at all. The RED dashboard's panel of the same name carries the long form of this, including why it and GoAgentsHighErrorRate deliberately differ.",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "gridPos": {"h": 4, "w": 8, "x": 8, "y": 0},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "decimals": 2,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "red", "value": 0.05}
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "colorMode": "value",
+            "graphMode": "area",
+            "textMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "expr": "sum(rate(http_requests_total{job=\"go-agents\", route!~\"/healthz|/readyz\", status=~\"5..\"}[$__rate_interval])) / sum(rate(http_requests_total{job=\"go-agents\", route!~\"/healthz|/readyz\"}[$__rate_interval]))",
+              "legendFormat": "5xx ratio"
+            }
+          ]
+        },
+        {
+          "id": 3,
+          "type": "stat",
+          "title": "p99 latency",
+          "description": "Duration, aggregated over non-probe routes. The histogram's top finite bucket is 4s, so a p99 sitting flat at 4 means slower than the histogram can see, not four seconds exactly. Break it out by route on the RED dashboard.",
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "gridPos": {"h": 4, "w": 8, "x": 16, "y": 0},
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s",
+              "min": 0,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {"color": "green", "value": null},
+                  {"color": "red", "value": 0.5}
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "colorMode": "value",
+            "graphMode": "area",
+            "textMode": "auto"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {"type": "prometheus", "uid": "prometheus"},
+              "expr": "histogram_quantile(0.99, sum by (le) (rate(http_request_duration_seconds_bucket{job=\"go-agents\", route!~\"/healthz|/readyz\"}[$__rate_interval])))",
+              "legendFormat": "p99"
+            }
+          ]
+        },
+        {
+          "id": 4,
+          "type": "logs",
+          "title": "Logs",
+          "description": "The raw zerolog JSON line, on purpose. A line_format stage would render level/status/message compactly and would also destroy the TraceID derived field, which regexes the raw line for \"trace_id\" — so the fields are read from the row's details instead, where | json puts them, and level additionally drives the row colour. Selected on namespace + app, both indexed labels set by alloy.yaml (which sets namespace, pod, container, app and job; Loki and the collector add service_name and instance). __error__=\"\" drops anything that is not JSON (a panic stack, a gin banner) rather than showing it as parse-error noise. Click a line, then TraceID, to land on its trace in Tempo.",
+          "datasource": {"type": "loki", "uid": "loki"},
+          "gridPos": {"h": 10, "w": 16, "x": 0, "y": 4},
+          "options": {
+            "showTime": true,
+            "showLabels": false,
+            "showCommonLabels": false,
+            "wrapLogMessage": true,
+            "prettifyLogMessage": false,
+            "enableLogDetails": true,
+            "dedupStrategy": "none",
+            "sortOrder": "Descending"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {"type": "loki", "uid": "loki"},
+              "expr": "{namespace=\"go-agents\", app=\"go-agents\"} | json | __error__=\"\"",
+              "queryType": "range",
+              "maxLines": 200
+            }
+          ]
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "Error log rate",
+          "description": "Lines at level=error per second. This is NOT the 5xx ratio in the strip above and the two move independently: the request logger emits every request at info regardless of status, so a 500 raises the ratio and not this, while the two error sites that do exist (a failed readiness probe and an unhandled handler error) raise this. A readiness failure in particular is invisible to every panel on this screen except this one, because /readyz is excluded from both the RED selectors and from tracing.",
+          "datasource": {"type": "loki", "uid": "loki"},
+          "gridPos": {"h": 10, "w": 8, "x": 16, "y": 4},
+          "fieldConfig": {
+            "defaults": {"unit": "cps", "min": 0, "custom": {"fillOpacity": 20, "showPoints": "never"}},
+            "overrides": []
+          },
+          "options": {
+            "legend": {"showLegend": true, "displayMode": "list", "placement": "bottom"},
+            "tooltip": {"mode": "single", "sort": "none"}
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {"type": "loki", "uid": "loki"},
+              "expr": "sum(rate({namespace=\"go-agents\", app=\"go-agents\"} | json | __error__=\"\" | level=\"error\" [$__auto]))",
+              "queryType": "range",
+              "legendFormat": "error lines/s"
+            }
+          ]
+        },
+        {
+          "id": 6,
+          "type": "table",
+          "title": "Recent traces",
+          "description": "TraceQL on the resource attribute internal/telemetry sets via semconv.ServiceName, not on a span name or a k8s label — the app's resource carries service.name, service.version, service.commit and deployment.environment and nothing k8s.*. Probe routes are absent by construction rather than by a filter: TracingMiddleware excludes /healthz and /readyz, so the kubelet never appears here at all.",
+          "datasource": {"type": "tempo", "uid": "tempo"},
+          "gridPos": {"h": 10, "w": 12, "x": 0, "y": 14},
+          "fieldConfig": {"defaults": {"custom": {"align": "auto"}}, "overrides": []},
+          "options": {"showHeader": true},
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {"type": "tempo", "uid": "tempo"},
+              "queryType": "traceql",
+              "query": "{resource.service.name=\"go-agents\"}",
+              "tableType": "traces",
+              "limit": 20
+            }
+          ]
+        },
+        {
+          "id": 7,
+          "type": "flamegraph",
+          "title": "CPU profile",
+          "description": "Pyroscope has no client library in this binary: profiles arrive because the admin port serves /debug/pprof/* and the agent scrapes it. service_name is Pyroscope's primary index label and alloy.yaml sets it explicitly from app.kubernetes.io/name, so it is the exact string go-agents rather than the <namespace>/<app> that Alloy would otherwise infer — matched exactly here for that reason.",
+          "datasource": {"type": "grafana-pyroscope-datasource", "uid": "pyroscope"},
+          "gridPos": {"h": 10, "w": 6, "x": 12, "y": 14},
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {"type": "grafana-pyroscope-datasource", "uid": "pyroscope"},
+              "queryType": "profile",
+              "profileTypeId": "process_cpu:cpu:nanoseconds:cpu:nanoseconds",
+              "labelSelector": "{service_name=\"go-agents\"}",
+              "groupBy": []
+            }
+          ]
+        },
+        {
+          "id": 8,
+          "type": "flamegraph",
+          "title": "Memory profile (in-use)",
+          "description": "inuse_space, not alloc_space: alloc_space is cumulative since process start and answers what allocated, while a container against its 128Mi limit is a question about what is held right now. Same service_name label as the CPU panel. alloy.yaml enables profile.memory, so all four memory profile types are ingested and inuse_space is one of them.",
+          "datasource": {"type": "grafana-pyroscope-datasource", "uid": "pyroscope"},
+          "gridPos": {"h": 10, "w": 6, "x": 18, "y": 14},
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {"type": "grafana-pyroscope-datasource", "uid": "pyroscope"},
+              "queryType": "profile",
+              "profileTypeId": "memory:inuse_space:bytes:space:bytes",
+              "labelSelector": "{service_name=\"go-agents\"}",
+              "groupBy": []
+            }
+          ]
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: dashboards
+spec:
+  replicas: 1
+  # Recreate: Grafana's sqlite database lives in the pod's emptyDir, and two
+  # replicas would each hold their own copy of session and annotation state.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grafana
+        app.kubernetes.io/component: dashboards
+      annotations:
+        # Grafana serves its own metrics on the same port as the UI, so this
+        # needs no separate admin listener.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: /metrics
+    spec:
+      terminationGracePeriodSeconds: 15
+      securityContext:
+        runAsNonRoot: true
+        # Verified against the image: USER is 472.
+        runAsUser: 472
+        runAsGroup: 472
+        # /var/lib/grafana is an emptyDir, created root-owned; fsGroup is what
+        # makes it writable by 472, and Grafana refuses to start if it cannot
+        # create its sqlite database there.
+        fsGroup: 472
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: grafana
+          # Pinned, and pinned to a digest-stable tag rather than a moving one.
+          #
+          # Watch out for a failure mode seen once while building this stack:
+          # every datasource query failed with
+          #   lookup prometheus.observability.svc.cluster.local on 8.8.8.8:53:
+          #   no such host
+          # while the pod's own /etc/resolv.conf named the cluster resolver and
+          # `nslookup` inside the same container resolved the name correctly.
+          # It survived pod restarts and a version bump, then stopped
+          # reproducing; the cause was never established, so nothing here
+          # claims to fix it. What DOES protect against it is `task kind:smoke`,
+          # which asserts datasource health rather than pod readiness — Grafana
+          # is Running and Ready throughout, and the only symptom is every
+          # panel reading "No data".
+          image: grafana/grafana:11.6.0
+          imagePullPolicy: IfNotPresent
+          env:
+            # NO CREDENTIALS EXIST IN THIS REPOSITORY, AND THAT IS THE POINT.
+            #
+            # Anonymous access with the Admin role, login form removed. Every
+            # alternative stores a password somewhere: an env var in this file,
+            # a Secret manifest, a .env the next person copies. A committed
+            # password is permanent — history rewrites are not a control you
+            # get to rely on — and a placeholder password is worse, because it
+            # trips the secret scanner while protecting nothing.
+            #
+            # What that buys is narrower than it is tempting to claim. There is
+            # no Ingress and no NodePort, so nothing outside the cluster
+            # reaches this UI without cluster credentials. INSIDE the cluster
+            # it is unauthenticated and no NetworkPolicy constrains that: any
+            # pod that can resolve grafana.observability.svc gets Admin, with
+            # no credential at all. That is an accepted trade on a local kind
+            # cluster whose only other workload is this repo's own API, and it
+            # is not one anywhere that runs a pod this repo did not put there.
+            # Exposing this outside a laptop means adding real auth first, not
+            # adding a password here.
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: Admin
+            - name: GF_AUTH_DISABLE_LOGIN_FORM
+              value: "true"
+            # Nothing in a local demo stack should be phoning home, and the
+            # update check is a startup-time network call that fails slowly on
+            # an offline laptop.
+            - name: GF_ANALYTICS_REPORTING_ENABLED
+              value: "false"
+            - name: GF_ANALYTICS_CHECK_FOR_UPDATES
+              value: "false"
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          # A startupProbe rather than initialDelaySeconds on the two below.
+          # Grafana runs its sqlite migrations and provisions datasources and
+          # dashboards before it binds :3000 — measured here at ~8s from
+          # container start — and without this the liveness probe is already
+          # counting against its 15s x 3 = 45s budget for that whole stretch.
+          # initialDelaySeconds is the wrong knob twice over: it would have to
+          # be set on liveness AND readiness, and it is a fixed worst-case wait
+          # paid on every restart, delaying Ready even when the start was fast.
+          # A startupProbe holds both off until the first success, so it costs
+          # only as long as the start actually takes, and it states the worst
+          # case explicitly: 2s x 20 = 40s, about five times what was observed.
+          startupProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 2
+            failureThreshold: 20
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: datasources
+              mountPath: /etc/grafana/provisioning/datasources
+              readOnly: true
+            - name: dashboard-provider
+              mountPath: /etc/grafana/provisioning/dashboards
+              readOnly: true
+            - name: dashboards
+              mountPath: /etc/grafana/dashboards
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/grafana
+            # Grafana writes render and session scratch files; with
+            # readOnlyRootFilesystem there is otherwise nowhere for them to go.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: datasources
+          configMap:
+            name: grafana-datasources
+        - name: dashboard-provider
+          configMap:
+            name: grafana-dashboard-provider
+        - name: dashboards
+          configMap:
+            name: grafana-dashboards
+        - name: data
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: dashboards
+spec:
+  # ClusterIP, not NodePort, and no Ingress: nothing outside the cluster
+  # reaches this, so a browser gets here through `kubectl --context
+  # kind-go-agents -n observability port-forward svc/grafana 3000:3000`.
+  # That is the whole of the control, and it stops at the cluster edge. Inside,
+  # this Service answers any pod that resolves it, unauthenticated and with no
+  # NetworkPolicy in front of it — see the anonymous-auth env block above.
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: grafana
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http
+      protocol: TCP

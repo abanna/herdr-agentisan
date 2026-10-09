@@ -1,0 +1,27 @@
+name: Task
+description: Scoped work that is neither a bug nor new behaviour — chores, refactors, gate work.
+labels: ["task"]
+body:
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What changes, and explicitly what does not. AGENTS.md rule 7 forbids drive-by refactors.
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: Definition of done
+      description: How a reviewer confirms this is finished.
+      value: |
+        - [ ] `task check` exits 0
+        - [ ] New behaviour has a test that was seen failing first
+        - [ ] `docs/openapi.json` regenerated if routes changed
+    validations:
+      required: true
+  - type: input
+    id: linear
+    attributes:
+      label: Linear issue
+      description: NERD-#### if this is tracked there.

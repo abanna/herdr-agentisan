@@ -1,0 +1,26 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: go-agents
+
+# Three nodes, not one.
+#
+# A single-node cluster would let every manifest in infrastructure/local/k8s pass while
+# meaning nothing: the PodDisruptionBudget could never be tested, the
+# topologySpreadConstraint would have one bucket, and a rolling update with
+# maxUnavailable 0 would look identical to a Recreate. Two workers is the
+# smallest topology in which those three claims are falsifiable.
+#
+# The control plane is left untainted-by-default (kind already keeps workloads
+# off it), so the two workers are the only schedulable nodes and a spread of
+# 1/1 is the observable success condition.
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
+
+# No extraPortMappings on purpose. Publishing Grafana or the API on a host port
+# would make the local cluster reachable in a way the manifests do not describe,
+# and it would quietly hide the thing worth demonstrating: the admin listener is
+# reachable by scraping a pod IP and by nothing else. `kubectl port-forward` is
+# what the runbooks use, and it is explicit about what is being exposed and for
+# how long.
