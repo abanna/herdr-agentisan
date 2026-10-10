@@ -51,9 +51,9 @@ func TestRunOnATerminal(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() { done <- dashboard.Run(t.Context(), config(src, &recorder{}), slave, slave) }()
-	// The header spells the counts out only when the terminal is wide
-	// enough: 120 columns, read from the terminal itself.
-	require.Eventually(t, func() bool { return strings.Contains(out.String(), "◐6 working") }, 5*time.Second, 10*time.Millisecond)
+	// pee09's stage is drawn whole only when the terminal is wide enough:
+	// 120 columns, read from the terminal itself, not the 80x24 fallback.
+	require.Eventually(t, func() bool { return strings.Contains(out.String(), "stale pane id resolver") }, 5*time.Second, 10*time.Millisecond)
 	require.Contains(t, out.String(), "\x1b[?1049h", "the alternate screen")
 	require.Contains(t, out.String(), "\x1b[?1002h", "mouse cell motion")
 

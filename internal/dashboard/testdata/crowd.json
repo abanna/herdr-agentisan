@@ -2,7 +2,8 @@
   "v": 1,
   "at": "2026-10-09T17:19:00Z",
   "team": "crowd",
-  "boss": {"name": "boss", "pane_id": "w1:p1", "status": "idle", "model": "opus", "ctx": 64, "item": "#900", "stage": "plan"},
+  "project": {"prs": [], "issues": 0},
+  "boss": {"name": "boss", "pane_id": "w1:p1", "status": "idle", "model": "opus", "ctx": 64, "item": "#900", "stage": "plan", "watchers": 0},
   "groups": [
     {"name": "coders", "agents": [
       {"name": "pee01", "pane_id": "w2:p1", "status": "working", "model": "opus", "ctx": 7, "item": "NERD-5301", "stage": "go-coder"},

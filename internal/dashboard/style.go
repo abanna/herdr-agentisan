@@ -32,6 +32,11 @@ var (
 	accentStyle = lipgloss.NewStyle().Foreground(colAccent)
 	errorStyle  = lipgloss.NewStyle().Foreground(colRed)
 	noteStyle   = lipgloss.NewStyle().Foreground(colYellow)
+	greenStyle  = lipgloss.NewStyle().Foreground(colGreen)
+	orangeStyle = lipgloss.NewStyle().Foreground(colOrange)
+	// buttonStyle is the btop button: bold on the accent, never reverse
+	// video, which marks the selected agent alone.
+	buttonStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#282a36")).Background(colAccent)
 )
 
 // Thresholds are the context levels of ADR-001 D7, in percent. ctx below
@@ -80,7 +85,53 @@ func StatusIcon(s snapshot.Status) string {
 	}
 }
 
-// statusLabel names a status in the header counts.
+// ciGlyph is a PR's CI state: ✓ passed, ✗ failed, ⏳ pending, ? unknown.
+func ciGlyph(c snapshot.CIState) seg {
+	switch c {
+	case snapshot.CISuccess:
+		return seg{"✓", greenStyle}
+	case snapshot.CIFailure:
+		return seg{"✗", errorStyle}
+	case snapshot.CIPending:
+		return seg{"⏳", noteStyle}
+	default:
+		return seg{"?", dimStyle}
+	}
+}
+
+// codexGlyph is where Codex's review stands: 👍 approved, 💬 findings to
+// answer, … not yet reviewed, ? unknown.
+func codexGlyph(c snapshot.CodexState) seg {
+	switch c {
+	case snapshot.CodexApproved:
+		return seg{"👍", plainStyle}
+	case snapshot.CodexFindings:
+		return seg{"💬", orangeStyle}
+	case snapshot.CodexPending:
+		return seg{"…", dimStyle}
+	default:
+		return seg{"?", dimStyle}
+	}
+}
+
+// mergeWord is a PR's merge state as GitHub names it, coloured by whether
+// it can merge.
+func mergeWord(m snapshot.MergeState) seg {
+	switch m {
+	case snapshot.MergeClean:
+		return seg{string(m), greenStyle}
+	case snapshot.MergeDirty:
+		return seg{string(m), errorStyle}
+	case snapshot.MergeBlocked, snapshot.MergeBehind:
+		return seg{string(m), noteStyle}
+	case snapshot.MergeUnstable:
+		return seg{string(m), orangeStyle}
+	default:
+		return seg{clean(string(m)), dimStyle}
+	}
+}
+
+// statusLabel names a status in a row and in the help.
 func statusLabel(s snapshot.Status) string {
 	if s.Valid() {
 		return string(s)
@@ -105,7 +156,7 @@ func statusStyle(s snapshot.Status) lipgloss.Style {
 	}
 }
 
-// ShortModel is the model as a card shows it, four cells at most: opus, son
+// ShortModel is the model as a row shows it, four cells at most: opus, son
 // or hai for Claude's families wherever they appear in the name, otherwise
 // the first word, lower-cased, cut to four cells (two wide characters).
 func ShortModel(model string) string {

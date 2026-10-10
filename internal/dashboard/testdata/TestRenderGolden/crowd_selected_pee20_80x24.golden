@@ -1,0 +1,24 @@
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ crowd · PRs none · issues 0                                         [ btop ] │
+│ boss ▸ ● idle · #900 · plan · watchers 0 · ctx ▓▓▓▓▓░░░ 64%            17:19 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+│ ⚠ pee04  blocked  son   ▓░░░░  28%  NERD-5304  precheck                      │
+│ ◐ pee05  working  opus  ▓▓░░░  35%  NERD-5305  go-coder                      │
+│ ✔ pee06  done     opus  ▓▓░░░  42%  NERD-5306  precheck                      │
+│ ● pee07  idle     opus  ▓▓░░░  49%  NERD-5307  go-coder                      │
+│ ⟳ pee08  ready    son   ▓▓▓░░  56%  NERD-5308  precheck                      │
+│ ◐ pee09  working  opus  ▓▓▓░░  63%  NERD-5309  go-coder                      │
+│ ◐ pee10  working  opus  ▓▓▓▓░  70%  NERD-5310  precheck                      │
+│ ● pee11  idle     opus  ▓▓▓▓░  77%  NERD-5311  go-coder                      │
+│ ? pee12  unknown  son   ░░░░░   --  NERD-5312  precheck                      │
+│ ◐ pee13  working  opus  ▓▓▓▓▓  91%  NERD-5313  go-coder                      │
+│ ● pee14  idle     opus  ▓▓▓▓▓  98%  NERD-5314  precheck                      │
+│ ◐ pee15  working  opus  ░░░░░   5%  NERD-5315  go-coder                      │
+│ ✔ pee16  done     son   ▓░░░░  12%  NERD-5316  precheck                      │
+│ ◐ pee17  working  opus  ▓░░░░  19%  NERD-5317  go-coder                      │
+│ ⚠ pee18  blocked  opus  ▓░░░░  26%  NERD-5318  precheck                      │
+│ ● pee19  idle     opus  ▓▓░░░  33%  NERD-5319  go-coder                      │
+│ ◐ pee20  working  son   ▓▓░░░  40%  NERD-5320  precheck                      │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ enter jump · ↑↓ move · ctrl-b m btop · ? help · q quit                      ↑3

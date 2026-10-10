@@ -1,6 +1,8 @@
 // Package dashboard is the team dashboard (ADR-001 D5): a bubbletea program
-// that draws one rounded card per group from snapshots, and focuses an agent
-// on Enter or a click.
+// that draws, from snapshots, a header box (the project's PRs, issues and
+// test slots; the boss), then one box per group stacked under it with one
+// line per agent. Enter or a click focuses an agent; a click on [ btop ]
+// opens btop in a herdr popup.
 //
 // The model polls a snapshot.Source on a tea.Tick. Its View is Render applied
 // to the model's Frame and size, a pure function, so frames are golden-tested
@@ -24,7 +26,8 @@ import (
 const (
 	// DefaultInterval is how often the source is polled.
 	DefaultInterval = time.Second
-	// DefaultFocusTimeout bounds one focus: agent.focus plus pane.zoom.
+	// DefaultFocusTimeout bounds one herdr action: a focus (agent.focus plus
+	// pane.zoom), or opening btop.
 	DefaultFocusTimeout = 3 * time.Second
 	// DefaultFetchTimeout bounds one poll, so a hung source shows up as an
 	// error instead of a dashboard that silently stops refreshing.
@@ -53,9 +56,13 @@ type Config struct {
 	// Focuser is called on Enter and a click. Nil turns focus off; say why
 	// in Note.
 	Focuser Focuser
+	// Btop is called on a click of [ btop ]. Nil draws neither the button
+	// nor its hint.
+	Btop BtopOpener
 	// Interval between polls. Zero means DefaultInterval.
 	Interval time.Duration
-	// FocusTimeout bounds one focus. Zero means DefaultFocusTimeout.
+	// FocusTimeout bounds one focus, and one btop open. Zero means
+	// DefaultFocusTimeout.
 	FocusTimeout time.Duration
 	// FetchTimeout bounds one poll. Zero means DefaultFetchTimeout.
 	FetchTimeout time.Duration
@@ -67,16 +74,18 @@ type Config struct {
 	Note string
 }
 
-// HerdrConfig is the dashboard herdr runs: it reads src and focuses through
-// the herdr socket at socketPath. Without a socket, focus is off and the
-// footer says why.
+// HerdrConfig is the dashboard herdr runs: it reads src, and focuses and
+// opens btop through the herdr socket at socketPath. Without a socket both
+// are off, and the footer says why.
 func HerdrConfig(src snapshot.Source, socketPath string) Config {
 	cfg := Config{Source: src}
 	if socketPath == "" {
 		cfg.Note = "focus off: HERDR_SOCKET_PATH is not set"
 		return cfg
 	}
-	cfg.Focuser = HerdrFocuser{Client: herdr.Client{SocketPath: socketPath}}
+	client := herdr.Client{SocketPath: socketPath}
+	cfg.Focuser = HerdrFocuser{Client: client}
+	cfg.Btop = HerdrBtop{Client: client}
 	return cfg
 }
 
@@ -107,20 +116,25 @@ type Model struct {
 	// anchor is the selected agent's name. The selection follows the agent,
 	// not its position, across refreshes.
 	anchor string
+	// scroll is the first line of the groups the last frame drew (see
+	// Frame.Scroll). It is settled after every change that can move the
+	// selection or the layout, so the frame a click lands on is the frame
+	// that was drawn.
+	scroll int
 
 	clock         time.Time
 	width, height int
 	help          bool
 	sourceErr     error
 	focusErr      error
+	btopErr       error
 }
 
-// The arrow keys, as tea.KeyPressMsg.String names them.
+// The arrow keys, as tea.KeyPressMsg.String names them. Left and right are
+// unbound: the groups stack, so there is nothing beside the selection.
 const (
-	keyUp    = "up"
-	keyDown  = "down"
-	keyLeft  = "left"
-	keyRight = "right"
+	keyUp   = "up"
+	keyDown = "down"
 )
 
 // Messages the model sends itself.
@@ -133,6 +147,9 @@ type (
 	focusMsg struct {
 		agent snapshot.Agent
 		err   error
+	}
+	btopMsg struct {
+		err error
 	}
 )
 
@@ -163,6 +180,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
+		m.settle()
 		return m, nil
 	case snapshotMsg:
 		// Each answer schedules exactly one tick, and each tick exactly one
@@ -175,6 +193,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s := msg.snap
 		m.snap, m.sourceErr = &s, nil
 		m.reanchor()
+		m.settle()
 		return m, m.tick()
 	case tickMsg:
 		m.clock = m.cfg.Now()
@@ -187,6 +206,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				err = fmt.Errorf("%w: %w", ErrFocus, err)
 			}
 			m.focusErr = fmt.Errorf("%s: %w", msg.agent.Name, err)
+		}
+		return m, nil
+	case btopMsg:
+		m.btopErr = msg.err
+		if msg.err != nil && !errors.Is(msg.err, ErrBtop) {
+			m.btopErr = fmt.Errorf("%w: %w", ErrBtop, msg.err)
 		}
 		return m, nil
 	case tea.KeyPressMsg:
@@ -205,8 +230,9 @@ func (m Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.help = !m.help
 	case "esc":
 		m.help = false
-	case keyUp, keyDown, keyLeft, keyRight:
+	case keyUp, keyDown:
 		m.move(msg.String())
+		m.settle()
 	case "enter":
 		return m, m.focus()
 	}
@@ -218,17 +244,22 @@ func (m Model) click(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.help {
-		// The overlay hides the cards: a click closes it, and focuses no
-		// one the reader cannot see.
+		// The overlay hides the groups: a click closes it, and acts on
+		// nothing the reader cannot see.
 		m.help = false
 		return m, nil
 	}
-	sel, ok := plan(m.Frame(), m.Width(), m.Height()).hit(msg.X, msg.Y)
-	if !ok {
+	what, sel := plan(m.Frame(), m.Width(), m.Height()).hit(msg.X, msg.Y)
+	switch what {
+	case hitAgent:
+		m.choose(sel)
+		m.settle()
+		return m, m.focus()
+	case hitBtop:
+		return m, m.openBtop()
+	default:
 		return m, nil
 	}
-	m.choose(sel)
-	return m, m.focus()
 }
 
 // View draws the frame full-screen, asking for mouse clicks so herdr
@@ -242,8 +273,11 @@ func (m Model) View() tea.View {
 
 // Frame is the model's state as Render draws it.
 func (m Model) Frame() Frame {
-	f := Frame{Snapshot: m.snap, Selection: m.sel, Now: m.clock, Help: m.help, Note: m.cfg.Note}
-	for _, err := range []error{m.sourceErr, m.focusErr} {
+	f := Frame{
+		Snapshot: m.snap, Selection: m.sel, Scroll: m.scroll, Now: m.clock,
+		Help: m.help, Btop: m.cfg.Btop != nil, Note: m.cfg.Note,
+	}
+	for _, err := range []error{m.sourceErr, m.focusErr, m.btopErr} {
 		if err != nil {
 			f.Errors = append(f.Errors, err)
 		}
@@ -276,7 +310,7 @@ func (m Model) Selected() (snapshot.Agent, bool) {
 	if !validSelection(groups, m.sel) {
 		return snapshot.Agent{}, false
 	}
-	return groups[m.sel.Card].Agents[m.sel.Agent], true
+	return groups[m.sel.Group].Agents[m.sel.Agent], true
 }
 
 func (m Model) fetch() tea.Cmd {
@@ -309,6 +343,26 @@ func (m Model) focus() tea.Cmd {
 	}
 }
 
+// openBtop returns the command opening btop, or nil when there is no
+// opener. Like a focus, it runs outside Update, bounded by FocusTimeout.
+func (m Model) openBtop() tea.Cmd {
+	if m.cfg.Btop == nil {
+		return nil
+	}
+	ctx, b, timeout := m.ctx, m.cfg.Btop, m.cfg.FocusTimeout
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return btopMsg{err: b.OpenBtop(ctx)}
+	}
+}
+
+// settle keeps the scroll Render settles on for the current frame: the
+// previous one, moved only as far as the selection needs.
+func (m *Model) settle() {
+	m.scroll = plan(m.Frame(), m.Width(), m.Height()).offset
+}
+
 // choose selects sel and anchors the selection to its agent.
 func (m *Model) choose(sel Selection) {
 	m.sel = sel
@@ -322,10 +376,10 @@ func (m *Model) choose(sel Selection) {
 // agent that exists.
 func (m *Model) reanchor() {
 	groups := Order(m.snap.Groups)
-	for c, g := range groups {
-		for a, ag := range g.Agents {
+	for g, grp := range groups {
+		for a, ag := range grp.Agents {
 			if m.anchor != "" && ag.Name == m.anchor {
-				m.sel = Selection{Card: c, Agent: a}
+				m.sel = Selection{Group: g, Agent: a}
 				return
 			}
 		}
@@ -333,17 +387,17 @@ func (m *Model) reanchor() {
 	m.choose(clamp(groups, m.sel))
 }
 
-// clamp moves sel onto an agent that exists: the nearest card that has
+// clamp moves sel onto an agent that exists: the nearest group that has
 // agents, then the nearest agent in it.
 func clamp(groups []snapshot.Group, sel Selection) Selection {
 	if len(groups) == 0 {
 		return Selection{}
 	}
-	start := min(max(sel.Card, 0), len(groups)-1)
+	start := min(max(sel.Group, 0), len(groups)-1)
 	for d := range len(groups) {
-		for _, c := range []int{start + d, start - d} {
-			if c >= 0 && c < len(groups) && len(groups[c].Agents) > 0 {
-				return Selection{Card: c, Agent: min(max(sel.Agent, 0), len(groups[c].Agents)-1)}
+		for _, g := range []int{start + d, start - d} {
+			if g >= 0 && g < len(groups) && len(groups[g].Agents) > 0 {
+				return Selection{Group: g, Agent: min(max(sel.Agent, 0), len(groups[g].Agents)-1)}
 			}
 		}
 	}
@@ -351,8 +405,7 @@ func clamp(groups []snapshot.Group, sel Selection) Selection {
 }
 
 // move applies one arrow key. Up and down walk the agents in display order,
-// crossing into the previous or next card. Left and right step to the card
-// beside this one in the grid, keeping the agent index, clamped.
+// crossing into the previous or next group, and stop at either end.
 func (m *Model) move(key string) {
 	if m.snap == nil {
 		return
@@ -364,43 +417,27 @@ func (m *Model) move(key string) {
 	sel := m.sel
 	switch key {
 	case keyDown:
-		if sel.Agent+1 < len(groups[sel.Card].Agents) {
+		if sel.Agent+1 < len(groups[sel.Group].Agents) {
 			sel.Agent++
-		} else if c := nextCard(groups, sel.Card, 1); c >= 0 {
-			sel = Selection{Card: c}
+		} else if g := nextGroup(groups, sel.Group, 1); g >= 0 {
+			sel = Selection{Group: g}
 		}
 	case keyUp:
 		if sel.Agent > 0 {
 			sel.Agent--
-		} else if c := nextCard(groups, sel.Card, -1); c >= 0 {
-			sel = Selection{Card: c, Agent: len(groups[c].Agents) - 1}
-		}
-	case keyLeft, keyRight:
-		step := 1
-		if key == keyLeft {
-			step = -1
-		}
-		cols := columns(groups, m.Width())
-		row := sel.Card / cols
-		for col := sel.Card%cols + step; col >= 0 && col < cols; col += step {
-			c := row*cols + col
-			if c >= len(groups) {
-				break
-			}
-			if n := len(groups[c].Agents); n > 0 {
-				sel = Selection{Card: c, Agent: min(sel.Agent, n-1)}
-				break
-			}
+		} else if g := nextGroup(groups, sel.Group, -1); g >= 0 {
+			sel = Selection{Group: g, Agent: len(groups[g].Agents) - 1}
 		}
 	}
 	m.choose(sel)
 }
 
-// nextCard is the next card from c in direction step that has agents, or -1.
-func nextCard(groups []snapshot.Group, c, step int) int {
-	for c += step; c >= 0 && c < len(groups); c += step {
-		if len(groups[c].Agents) > 0 {
-			return c
+// nextGroup is the next group from g in direction step that has agents, or
+// -1.
+func nextGroup(groups []snapshot.Group, g, step int) int {
+	for g += step; g >= 0 && g < len(groups); g += step {
+		if len(groups[g].Agents) > 0 {
+			return g
 		}
 	}
 	return -1

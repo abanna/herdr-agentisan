@@ -1,7 +1,7 @@
 # herdr plugin manifest. See https://herdr.dev/docs/plugins/.
 #
 # Every command is ONE exec of an argv array with the plugin root as the
-# working directory — no shell. `herdr plugin link` does not run [[build]]
+# working directory — no shell. herdr runs them, never the plugin. `herdr plugin link` does not run [[build]]
 # (only `herdr plugin install` does), so link with `task plugin:link`, which
 # builds first. internal/cli's TestManifestMatchesTheBinary fails the build if
 # an action stops naming a real command or the build output path drifts.
@@ -34,3 +34,14 @@ title = "Agentisan: restart daemon"
 description = "Stop the agentisan daemon if it runs, then start it"
 contexts = ["global"]
 command = ["bin/herdr-agentisan", "daemon", "restart"]
+
+# The dashboard's [ btop ] button asks herdr (plugin.pane.open) to run this in
+# a popup, sized in the request. herdr spawns btop from its own PATH; the
+# plugin starts no process. Relink after changing it: herdr reads panes at
+# link time.
+[[panes]]
+id = "btop"
+title = "btop"
+description = "System monitor, in a popup"
+placement = "popup"
+command = ["btop"]

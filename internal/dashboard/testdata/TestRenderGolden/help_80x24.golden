@@ -1,24 +1,24 @@
- ◆ agentisan · 15 agents   ◐6 ●4 ⚠1 ✔2 ⟳1 ?1                              17:19
- boss ▸ #867 release · review · ctx ▓▓░░░░░░ 23%
-╭ coders 9 ───────────────────────────╮ ╭ precheck 2 ─────────────────────────╮
-│◐ pee01              opus ▓▓░░░  38% │ │◐ precheck           son  ▓▓░░░  37% │
-│  r2 · J1 re-run                     │ │  running                            │
-│◐ pee02              opus ▓▓░░░  30% │ │● precheck2          son  ▓░░░░  10% │
-│  J1 re-queued                       │ │                                     │
-│● pee03              opu╭ help ─────────────────────╮────────────────────────╯
-│  PR3a · committed      │ ↑ ↓    move within a card │
-│◐ pee04              opu│ ← →    move across cards  │
-│  NERD-5255 · go-review │ enter  focus and zoom     │
-│⚠ pee05              opu│ click  focus and zoom     │
-│  NERD-5247 · waiting on│ ?      close this help    │
-│  …4 more               │ q      quit               │
-╰────────────────────────│ ◐ working   ● idle        │
-╭ qa 1 ──────────────────│ ⚠ blocked   ✔ done        │────────────────────────╮
-│✔ qa                 son│ ⟳ ready     ? unknown     │        gpt- ▓▓░░░  41% │
-│  queue empty           ╰───────────────────────────╯ge                      │
-╰─────────────────────────────────────╯ ╰─────────────────────────────────────╯
-╭ research 1 ─────────────────────────╮ ╭ clerk 1 ────────────────────────────╮
-│● research           hai  ░░░░░   5% │ │? clerk              hai  ░░░░░   -- │
-│  herdr 0.9.3 events                 │ │                                     │
-╰─────────────────────────────────────╯ ╰─────────────────────────────────────╯
- ←↑↓→ move · enter focus · ? help
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ agentisan · PRs 5 · issues 14 · slots 2/2                           [ btop ] │
+│ boss ▸ ◐ working · #867 release · review · ctx ▓▓░░░░░░ 23%            17:19 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+╭─ CODERS · 9 ✔1 ◐4 ●2 ⚠1 ⟳1 ──────────────────────────────────────────────────╮
+│ write the code                                                               │
+│ ◐ pee01      working  opus  ▓▓░░░  38%  r2         J1 re-run             12m │
+│ ◐ pee02      workin╭ help ─────────────────────────────╮-queued          21m │
+│ ● pee03      idle  │ ↑ ↓       move through the agents │tted           1h39m │
+│ ◐ pee04      workin│ enter     jump: focus and zoom    │view              3m │
+│ ⚠ pee05      blocke│ click     jump: focus and zoom    │ng on boss     1h09m │
+│ ● pee06      idle  │ [ btop ]  btop in a herdr popup   │                     │
+│ ✔ pee07      done  │ ?         close this help         │d              2d08h │
+│ ⟳ pee08      ready │ q         quit                    │ff read           0m │
+│ ◐ pee09      workin│ ◐ working   ● idle                │eck: tdaddy …        │
+╰────────────────────│ ⚠ blocked   ✔ done                │─────────────────────╯
+╭─ PRECHECK · 2 ◐1 ●1│ ⟳ ready     ? unknown             │─────────────────────╮
+│ ◐ precheck   workin╰───────────────────────────────────╯ng                8m │
+│ ● precheck2  idle     son   ▓░░░░  10%                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ QA · 1 ✔1 ──────────────────────────────────────────────────────────────────╮
+│ ✔ qa         done     son   ▓░░░░  12%             queue empty         3h19m │
+ enter jump · ↑↓ move · ctrl-b m btop · ? help · q quit                      ↓3
