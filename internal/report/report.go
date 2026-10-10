@@ -42,13 +42,16 @@ var (
 	// ErrNotInPane means HERDR_SOCKET_PATH or HERDR_PANE_ID is unset or
 	// empty: the process is not running in a herdr pane.
 	ErrNotInPane = errors.New("not running in a herdr pane")
-	// ErrNoContext means the statusline carries no context percentage, as
-	// before Claude has measured one.
-	ErrNoContext = errors.New("statusline has no context percentage")
-	// ErrMalformed means the statusline input is unusable: a terminal rather
-	// than piped JSON, unreadable, over MaxStatuslineBytes, not one JSON
-	// object, or a percentage that is not a JSON number from 0 to 100.
-	ErrMalformed = errors.New("malformed statusline input")
+	// ErrNoContext means there is no context use to report yet: Claude's
+	// statusline carries no percentage, as before Claude has measured one,
+	// or a Codex session has no transcript, or no token count with a usable
+	// context window in the tail of it.
+	ErrNoContext = errors.New("no context percentage to report")
+	// ErrMalformed means the input is unusable: a terminal rather than piped
+	// JSON, unreadable, over its size cap, not one JSON object, or a
+	// percentage that is not a JSON number from 0 to 100; or, for Codex, a
+	// transcript path that is not absolute or not a readable regular file.
+	ErrMalformed = errors.New("malformed report input")
 	// ErrPaneUnresolved means no pane runs the reporting process: its lineage
 	// reaches no pane's shell or foreground job. That is the case when the
 	// statusline exited first and the report was re-parented to init.
@@ -162,7 +165,12 @@ func Statusline(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (Resu
 	if err != nil {
 		return Result{}, err
 	}
+	return pushCtx(ctx, rep, pane, pct)
+}
 
+// pushCtx sets the ctx token to pct on the pane the reporting process runs
+// in. One herdr.CallTimeout bounds the whole push, finding the pane included.
+func pushCtx(ctx context.Context, rep Reporter, pane Pane, pct int) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, herdr.CallTimeout)
 	defer cancel()
 	target, err := resolvePane(ctx, rep, pane)

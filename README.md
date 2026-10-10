@@ -45,6 +45,41 @@ It prints nothing and always exits 0. Outside a herdr pane, or when the
 statusline has no context percentage yet, it reports nothing. Set
 `HERDR_AGENTISAN_LOG_LEVEL=debug` and drop the redirect to see why.
 
+## Report `$ctx` from Codex
+
+Each Codex agent pushes the same `ctx` token through two Codex hooks, with the
+number Codex itself shows as "Context N% used". Add them to
+`~/.codex/config.toml`, or to a trusted project's `.codex/config.toml`
+([sample](docs/config/codex-hooks.example.toml)), and trust them once when
+Codex asks:
+
+```toml
+[[hooks.PostToolUse]]
+matcher = "*"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "herdr-agentisan report codex"
+timeout = 10
+async = true
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "herdr-agentisan report codex"
+timeout = 10
+async = true
+```
+
+Start Codex with `codex --no-daemon`. By default Codex runs its sessions in a
+shared background server whose hooks carry the environment of whichever pane
+started it, so the report cannot tell which pane it belongs to and reports
+nothing. Like `report statusline`, it prints nothing and always exits 0; the
+token expires 180 s after the last tool call or turn, so an idle Codex agent's
+`ctx` goes blank. `HERDR_AGENTISAN_LOG_LEVEL=debug` logs why nothing was
+reported. ADR-001 A22 has the details.
+
 ## Report `$item` and `$stage` from agentisan
 
 Agentisan runs `report stage` on every pipeline step transition once

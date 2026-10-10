@@ -423,3 +423,70 @@ func TestSelfLineageAdmitsCLAUDE_PID(t *testing.T) {
 	require.NotEmpty(t, got.Procs)
 	assert.Equal(t, stranger, got.Procs[len(got.Procs)-1].PID)
 }
+
+// TestProcCmdlineClasses walks /proc/<pid>/cmdline: NUL-separated arguments
+// with a trailing NUL, a process that rewrote its arguments without one, a
+// kernel thread or zombie with none, and a process that has gone.
+func TestProcCmdlineClasses(t *testing.T) {
+	t.Parallel()
+	proc := fstest.MapFS{
+		"40/cmdline": {Data: []byte("/home/u/.codex/bin/codex\x00app-server\x00--listen\x00unix://\x00")},
+		"41/cmdline": {Data: []byte("codex: worker title")},
+		"42/cmdline": {Data: []byte{}},
+		"43/cmdline": {Data: []byte("sh\x00-c\x00\x00echo\x00")},
+		"45/cmdline": {Data: []byte("\xff\xfe\x00app-server\x00")},
+	}
+	tests := map[int]struct {
+		want []string
+		err  error
+	}{
+		40: {want: []string{"/home/u/.codex/bin/codex", "app-server", "--listen", "unix://"}},
+		41: {want: []string{"codex: worker title"}},
+		42: {want: []string{}},
+		43: {want: []string{"sh", "-c", "", "echo"}},
+		44: {err: report.ErrProcCmdline},
+		45: {want: []string{"\xff\xfe", "app-server"}},
+	}
+	for pid, tc := range tests {
+		t.Run(strconv.Itoa(pid), func(t *testing.T) {
+			t.Parallel()
+			got, err := report.ProcCmdline(proc)(pid)
+			if tc.err != nil {
+				require.ErrorIs(t, err, tc.err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestSelfLineageChecksTheRealCodexHost: the real lineage carries a cmdline
+// reader, so the Codex host check reads every ancestor rather than refusing
+// unverified. Whether one is a Codex app-server depends on who runs the
+// tests, so either answer but "unverified" passes.
+func TestSelfLineageChecksTheRealCodexHost(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "linux" {
+		t.Skip("no /proc to read a lineage from")
+	}
+	err := report.SelfLineage(func(string) (string, bool) { return "", false }).CheckCodexHost()
+	if err != nil {
+		require.ErrorIs(t, err, report.ErrCodexDaemon)
+	}
+}
+
+// TestProcCmdlineUnreadableFile: a cmdline the process may not read is an
+// ErrProcCmdline like one that has gone.
+func TestProcCmdlineUnreadableFile(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a mode-0 file")
+	}
+	dir := t.TempDir()
+	require.NoError(t, os.Mkdir(dir+"/300", 0o700))
+	require.NoError(t, os.WriteFile(dir+"/300/cmdline", []byte("codex\x00"), 0o000))
+
+	_, err := report.ProcCmdline(os.DirFS(dir))(300)
+	require.ErrorIs(t, err, report.ErrProcCmdline)
+}
