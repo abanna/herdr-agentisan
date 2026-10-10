@@ -105,6 +105,10 @@ exempts whatever is later added under that name.
   detached `daemon run`; herdr's `[[startup]]` hook runs it, and the
   `daemon-restart` action covers linking. Tests run daemons in process against
   herdrtest and a scratch state dir, never the real ones.
+- `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
+  D9, D12) behind `config resolve`: layered precedence with provenance, secret
+  references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check.
+  Sample in `docs/config/herdr-agentisan.example.toml`.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
   embedded from `migrations/` and tracked by `user_version`. The daemon holds
