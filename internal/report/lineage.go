@@ -25,6 +25,10 @@ const ClaudePIDEnv = "CLAUDE_PID"
 // when the process has already exited.
 var ErrProcStat = errors.New("unreadable /proc stat")
 
+// ErrProcCmdline means a process's /proc cmdline could not be read, as when
+// the process has already exited.
+var ErrProcCmdline = errors.New("unreadable /proc cmdline")
+
 // Stat is the part of a process's /proc stat a lineage needs.
 type Stat struct {
 	PPID int
@@ -37,6 +41,9 @@ type Stat struct {
 // StatFunc reads a process's Stat.
 type StatFunc func(pid int) (Stat, error)
 
+// CmdlineFunc reads a process's argument vector.
+type CmdlineFunc func(pid int) ([]string, error)
+
 // Proc is one process of a lineage, as it was when the lineage was read.
 type Proc struct {
 	PID   int
@@ -48,8 +55,18 @@ type Proc struct {
 // Build one with ReadLineage; a zero Lineage confirms nothing, so a report
 // given one lands nowhere.
 type Lineage struct {
-	Procs []Proc
-	stat  StatFunc
+	Procs   []Proc
+	stat    StatFunc
+	cmdline CmdlineFunc
+}
+
+// WithCmdline sets the reader CheckCodexHost asks what each process of the
+// lineage runs, and returns l. A nil l stays nil.
+func (l *Lineage) WithCmdline(cmdline CmdlineFunc) *Lineage {
+	if l != nil {
+		l.cmdline = cmdline
+	}
+	return l
 }
 
 // ReadLineage reads pid's lineage through stat. It stops before pid 1 (init
@@ -195,13 +212,32 @@ func parseStat(pid int, raw []byte) (Stat, error) {
 	return Stat{PPID: ppid, Start: start}, nil
 }
 
+// ProcCmdline reads argument vectors from a Linux procfs mounted at proc.
+// cmdline holds each argument followed by a NUL; a process that rewrote its
+// arguments may leave no trailing NUL, and a kernel thread or zombie has
+// none at all, which reads as no arguments.
+func ProcCmdline(proc fs.FS) CmdlineFunc {
+	return func(pid int) ([]string, error) {
+		raw, err := fs.ReadFile(proc, strconv.Itoa(pid)+"/cmdline")
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrProcCmdline, err)
+		}
+		if len(raw) == 0 {
+			return []string{}, nil
+		}
+		return strings.Split(strings.TrimSuffix(string(raw), "\x00"), "\x00"), nil
+	}
+}
+
 // SelfLineage is the running process's lineage, read from /proc and anchored
-// on the environment lookup reads (os.LookupEnv in production). It is nil
-// where the OS has no procfs: a report given no lineage trusts HERDR_PANE_ID
-// unchecked, as it did before lineage existed.
+// on the environment lookup reads (os.LookupEnv in production), with /proc's
+// cmdline reader for CheckCodexHost. It is nil where the OS has no procfs: a
+// report given no lineage trusts HERDR_PANE_ID unchecked, as it did before
+// lineage existed.
 func SelfLineage(lookup func(string) (string, bool)) *Lineage {
 	if !procfs {
 		return nil
 	}
-	return ReadLineage(os.Getpid(), ProcStat(os.DirFS("/proc")), AnchorsFrom(lookup)...)
+	proc := os.DirFS("/proc")
+	return ReadLineage(os.Getpid(), ProcStat(proc), AnchorsFrom(lookup)...).WithCmdline(ProcCmdline(proc))
 }

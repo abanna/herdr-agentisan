@@ -1,0 +1,31 @@
+# Codex hooks that report each Codex agent's context use to its herdr pane as
+# the `ctx` token (ADR-001 A22). Add them to ~/.codex/config.toml, or to a
+# trusted project's .codex/config.toml.
+#
+# - Start Codex with `codex --no-daemon`. A hook run by the shared app-server
+#   daemon carries the daemon's environment, not the pane's, so the report
+#   refuses it and reports nothing. `features.daemon_auto_start = false` is
+#   not enough: Codex still attaches to a daemon that is already running.
+# - Codex runs a new or edited hook only once you trust it, at startup or in
+#   /hooks.
+# - The hooks run through your login shell, so `herdr-agentisan` must be on
+#   its PATH (`task install`), or give an absolute path.
+# - `async` keeps herdr's latency out of every turn, and keeps anything your
+#   shell's startup files print from failing the Stop hook.
+
+[[hooks.PostToolUse]]
+matcher = "*"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "herdr-agentisan report codex"
+timeout = 10
+async = true
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "herdr-agentisan report codex"
+timeout = 10
+async = true

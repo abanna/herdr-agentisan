@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A17 and A20 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A17, A20 and A22 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -624,3 +624,39 @@ Go To was evaluated first, as D5 asks, against the herdr source at v0.9.3 (read,
 - **What it cannot do.** Nothing on the socket opens it: the navigator is the client's own overlay, absent from `src/api/schema/commands.rs` and `src/app/api*.rs`. The dashboard's `/` cannot hand off to it.
 - **prefix+/ anywhere is Go To.** `keys.goto` takes one key or a list (`BindingConfig`, `src/config/keybinds.rs:47`), and prefix+/ is unbound by default; help is prefix+?, shift+/ (`keybinds.rs:1853-1858`). The snippet adds prefix+/ and keeps prefix+g: `goto = ["prefix+g", "prefix+/"]` in `[keys]`, sampled in `docs/config/herdr-keys.example.toml`. No popup pane is built: it would rebuild Go To, and its data would need the daemon's snapshot op or a second resolver.
 - **`/` in the dashboard filters in place.** Printable keys, q and ? included, are query text; the arrows move among the matches; Backspace edits; Enter jumps (agent.focus, then zoom, as D5's Jump) and ends the search, as a click does; Esc ends it, keeping the selection. Each word of the query must appear, letters in order with gaps allowed and case folded, in the agent's name, group, item and stage joined, so "cod 5255" finds the coder on NERD-5255. Groups keep their order, a group with no match is hidden, and every snapshot is filtered as it arrives. The boss is not searched: it sits in the header and is not selectable, and Go To finds it.
+
+### A22. Codex context: findings from item 7
+
+*Overrides:* the "Codex context" row of Verified constraints, the writer of `ctx` in the token contract, and the last row of A12. *Adds to:* D4, D7 and Report commands. A17 to A21 are reserved for work in flight, so the gap in the numbering is deliberate.
+
+Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI installed here. The process tree was observed under the running app-server daemon, 0.162.1.
+
+| Overridden | Now |
+| --- | --- |
+| Codex context (Verified constraints) | The session rollout's token counts, read by `report codex` from Codex hooks. Codex must run with `--no-daemon` |
+| `ctx` writer (token contract) | `report statusline` (Claude) and `report codex` (Codex). Format, source and TTL are unchanged |
+| What signal reports Codex context usage? (A12) | Closed by this amendment |
+
+- **The signal.**
+  - Codex writes every session to a rollout, `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl`. New 0.161 sessions still write it; the SQLite thread history indexes it.
+  - After each model response Codex appends an `event_msg` `token_count`. Its info carries `last_token_usage` (the context that response saw) and `model_context_window` (the model's usable window, with its 95% headroom already applied).
+  - The TUI's "Context N% used" (`tui/src/token_usage.rs:9,39-53`) takes 12,000 baseline tokens off both, rounds the remaining share, and shows 100 minus it. `report codex` computes the same number.
+  - `total_token_usage` is the session's cumulative spend, not its context. Across 17,083 recorded counts it passed the window 15,916 times. The last usage never did.
+- **The writer.**
+  - `herdr-agentisan report codex` runs from async Codex `PostToolUse` (matcher `*`) and `Stop` hooks, sampled in `docs/config/codex-hooks.example.toml`.
+  - A hook gets JSON on stdin. Its `transcript_path` names the live rollout, flushed before the hook runs. No hook payload carries token counts.
+  - The report reads the last 4 MiB of that transcript for the newest count with usage; the longest rollout line measured was 2.6 MB. It pushes `ctx` under the unchanged contract, and always reads stdin to its end. Codex 0.161 ignores a broken pipe on a hook's stdin (`hooks/src/engine/command_runner.rs:260-264`), so draining only keeps the hook from depending on that.
+  - D4 holds. Codex hands the hook its own session's transcript, so the agent still reports itself. Nothing scans files for other agents, and the daemon reads nothing.
+- **One deliberate difference from the TUI.** When the context overflows, Codex records the window as the cumulative total with nothing else counted, and a last usage near 0 (`fill_to_context_window`, `protocol/src/protocol.rs:2316-2330`). The TUI therefore shows almost nothing used at the moment the context is full. `report codex` reports 100 for that record.
+- **Workers run `codex --no-daemon`.**
+  - By default the 0.161 TUI starts or attaches to a shared app-server daemon and runs every session there (`tui/src/startup_orchestration.rs:509-571`).
+  - Hooks inherit the environment of the process hosting the session (`hooks/src/registry.rs:79`), and the client's own is never sent. Under the daemon, a hook therefore carries the `HERDR_PANE_ID` of whichever pane started the daemon. Its parent walk runs through the app-server and, while it lives, through that starting TUI and its pane. A report would land on the wrong pane.
+  - `--no-daemon` runs the app-server inside the TUI (`tui/src/lib.rs:284-312`). Hooks are then the TUI's direct children, with the pane's environment.
+  - `features.daemon_auto_start = false` is not enough: the TUI still attaches to a daemon that is already running.
+  - `report codex` reads every process of its lineage. It reports nothing when one runs a Codex `app-server` (`ErrCodexDaemon`), or when it cannot check (`ErrHostUnverified`). Off Linux there is no lineage, so a Codex `ctx` is Linux-only for now (NERD-5281).
+- **Subagents.** A hook fired inside a Codex subagent carries `agent_id`. It reports nothing, so the pane shows the main session.
+- **Trust.** Codex runs a hook only once the user has trusted it, at startup or in `/hooks`. Editing the hook withdraws that trust.
+- **Idle expiry.** Hooks fire only during turns, so an idle Codex agent's `ctx` expires 180 s after its last tool call or turn. The TTL is unchanged (NERD-5280).
+- **D7.** A Codex worker rotates on its context levels like a Claude worker, provided it was launched with `--no-daemon` and its hooks are installed and trusted (NERD-5278). A Codex worker without `ctx` rotates only when the boss directs it.
+- **Item 3 under Codex.** `report stage` runs as a Codex shell tool command, so under the daemon it carries the same stale `HERDR_PANE_ID` and lineage as a hook. Under `--no-daemon`, a sandboxed command runs in a bubblewrap PID namespace (`--unshare-pid`, `linux-sandbox/src/bwrap.rs:355-378`), so its parent walk cannot reach the pane. Whether herdr's socket is reachable from inside that sandbox is unverified. Item 3's "works from a Codex pane" stays open (NERD-5279).
+- **Back and the dashboard.** The focus history and Back are pane-level and never consult the agent kind, so they treat Codex panes like any other. The dashboard shows a Codex agent's `ctx` once its hooks run.
