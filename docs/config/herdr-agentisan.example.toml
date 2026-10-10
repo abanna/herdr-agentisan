@@ -1,0 +1,130 @@
+# herdr-agentisan.toml: an example of the plugin's configuration (ADR-001 D9).
+#
+# Copy it to $HERDR_PLUGIN_CONFIG_DIR/herdr-agentisan.toml, then check what it
+# resolves to and where each value came from:
+#
+#   herdr-agentisan config resolve                    # shared values, project list
+#   herdr-agentisan config resolve --project assay    # one project's profile
+#   herdr-agentisan config resolve --project assay --check-secrets
+#
+# Layers, lowest to highest precedence:
+#
+#   1. built-in defaults: agent.command = ["claude"],
+#      rotation.thresholds = [55, 65, 75]
+#   2. the shared tables below: every top-level table except [projects]
+#   3. [projects.<name>]
+#   4. <repo>/.herdr-agentisan.toml: a profile body with its own
+#      schema_version = 1; it cannot set repo
+#   5. --set key.path=value on the command line, e.g.
+#      --set groups.coders.workers=4  --set 'rotation.thresholds=[50,60,70]'
+#
+# Tables deep-merge, key by key. Strings, numbers and lists (including
+# verify and agent.command) replace whole. So do secret references.
+#
+# Secrets are never written here. A secret field (integrations.<name>.token)
+# holds a reference, and nothing else:
+#
+#   { env = "NAME" }                   read from the environment
+#   { op = "op://Vault/Item/field" }   read with `op read` (1Password CLI)
+#
+# A plain string there fails with "secret is not a reference".
+
+schema_version = 1
+
+# ---------------------------------------------------------------------------
+# Shared tables: every project inherits these.
+# ---------------------------------------------------------------------------
+
+# D12: the agent must be claude or codex (by base name), without --bare, and
+# any --setting-sources must include project, so the repo's Agentisan
+# bundle (.claude/version.txt) is loaded.
+[agent]
+command = ["claude"]
+model = "opus"
+
+[rotation]
+thresholds = [55, 65, 75]
+
+# Each group: workers is how many `team up` starts, slots is the cap the boss
+# can scale to (slots >= workers >= 0).
+[groups.precheck]
+workers = 1
+slots = 1
+
+[groups.clerk]
+workers = 1
+slots = 1
+
+[groups.debugger]
+workers = 0
+slots = 1
+
+[integrations.github]
+token = { env = "GITHUB_TOKEN" }
+
+# ---------------------------------------------------------------------------
+# Projects. The key is the project's name: lower case, digits and dashes.
+# ---------------------------------------------------------------------------
+
+[projects.agentisan]
+repo = "~/Development/nerdsrun/agentisan-skills"
+color = "#7c3aed"
+github = "nerds-run/agentisan-skills"
+verify = [["task", "check"]]
+
+[projects.agentisan.groups.coders]
+workers = 3
+slots = 5
+
+[projects.agentisan.groups.qa]
+workers = 1
+slots = 2
+
+[projects.agentisan.groups.codex]
+workers = 1
+slots = 1
+
+[projects.agentisan.groups.research]
+workers = 0
+slots = 1
+
+# Overrides one key of the shared group; its slots still come from above.
+[projects.agentisan.groups.clerk]
+workers = 0
+
+[projects.agentisan.integrations.linear]
+url = "https://linear.app/nerds-run"
+token = { op = "op://Engineering/Linear API/credential" }
+
+[projects.assay]
+repo = "~/Development/nerdsrun/assay"
+color = "#0ea5e9"
+github = "nerds-run/assay"
+verify = [["task", "check"], ["task", "test:unit"]]
+
+[projects.assay.agent]
+model = "sonnet"
+
+[projects.assay.groups.coders]
+workers = 2
+slots = 4
+
+[projects.assay.groups.qa]
+workers = 1
+slots = 2
+
+[projects.assay.groups.codex]
+workers = 1
+slots = 2
+
+[projects.assay.groups.research]
+workers = 1
+slots = 2
+
+[projects.assay.groups.debugger]
+workers = 1
+slots = 2
+
+[projects.assay.integrations.linear]
+url = "https://linear.app/nerds-run"
+token = { op = "op://Engineering/Linear API/section/credential" }
