@@ -74,15 +74,26 @@ type Pane struct {
 	// report lands only on a pane one of them runs in. Nil means the OS cannot
 	// read a lineage: the report then trusts PaneID unchecked.
 	Lineage *Lineage
+	// CodexThread is CODEX_THREAD_ID, which Codex sets on every tool command
+	// it runs: a report that carries it runs under Codex, and must find the
+	// pane's own Codex among its ancestors before it reports (A25).
+	CodexThread string
+	// CodexNetworkSandboxed is CODEX_SANDBOX_NETWORK_DISABLED set: Codex ran
+	// the command in a sandbox whose seccomp filter denies every connect,
+	// herdr's socket included.
+	CodexNetworkSandboxed bool
 }
 
-// PaneFrom reads HERDR_SOCKET_PATH and HERDR_PANE_ID through lookup
-// (os.LookupEnv in production). Taking the lookup keeps tests from ever
-// seeing a developer's live herdr variables.
+// PaneFrom reads HERDR_SOCKET_PATH, HERDR_PANE_ID, CODEX_THREAD_ID and
+// CODEX_SANDBOX_NETWORK_DISABLED through lookup (os.LookupEnv in
+// production). Taking the lookup keeps tests from ever seeing a developer's
+// live herdr variables.
 func PaneFrom(lookup func(string) (string, bool)) Pane {
 	sock, _ := lookup("HERDR_SOCKET_PATH")
 	pane, _ := lookup("HERDR_PANE_ID")
-	return Pane{SocketPath: sock, PaneID: pane}
+	thread, _ := lookup("CODEX_THREAD_ID")
+	sandboxed, _ := lookup("CODEX_SANDBOX_NETWORK_DISABLED")
+	return Pane{SocketPath: sock, PaneID: pane, CodexThread: thread, CodexNetworkSandboxed: sandboxed != ""}
 }
 
 // Reporter is the slice of the herdr client a report needs: the report
