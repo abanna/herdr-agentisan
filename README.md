@@ -97,9 +97,9 @@ it reported; only a malformed command line (an unknown flag, an extra
 argument) fails.
 
 Run by Codex (it carries `CODEX_THREAD_ID`), `report stage` reports only from
-the pane's own Codex: `codex --no-daemon`, with tool commands outside Codex's
-sandbox. Under the shared app-server daemon, in the sandbox, or off Linux, it
-reports nothing (ADR-001 A25).
+the pane's own Codex started as `codex --no-daemon --sandbox danger-full-access`.
+Under the shared app-server daemon, with Codex's default sandbox (even for an
+approved escalation), or off Linux, it reports nothing (ADR-001 A25).
 
 ## Search on prefix+/ and in the dashboard
 

@@ -656,14 +656,15 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
 
 - **Detection.** `report stage` knows it was run by a Codex tool command because `CODEX_THREAD_ID` is set; Codex sets it on every tool command (`core/src/exec_env.rs:30-37`). The lineage then decides where to report. Without that variable nothing changes, so Claude and scripts behave as before.
 - **Under Codex, `report stage` lands on the pane of its own Codex or nowhere.** Before calling herdr it refuses:
-  - Codex's network sandbox (`CODEX_SANDBOX_NETWORK_DISABLED`, `core/src/spawn.rs:91-92`), with `ErrCodexSandboxed`. There seccomp denies every `connect`, Unix sockets included (`linux-sandbox/src/landlock.rs:202-203`).
+  - Codex's restricted network (`CODEX_SANDBOX_NETWORK_DISABLED`), with `ErrCodexSandboxed`. In Codex's sandbox, seccomp then denies every `connect`, Unix sockets included (`linux-sandbox/src/landlock.rs:202-203`).
+    - Codex sets the variable from the turn's network policy, not from whether the command actually runs sandboxed (`core/src/sandboxing/mod.rs:169-175`). So a command whose escalation was approved still carries it, and reports nothing.
   - A lineage that `CheckCodexHost` does not accept:
     - one through a Codex app-server (`ErrCodexDaemon`), whose inherited `HERDR_PANE_ID` names the pane that started the daemon;
     - one with no Codex process in it (`ErrNoCodexHost`), as inside the sandbox's pid namespace, where the walk sees only the namespace's own processes;
     - one it cannot read (`ErrHostUnverified`). That includes every lineage off Linux, so off Linux, under Codex, nothing is reported.
 - **`CheckCodexHost` now requires the pane's own Codex.** That is a `codex` process among the ancestors, either the native binary or the node launcher, and no app-server. `report codex` (A22) shares the rule.
-- **So item and stage from Codex need an embedded, unsandboxed session:** `codex --no-daemon`, with tool commands outside the sandbox. Item 3's "work from a Codex pane" holds for that session only.
-  - A sandboxed Codex worker reports no item or stage.
+- **So item and stage from Codex need `codex --no-daemon --sandbox danger-full-access`.** Item 3's "work from a Codex pane" holds for that session only.
+  - A Codex worker under the default sandbox reports no item or stage, even for a step whose escalation was approved.
   - A Codex `allow` rule for `herdr-agentisan report stage` would not change that. A rule bypasses the sandbox only when every part of the top-level tool command matches (`core/src/exec_policy.rs:440-455`), and Agentisan runs the report from inside its own step scripts.
   - The worker launch settings belong to NERD-5278.
   - Binding a Codex thread to its pane from the `report codex` hook, so that a stage could find its pane by `CODEX_THREAD_ID`, is deferred. It would add a key to the token contract, and the default sandbox would still deny the connect.
