@@ -45,6 +45,22 @@ It prints nothing and always exits 0. Outside a herdr pane, or when the
 statusline has no context percentage yet, it reports nothing. Set
 `HERDR_AGENTISAN_LOG_LEVEL=debug` and drop the redirect to see why.
 
+## Report `$item` and `$stage` from agentisan
+
+Agentisan runs `report stage` on every pipeline step transition once
+`herdr-agentisan` is on your `PATH`; there is nothing to wire up:
+
+```bash
+herdr-agentisan report stage --item=NERD-5253 --stage=build_test
+```
+
+It sets the pane's `item` and `stage` tokens, source `agentisan`, with a 24 h
+TTL renewed by every report; they also leave with the pane. A value is at
+most 80 printable characters, and anything else is refused rather than cut
+short. Like `report statusline`, it prints nothing and exits 0 whether or not
+it reported; only a malformed command line (an unknown flag, an extra
+argument) fails.
+
 ## Gates
 
 `task check` runs most of what CI runs: lint, format, vet, gosec, gitleaks,

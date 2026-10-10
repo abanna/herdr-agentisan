@@ -182,7 +182,7 @@ func newReportCmd() *cobra.Command {
 			return fmt.Errorf("%s needs a subcommand; see --help", cmd.CommandPath())
 		},
 	}
-	c.AddCommand(newReportStatuslineCmd())
+	c.AddCommand(newReportStatuslineCmd(), newReportStageCmd())
 	return c
 }
 
@@ -217,4 +217,45 @@ func newReportStatuslineCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newReportStageCmd() *cobra.Command {
+	var item, stage string
+	c := &cobra.Command{
+		Use:   "stage --item <id> --stage <step>",
+		Short: "Push item and stage from an agentisan step transition",
+		Long: "Sets this pane's item and stage tokens: the ticket the agent works on\n" +
+			"and the agentisan pipeline step it is in. Agentisan runs it on every\n" +
+			"step transition, passing each value as --flag=value so that one\n" +
+			"starting with a dash stays a value.\n\n" +
+			"A value is at most 80 printable characters; anything else is refused,\n" +
+			"never cut short. The tokens expire 24 h after the last report.\n\n" +
+			"It prints nothing and exits 0 whether or not it reported; only a\n" +
+			"malformed command line (an unknown flag, an extra argument) fails. Why\n" +
+			"nothing was reported goes to the debug log (HERDR_AGENTISAN_LOG_LEVEL=debug).",
+		Example: "herdr-agentisan report stage --item=NERD-5253 --stage=build_test",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx := cmd.Context()
+			// Read the lineage first, as statusline does: the pane is found
+			// through the processes running when the report was made.
+			lineage := lineageFrom(ctx)()
+			logger := logging.From(ctx)
+			pane := report.PaneFrom(lookupEnvFrom(ctx))
+			pane.Lineage = lineage
+			res, err := report.Stage(ctx, herdr.Client{SocketPath: pane.SocketPath}, pane, item, stage)
+			// A step transition runs this, and a sidebar token never fails
+			// a step: why nothing was reported is for the debug log only.
+			if err != nil {
+				logger.Debug().Err(err).Str("pane", pane.PaneID).Ints("lineage", lineage.PIDs()).Msg("report stage: nothing reported")
+				return nil
+			}
+			logger.Debug().Str("pane", pane.PaneID).Str("reported_to", res.PaneID).
+				Str(report.ItemKey, res.Item).Str(report.StageKey, res.Stage).Msg("report stage")
+			return nil
+		},
+	}
+	c.Flags().StringVar(&item, "item", "", "ticket key, such as NERD-5253")
+	c.Flags().StringVar(&stage, "stage", "", "agentisan pipeline step, such as build_test")
+	return c
 }
