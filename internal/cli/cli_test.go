@@ -630,6 +630,27 @@ func TestManifestMatchesTheBinary(t *testing.T) {
 	}
 }
 
+// TestManifestDeclaresTheBtopPopup: the dashboard's [ btop ] button asks
+// herdr for plugin.pane.open on plugin.ID's plugin.BtopPane entrypoint. Both
+// constants must name what the manifest declares, and the pane must be a
+// popup running btop, or the click fails in a live herdr only.
+func TestManifestDeclaresTheBtopPopup(t *testing.T) {
+	t.Parallel()
+	m, err := plugin.LoadManifest(filepath.Join("..", "..", plugin.ManifestFile))
+	require.NoError(t, err)
+
+	assert.Equal(t, plugin.ID, m.ID)
+	var btop *plugin.Pane
+	for i := range m.Panes {
+		if m.Panes[i].ID == plugin.BtopPane {
+			btop = &m.Panes[i]
+		}
+	}
+	require.NotNil(t, btop, "the manifest declares no %q pane", plugin.BtopPane)
+	assert.Equal(t, "popup", btop.Placement)
+	assert.Equal(t, []string{"btop"}, btop.Command)
+}
+
 // TestManifestStartsTheDaemon: herdr's startup hook starts the daemon, and
 // the daemon-restart action exists because linking fires no startup hook
 // (ADR-001 D3).

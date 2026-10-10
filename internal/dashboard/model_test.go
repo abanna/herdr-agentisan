@@ -79,6 +79,26 @@ func (r *recorder) names() []string {
 	return out
 }
 
+// opener is a BtopOpener that counts its calls and answers err.
+type opener struct {
+	mu    sync.Mutex
+	calls int
+	err   error
+}
+
+func (o *opener) OpenBtop(context.Context) error {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.calls++
+	return o.err
+}
+
+func (o *opener) count() int {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.calls
+}
+
 func config(src snapshot.Source, f dashboard.Focuser) dashboard.Config {
 	return dashboard.Config{
 		Source:   src,
@@ -143,9 +163,9 @@ func selected(t *testing.T, m dashboard.Model) string {
 	return a.Name
 }
 
-// TestArrowKeysMoveTheSelection walks the selection rules on the full team.
-// At 120 columns the cards sit three to a row: coders, precheck, qa / codex,
-// research, clerk. At 80 they sit two to a row.
+// TestArrowKeysMoveTheSelection: up and down walk the agents in display
+// order (coders, precheck, qa, codex, research, clerk), across groups,
+// stopping at both ends. Left and right do nothing: the groups stack.
 func TestArrowKeysMoveTheSelection(t *testing.T) {
 	t.Parallel()
 
@@ -154,21 +174,18 @@ func TestArrowKeysMoveTheSelection(t *testing.T) {
 		keys []tea.KeyPressMsg
 		want string
 	}{
-		"starts on the first agent":            {w: 120, h: 40, want: "pee01"},
-		"down moves within a card":             {w: 120, h: 40, keys: keys(repeat(keyDown, 1)), want: "pee02"},
-		"up at the very first agent stays":     {w: 120, h: 40, keys: keys(repeat(keyUp, 1)), want: "pee01"},
-		"down wraps into the next card":        {w: 120, h: 40, keys: keys(repeat(keyDown, 9)), want: "precheck"},
-		"up wraps into the previous card":      {w: 120, h: 40, keys: keys(repeat(keyDown, 9), repeat(keyUp, 1)), want: "pee09"},
-		"down at the very last agent stays":    {w: 120, h: 40, keys: keys(repeat(keyDown, 30)), want: "clerk"},
-		"right keeps the index":                {w: 120, h: 40, keys: keys(repeat(keyDown, 1), repeat(keyRight, 1)), want: "precheck2"},
-		"right clamps the index":               {w: 120, h: 40, keys: keys(repeat(keyDown, 3), repeat(keyRight, 1)), want: "precheck2"},
-		"right twice reaches the third column": {w: 120, h: 40, keys: keys(repeat(keyRight, 2)), want: "qa"},
-		"right at the end of a row stays":      {w: 120, h: 40, keys: keys(repeat(keyRight, 5)), want: "qa"},
-		"left at the start of a row stays":     {w: 120, h: 40, keys: keys(repeat(keyLeft, 1)), want: "pee01"},
-		"left comes back":                      {w: 120, h: 40, keys: keys(repeat(keyRight, 1), repeat(keyLeft, 1)), want: "pee01"},
-		"left on the second row":               {w: 120, h: 40, keys: keys(repeat(keyDown, 14), repeat(keyLeft, 2)), want: "codex"},
-		"two columns: right stops at the edge": {w: 80, h: 24, keys: keys(repeat(keyRight, 3)), want: "precheck"},
-		"two columns: second row":              {w: 80, h: 24, keys: keys(repeat(keyDown, 12), repeat(keyRight, 1)), want: "codex"},
+		"starts on the first agent":         {w: 120, h: 40, want: "pee01"},
+		"down moves within a group":         {w: 120, h: 40, keys: keys(repeat(keyDown, 1)), want: "pee02"},
+		"up at the very first agent stays":  {w: 120, h: 40, keys: keys(repeat(keyUp, 1)), want: "pee01"},
+		"down crosses into the next group":  {w: 120, h: 40, keys: keys(repeat(keyDown, 9)), want: "precheck"},
+		"up crosses into the previous one":  {w: 120, h: 40, keys: keys(repeat(keyDown, 9), repeat(keyUp, 1)), want: "pee09"},
+		"down walks every group in order":   {w: 120, h: 40, keys: keys(repeat(keyDown, 13)), want: "research"},
+		"down at the very last agent stays": {w: 120, h: 40, keys: keys(repeat(keyDown, 30)), want: "clerk"},
+		"right does nothing":                {w: 120, h: 40, keys: keys(repeat(keyDown, 1), repeat(keyRight, 3)), want: "pee02"},
+		"left does nothing":                 {w: 120, h: 40, keys: keys(repeat(keyDown, 10), repeat(keyLeft, 2)), want: "precheck2"},
+		// The groups scroll: the selection is drawn wherever it is.
+		"down past the screen scrolls": {w: 80, h: 24, keys: keys(repeat(keyDown, 14)), want: "clerk"},
+		"and back up":                  {w: 80, h: 24, keys: keys(repeat(keyDown, 14), repeat(keyUp, 14)), want: "pee01"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -182,6 +199,44 @@ func TestArrowKeysMoveTheSelection(t *testing.T) {
 			assert.Contains(t, selectedLine(t, renderAttrs(t, m)), tc.want, "the selection is drawn where it is")
 		})
 	}
+}
+
+// contentTop is the first line of the groups in a frame the model drew.
+func contentTop(t *testing.T, m dashboard.Model) string {
+	t.Helper()
+	return lines(ansi.Strip(m.View().Content))[5]
+}
+
+// TestScrollFollowsTheSelection: the groups scroll only as far as the
+// selection needs, and stay where they are while it moves within view, so
+// stepping back up from the bottom does not jump the view.
+func TestScrollFollowsTheSelection(t *testing.T) {
+	t.Parallel()
+
+	src := &script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "full"))}}
+	m := started(t, config(src, &recorder{}), 80, 24)
+	assert.True(t, strings.HasPrefix(contentTop(t, m), "╭─ CODERS"))
+
+	for range 14 {
+		m, _ = update(t, m, keyDown)
+	}
+	require.Equal(t, "clerk", selected(t, m))
+	bottom := contentTop(t, m)
+	assert.True(t, strings.HasPrefix(bottom, "╭─ PRECHECK"), "scrolled to the end: %q", bottom)
+
+	m, _ = update(t, m, keyUp)
+	m, _ = update(t, m, keyUp)
+	require.Equal(t, "codex", selected(t, m))
+	assert.Equal(t, bottom, contentTop(t, m), "moving within view keeps the view")
+
+	m, _ = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 12})
+	assert.Contains(t, selectedLine(t, renderAttrs(t, m)), "codex", "a smaller pane scrolls to keep the selection")
+
+	for range 14 {
+		m, _ = update(t, m, keyUp)
+	}
+	require.Equal(t, "pee01", selected(t, m))
+	assert.True(t, strings.HasPrefix(contentTop(t, m), "╭─ CODERS"), "back at the top")
 }
 
 // renderAttrs draws the model's current frame keeping attributes, so the
@@ -237,17 +292,19 @@ func TestClickFocusesTheAgentUnderThePointer(t *testing.T) {
 		button tea.MouseButton
 		want   string // focused and selected; "" for no focus
 	}{
-		"first line":                  {target: "pee04", button: tea.MouseLeft, want: "pee04"},
-		"second line":                 {target: "pee05", dy: 1, button: tea.MouseLeft, want: "pee05"},
-		"far right of the first line": {target: "precheck2", dx: 20, button: tea.MouseLeft, want: "precheck2"},
-		"a card in the second row":    {target: "● research", button: tea.MouseLeft, want: "research"},
-		"the right button does not":   {target: "pee04", button: tea.MouseRight},
-		"the header does not":         {target: "agentisan", button: tea.MouseLeft},
-		"the boss line does not":      {target: "#867", button: tea.MouseLeft},
-		"a card's title does not":     {target: "coders 9", button: tea.MouseLeft},
-		"a card's border does not":    {target: "pee01", dx: -100, button: tea.MouseLeft},
-		"between two cards does not":  {target: "pee01", dx: 36, button: tea.MouseLeft},
-		"past the last card does not": {target: "pee01", dx: 116, button: tea.MouseLeft},
+		"a row":                             {target: "pee04", button: tea.MouseLeft, want: "pee04"},
+		"far right of a row":                {target: "pee05", dx: 100, button: tea.MouseLeft, want: "pee05"},
+		"the padding inside the border":     {target: "pee06", dx: -3, button: tea.MouseLeft, want: "pee06"},
+		"a group further down":              {target: "● research", button: tea.MouseLeft, want: "research"},
+		"the right button does not":         {target: "pee04", button: tea.MouseRight},
+		"the header does not":               {target: "agentisan", button: tea.MouseLeft},
+		"the boss line does not":            {target: "#867", button: tea.MouseLeft},
+		"the gap under the header does not": {target: "agentisan", dy: 3, button: tea.MouseLeft},
+		"a group's title does not":          {target: "CODERS", button: tea.MouseLeft},
+		"a group's description does not":    {target: "write the code", button: tea.MouseLeft},
+		"a box's bottom border does not":    {target: "pee09", dy: 1, button: tea.MouseLeft},
+		"a box's left border does not":      {target: "pee01", dx: -100, button: tea.MouseLeft},
+		"a box's right border does not":     {target: "pee01", dx: 115, button: tea.MouseLeft},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -268,6 +325,134 @@ func TestClickFocusesTheAgentUnderThePointer(t *testing.T) {
 			assert.Equal(t, []string{tc.want}, rec.names())
 		})
 	}
+}
+
+// TestClickAfterScrollHitsWhatIsDrawn: a click maps through the scrolled
+// frame, the one on screen, not the unscrolled one.
+func TestClickAfterScrollHitsWhatIsDrawn(t *testing.T) {
+	t.Parallel()
+
+	rec := &recorder{}
+	src := &script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "full"))}}
+	m := started(t, config(src, rec), 80, 24)
+	for range 14 {
+		m, _ = update(t, m, keyDown)
+	}
+	x, y := locate(t, m.View().Content, "● research")
+	m, cmd := update(t, m, tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	assert.Equal(t, "research", selected(t, m))
+	run(t, m, cmd)
+	assert.Equal(t, []string{"research"}, rec.names())
+}
+
+// TestClickOnBtopOpensIt: a left click on any cell of [ btop ] asks the
+// opener for btop, once, and focuses no one; a click beside it does nothing.
+func TestClickOnBtopOpensIt(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		dx     int
+		button tea.MouseButton
+		opens  bool
+	}{
+		"its first cell":            {dx: 0, button: tea.MouseLeft, opens: true},
+		"its last cell":             {dx: 7, button: tea.MouseLeft, opens: true},
+		"left of it":                {dx: -1, button: tea.MouseLeft},
+		"right of it":               {dx: 8, button: tea.MouseLeft},
+		"the right button does not": {dx: 2, button: tea.MouseRight},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			rec, op := &recorder{}, &opener{}
+			cfg := config(&script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "full"))}}, rec)
+			cfg.Btop = op
+			m := started(t, cfg, 120, 40)
+			x, y := locate(t, m.View().Content, "[ btop ]")
+
+			m, cmd := update(t, m, tea.MouseClickMsg{X: x + tc.dx, Y: y, Button: tc.button})
+			if !tc.opens {
+				assert.Nil(t, cmd)
+				assert.Zero(t, op.count())
+				return
+			}
+			assert.Zero(t, op.count(), "btop opens in a command, never inside Update")
+			run(t, m, cmd)
+			assert.Equal(t, 1, op.count())
+			assert.Empty(t, rec.names(), "the button focuses no agent")
+			assert.Equal(t, "pee01", selected(t, m))
+		})
+	}
+}
+
+// TestNoBtopWithoutAnOpener: without an opener the button is not drawn, the
+// hint is not shown, and a click where the button would be does nothing.
+func TestNoBtopWithoutAnOpener(t *testing.T) {
+	t.Parallel()
+
+	src := &script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "full"))}}
+	m := started(t, config(src, &recorder{}), 120, 40)
+	assert.NotContains(t, m.View().Content, "btop")
+	_, cmd := update(t, m, tea.MouseClickMsg{X: 112, Y: 1, Button: tea.MouseLeft})
+	assert.Nil(t, cmd)
+}
+
+// TestBtopErrorShowsInTheFooter: a failed open is one line in the footer,
+// never a crash, and the next successful open clears it.
+func TestBtopErrorShowsInTheFooter(t *testing.T) {
+	t.Parallel()
+
+	op := &opener{err: fmt.Errorf("%w: plugin not found", herdr.ErrAPI)}
+	cfg := config(&script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "full"))}}, &recorder{})
+	cfg.Btop = op
+	m := started(t, cfg, 120, 40)
+	x, y := locate(t, m.View().Content, "[ btop ]")
+	click := tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft}
+
+	_, cmd := update(t, m, click)
+	m = run(t, m, cmd)
+	footer := lines(m.View().Content)[39]
+	assert.Contains(t, footer, "✖ btop failed:")
+	assert.Contains(t, footer, "plugin not found")
+
+	op.mu.Lock()
+	op.err = nil
+	op.mu.Unlock()
+	_, cmd = update(t, m, click)
+	m = run(t, m, cmd)
+	assert.NotContains(t, m.View().Content, "btop failed")
+}
+
+// TestHerdrBtopOpensThePopup drives the button end to end against the fake
+// herdr: one plugin.pane.open for this plugin's btop pane, as a popup at 92%
+// of the terminal each way. The plugin itself starts no process.
+func TestHerdrBtopOpensThePopup(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		reply herdrtest.Reply
+		err   error
+	}{
+		"herdr opens it": {reply: herdrtest.Reply{Result: map[string]any{"type": "ok"}}},
+		"herdr refuses":  {reply: herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "plugin_not_found", Message: "plugin not found"}}, err: herdr.ErrAPI},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply { return tc.reply })
+			err := dashboard.HerdrBtop{Client: herdr.Client{SocketPath: srv.Path}}.OpenBtop(t.Context())
+			if tc.err != nil {
+				require.ErrorIs(t, err, tc.err)
+				require.ErrorIs(t, err, dashboard.ErrBtop)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, []sent{{Method: "plugin.pane.open", Params: `{"plugin_id":"nerdsrun.agentisan","entrypoint":"btop","width":"92%","height":"92%","placement":"popup"}`}}, requests(srv))
+		})
+	}
+	err := dashboard.HerdrBtop{}.OpenBtop(t.Context())
+	require.ErrorIs(t, err, herdr.ErrNoSocket, "no socket fails without dialling")
+	require.ErrorIs(t, err, dashboard.ErrBtop)
 }
 
 // focusHerdr answers agent.focus and pane.zoom like herdr 0.9.3, or fails
@@ -398,7 +583,7 @@ func TestFocusErrorShowsInTheFooter(t *testing.T) {
 	footer := lines[len(lines)-1]
 	assert.Contains(t, footer, "✖ pee01: focus failed:")
 	assert.Contains(t, footer, "agent target pee01 not found")
-	assert.Contains(t, m.View().Content, "pee09", "the cards stay drawn")
+	assert.Contains(t, m.View().Content, "pee09", "the groups stay drawn")
 
 	rec.mu.Lock()
 	rec.err = nil
@@ -467,21 +652,28 @@ func TestHelpToggles(t *testing.T) {
 	}
 }
 
-// TestClickWhileHelpIsOpenClosesIt: the overlay covers the cards, so a click
-// must not focus an agent the reader cannot see.
+// TestClickWhileHelpIsOpenClosesIt: the overlay covers the groups, so a
+// click must neither focus an agent nor open btop the reader cannot see.
 func TestClickWhileHelpIsOpenClosesIt(t *testing.T) {
 	t.Parallel()
 
-	rec := &recorder{}
-	src := &script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "full"))}}
-	m := started(t, config(src, rec), 120, 40)
-	x, y := locate(t, m.View().Content, "pee04")
-	m, _ = update(t, m, keyHelp)
+	for _, target := range []string{"pee04", "[ btop ]"} {
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+			rec, op := &recorder{}, &opener{}
+			cfg := config(&script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "full"))}}, rec)
+			cfg.Btop = op
+			m := started(t, cfg, 120, 40)
+			x, y := locate(t, m.View().Content, target)
+			m, _ = update(t, m, keyHelp)
 
-	m, cmd := update(t, m, tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
-	assert.Nil(t, cmd)
-	assert.NotContains(t, m.View().Content, "╭ help")
-	assert.Empty(t, rec.names())
+			m, cmd := update(t, m, tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+			assert.Nil(t, cmd)
+			assert.NotContains(t, m.View().Content, "╭ help")
+			assert.Empty(t, rec.names())
+			assert.Zero(t, op.count())
+		})
+	}
 }
 
 // TestPolling: Init fetches at once; each answer schedules exactly one tick;
@@ -532,7 +724,7 @@ func TestSourceErrorKeepsTheLastGoodFrame(t *testing.T) {
 	m, tick = pollOnce(t, m, tick)
 	after := m.View().Content
 	assert.Contains(t, after, "connection refused")
-	assert.Equal(t, cardsOnly(before), cardsOnly(after), "the cards are the last good frame's")
+	assert.Equal(t, groupsOnly(before), groupsOnly(after), "the groups are the last good frame's")
 
 	m, _ = pollOnce(t, m, tick)
 	assert.NotContains(t, m.View().Content, "connection refused")
@@ -561,7 +753,7 @@ func pollOnce(t *testing.T, m dashboard.Model, tick tea.Cmd) (dashboard.Model, t
 	return m, tick
 }
 
-func cardsOnly(frame string) string {
+func groupsOnly(frame string) string {
 	lines := strings.Split(frame, "\n")
 	return strings.Join(lines[:len(lines)-1], "\n")
 }
@@ -572,6 +764,7 @@ func TestWaitingForTheFirstSnapshot(t *testing.T) {
 	src := &script{steps: []func() (snapshot.Snapshot, error){fail(fmt.Errorf("%w: refused", snapshot.ErrUnavailable))}}
 	m := dashboard.New(t.Context(), config(src, &recorder{}))
 	assert.Contains(t, m.View().Content, "waiting for the daemon…", "an unsized model draws at 80x24")
+	assert.Len(t, lines(m.View().Content), 24)
 
 	m, _ = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = run(t, m, m.Init())
@@ -583,6 +776,28 @@ func TestWaitingForTheFirstSnapshot(t *testing.T) {
 
 	_, cmd := update(t, m, keyEnter)
 	assert.Nil(t, cmd, "nothing to focus yet")
+}
+
+// TestUnusableWindowSizesDrawAtTheFallback: a reported size of zero or less
+// is no size; the model draws at 80x24 until a usable one arrives.
+func TestUnusableWindowSizesDrawAtTheFallback(t *testing.T) {
+	t.Parallel()
+
+	for name, size := range map[string]tea.WindowSizeMsg{
+		"zero":     {Width: 0, Height: 0},
+		"negative": {Width: -3, Height: -1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			src := &script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "full"))}}
+			m := started(t, config(src, &recorder{}), 120, 40)
+			m, _ = update(t, m, size)
+			assert.Equal(t, 80, m.Width())
+			assert.Equal(t, 24, m.Height())
+			require.Len(t, lines(m.View().Content), 24)
+			assert.Contains(t, selectedLine(t, renderAttrs(t, m)), "pee01")
+		})
+	}
 }
 
 // TestSelectionFollowsTheAgent: the selection is anchored to the agent, not
@@ -644,11 +859,13 @@ func TestHerdrConfig(t *testing.T) {
 
 	off := dashboard.HerdrConfig(src, "")
 	assert.Nil(t, off.Focuser)
+	assert.Nil(t, off.Btop, "no socket, no btop")
 	assert.Contains(t, off.Note, "HERDR_SOCKET_PATH")
 	assert.Equal(t, src, off.Source)
 
 	on := dashboard.HerdrConfig(src, "/run/herdr.sock")
 	assert.Equal(t, dashboard.HerdrFocuser{Client: herdr.Client{SocketPath: "/run/herdr.sock"}}, on.Focuser)
+	assert.Equal(t, dashboard.HerdrBtop{Client: herdr.Client{SocketPath: "/run/herdr.sock"}}, on.Btop)
 	assert.Empty(t, on.Note)
 }
 
@@ -677,6 +894,7 @@ func TestFixtureConfig(t *testing.T) {
 				t.Helper()
 				assert.Equal(t, snapshot.FileSource{Path: good}, cfg.Source)
 				assert.Equal(t, dashboard.HerdrFocuser{Client: herdr.Client{SocketPath: "/run/herdr.sock"}}, cfg.Focuser)
+				assert.Equal(t, dashboard.HerdrBtop{Client: herdr.Client{SocketPath: "/run/herdr.sock"}}, cfg.Btop)
 			},
 		},
 		"focus off without a socket": {
@@ -684,6 +902,7 @@ func TestFixtureConfig(t *testing.T) {
 			check: func(t *testing.T, cfg dashboard.Config) {
 				t.Helper()
 				assert.Nil(t, cfg.Focuser)
+				assert.Nil(t, cfg.Btop)
 				assert.Contains(t, cfg.Note, "HERDR_SOCKET_PATH")
 			},
 		},
@@ -777,6 +996,14 @@ func (blockingSource) Snapshot(ctx context.Context) (snapshot.Snapshot, error) {
 	return snapshot.Snapshot{}, ctx.Err()
 }
 
+// blockingBtop returns only when its context ends.
+type blockingBtop struct{}
+
+func (blockingBtop) OpenBtop(ctx context.Context) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 // blockingFocuser returns only when its context ends.
 type blockingFocuser struct{}
 
@@ -834,6 +1061,22 @@ func TestCallsAreBounded(t *testing.T) {
 			},
 			want: []string{"pee01: focus failed", "deadline exceeded"},
 		},
+		"a btop that never opens": {
+			cfg: func(t *testing.T) dashboard.Config {
+				t.Helper()
+				cfg := config(&script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "full"))}}, &recorder{})
+				cfg.Btop = blockingBtop{}
+				cfg.FocusTimeout = 20 * time.Millisecond
+				return cfg
+			},
+			cmd: func(t *testing.T, m dashboard.Model) (dashboard.Model, tea.Cmd) {
+				t.Helper()
+				m = run(t, m, m.Init())
+				x, y := locate(t, m.View().Content, "[ btop ]")
+				return update(t, m, tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+			},
+			want: []string{"btop failed", "deadline exceeded"},
+		},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -889,6 +1132,15 @@ func TestZeroConfigMeansDefaults(t *testing.T) {
 			_, cmd := update(t, started(t, cfg, 80, 24), keyEnter)
 			return cmd
 		},
+		"a zero timeout bounds btop by the default": func(t *testing.T) tea.Cmd {
+			t.Helper()
+			cfg := config(&script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "full"))}}, nil)
+			cfg.Btop = blockingBtop{}
+			m := started(t, cfg, 120, 40)
+			x, y := locate(t, m.View().Content, "[ btop ]")
+			_, cmd := update(t, m, tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+			return cmd
+		},
 		"a negative fetch timeout": func(t *testing.T) tea.Cmd {
 			t.Helper()
 			cfg := config(blockingSource{}, nil)
@@ -923,8 +1175,8 @@ func TestTheDefaultClockIsTheLocalTime(t *testing.T) {
 	m := started(t, cfg, 120, 40)
 	after := time.Now()
 
-	header, _, _ := strings.Cut(m.View().Content, "\n")
-	assert.True(t, strings.HasSuffix(header, before.Format("15:04")) || strings.HasSuffix(header, after.Format("15:04")), "%q", header)
+	boss := lineWith(t, m.View().Content, "boss ▸")
+	assert.True(t, strings.HasSuffix(boss, before.Format("15:04")+" │") || strings.HasSuffix(boss, after.Format("15:04")+" │"), "%q", boss)
 }
 
 // TestUnboundKeysDoNothing: only the documented keys act. A capital Q, q
@@ -944,6 +1196,11 @@ func TestUnboundKeysDoNothing(t *testing.T) {
 		"a function key":        {Code: tea.KeyF1},
 		"enter with a modifier": {Code: tea.KeyEnter, Mod: tea.ModAlt},
 		"an empty key event":    {},
+		"left":                  keyLeft,
+		"right":                 keyRight,
+		"m":                     {Code: 'm', Text: "m"},
+		"slash":                 {Code: '/', Text: "/"},
+		"b":                     {Code: 'b', Text: "b"},
 	}
 	for name, k := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -961,9 +1218,9 @@ func TestUnboundKeysDoNothing(t *testing.T) {
 	}
 }
 
-// TestClicksOffTheCardsDoNothing: positions outside the frame, negative or
+// TestClicksOffTheAgentsDoNothing: positions outside the frame, negative or
 // huge, select and focus no one.
-func TestClicksOffTheCardsDoNothing(t *testing.T) {
+func TestClicksOffTheAgentsDoNothing(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]tea.MouseClickMsg{
@@ -972,6 +1229,7 @@ func TestClicksOffTheCardsDoNothing(t *testing.T) {
 		"a position past the frame": {X: 1 << 30, Y: 1 << 30, Button: tea.MouseLeft},
 		"the footer":                {X: 3, Y: 39, Button: tea.MouseLeft},
 		"the wheel":                 {X: 3, Y: 3, Button: tea.MouseWheelDown},
+		"an empty click event":      {},
 	}
 	for name, click := range tests {
 		t.Run(name, func(t *testing.T) {

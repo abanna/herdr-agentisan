@@ -412,3 +412,36 @@ func (c Client) ZoomPane(ctx context.Context, paneID string) (PaneZoom, error) {
 	}
 	return *out.Zoom, nil
 }
+
+// PluginPopup opens one of a plugin's manifest [[panes]] entrypoints as a
+// herdr popup: a session-modal terminal over the active pane that leaves the
+// tab layout alone and closes when its command exits.
+type PluginPopup struct {
+	PluginID   string `json:"plugin_id"`
+	Entrypoint string `json:"entrypoint"`
+	// Width and Height are the popup's outer size, in cells ("80") or a
+	// percentage of the terminal ("92%"). Empty leaves the manifest's size,
+	// or herdr's default of half the terminal.
+	Width  string `json:"width,omitempty"`
+	Height string `json:"height,omitempty"`
+}
+
+// OpenPluginPopup asks herdr to run a plugin pane in a popup. herdr runs the
+// manifest's argv itself; the plugin starts no process. A popup has no pane
+// id, so herdr answers a bare ok.
+func (c Client) OpenPluginPopup(ctx context.Context, p PluginPopup) error {
+	params := struct {
+		PluginPopup
+		Placement string `json:"placement"`
+	}{PluginPopup: p, Placement: "popup"}
+	var out struct {
+		Type string `json:"type"`
+	}
+	if err := c.Call(ctx, "plugin.pane.open", params, &out); err != nil {
+		return err
+	}
+	if out.Type != "ok" {
+		return fmt.Errorf("%w: plugin.pane.open: result type %q, want \"ok\"", ErrProtocol, out.Type)
+	}
+	return nil
+}

@@ -747,3 +747,97 @@ func TestCallTimeoutIsFiveSeconds(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, 5*time.Second, herdr.CallTimeout, "the zero Client bounds each call by CallTimeout")
 }
+
+// TestOpenPluginPopupSendsTheSchemaShape: plugin.pane.open with placement
+// popup, as herdr 0.9.3's PluginPaneOpenParams reads it. A popup answers ok:
+// it has no pane id. A size left empty is left out, so the manifest's (or
+// herdr's default, half the terminal) applies.
+func TestOpenPluginPopupSendsTheSchemaShape(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		popup herdr.PluginPopup
+		want  string
+	}{
+		"a sized popup": {
+			popup: herdr.PluginPopup{PluginID: "nerdsrun.agentisan", Entrypoint: "btop", Width: "92%", Height: "92%"},
+			want:  `{"plugin_id":"nerdsrun.agentisan","entrypoint":"btop","placement":"popup","width":"92%","height":"92%"}`,
+		},
+		"the manifest's size": {
+			popup: herdr.PluginPopup{PluginID: "nerdsrun.agentisan", Entrypoint: "btop"},
+			want:  `{"plugin_id":"nerdsrun.agentisan","entrypoint":"btop","placement":"popup"}`,
+		},
+		// Sent as JSON values, never an argv: herdr resolves the entrypoint
+		// against the manifest and refuses one it does not declare.
+		"an option-like entrypoint": {
+			popup: herdr.PluginPopup{PluginID: "nerdsrun.agentisan", Entrypoint: "--help"},
+			want:  `{"plugin_id":"nerdsrun.agentisan","entrypoint":"--help","placement":"popup"}`,
+		},
+		// Whatever bytes the names hold, the request stays one valid JSON
+		// line: invalid UTF-8 is sent as U+FFFD, controls are escaped.
+		"a non-ASCII entrypoint":               {popup: herdr.PluginPopup{PluginID: "p", Entrypoint: "ビートップ"}, want: `{"plugin_id":"p","entrypoint":"ビートップ","placement":"popup"}`},
+		"an entrypoint with invalid UTF-8":     {popup: herdr.PluginPopup{PluginID: "p", Entrypoint: "b\xfftop"}, want: `{"plugin_id":"p","entrypoint":"b\ufffdtop","placement":"popup"}`},
+		"a truncated multibyte entrypoint":     {popup: herdr.PluginPopup{PluginID: "p", Entrypoint: "btop\xe2\x82"}, want: `{"plugin_id":"p","entrypoint":"btop\ufffd\ufffd","placement":"popup"}`},
+		"an entrypoint with a newline":         {popup: herdr.PluginPopup{PluginID: "p", Entrypoint: "b\ntop"}, want: `{"plugin_id":"p","entrypoint":"b\ntop","placement":"popup"}`},
+		"an entrypoint with a NUL":             {popup: herdr.PluginPopup{PluginID: "p", Entrypoint: "b\x00top"}, want: `{"plugin_id":"p","entrypoint":"b\u0000top","placement":"popup"}`},
+		"an entrypoint with a byte-order mark": {popup: herdr.PluginPopup{PluginID: "p", Entrypoint: "\ufeffbtop"}, want: `{"plugin_id":"p","entrypoint":"\ufeffbtop","placement":"popup"}`},
+		"an entrypoint with shell metachars":   {popup: herdr.PluginPopup{PluginID: "p", Entrypoint: "b;$(x) *"}, want: `{"plugin_id":"p","entrypoint":"b;$(x) *","placement":"popup"}`},
+		// The client sends what it is given; herdr refuses an empty one.
+		"an empty entrypoint is sent": {
+			popup: herdr.PluginPopup{}, want: `{"plugin_id":"","entrypoint":"","placement":"popup"}`,
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
+				return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
+			})
+
+			require.NoError(t, herdr.Client{SocketPath: srv.Path}.OpenPluginPopup(t.Context(), tc.popup))
+			reqs := srv.Requests()
+			require.Len(t, reqs, 1)
+			assert.Equal(t, "plugin.pane.open", reqs[0].Method)
+			assert.JSONEq(t, tc.want, string(reqs[0].Params))
+		})
+	}
+}
+
+func TestOpenPluginPopupFailureClasses(t *testing.T) {
+	t.Parallel()
+
+	popup := herdr.PluginPopup{PluginID: "nerdsrun.agentisan", Entrypoint: "btop"}
+	tests := map[string]struct {
+		handler herdrtest.Handler
+		noSock  bool
+		want    error
+	}{
+		// herdr refuses a plugin that is not linked, or linked from before
+		// the manifest declared the pane.
+		"the plugin is not linked": {handler: func(herdrtest.Request) herdrtest.Reply {
+			return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "plugin_not_found", Message: "plugin not found"}}
+		}, want: herdr.ErrAPI},
+		"the popup failed to start": {handler: func(herdrtest.Request) herdrtest.Reply {
+			return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "plugin_pane_open_failed", Message: "spawn failed"}}
+		}, want: herdr.ErrAPI},
+		"a pane answer, not a popup's": {handler: func(herdrtest.Request) herdrtest.Reply {
+			return herdrtest.Reply{Result: map[string]any{"type": "plugin_pane_info"}}
+		}, want: herdr.ErrProtocol},
+		// The type is matched exactly: a re-cased "OK" is not herdr's ok.
+		"an OK in another case": {handler: func(herdrtest.Request) herdrtest.Reply {
+			return herdrtest.Reply{Result: map[string]any{"type": "OK"}}
+		}, want: herdr.ErrProtocol},
+		"closed without a reply":           {handler: func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Silent: true} }, want: herdr.ErrUnavailable},
+		"no socket fails without dialling": {noSock: true, want: herdr.ErrNoSocket},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			client := herdr.Client{}
+			if !tc.noSock {
+				client.SocketPath = herdrtest.Start(t, tc.handler).Path
+			}
+			require.ErrorIs(t, client.OpenPluginPopup(t.Context(), popup), tc.want)
+		})
+	}
+}

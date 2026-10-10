@@ -2,34 +2,47 @@
   "v": 1,
   "at": "2026-10-09T17:19:00Z",
   "team": "agentisan",
-  "boss": {"name": "boss", "pane_id": "w1:p1", "status": "working", "model": "claude-opus-4-1", "ctx": 23, "item": "#867 release", "stage": "review"},
+  "project": {
+    "color": "#bd93f9",
+    "prs": [
+      {"number": 878, "ci": "pending", "codex": "pending", "merge": "blocked"},
+      {"number": 882, "ci": "success", "codex": "findings", "merge": "blocked"},
+      {"number": 884, "ci": "failure", "codex": "pending", "merge": "dirty"},
+      {"number": 886, "ci": "success", "codex": "approved", "merge": "clean"},
+      {"number": 887, "ci": "success", "codex": "approved", "merge": "behind"}
+    ],
+    "issues": 14,
+    "slots": {"used": 2, "total": 2}
+  },
+  "boss": {"name": "boss", "pane_id": "w1:p1", "status": "working", "model": "claude-opus-4-1", "ctx": 23, "item": "#867 release", "stage": "review",
+           "stage_started_at": "2026-10-09T17:02:00Z", "watchers": 4, "started_at": "2026-10-09T15:05:00Z"},
   "groups": [
     {"name": "research", "description": "reads before anyone writes", "agents": [
-      {"name": "research", "pane_id": "w7:p1", "status": "idle", "model": "claude-haiku-4-5", "ctx": 5, "stage": "herdr 0.9.3 events"}
+      {"name": "research", "pane_id": "w7:p1", "status": "idle", "model": "claude-haiku-4-5", "ctx": 5, "stage": "herdr 0.9.3 events", "stage_started_at": "2026-10-09T16:31:00Z"}
     ]},
     {"name": "qa", "agents": [
-      {"name": "qa", "pane_id": "w5:p1", "status": "done", "model": "sonnet", "ctx": 12, "stage": "queue empty"}
+      {"name": "qa", "pane_id": "w5:p1", "status": "done", "model": "sonnet", "ctx": 12, "stage": "queue empty", "stage_started_at": "2026-10-09T14:00:00Z"}
     ]},
     {"name": "coders", "description": "write the code", "agents": [
-      {"name": "pee01", "pane_id": "w2:p1", "status": "working", "model": "claude-opus-4-1", "ctx": 38, "item": "r2", "stage": "J1 re-run"},
-      {"name": "pee02", "pane_id": "w2:p2", "status": "working", "model": "opus", "ctx": 30, "stage": "J1 re-queued"},
-      {"name": "pee03", "pane_id": "w2:p3", "status": "idle", "model": "opus", "ctx": 22, "item": "PR3a", "stage": "committed"},
-      {"name": "pee04", "pane_id": "w2:p4", "status": "working", "model": "opus", "ctx": 61, "item": "NERD-5255", "stage": "go-review"},
-      {"name": "pee05", "pane_id": "w2:p5", "status": "blocked", "model": "opus", "ctx": 78, "item": "NERD-5247", "stage": "waiting on boss"},
+      {"name": "pee01", "pane_id": "w2:p1", "status": "working", "model": "claude-opus-4-1", "ctx": 38, "item": "r2", "stage": "J1 re-run", "stage_started_at": "2026-10-09T17:07:00Z"},
+      {"name": "pee02", "pane_id": "w2:p2", "status": "working", "model": "opus", "ctx": 30, "stage": "J1 re-queued", "stage_started_at": "2026-10-09T16:58:00Z"},
+      {"name": "pee03", "pane_id": "w2:p3", "status": "idle", "model": "opus", "ctx": 22, "item": "PR3a", "stage": "committed", "stage_started_at": "2026-10-09T15:40:00Z"},
+      {"name": "pee04", "pane_id": "w2:p4", "status": "working", "model": "opus", "ctx": 61, "item": "NERD-5255", "stage": "go-review", "stage_started_at": "2026-10-09T17:15:30Z"},
+      {"name": "pee05", "pane_id": "w2:p5", "status": "blocked", "model": "opus", "ctx": 78, "item": "NERD-5247", "stage": "waiting on boss", "stage_started_at": "2026-10-09T16:10:00Z"},
       {"name": "pee06", "pane_id": "w2:p6", "status": "idle", "model": "Sonnet 4.5", "ctx": 12},
-      {"name": "pee07", "pane_id": "w2:p7", "status": "done", "model": "opus", "ctx": 47, "item": "NERD-5246", "stage": "merged"},
-      {"name": "pee08", "pane_id": "w2:p8", "status": "ready", "model": "opus", "stage": "handoff read"},
-      {"name": "pee09", "pane_id": "w2:p9", "status": "working", "model": "opus", "ctx": 69, "item": "NERD-5268", "stage": "precheck: tdaddy impact on the stale pane id resolver"}
+      {"name": "pee07", "pane_id": "w2:p7", "status": "done", "model": "opus", "ctx": 47, "item": "NERD-5246", "stage": "merged", "stage_started_at": "2026-10-07T09:00:00Z"},
+      {"name": "pee08", "pane_id": "w2:p8", "status": "ready", "model": "opus", "stage": "handoff read", "stage_started_at": "2026-10-09T17:19:00Z"},
+      {"name": "pee09", "pane_id": "w2:p9", "status": "working", "model": "opus", "ctx": 69, "item": "NERD-5268", "stage": "precheck: tdaddy impact on the stale pane id resolver", "stage_started_at": "2026-10-09T17:20:00Z"}
     ]},
     {"name": "clerk", "agents": [
       {"name": "clerk", "pane_id": "w8:p1", "status": "unknown", "model": "haiku"}
     ]},
     {"name": "precheck", "agents": [
-      {"name": "precheck", "pane_id": "w3:p1", "status": "working", "model": "sonnet", "ctx": 37, "stage": "running"},
+      {"name": "precheck", "pane_id": "w3:p1", "status": "working", "model": "sonnet", "ctx": 37, "stage": "running", "stage_started_at": "2026-10-09T17:11:00Z"},
       {"name": "precheck2", "pane_id": "w3:p2", "status": "idle", "model": "sonnet", "ctx": 10}
     ]},
     {"name": "codex", "description": "Codex review triage", "agents": [
-      {"name": "codex", "pane_id": "w6:p1", "status": "working", "model": "gpt-5-codex", "ctx": 41, "item": "#868", "stage": "triage"}
+      {"name": "codex", "pane_id": "w6:p1", "status": "working", "model": "gpt-5-codex", "ctx": 41, "item": "#868", "stage": "triage", "stage_started_at": "2026-10-09T17:13:00Z"}
     ]}
   ]
 }

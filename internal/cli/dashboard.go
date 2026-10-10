@@ -14,11 +14,13 @@ func newDashboardCmd() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "dashboard",
-		Short: "Show the team dashboard: a card per group; Enter or a click focuses an agent",
-		Long: "Draws one card per group with each agent's status, model, ctx, item and\n" +
-			"stage, refreshed every second. Arrow keys move, Enter or a left click\n" +
-			"focuses and zooms the agent through HERDR_SOCKET_PATH, ? shows help and\n" +
-			"q quits.\n\n" +
+		Short: "Show the team dashboard: a header box, then a box per group; Enter or a click focuses an agent",
+		Long: "Draws a header box (the project's PRs, issues and test slots; the boss),\n" +
+			"then one box per group, stacked, with one line per agent: status, model,\n" +
+			"ctx, item, stage and time in the stage. Refreshed every second; the groups\n" +
+			"scroll when they do not fit. Up and down move, Enter or a left click\n" +
+			"focuses and zooms the agent through HERDR_SOCKET_PATH, a click on\n" +
+			"[ btop ] opens btop in a herdr popup, ? shows help and q quits.\n\n" +
 			"The daemon does not serve snapshots yet, so --fixture is required: a\n" +
 			"snapshot JSON file, re-read on every refresh. Try:\n\n" +
 			"  herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json",

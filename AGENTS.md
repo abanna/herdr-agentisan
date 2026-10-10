@@ -82,7 +82,10 @@ exempts whatever is later added under that name.
 - `herdr-plugin.toml` — the plugin manifest herdr reads. Every action execs
   `bin/herdr-agentisan <subcommand>`; `TestManifestMatchesTheBinary` in
   `internal/cli` fails the build if an action stops naming a real command or
-  the build output path drifts from the Taskfile's.
+  the build output path drifts from the Taskfile's. Its one `[[panes]]`
+  entry, `btop`, is the popup the dashboard's `[ btop ]` button asks herdr to
+  open (`plugin.pane.open`); herdr runs it, the plugin starts no process, and
+  `TestManifestDeclaresTheBtopPopup` pins it to `plugin.ID`/`plugin.BtopPane`.
 - `cmd/herdr-agentisan/` — the plugin binary's entrypoint. Wires config,
   logging (stderr only — stdout is the command's output) and tracing; no logic.
 - `cmd/devctl/` — development operations CLI entrypoint. A thin shim.
@@ -90,7 +93,8 @@ exempts whatever is later added under that name.
   package, renders. Domain packages live beside it under `internal/`, one per
   concern; no command holds a rule of its own.
 - `internal/plugin/` — the plugin's domain: the runtime environment herdr
-  injects (`EnvFrom`), the manifest (`LoadManifest`) and the actions' logic.
+  injects (`EnvFrom`), the manifest (`LoadManifest`, with its actions and
+  panes) and the actions' logic.
 - `internal/report/` — an agent pushing its own state to its pane as herdr
   tokens (ADR-001 D4), and the token contract for the keys it writes.
   `report statusline` turns Claude's statusline JSON into `ctx`, and
@@ -112,8 +116,13 @@ exempts whatever is later added under that name.
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real
   socket set, and a test that reads it would toast a live session.
-- `internal/snapshot/` — the versioned snapshot contract (ADR-001 D5/D6).
-- `internal/dashboard/` — the bubbletea team dashboard and its pure renderer.
+- `internal/snapshot/` — the versioned snapshot contract (ADR-001 D5/D6):
+  the groups and agents, the boss, and the project's PRs, issues and test
+  slots. Decoding is strict: exact keys, closed enums, RFC 3339 times.
+- `internal/dashboard/` — the bubbletea team dashboard and its pure renderer:
+  a header box, then the groups stacked as boxes with one dense line per
+  agent, scrolling to keep the selection in view. Goldens in `testdata/`
+  (`go test ./internal/dashboard/ -update`, then read every one).
 - `internal/devctl/` — the `devctl` cobra tree: the coverage floor, the
   docs-parity check and the large-file ceiling, none of which the Go toolchain
   provides.

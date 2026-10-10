@@ -181,6 +181,12 @@ id = "ping"
 title = "Ping"
 contexts = ["global"]
 command = ["bin/herdr-agentisan", "action", "ping"]
+
+[[panes]]
+id = "btop"
+title = "btop"
+placement = "popup"
+command = ["btop"]
 `
 
 func writeManifest(t *testing.T, body string) string {
@@ -201,6 +207,72 @@ func TestLoadManifest(t *testing.T) {
 	assert.Equal(t, "nerdsrun.agentisan.ping", m.QualifiedActionID(m.Actions[0]))
 	require.Len(t, m.Startup, 1)
 	assert.Equal(t, []string{"bin/herdr-agentisan", "daemon", "start"}, m.Startup[0].Command)
+	require.Len(t, m.Panes, 1)
+	assert.Equal(t, plugin.Pane{ID: "btop", Title: "btop", Placement: "popup", Command: []string{"btop"}}, m.Panes[0])
+}
+
+// TestLoadManifestLineEndings: a manifest saved with CRLF line endings, or
+// without a final newline, reads the same.
+func TestLoadManifestLineEndings(t *testing.T) {
+	t.Parallel()
+
+	for name, body := range map[string]string{
+		"CRLF":             strings.ReplaceAll(validManifest, "\n", "\r\n"),
+		"no final newline": strings.TrimRight(validManifest, "\n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			m, err := plugin.LoadManifest(writeManifest(t, body))
+			require.NoError(t, err)
+			require.Len(t, m.Panes, 1)
+			assert.Equal(t, plugin.Pane{ID: "btop", Title: "btop", Placement: "popup", Command: []string{"btop"}}, m.Panes[0])
+		})
+	}
+}
+
+// TestManifestPaneIDLength: herdr takes a pane id of up to 120 characters
+// and refuses a longer one at link time; so does the gate.
+func TestManifestPaneIDLength(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		n  int
+		ok bool
+	}{
+		"120 characters": {n: 120, ok: true},
+		"121 characters": {n: 121},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			body := strings.Replace(validManifest, `id = "btop"`, `id = "`+strings.Repeat("b", tc.n)+`"`, 1)
+			_, err := plugin.LoadManifest(writeManifest(t, body))
+			if tc.ok {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, plugin.ErrInvalidManifest)
+		})
+	}
+}
+
+// TestManifestPanePlacements: a pane's placement is one of herdr's five, or
+// left out for herdr's default (overlay).
+func TestManifestPanePlacements(t *testing.T) {
+	t.Parallel()
+
+	for _, placement := range []string{"", "overlay", "popup", "split", "tab", "zoomed"} {
+		t.Run(placement, func(t *testing.T) {
+			t.Parallel()
+			body := strings.Replace(validManifest, `placement = "popup"`, `placement = "`+placement+`"`, 1)
+			if placement == "" {
+				body = strings.Replace(validManifest, `placement = "popup"`, ``, 1)
+			}
+			m, err := plugin.LoadManifest(writeManifest(t, body))
+			require.NoError(t, err)
+			assert.Equal(t, placement, m.Panes[0].Placement)
+		})
+	}
 }
 
 // TestManifestRejections: herdr only warns about many of these at link time,
@@ -213,19 +285,42 @@ func TestManifestRejections(t *testing.T) {
 		return strings.Replace(validManifest, old, repl, 1)
 	}
 	tests := map[string]string{
-		"unknown top-level key (typo)":  replace(`min_herdr_version`, `min_herd_version`),
-		"invalid plugin id":             replace(`id = "nerdsrun.agentisan"`, `id = "nerds run"`),
-		"missing name":                  replace(`name = "Agentisan"`, ``),
-		"unknown platform":              replace(`["linux", "macos"]`, `["linux", "plan9"]`),
-		"dotted action id":              replace(`id = "ping"`, `id = "p.ing"`),
-		"action without command":        replace(`command = ["bin/herdr-agentisan", "action", "ping"]`, `command = []`),
-		"unknown action context":        replace(`contexts = ["global"]`, `contexts = ["galaxy"]`),
-		"duplicate action id":           validManifest + "\n[[actions]]\nid = \"ping\"\ntitle = \"again\"\ncommand = [\"x\"]\n",
-		"build without -o target":       replace(`"-o", "bin/herdr-agentisan", `, ``),
-		"startup without command":       replace(`command = ["bin/herdr-agentisan", "daemon", "start"]`, `command = []`),
-		"startup with unknown platform": replace(`command = ["bin/herdr-agentisan", "daemon", "start"]`, `command = ["x"]`+"\n"+`platforms = ["beos"]`),
-		"startup with an unknown key":   replace(`command = ["bin/herdr-agentisan", "daemon", "start"]`, `command = ["x"]`+"\n"+`when = "boot"`),
-		"not TOML":                      "id = [",
+		"unknown top-level key (typo)":   replace(`min_herdr_version`, `min_herd_version`),
+		"invalid plugin id":              replace(`id = "nerdsrun.agentisan"`, `id = "nerds run"`),
+		"missing name":                   replace(`name = "Agentisan"`, ``),
+		"unknown platform":               replace(`["linux", "macos"]`, `["linux", "plan9"]`),
+		"dotted action id":               replace(`id = "ping"`, `id = "p.ing"`),
+		"action without command":         replace(`command = ["bin/herdr-agentisan", "action", "ping"]`, `command = []`),
+		"unknown action context":         replace(`contexts = ["global"]`, `contexts = ["galaxy"]`),
+		"duplicate action id":            validManifest + "\n[[actions]]\nid = \"ping\"\ntitle = \"again\"\ncommand = [\"x\"]\n",
+		"build without -o target":        replace(`"-o", "bin/herdr-agentisan", `, ``),
+		"startup without command":        replace(`command = ["bin/herdr-agentisan", "daemon", "start"]`, `command = []`),
+		"startup with unknown platform":  replace(`command = ["bin/herdr-agentisan", "daemon", "start"]`, `command = ["x"]`+"\n"+`platforms = ["beos"]`),
+		"startup with an unknown key":    replace(`command = ["bin/herdr-agentisan", "daemon", "start"]`, `command = ["x"]`+"\n"+`when = "boot"`),
+		"not TOML":                       "id = [",
+		"dotted pane id":                 replace(`id = "btop"`, `id = "b.top"`),
+		"empty pane id":                  replace(`id = "btop"`, `id = ""`),
+		"pane without title":             replace(`title = "btop"`, `title = ""`),
+		"pane without command":           replace(`command = ["btop"]`, `command = []`),
+		"unknown pane placement":         replace(`placement = "popup"`, `placement = "floating"`),
+		"pane placement in another case": replace(`placement = "popup"`, `placement = "Popup"`),
+		"pane with unknown platform":     replace(`command = ["btop"]`, `command = ["btop"]`+"\n"+`platforms = ["beos"]`),
+		"duplicate pane id":              validManifest + "\n[[panes]]\nid = \"btop\"\ntitle = \"again\"\ncommand = [\"x\"]\n",
+		// herdr reads a size only for a popup, as a cell count or a
+		// percentage; this plugin sends the size with each request instead,
+		// so the manifest declares none.
+		"pane with a size key": replace(`command = ["btop"]`, `command = ["btop"]`+"\n"+`width = "92%"`),
+		// herdr's id alphabet is ASCII: no other letter, no space, no NUL.
+		"non-ASCII pane id":                     replace(`id = "btop"`, `id = "bトップ"`),
+		"a pane id with a space":                replace(`id = "btop"`, `id = "b top"`),
+		"a NUL in a pane id":                    replace(`id = "btop"`, `id = "b\u0000top"`),
+		"invalid UTF-8 in a pane title":         replace(`title = "btop"`, "title = \"b\xfftop\""),
+		"a truncated multibyte in a pane title": replace(`title = "btop"`, "title = \"btop\xe2\x82\""),
+		"a byte-order mark in a pane id":        replace(`id = "btop"`, `id = "\uFEFFbtop"`),
+		// herdr trims a title and refuses one left empty, and refuses an
+		// empty argument in a command.
+		"a pane title of spaces":                replace(`title = "btop"`, `title = "   "`),
+		"a pane command with an empty argument": replace(`command = ["btop"]`, `command = ["btop", ""]`),
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {
