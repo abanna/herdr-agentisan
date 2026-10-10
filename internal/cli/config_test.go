@@ -415,3 +415,29 @@ func TestConfigResolveRendersAnyValue(t *testing.T) {
 		})
 	}
 }
+
+// TestConfigResolveShowsTheSpacesProject: config resolve reports
+// spaces.project like any leaf, with the layer it came from, and refuses one
+// that names no configured project.
+func TestConfigResolveShowsTheSpacesProject(t *testing.T) {
+	t.Parallel()
+	dir, _ := configFixture(t)
+
+	out, err := runCtx(configCtx(t, nil, nil), "config", "resolve", "--config-dir", dir, "--set", "spaces.project=alpha")
+	require.NoError(t, err)
+	assert.Contains(t, out, "spaces.project = \"alpha\"  # flag\n")
+
+	out, err = runCtx(configCtx(t, nil, nil), "config", "resolve", "--config-dir", dir, "--project", "app", "--json", "--set", "spaces.project=app")
+	require.NoError(t, err)
+	var got struct {
+		Values  map[string]any    `json:"values"`
+		Sources map[string]string `json:"sources"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	assert.Equal(t, map[string]any{"project": "app"}, got.Values["spaces"])
+	assert.Equal(t, settings.LayerFlag, got.Sources["spaces.project"])
+
+	_, err = runCtx(configCtx(t, nil, nil), "config", "resolve", "--config-dir", dir, "--set", "spaces.project=beta")
+	require.ErrorIs(t, err, settings.ErrNoProject)
+	assert.Contains(t, err.Error(), "known projects: alpha, app")
+}

@@ -112,11 +112,15 @@ exempts whatever is later added under that name.
   server's `state.db`, which it holds open while it runs and records every
   `pane.focused` event in (resubscribing and resyncing on `events_lost`); and
   the plugin socket (D6) that answers `health` and `back` (A16: walk the
-  focus history, un-zoom the pane left, then focus the target). `daemon
-  start` spawns a detached `daemon run`; herdr's
-  `[[startup]]` hook runs it, and the `daemon-restart` action covers linking.
-  Tests run daemons in process against herdrtest and a scratch state dir,
-  never the real ones.
+  focus history, un-zoom the pane left, then focus the target). Every poll
+  it also rebuilds the team model and pushes `$team` (`team.go`). `daemon
+  start` spawns a detached `daemon run`; herdr's `[[startup]]` hook runs it,
+  and the `daemon-restart` action covers linking. Tests run daemons in
+  process against herdrtest and a scratch state dir, never the real ones.
+- `internal/team/` — the team domain model (ADR-001 D5, A17): project → group
+  → logical worker → current pane, built from `pane.list`, `workspace.list`
+  and `state.db`'s `workers` rows. A `Resolver` maps the layout onto it;
+  `Spaces` is today's ◆ spaces. Also the frozen `$team` format.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
   references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check.

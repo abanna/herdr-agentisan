@@ -40,8 +40,9 @@ var secretNames = map[string]bool{"token": true, "api_key": true, "password": tr
 
 func leafOf(k kind) *node { return &node{kind: k} }
 
-// profileSchema is the body of a profile: the shared tables, a
-// [projects.<name>] table, a repo file and --set all share it.
+// profileSchema is the body of a profile: a [projects.<name>] table and a
+// repo file are checked against it. The shared file's top level and each
+// --set are checked against sharedSchema, which adds [spaces] to it.
 var profileSchema = &node{kind: kindTable, fields: map[string]*node{
 	"repo":   leafOf(kindString),
 	"color":  leafOf(kindString),
@@ -76,6 +77,8 @@ type source struct {
 	// values is the normalised tree: tables are map[string]any, leaves are
 	// string, int, []string, []int, [][]string or SecretRef.
 	values map[string]any
+	// schema is what the values are checked against; nil is profileSchema.
+	schema *node
 }
 
 // at names a key path the way errors report it: as written in the origin,
@@ -84,9 +87,13 @@ func (s *source) at(path string) string {
 	return fmt.Sprintf("%s (%s, %s)", strings.TrimSuffix(s.prefix+path, "."), s.layer, s.origin)
 }
 
-// load checks raw against the profile schema and stores its normalised form.
+// load checks raw against the source's schema and stores its normalised form.
 func (s *source) load(raw map[string]any) error {
-	v, err := s.normalize(profileSchema, raw, "")
+	schema := s.schema
+	if schema == nil {
+		schema = profileSchema
+	}
+	v, err := s.normalize(schema, raw, "")
 	if err != nil {
 		return err
 	}

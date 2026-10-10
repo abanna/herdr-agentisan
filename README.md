@@ -134,6 +134,24 @@ description = "Agentisan: back to the previous pane"
 This takes prefix+b from herdr's default `toggle_sidebar`; see
 [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml).
 
+## `$team` on the ◆ spaces
+
+The daemon pushes each `◆ <group>` workspace its `$team` token every 3 s:
+`N · ◐w ●i[ ⚠b][ ⟳r]`, with source `agentisan` and a 9 s TTL, so the
+tokens clear themselves within 9 s of the daemon stopping. `◆ boss` and
+`◆ herdr` get none. `[spaces] project` in `herdr-agentisan.toml` names the
+project the spaces belong to; with no config file they belong to one unnamed
+project. See ADR-001 A17.
+
+### Cutover from v12's `$team` push
+
+Each key has one writer (ADR-001 D4). Once a daemon with this push is
+running, delete the `report_team_tokens(...)` call at line 231 of
+`herdr-dashboard-v12.py` and restart v12. Until then both write `$team` and
+the last write wins; after, the daemon's next push, within 3 s, replaces the
+value v12 left on each group space. The daemon never writes `◆ herdr`, so
+v12's last value there clears itself when its 30 s TTL runs out.
+
 ## Gates
 
 `task check` runs most of what CI runs: lint, format, vet, gosec, gitleaks,
