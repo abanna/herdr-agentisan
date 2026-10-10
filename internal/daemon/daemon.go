@@ -7,6 +7,7 @@ import (
 	"os"
 	"runtime"
 	"slices"
+	"sync"
 	"syscall"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/report"
+	"github.com/abanna/herdr-agentisan/internal/store"
 )
 
 // VerifiedProtocols are the herdr API protocol versions this build has been
@@ -34,6 +36,9 @@ const (
 	DefaultStartWait = 3 * time.Second
 	// DefaultStopWait is how long Stop waits for the daemon to let go.
 	DefaultStopWait = 10 * time.Second
+	// PruneInterval is how often, by Options.Now, the daemon prunes finished
+	// handoffs past retention (A1). It also prunes once when it starts.
+	PruneInterval = 24 * time.Hour
 )
 
 // recheck is how often a waiting caller retries the lock.
@@ -61,9 +66,11 @@ var (
 	ErrSpawn = errors.New("could not start the daemon")
 )
 
-// Pinger is the slice of the herdr client the daemon needs.
-type Pinger interface {
+// HerdrClient is the slice of the herdr client the daemon needs.
+type HerdrClient interface {
 	Ping(ctx context.Context) (herdr.Pong, error)
+	ListPanes(ctx context.Context) ([]herdr.PaneInfo, error)
+	Subscribe(ctx context.Context, types ...string) (*herdr.Subscription, error)
 }
 
 // Hooks are the process operations, injected so tests can run daemons in
@@ -85,7 +92,7 @@ type Options struct {
 	// HerdrSocket is the herdr server's socket (HERDR_SOCKET_PATH).
 	HerdrSocket string
 	// Herdr is the client for that socket.
-	Herdr Pinger
+	Herdr HerdrClient
 	// LockWait bounds the wait for a stale holder; zero is DefaultLockWait.
 	LockWait time.Duration
 	// Poll is how often the daemon checks its herdr server; zero is PollInterval.
@@ -98,8 +105,10 @@ type Options struct {
 	AllowUnverified bool
 	// Version and Commit are reported by health.
 	Version, Commit string
-	Logger          zerolog.Logger
-	Hooks           Hooks
+	// Now is the clock focus times and handoff pruning read; nil is time.Now.
+	Now    func() time.Time
+	Logger zerolog.Logger
+	Hooks  Hooks
 }
 
 func (o Options) withDefaults() Options {
@@ -114,6 +123,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.StopWait <= 0 {
 		o.StopWait = DefaultStopWait
+	}
+	if o.Now == nil {
+		o.Now = time.Now
 	}
 	if o.Hooks.Signal == nil {
 		o.Hooks.Signal = func(pid int) error { return syscall.Kill(pid, syscall.SIGTERM) }
@@ -164,12 +176,14 @@ func (o Options) liveHolder(path string) (LockInfo, bool, error) {
 	return info, o.alive(info), nil
 }
 
-// Run is the daemon: it takes the lock, checks the herdr protocol, serves its
-// socket and returns when ctx ends (nil) or its herdr server goes
-// (ErrHerdrGone). A daemon of the same server already holding the lock is
-// ErrAlreadyRunning. One bound to a different server is waited for, up to
-// LockWait, because during a live handoff the new server's startup hook can
-// run before the old daemon notices its server has gone (A3).
+// Run is the daemon: it takes the lock, checks the herdr protocol, opens the
+// state database, serves its socket, follows focus events and returns when
+// ctx ends (nil) or its herdr server goes (ErrHerdrGone). A daemon of the same
+// server already holding the lock is ErrAlreadyRunning. One bound to a
+// different server is waited for, up to LockWait, because during a live
+// handoff the new server's startup hook can run before the old daemon notices
+// its server has gone (A3). A state database it cannot open, or one a newer
+// build has migrated (store.ErrSchemaTooNew), stops it before it serves.
 func Run(ctx context.Context, o Options) error {
 	o = o.withDefaults()
 	paths, err := PathsFor(o.StateDir, o.HerdrSocket)
@@ -205,16 +219,38 @@ func Run(ctx context.Context, o Options) error {
 			ErrUnverifiedProtocol, pong.Version, pong.Protocol, VerifiedProtocols, AllowUnverifiedEnv)
 	}
 
-	srv, err := listen(paths.Socket, HealthInfo{
+	st, err := store.Open(ctx, paths.DB)
+	if err != nil {
+		return fmt.Errorf("daemon state: %w", err)
+	}
+	// Deferred first, so it runs last: after focus collection has stopped
+	// and the socket's handlers have finished, nothing uses the store.
+	defer func() {
+		if err := st.Close(); err != nil {
+			o.Logger.Warn().Err(err).Msg("close the state database")
+		}
+	}()
+
+	srv, err := listen(paths.Socket, o.health(ctx, st, HealthInfo{
 		PID: os.Getpid(), Version: o.Version, Commit: o.Commit, StartedAt: startedAt,
 		HerdrProtocol: pong.Protocol, HerdrSocket: o.HerdrSocket, Herdr: ident,
-	}, o.Logger)
+	}), o.Logger)
 	if err != nil {
 		return err
 	}
 	defer srv.close()
-	o.Logger.Info().Int("pid", os.Getpid()).Uint32("protocol", pong.Protocol).Str("socket", paths.Socket).Msg("daemon running")
 
+	focusCtx, stopFocus := context.WithCancel(ctx)
+	var focus sync.WaitGroup
+	focus.Go(func() { o.followFocus(focusCtx, st, ident) })
+	defer func() {
+		stopFocus()
+		focus.Wait()
+	}()
+	o.Logger.Info().Int("pid", os.Getpid()).Uint32("protocol", pong.Protocol).Str("socket", paths.Socket).
+		Int("store_version", st.UserVersion()).Msg("daemon running")
+
+	nextPrune := o.prune(ctx, st)
 	tick := time.NewTicker(o.Poll)
 	defer tick.Stop()
 	for {
@@ -227,8 +263,43 @@ func Run(ctx context.Context, o Options) error {
 				o.Logger.Info().Err(err).Msg("herdr server gone; daemon exiting")
 				return err
 			}
+			if !o.Now().Before(nextPrune) {
+				nextPrune = o.prune(ctx, st)
+			}
 		}
 	}
+}
+
+// health returns the health op's answer: base, plus the state database's
+// schema version and focus rows read when asked.
+func (o Options) health(ctx context.Context, st *store.Store, base HealthInfo) func() HealthInfo {
+	return func() HealthInfo {
+		h := base
+		h.StoreVersion = st.UserVersion()
+		ctx, cancel := context.WithTimeout(ctx, ioTimeout)
+		defer cancel()
+		n, err := st.FocusRows(ctx)
+		if err != nil {
+			o.Logger.Debug().Err(err).Msg("health: count focus rows")
+			n = -1
+		}
+		h.FocusRows = n
+		return h
+	}
+}
+
+// prune deletes the finished handoffs past retention (A1) and returns when
+// the next prune is due. A failure is logged and retried at the next one.
+func (o Options) prune(ctx context.Context, st *store.Store) time.Time {
+	now := o.Now()
+	n, err := st.PruneHandoffs(ctx, now)
+	switch {
+	case err != nil:
+		o.Logger.Warn().Err(err).Msg("prune finished handoffs")
+	case n > 0:
+		o.Logger.Info().Int64("deleted", n).Msg("pruned finished handoffs")
+	}
+	return now.Add(PruneInterval)
 }
 
 // stillServed reports ErrHerdrGone unless the daemon's herdr server is still
@@ -237,8 +308,7 @@ func Run(ctx context.Context, o Options) error {
 // ping that fails any other way, such as a busy herdr timing out, is not
 // taken as the server going.
 func (o Options) stillServed(ctx context.Context, ident Identity, protocol uint32) error {
-	now, err := HerdrIdentity(o.HerdrSocket)
-	if err != nil || now != ident {
+	if !o.sameServer(ident) {
 		return fmt.Errorf("%w: the socket the daemon belongs to was removed or replaced", ErrHerdrGone)
 	}
 	pong, err := o.Herdr.Ping(ctx)

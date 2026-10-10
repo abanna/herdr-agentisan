@@ -21,7 +21,18 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
+	"github.com/abanna/herdr-agentisan/internal/store"
 )
+
+// ready bounds how long a test waits for an in-process daemon to come up or
+// stop, or for what it records to land: the daemon's own bounds, its ping's
+// (herdr.CallTimeout) and its store's waits (store.BusyTimeout). It is not a
+// literal few seconds because a fresh state.db costs ten fsyncs, which take
+// seconds on a runner whose disk other suites keep busy: under an fsync hog a
+// fresh store.Open took a median of 2.3 s and up to 5.3 s, against 40 ms
+// idle. A daemon that is ready ends every wait at once, so the size costs
+// nothing when nothing is wrong.
+const ready = herdr.CallTimeout + store.BusyTimeout
 
 // shortDir returns a fresh directory with a short path: unix socket paths
 // are capped near 104 bytes, and t.TempDir embeds the whole test name.
@@ -39,19 +50,102 @@ func pong(protocol uint32) herdrtest.Handler {
 	}
 }
 
-// fakeHerdr is a herdrtest server at a path the test can restart it at.
+// fakeHerdr is a herdrtest server at a path the test can restart it at. It
+// answers ping, pane.list (with the pane the test says is focused) and
+// events.subscribe, whose streams the test drives.
 type fakeHerdr struct {
 	t    *testing.T
 	path string
 	srv  *herdrtest.Server
 	h    herdrtest.Handler
+
+	mu      sync.Mutex
+	focused string // the pane pane.list reports focused; "" for none
+	listErr bool   // pane.list answers with an error
+	refuse  int    // how many events.subscribe requests to refuse first
+	// streams carries every subscription the server opens, in order.
+	streams chan *stream
+}
+
+// stream is one events.subscribe connection the fake herdr is serving.
+type stream struct {
+	id    string
+	lines chan []byte
 }
 
 func newHerdr(t *testing.T, protocol uint32) *fakeHerdr {
 	t.Helper()
-	f := &fakeHerdr{t: t, path: filepath.Join(shortDir(t), "h.sock"), h: pong(protocol)}
+	f := &fakeHerdr{t: t, path: filepath.Join(shortDir(t), "h.sock"), streams: make(chan *stream, 64)}
+	f.h = f.serve(protocol)
 	f.srv = herdrtest.StartAt(t, f.path, f.h)
 	return f
+}
+
+func (f *fakeHerdr) serve(protocol uint32) herdrtest.Handler {
+	return func(r herdrtest.Request) herdrtest.Reply {
+		switch r.Method {
+		case "ping":
+			return pong(protocol)(r)
+		case "pane.list":
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if f.listErr {
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "server_unavailable", Message: "busy"}}
+			}
+			panes := []map[string]any{{"pane_id": "w9:p9", "workspace_id": "w9", "focused": false}}
+			if f.focused != "" {
+				panes = append(panes, map[string]any{"pane_id": f.focused, "workspace_id": "w1", "focused": true})
+			}
+			return herdrtest.Reply{Result: map[string]any{"type": "pane_list", "panes": panes}}
+		case "events.subscribe":
+			f.mu.Lock()
+			refused := f.refuse > 0
+			if refused {
+				f.refuse--
+			}
+			f.mu.Unlock()
+			if refused {
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "server_unavailable", Message: "try again"}}
+			}
+			s := &stream{id: r.ID, lines: make(chan []byte, 64)}
+			select {
+			case f.streams <- s:
+			default:
+			}
+			return herdrtest.Reply{Result: herdrtest.SubscriptionStarted(), Stream: s.lines}
+		}
+		return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "invalid_request", Message: "unknown method " + r.Method}}
+	}
+}
+
+// focus sets the pane pane.list reports focused.
+func (f *fakeHerdr) focus(pane string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.focused = pane
+}
+
+// nextStream waits for the daemon's next subscription.
+func (f *fakeHerdr) nextStream(t *testing.T) *stream {
+	t.Helper()
+	select {
+	case s := <-f.streams:
+		return s
+	case <-time.After(ready):
+		t.Fatal("the daemon did not subscribe to focus events")
+		return nil
+	}
+}
+
+// subscribes counts the events.subscribe requests the current server got.
+func (f *fakeHerdr) subscribes() int {
+	n := 0
+	for _, r := range f.srv.Requests() {
+		if r.Method == "events.subscribe" {
+			n++
+		}
+	}
+	return n
 }
 
 // restart replaces the socket at the same path, so its inode changes, as a
@@ -98,8 +192,8 @@ func opts(t *testing.T, stateDir string, h *fakeHerdr) daemon.Options {
 		Herdr:       herdr.Client{SocketPath: h.path},
 		LockWait:    time.Second,
 		Poll:        20 * time.Millisecond,
-		StartWait:   2 * time.Second,
-		StopWait:    2 * time.Second,
+		StartWait:   ready,
+		StopWait:    ready,
 		Version:     "v-test",
 		Commit:      "c-test",
 		Logger:      zerolog.Nop(),
@@ -124,8 +218,8 @@ func run(t *testing.T, o daemon.Options) *running {
 		cancel()
 		select {
 		case <-r.done:
-		case <-time.After(5 * time.Second):
-			t.Error("daemon did not stop within 5 s of cancel")
+		case <-time.After(ready):
+			t.Errorf("daemon did not stop within %v of cancel", ready)
 		}
 	})
 	return r
@@ -176,7 +270,7 @@ func healthy(t *testing.T, stateDir string, h *fakeHerdr) daemon.HealthInfo {
 		var err error
 		info, err = daemon.Health(t.Context(), socketPath(t, stateDir, h.path))
 		return err == nil
-	}, 3*time.Second, 10*time.Millisecond, "the daemon never answered health")
+	}, ready, 10*time.Millisecond, "the daemon never answered health")
 	return info
 }
 
@@ -216,6 +310,7 @@ func TestPathsForClasses(t *testing.T) {
 			assert.Equal(t, filepath.Join(p.Dir, "daemon.lock"), p.Lock)
 			assert.Equal(t, filepath.Join(p.Dir, "daemon.log"), p.Log)
 			assert.Equal(t, filepath.Join(p.Dir, "daemon.sock"), p.Socket)
+			assert.Equal(t, filepath.Join(p.Dir, "state.db"), p.DB)
 			assert.Len(t, p.Socket, 103)
 		})
 	}
@@ -255,14 +350,16 @@ func TestRunServesHealthUntilCancelled(t *testing.T) {
 	assert.EqualValues(t, 22, info.HerdrProtocol)
 	assert.Equal(t, h.path, info.HerdrSocket)
 	assert.Equal(t, mustIdentity(t, h.path), info.Herdr)
-	assert.WithinDuration(t, time.Now(), info.StartedAt, 5*time.Second)
+	assert.WithinDuration(t, time.Now(), info.StartedAt, ready)
+	assert.Equal(t, store.SchemaVersion(), info.StoreVersion)
+	assert.Zero(t, info.FocusRows, "no pane is focused, so nothing is recorded")
 
 	st, err := os.Stat(socketPath(t, dir, h.path))
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), st.Mode().Perm(), "the socket is the owner's only")
 
 	r.cancel()
-	require.NoError(t, r.wait(t, 3*time.Second), "a cancelled daemon stops cleanly")
+	require.NoError(t, r.wait(t, ready), "a cancelled daemon stops cleanly")
 	assert.NoFileExists(t, socketPath(t, dir, h.path))
 	_, err = daemon.Health(t.Context(), socketPath(t, dir, h.path))
 	require.ErrorIs(t, err, daemon.ErrUnavailable)
@@ -289,7 +386,7 @@ func TestRunExitsWhenHerdrGoes(t *testing.T) {
 			healthy(t, dir, h)
 
 			end(h)
-			require.ErrorIs(t, r.wait(t, 3*time.Second), daemon.ErrHerdrGone)
+			require.ErrorIs(t, r.wait(t, ready), daemon.ErrHerdrGone)
 			assert.NoFileExists(t, socketPath(t, dir, h.path))
 		})
 	}
@@ -348,7 +445,7 @@ func TestTwoServersEachGetTheirOwnDaemon(t *testing.T) {
 	ob := opts(t, dir, b)
 	ob.Hooks.Signal = func(int) error { rb.cancel(); return nil }
 	require.NoError(t, daemon.Stop(t.Context(), ob))
-	require.NoError(t, rb.wait(t, time.Second))
+	require.NoError(t, rb.wait(t, ready))
 	assert.True(t, ra.alive(), "stopping B's daemon leaves A's running")
 	assert.Equal(t, mustIdentity(t, a.path), healthy(t, dir, a).Herdr)
 }
@@ -377,7 +474,7 @@ func TestTwoRunsLeaveOneDaemon(t *testing.T) {
 
 	a, b := run(t, o), run(t, o)
 	healthy(t, dir, h)
-	require.Eventually(t, func() bool { return a.alive() != b.alive() }, 3*time.Second, 10*time.Millisecond,
+	require.Eventually(t, func() bool { return a.alive() != b.alive() }, ready, 10*time.Millisecond,
 		"exactly one daemon must keep running")
 	loser := a
 	if a.alive() {
@@ -568,7 +665,7 @@ func TestStartClasses(t *testing.T) {
 		require.Eventually(t, func() bool {
 			info, err := daemon.Health(t.Context(), socketPath(t, dir, h.path))
 			return err == nil && info.Herdr == mustIdentity(t, h.path)
-		}, 3*time.Second, 10*time.Millisecond, "the new daemon takes over once the old one lets go")
+		}, ready, 10*time.Millisecond, "the new daemon takes over once the old one lets go")
 	})
 	t.Run("a spawn that fails is an error", func(t *testing.T) {
 		t.Parallel()
@@ -635,7 +732,7 @@ func TestTwoConcurrentStartsLeaveOneDaemon(t *testing.T) {
 			}
 		}
 		return alive == 1
-	}, 3*time.Second, 10*time.Millisecond, "exactly one daemon must keep running")
+	}, ready, 10*time.Millisecond, "exactly one daemon must keep running")
 }
 
 func TestStopClasses(t *testing.T) {
@@ -663,7 +760,7 @@ func TestStopClasses(t *testing.T) {
 
 		require.NoError(t, daemon.Stop(t.Context(), o))
 		assert.Equal(t, os.Getpid(), got)
-		require.NoError(t, r.wait(t, time.Second))
+		require.NoError(t, r.wait(t, ready))
 	})
 	t.Run("a wedged daemon whose socket is gone is still stopped", func(t *testing.T) {
 		t.Parallel()

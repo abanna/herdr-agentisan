@@ -22,7 +22,15 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
 	"github.com/abanna/herdr-agentisan/internal/logging"
+	"github.com/abanna/herdr-agentisan/internal/store"
 )
+
+// ready bounds how long a test waits for an in-process daemon to come up or
+// stop: the daemon's own bounds, its ping's (herdr.CallTimeout) and its
+// store's waits (store.BusyTimeout). A fresh state.db costs ten fsyncs,
+// which take seconds on a runner whose disk other suites keep busy, so a
+// literal few seconds flakes there. A ready daemon ends every wait at once.
+const ready = herdr.CallTimeout + store.BusyTimeout
 
 // daemonEnv is a herdr server plus a plugin state directory, both scratch:
 // a daemon test never touches the developer's herdr or state.
@@ -50,7 +58,10 @@ func (e daemonEnv) lookup(extra map[string]string) func(string) (string, bool) {
 }
 
 // inProcess runs every daemon the commands spawn in this process, and stops
-// it when the commands signal it.
+// it when the commands signal it. Its spawn returns once the daemon it
+// started answers health, or exits, within ready: `daemon start` then waits
+// its own DefaultStartWait for a daemon that is already up, so what a test
+// checks is the command, not how fast the runner's disk syncs a fresh store.
 type inProcess struct {
 	t      *testing.T
 	e      daemonEnv
@@ -76,6 +87,7 @@ func (p *inProcess) hooks() daemon.Hooks {
 				}
 			}()
 			p.t.Cleanup(func() { cancel(); <-done })
+			awaitDaemon(p.t, p.e, done)
 			p.mu.Lock()
 			defer p.mu.Unlock()
 			p.runs++
@@ -92,6 +104,27 @@ func (p *inProcess) hooks() daemon.Hooks {
 			return nil
 		},
 		StartTime: func(int) (uint64, error) { return 9, nil },
+	}
+}
+
+// awaitDaemon waits, up to ready, until the daemon of e's herdr answers
+// health or the run that was to start it has ended.
+func awaitDaemon(t *testing.T, e daemonEnv, done <-chan struct{}) {
+	t.Helper()
+	paths, err := daemon.PathsFor(e.stateDir, e.herdrSock)
+	if err != nil {
+		return // the command reports it
+	}
+	deadline := time.Now().Add(ready)
+	for time.Now().Before(deadline) {
+		if _, err := daemon.Health(t.Context(), paths.Socket); err == nil {
+			return
+		}
+		select {
+		case <-done:
+			return
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 }
 
@@ -131,6 +164,7 @@ func TestDaemonLifecycleCommands(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(out), &info))
 	assert.Equal(t, os.Getpid(), info.PID)
 	assert.EqualValues(t, 22, info.HerdrProtocol)
+	assert.Equal(t, 1, info.StoreVersion)
 
 	out, err = runCtx(ctx, "daemon", "restart")
 	require.NoError(t, err)
@@ -151,8 +185,8 @@ func TestDaemonLifecycleCommands(t *testing.T) {
 	assert.Equal(t, 3, p.runs, "start, restart and restart each spawned once; the second start did not")
 }
 
-// TestDaemonHealthText: the human form names the pid, the herdr protocol and
-// the socket.
+// TestDaemonHealthText: the human form names the pid, the herdr protocol, the
+// socket and the state database's schema version and focus rows.
 func TestDaemonHealthText(t *testing.T) {
 	t.Parallel()
 	e := newDaemonEnv(t)
@@ -166,6 +200,7 @@ func TestDaemonHealthText(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "pid")
 	assert.Contains(t, out, "protocol 22")
+	assert.Contains(t, out, "state schema 1, 0 focus rows")
 }
 
 // TestDaemonCommandsFailClearly: what each command reports when it cannot do
@@ -246,7 +281,7 @@ func TestDaemonRunLogsToItsCappedFile(t *testing.T) {
 	require.Eventually(t, func() bool {
 		_, err := daemon.Health(t.Context(), paths.Socket)
 		return err == nil
-	}, 3*time.Second, 10*time.Millisecond)
+	}, ready, 10*time.Millisecond)
 
 	out, err := runCtx(daemonCtx(t, e, nil, &logs), "daemon", "run")
 	require.NoError(t, err, "a second run for the same herdr exits 0")
@@ -256,7 +291,7 @@ func TestDaemonRunLogsToItsCappedFile(t *testing.T) {
 	select {
 	case err := <-done:
 		require.NoError(t, err)
-	case <-time.After(5 * time.Second):
+	case <-time.After(ready):
 		t.Fatal("daemon run did not stop")
 	}
 	raw, err := os.ReadFile(paths.Log)
@@ -293,7 +328,7 @@ func TestDaemonRunRefusesAnUnverifiedProtocol(t *testing.T) {
 	require.Eventually(t, func() bool {
 		info, err := daemon.Health(t.Context(), paths.Socket)
 		return err == nil && info.HerdrProtocol == 23
-	}, 3*time.Second, 10*time.Millisecond, "the override runs protocol 23")
+	}, ready, 10*time.Millisecond, "the override runs protocol 23")
 	cancel()
 	<-done
 }

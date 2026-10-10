@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 // Request is one decoded request line as the server received it.
@@ -33,6 +34,12 @@ type ErrorBody struct {
 // normally set; Raw is written verbatim to test malformed responses. ID
 // overrides the echoed request id when non-nil. Unterminated omits the
 // trailing newline; Silent closes the connection without writing anything.
+//
+// Stream, when non-nil, keeps the connection open after the reply, as herdr
+// does for events.subscribe: the server writes every item received on it,
+// verbatim, until the channel is closed or the server closes, and then closes
+// the connection. Items are whole lines, newline included, unless a test
+// means to send a partial one.
 type Reply struct {
 	Result       any
 	Error        *ErrorBody
@@ -40,6 +47,7 @@ type Reply struct {
 	ID           *string
 	Unterminated bool
 	Silent       bool
+	Stream       <-chan []byte
 }
 
 // Handler answers one request.
@@ -56,6 +64,8 @@ type Server struct {
 	ln    net.Listener
 	wg    sync.WaitGroup
 	close sync.Once
+	// done is closed by Close, ending every open stream.
+	done chan struct{}
 }
 
 // Requests returns every request received so far, in arrival order.
@@ -86,7 +96,7 @@ func Start(t testing.TB, handle Handler) *Server {
 func StartAt(t testing.TB, path string, handle Handler) *Server {
 	t.Helper()
 
-	s := &Server{Path: path}
+	s := &Server{Path: path, done: make(chan struct{})}
 	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", path)
 	if err != nil {
 		t.Fatalf("herdrtest: listen: %v", err)
@@ -115,9 +125,11 @@ func (s *Server) Crash() {
 }
 
 // Close stops the server and removes its socket file, as a herdr that exits
-// does. It is safe to call more than once.
+// does. Open streams end, so their subscribers see the connection close. It is
+// safe to call more than once.
 func (s *Server) Close() {
 	s.close.Do(func() {
+		close(s.done)
 		_ = s.ln.Close() // a unix listener unlinks its socket file on close
 		s.wg.Wait()
 	})
@@ -159,5 +171,63 @@ func (s *Server) serve(conn net.Conn, handle Handler) {
 	if !reply.Unterminated {
 		out = append(out, '\n')
 	}
-	_, _ = conn.Write(out)
+	if _, err := conn.Write(out); err != nil || reply.Stream == nil {
+		return
+	}
+	s.stream(conn, reply.Stream)
+}
+
+// streamWriteTimeout bounds one stream write, so a client that stops reading
+// cannot hold Close up.
+const streamWriteTimeout = 5 * time.Second
+
+// stream writes each item from lines until lines is closed, the server
+// closes or the client goes.
+func (s *Server) stream(conn net.Conn, lines <-chan []byte) {
+	for {
+		select {
+		case <-s.done:
+			return
+		case line, ok := <-lines:
+			if !ok {
+				return
+			}
+			_ = conn.SetWriteDeadline(time.Now().Add(streamWriteTimeout))
+			if _, err := conn.Write(line); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// SubscriptionStarted is the result herdr acknowledges events.subscribe with
+// (src/api/server.rs, stream_subscriptions).
+func SubscriptionStarted() map[string]any { return map[string]any{"type": "subscription_started"} }
+
+// PaneFocused is the line herdr streams to a pane.focused subscriber when
+// paneID, in workspaceID, takes focus: an event envelope, with no request id
+// (src/api/schema/events.rs, EventEnvelope and EventData::PaneFocused).
+func PaneFocused(paneID, workspaceID string) []byte {
+	return line(map[string]any{
+		"event": "pane_focused",
+		"data":  map[string]any{"type": "pane_focused", "pane_id": paneID, "workspace_id": workspaceID},
+	})
+}
+
+// EventsLost is the line herdr writes, just before it closes the stream, to a
+// subscriber that fell more than 512 events behind (src/api/subscriptions.rs,
+// subscription_events_after). id is the subscribe request's.
+func EventsLost(id string) []byte {
+	return line(map[string]any{
+		"id": id,
+		"error": ErrorBody{
+			Code:    "events_lost",
+			Message: "event subscription fell behind retained history; resubscribe and resync with session.snapshot",
+		},
+	})
+}
+
+func line(v any) []byte {
+	raw, _ := json.Marshal(v)
+	return append(raw, '\n')
 }

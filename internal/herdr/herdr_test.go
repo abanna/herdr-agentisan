@@ -377,9 +377,11 @@ func TestListPanesSendsTheSchemaShape(t *testing.T) {
 				{"pane_id": "w1:p1", "terminal_id": "term_a", "workspace_id": "w1", "tab_id": "w1:t1", "focused": true, "agent_status": "idle", "revision": 3},
 				{"pane_id": "wN:p2", "terminal_id": "term_b", "workspace_id": "wN", "tab_id": "wN:t1", "focused": false, "agent_status": "working", "revision": 9, "agent": "claude"},
 			},
-			want: []herdr.PaneInfo{{PaneID: "w1:p1"}, {PaneID: "wN:p2"}},
+			want: []herdr.PaneInfo{{PaneID: "w1:p1", WorkspaceID: "w1", Focused: true}, {PaneID: "wN:p2", WorkspaceID: "wN"}},
 		},
 		"no panes": {panes: []map[string]any{}, want: []herdr.PaneInfo{}},
+		// The schema requires both; a pane without them reads as not focused.
+		"a pane without focused or workspace_id": {panes: []map[string]any{{"pane_id": "w1:p1"}}, want: []herdr.PaneInfo{{PaneID: "w1:p1"}}},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -497,20 +499,22 @@ func TestPaneQueryFailureClasses(t *testing.T) {
 		call    func(herdr.Client) error
 		want    error
 	}{
-		"list: wrong result type":      {handler: reply(map[string]any{"type": "pane_info"}), call: list, want: herdr.ErrProtocol},
-		"list: panes missing":          {handler: reply(map[string]any{"type": "pane_list"}), call: list, want: herdr.ErrProtocol},
-		"list: a pane without an id":   {handler: reply(map[string]any{"type": "pane_list", "panes": []map[string]any{{"pane_id": ""}}}), call: list, want: herdr.ErrProtocol},
-		"list: panes is not an array":  {handler: reply(map[string]any{"type": "pane_list", "panes": "w1:p1"}), call: list, want: herdr.ErrProtocol},
-		"list: closed without a reply": {handler: func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Silent: true} }, call: list, want: herdr.ErrUnavailable},
-		"info: pane not found":         {handler: notFound, call: info, want: herdr.ErrPaneNotFound},
-		"info: wrong result type":      {handler: reply(map[string]any{"type": "pane_list", "panes": []any{}}), call: info, want: herdr.ErrProtocol},
-		"info: negative pid":           {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w1:p1", "shell_pid": -1}}), call: info, want: herdr.ErrProtocol},
-		"info: fractional pid":         {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w1:p1", "shell_pid": 1.5}}), call: info, want: herdr.ErrProtocol},
-		"info: pid as a string":        {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w1:p1", "foreground_process_group_id": "7"}}), call: info, want: herdr.ErrProtocol},
-		"info: pid one past uint32":    {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w1:p1", "foreground_processes": []map[string]any{{"pid": 1 << 32, "name": "x"}}}}), call: info, want: herdr.ErrProtocol},
-		"info: pane_id empty":          {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": ""}}), call: info, want: herdr.ErrProtocol},
-		"info: process_info missing":   {handler: reply(map[string]any{"type": "pane_process_info"}), call: info, want: herdr.ErrProtocol},
-		"info: closed without a reply": {handler: func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Silent: true} }, call: info, want: herdr.ErrUnavailable},
+		"list: wrong result type":            {handler: reply(map[string]any{"type": "pane_info"}), call: list, want: herdr.ErrProtocol},
+		"list: panes missing":                {handler: reply(map[string]any{"type": "pane_list"}), call: list, want: herdr.ErrProtocol},
+		"list: a pane without an id":         {handler: reply(map[string]any{"type": "pane_list", "panes": []map[string]any{{"pane_id": ""}}}), call: list, want: herdr.ErrProtocol},
+		"list: panes is not an array":        {handler: reply(map[string]any{"type": "pane_list", "panes": "w1:p1"}), call: list, want: herdr.ErrProtocol},
+		"list: closed without a reply":       {handler: func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Silent: true} }, call: list, want: herdr.ErrUnavailable},
+		"list: focused is not a bool":        {handler: reply(map[string]any{"type": "pane_list", "panes": []map[string]any{{"pane_id": "w1:p1", "focused": "yes"}}}), call: list, want: herdr.ErrProtocol},
+		"list: workspace_id is not a string": {handler: reply(map[string]any{"type": "pane_list", "panes": []map[string]any{{"pane_id": "w1:p1", "workspace_id": 7}}}), call: list, want: herdr.ErrProtocol},
+		"info: pane not found":               {handler: notFound, call: info, want: herdr.ErrPaneNotFound},
+		"info: wrong result type":            {handler: reply(map[string]any{"type": "pane_list", "panes": []any{}}), call: info, want: herdr.ErrProtocol},
+		"info: negative pid":                 {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w1:p1", "shell_pid": -1}}), call: info, want: herdr.ErrProtocol},
+		"info: fractional pid":               {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w1:p1", "shell_pid": 1.5}}), call: info, want: herdr.ErrProtocol},
+		"info: pid as a string":              {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w1:p1", "foreground_process_group_id": "7"}}), call: info, want: herdr.ErrProtocol},
+		"info: pid one past uint32":          {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w1:p1", "foreground_processes": []map[string]any{{"pid": 1 << 32, "name": "x"}}}}), call: info, want: herdr.ErrProtocol},
+		"info: pane_id empty":                {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": ""}}), call: info, want: herdr.ErrProtocol},
+		"info: process_info missing":         {handler: reply(map[string]any{"type": "pane_process_info"}), call: info, want: herdr.ErrProtocol},
+		"info: closed without a reply":       {handler: func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Silent: true} }, call: info, want: herdr.ErrUnavailable},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

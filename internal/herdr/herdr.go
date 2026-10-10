@@ -2,8 +2,9 @@
 //
 // The wire format is newline-delimited JSON over a unix socket, one request
 // per connection: herdr closes the connection after answering anything that
-// is not a subscription. Request and response shapes follow `herdr api schema
-// --json` (protocol 22). Only the methods this plugin calls are modelled.
+// is not a subscription, and keeps a subscription's open to stream its events
+// (Subscribe). Request and response shapes follow `herdr api schema --json`
+// (protocol 22). Only the methods this plugin calls are modelled.
 package herdr
 
 import (
@@ -34,10 +35,20 @@ var (
 	// ErrPaneNotFound means herdr has no pane by the id it was given. It is an
 	// ErrAPI too: an APIError whose code is pane_not_found matches both.
 	ErrPaneNotFound = errors.New("herdr pane not found")
+	// ErrEventsLost means a subscriber fell further behind than herdr's
+	// event history reaches, and herdr ended its subscription. The caller
+	// resubscribes and rereads the state it follows (ADR-001 A3). It is an
+	// ErrAPI too: an APIError whose code is events_lost matches both.
+	ErrEventsLost = errors.New("herdr dropped events the subscriber had not read")
 )
 
-// codePaneNotFound is herdr's error code for an id that names no pane.
-const codePaneNotFound = "pane_not_found"
+// herdr's error codes the client gives a sentinel of their own.
+const (
+	// codePaneNotFound is the code for an id that names no pane.
+	codePaneNotFound = "pane_not_found"
+	// codeEventsLost is the code for a subscriber that fell behind.
+	codeEventsLost = "events_lost"
+)
 
 // maxResponseBytes bounds one response line. The largest response this client
 // asks for is a few hundred bytes; the cap stops a misbehaving peer from
@@ -59,9 +70,16 @@ func (e *APIError) Error() string {
 func (e *APIError) Unwrap() error { return ErrAPI }
 
 // Is lets errors.Is(err, ErrPaneNotFound) match herdr's pane_not_found code,
-// so callers never compare code strings themselves.
+// and errors.Is(err, ErrEventsLost) its events_lost code, so callers never
+// compare code strings themselves.
 func (e *APIError) Is(target error) bool {
-	return target == ErrPaneNotFound && e.Code == codePaneNotFound
+	if target == ErrPaneNotFound {
+		return e.Code == codePaneNotFound
+	}
+	if target == ErrEventsLost {
+		return e.Code == codeEventsLost
+	}
+	return false
 }
 
 // CallTimeout bounds every herdr call a Client makes unless its Timeout says
@@ -127,7 +145,7 @@ func (c Client) Call(ctx context.Context, method string, params, out any) error 
 	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
 	defer stop()
 
-	id := "agentisan-" + strconv.FormatUint(requestSeq.Add(1), 10)
+	id := nextID()
 	line, err := json.Marshal(request{ID: id, Method: method, Params: params})
 	if err != nil {
 		return fmt.Errorf("encode %s request: %w", method, err)
@@ -143,7 +161,14 @@ func (c Client) Call(ctx context.Context, method string, params, out any) error 
 		}
 		return c.ioError(ctx, method, err)
 	}
+	return decodeResponse(method, id, raw, out)
+}
 
+// nextID returns a request id unique within this process.
+func nextID() string { return "agentisan-" + strconv.FormatUint(requestSeq.Add(1), 10) }
+
+// decodeResponse decodes the response line raw to the request id into out.
+func decodeResponse(method, id string, raw []byte, out any) error {
 	var resp response
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return fmt.Errorf("%w: %s: decode response: %w", ErrProtocol, method, err)
@@ -274,7 +299,12 @@ func (c Client) ShowNotification(ctx context.Context, n Notification) (Notificat
 
 // PaneInfo is one pane in pane.list, limited to the fields this plugin reads.
 type PaneInfo struct {
-	PaneID string `json:"pane_id"`
+	PaneID      string `json:"pane_id"`
+	WorkspaceID string `json:"workspace_id"`
+	// Focused is true for the one pane that has the user's focus: the
+	// focused pane of the active tab of the active workspace. Every other
+	// pane, including the focused pane of a background tab, is false.
+	Focused bool `json:"focused"`
 }
 
 // ListPanes returns every pane in every workspace.

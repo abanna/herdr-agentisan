@@ -4,8 +4,9 @@
 // requests (D6); a protocol pin; and the start, stop and health operations the
 // CLI and herdr's startup hook drive.
 //
-// The daemon itself runs an empty loop for now: it serves health and exits
-// when its herdr server goes away. Collection and the store come later.
+// While it runs, the daemon holds the server's state database, state.db
+// (D13, A1), records every pane.focused event in it for Back (D5), and prunes
+// finished handoffs. It exits when its herdr server goes away.
 package daemon
 
 import (
@@ -21,6 +22,7 @@ const (
 	lockName   = "daemon.lock"
 	logName    = "daemon.log"
 	socketName = "daemon.sock"
+	dbName     = "state.db"
 )
 
 // MaxSocketPath is the longest socket path the daemon binds: under 104 bytes,
@@ -53,6 +55,9 @@ type Paths struct {
 	Lock   string
 	Log    string
 	Socket string
+	// DB is the state database (D13, A1). Living beside the lock, it carries
+	// across a live handoff with it.
+	DB string
 }
 
 // PathsFor returns the paths of the daemon for the herdr server at
@@ -71,6 +76,7 @@ func PathsFor(stateDir, herdrSocket string) (Paths, error) {
 		Lock:   filepath.Join(dir, lockName),
 		Log:    filepath.Join(dir, logName),
 		Socket: filepath.Join(dir, socketName),
+		DB:     filepath.Join(dir, dbName),
 	}
 	if len(p.Socket) > MaxSocketPath {
 		return Paths{}, fmt.Errorf("%w: %d bytes, at most %d: %s", ErrSocketPathTooLong, len(p.Socket), MaxSocketPath, p.Socket)

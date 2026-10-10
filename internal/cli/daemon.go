@@ -259,8 +259,9 @@ func newDaemonHealthCmd(opts func(*cobra.Command) (daemon.Options, error)) *cobr
 				return fmt.Errorf("daemon health: %w", err)
 			}
 			return render(cmd.OutOrStdout(), asJSON, info, func(w io.Writer) error {
-				return printf(w, "daemon pid %d, up %ds, %s (%s), herdr protocol %d at %s\n",
-					info.PID, info.UptimeSeconds, info.Version, info.Commit, info.HerdrProtocol, info.HerdrSocket)
+				return printf(w, "daemon pid %d, up %ds, %s (%s), herdr protocol %d at %s, state schema %d, %d focus rows\n",
+					info.PID, info.UptimeSeconds, info.Version, info.Commit, info.HerdrProtocol, info.HerdrSocket,
+					info.StoreVersion, info.FocusRows)
 			})
 		},
 	}
