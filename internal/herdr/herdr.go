@@ -94,6 +94,23 @@ type Client struct {
 	SocketPath string
 	// Timeout bounds each call; zero means CallTimeout.
 	Timeout time.Duration
+	// Dialed, when set, runs on every connection once it is made and before
+	// anything is written to it; an error ends the call with nothing sent.
+	// The daemon uses it to prove the socket path still names its own
+	// server: the path can be replaced between a check and the dial, and a
+	// request must not reach the replacement (ADR-001 A3).
+	Dialed func() error
+}
+
+// dialed runs the Dialed hook, if any, on a fresh connection.
+func (c Client) dialed(method string) error {
+	if c.Dialed == nil {
+		return nil
+	}
+	if err := c.Dialed(); err != nil {
+		return fmt.Errorf("%s: %w", method, err)
+	}
+	return nil
 }
 
 // timeout is the bound for one call.
@@ -136,6 +153,9 @@ func (c Client) Call(ctx context.Context, method string, params, out any) error 
 		return fmt.Errorf("%w: dial %s: %w", ErrUnavailable, c.SocketPath, err)
 	}
 	defer conn.Close() //nolint:errcheck // one-shot connection; the response is already read or the call failed
+	if err := c.dialed(method); err != nil {
+		return err
+	}
 
 	// The context bounds the whole exchange, not just the dial: a herdr that
 	// accepts and never answers must not hold a plugin action open.
@@ -305,6 +325,14 @@ type PaneInfo struct {
 	// focused pane of the active tab of the active workspace. Every other
 	// pane, including the focused pane of a background tab, is false.
 	Focused bool `json:"focused"`
+	// Agent is the agent herdr detected in the pane, such as "claude"; ""
+	// for a plain shell (null in herdr's schema).
+	Agent string `json:"agent"`
+	// AgentStatus is "idle", "working", "blocked", "done" or "unknown" in
+	// herdr 0.9.3, kept as sent: a newer herdr may add one.
+	AgentStatus string `json:"agent_status"`
+	// Tokens are the pane's metadata tokens; nil when it has none.
+	Tokens map[string]string `json:"tokens"`
 }
 
 // ListPanes returns every pane in every workspace.

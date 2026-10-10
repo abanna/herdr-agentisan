@@ -61,6 +61,23 @@ short. Like `report statusline`, it prints nothing and exits 0 whether or not
 it reported; only a malformed command line (an unknown flag, an extra
 argument) fails.
 
+## `$team` on the ◆ spaces
+
+The daemon pushes each `◆ <group>` workspace its `$team` token every 3 s:
+`N · ◐w ●i[ ⚠b][ ⟳r]`, with source `agentisan` and a 9 s TTL, so the
+tokens clear themselves within 9 s of the daemon stopping. `◆ boss` and
+`◆ herdr` get none. `[spaces] project` in `herdr-agentisan.toml` names the
+project the spaces belong to; with no config file they belong to one unnamed
+project. See ADR-001 A17.
+
+### Cutover from v12's `$team` push
+
+Each key has one writer (ADR-001 D4). Once a daemon with this push is
+running, delete the `report_team_tokens(...)` call at line 231 of
+`herdr-dashboard-v12.py` and restart v12. Until then both write `$team` and
+the last write wins; after, the daemon's next push, within 3 s, replaces the
+value v12 left.
+
 ## Gates
 
 `task check` runs most of what CI runs: lint, format, vet, gosec, gitleaks,

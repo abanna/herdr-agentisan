@@ -69,6 +69,9 @@ func Load(opts LoadOptions) (Resolved, error) {
 		if err := m.checkFields(); err != nil {
 			return Resolved{}, err
 		}
+		if err := m.spaces(names); err != nil {
+			return Resolved{}, err
+		}
 		// Lint every project too, short of the repo checks, which touch
 		// the filesystem and wait for a selection.
 		for _, name := range names {
@@ -101,6 +104,9 @@ func Load(opts LoadOptions) (Resolved, error) {
 	m := merge(slices.Concat(layers, []*source{repoFile}, flags)...)
 	m.values["repo"] = repo
 	if err := m.checkFields(); err != nil {
+		return Resolved{}, err
+	}
+	if err := m.spaces(names); err != nil {
 		return Resolved{}, err
 	}
 	if err := checkBundle(repo, opts.Stat, m.at("repo")); err != nil {
@@ -192,7 +198,7 @@ func loadShared(path string) (*source, map[string]*source, error) {
 	if err != nil || !found {
 		return nil, projects, err
 	}
-	shared := &source{layer: LayerShared, origin: path}
+	shared := &source{layer: LayerShared, origin: path, schema: sharedSchema}
 	raw, hasProjects := doc["projects"]
 	delete(doc, "projects")
 	if err := shared.load(doc); err != nil {
@@ -251,7 +257,7 @@ func parseFlags(sets []string) ([]*source, error) {
 		for _, seg := range slices.Backward(segs) {
 			raw = map[string]any{seg: raw}
 		}
-		s := &source{layer: LayerFlag, origin: flagOrigin}
+		s := &source{layer: LayerFlag, origin: flagOrigin, schema: sharedSchema}
 		tree, _ := raw.(map[string]any)
 		if err := s.load(tree); err != nil {
 			return nil, err

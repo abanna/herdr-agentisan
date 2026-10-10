@@ -22,6 +22,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
 	"github.com/abanna/herdr-agentisan/internal/logging"
+	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
 )
 
@@ -331,4 +332,67 @@ func TestDaemonRunRefusesAnUnverifiedProtocol(t *testing.T) {
 	}, ready, 10*time.Millisecond, "the override runs protocol 23")
 	cancel()
 	<-done
+}
+
+// TestDaemonRunPushesTeam: `daemon run` turns the team poll on, reading the
+// spaces' project from HERDR_PLUGIN_CONFIG_DIR, and pushes $team to the ◆
+// group spaces of its herdr.
+func TestDaemonRunPushesTeam(t *testing.T) {
+	t.Parallel()
+	dir, err := os.MkdirTemp("", "dc")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	e := daemonEnv{herdrSock: filepath.Join(dir, "h.sock"), stateDir: filepath.Join(dir, "state")}
+	srv := herdrtest.StartAt(t, e.herdrSock, func(r herdrtest.Request) herdrtest.Reply {
+		switch r.Method {
+		case "pane.list":
+			return herdrtest.Reply{Result: map[string]any{"type": "pane_list", "panes": []map[string]any{
+				{"pane_id": "wN:p1", "workspace_id": "wN", "agent": "claude", "agent_status": "working"},
+			}}}
+		case "workspace.list":
+			return herdrtest.Reply{Result: map[string]any{"type": "workspace_list", "workspaces": []map[string]any{
+				{"workspace_id": "wN", "label": "◆ coders"}, {"workspace_id": "wJ", "label": "◆ boss"},
+			}}}
+		case "workspace.report_metadata":
+			return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
+		}
+		return herdrtest.Reply{Result: map[string]any{"type": "pong", "version": "0.9.3", "protocol": 22}}
+	})
+	configDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(configDir, settings.FileName),
+		[]byte("schema_version = 1\n[projects.agentisan]\nrepo = \"/nonexistent\"\n"), 0o600))
+	var logs bytes.Buffer
+	ctx, cancel := context.WithCancel(cli.WithLookupEnv(daemonCtx(t, e, nil, &logs),
+		e.lookup(map[string]string{"HERDR_PLUGIN_CONFIG_DIR": configDir})))
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := runCtx(ctx, "daemon", "run")
+		done <- err
+	}()
+	var push string
+	require.Eventually(t, func() bool {
+		for _, r := range srv.Requests() {
+			if r.Method == "workspace.report_metadata" {
+				push = string(r.Params)
+				return true
+			}
+		}
+		return false
+	}, ready, 10*time.Millisecond, "daemon run pushed no $team")
+	assert.JSONEq(t, `{"workspace_id":"wN","source":"agentisan","tokens":{"team":"1 · ◐1 ●0"},"ttl_ms":9000}`, push)
+
+	cancel()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(ready):
+		t.Fatal("daemon run did not stop")
+	}
+	paths, err := daemon.PathsFor(e.stateDir, e.herdrSock)
+	require.NoError(t, err)
+	raw, err := os.ReadFile(paths.Log)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"project":"agentisan"`, "the project came from HERDR_PLUGIN_CONFIG_DIR")
 }

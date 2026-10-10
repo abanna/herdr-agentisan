@@ -377,7 +377,10 @@ func TestListPanesSendsTheSchemaShape(t *testing.T) {
 				{"pane_id": "w1:p1", "terminal_id": "term_a", "workspace_id": "w1", "tab_id": "w1:t1", "focused": true, "agent_status": "idle", "revision": 3},
 				{"pane_id": "wN:p2", "terminal_id": "term_b", "workspace_id": "wN", "tab_id": "wN:t1", "focused": false, "agent_status": "working", "revision": 9, "agent": "claude"},
 			},
-			want: []herdr.PaneInfo{{PaneID: "w1:p1", WorkspaceID: "w1", Focused: true}, {PaneID: "wN:p2", WorkspaceID: "wN"}},
+			want: []herdr.PaneInfo{
+				{PaneID: "w1:p1", WorkspaceID: "w1", Focused: true, AgentStatus: "idle"},
+				{PaneID: "wN:p2", WorkspaceID: "wN", Agent: "claude", AgentStatus: "working"},
+			},
 		},
 		"no panes": {panes: []map[string]any{}, want: []herdr.PaneInfo{}},
 		// The schema requires both; a pane without them reads as not focused.

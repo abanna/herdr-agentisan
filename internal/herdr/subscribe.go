@@ -76,6 +76,10 @@ func (c Client) Subscribe(ctx context.Context, types ...string) (*Subscription, 
 	if err != nil {
 		return nil, fmt.Errorf("%w: dial %s: %w", ErrUnavailable, c.SocketPath, err)
 	}
+	if err := c.dialed(methodSubscribe); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 	r, id, err := c.handshake(ackCtx, conn, types)
 	if err != nil {
 		_ = conn.Close()

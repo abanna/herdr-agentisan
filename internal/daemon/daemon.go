@@ -109,6 +109,8 @@ type Options struct {
 	Now    func() time.Time
 	Logger zerolog.Logger
 	Hooks  Hooks
+	// Team turns on the team poll and the $team push; nil leaves it off.
+	Team *TeamOptions
 }
 
 func (o Options) withDefaults() Options {
@@ -247,6 +249,8 @@ func Run(ctx context.Context, o Options) error {
 		stopFocus()
 		focus.Wait()
 	}()
+	stopTeam := o.startTeam(ctx, st, ident)
+	defer stopTeam()
 	o.Logger.Info().Int("pid", os.Getpid()).Uint32("protocol", pong.Protocol).Str("socket", paths.Socket).
 		Int("store_version", st.UserVersion()).Msg("daemon running")
 

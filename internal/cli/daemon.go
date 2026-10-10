@@ -89,6 +89,7 @@ func daemonOptions(cmd *cobra.Command, stateDirFlag string) (daemon.Options, err
 		Commit:          config.Commit,
 		Logger:          logging.From(ctx),
 		Hooks:           hooks,
+		Team:            &daemon.TeamOptions{ConfigDir: env.ConfigDir},
 	}, nil
 }
 
