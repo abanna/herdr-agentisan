@@ -59,6 +59,18 @@ func (e *RequestError) Error() string { return fmt.Sprintf("daemon: %s: %s", e.C
 // Unwrap lets errors.Is(err, ErrRequest) match.
 func (e *RequestError) Unwrap() error { return ErrRequest }
 
+// Is lets errors.Is match the sentinel a refusal code stands for, so callers
+// never compare codes themselves.
+func (e *RequestError) Is(target error) bool {
+	switch e.Code {
+	case codeNoHistory:
+		return target == ErrNoHistory
+	case codeHerdrFailed:
+		return target == ErrHerdrCall
+	}
+	return false
+}
+
 // HealthInfo is the health op's answer.
 type HealthInfo struct {
 	PID           int       `json:"pid"`
@@ -100,13 +112,15 @@ type server struct {
 	path string
 	// health reports the daemon's health when asked.
 	health func() HealthInfo
-	log    zerolog.Logger
-	wg     sync.WaitGroup
+	// back runs the back op.
+	back func() (BackResult, error)
+	log  zerolog.Logger
+	wg   sync.WaitGroup
 }
 
 // listen binds the daemon socket, replacing a stale one: only the lock holder
 // calls it. The socket is the owner's only.
-func listen(path string, health func() HealthInfo, log zerolog.Logger) (*server, error) {
+func listen(path string, health func() HealthInfo, back func() (BackResult, error), log zerolog.Logger) (*server, error) {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("remove stale socket %s: %w", path, err)
 	}
@@ -118,7 +132,7 @@ func listen(path string, health func() HealthInfo, log zerolog.Logger) (*server,
 		_ = ln.Close()
 		return nil, fmt.Errorf("chmod %s: %w", path, err)
 	}
-	s := &server{ln: ln, path: path, health: health, log: log}
+	s := &server{ln: ln, path: path, health: health, back: back, log: log}
 	s.wg.Go(s.accept)
 	return s, nil
 }
@@ -174,6 +188,14 @@ func (s *server) dispatch(line []byte, readErr error) response {
 		h := s.health()
 		h.UptimeSeconds = int64(time.Since(h.StartedAt).Seconds())
 		data, _ := json.Marshal(h)
+		return response{OK: true, Data: data}
+	case "back":
+		res, err := s.back()
+		if err != nil {
+			s.log.Info().Err(err).Msg("back refused")
+			return refuse(backCode(err), err.Error())
+		}
+		data, _ := json.Marshal(res)
 		return response{OK: true, Data: data}
 	default:
 		return refuse(codeUnknownOp, fmt.Sprintf("unknown op %q", req.Op))

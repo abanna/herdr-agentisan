@@ -35,6 +35,15 @@ description = "Stop the agentisan daemon if it runs, then start it"
 contexts = ["global"]
 command = ["bin/herdr-agentisan", "daemon", "restart"]
 
+# Back (ADR-001 D5, A16). Plugins cannot ship key bindings: prefix+b is bound
+# in herdr's own config, as docs/config/herdr-keys.example.toml shows.
+[[actions]]
+id = "back"
+title = "Agentisan: back"
+description = "Return to the previous pane and un-zoom the one you leave"
+contexts = ["global"]
+command = ["bin/herdr-agentisan", "back"]
+
 # The dashboard's [ btop ] button asks herdr (plugin.pane.open) to run this in
 # a popup, sized in the request. herdr spawns btop from its own PATH; the
 # plugin starts no process. Relink after changing it: herdr reads panes at
