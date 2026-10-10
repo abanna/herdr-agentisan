@@ -182,17 +182,43 @@ func TestOpenMigratesAndIsIdempotent(t *testing.T) {
 func TestOpenRefusesANewerSchema(t *testing.T) {
 	t.Parallel()
 	path := dbPath(t)
-	db := raw(t, path)
-	newer := store.SchemaVersion() + 1
-	_, err := db.ExecContext(t.Context(), fmt.Sprintf("CREATE TABLE future (x INTEGER); PRAGMA user_version = %d", newer))
+	const newer = 99
+	setup, err := sql.Open("sqlite", path)
 	require.NoError(t, err)
+	_, err = setup.ExecContext(t.Context(), fmt.Sprintf(
+		"CREATE TABLE future (x INTEGER); INSERT INTO future VALUES (42); PRAGMA user_version = %d", newer))
+	require.NoError(t, err)
+	require.NoError(t, setup.Close())
+	require.Equal(t, []byte{1, 1}, header(t, path), "the file starts in rollback-journal mode, as an older sqlite3 leaves it")
 
 	s, err := store.Open(t.Context(), path)
 	require.ErrorIs(t, err, store.ErrSchemaTooNew)
 	assert.Nil(t, s)
 	assert.Contains(t, err.Error(), fmt.Sprint(newer))
+
+	// Refused before anything wrote: not even the switch to WAL.
+	assert.Equal(t, []byte{1, 1}, header(t, path), "the refused file is not switched to WAL")
+	assert.NoFileExists(t, path+"-wal")
+	db := raw(t, path)
+	var mode string
+	require.NoError(t, db.QueryRowContext(t.Context(), "PRAGMA journal_mode").Scan(&mode))
+	assert.Equal(t, "delete", mode)
 	assert.Equal(t, newer, userVersion(t, db), "a refused database keeps its version")
 	assert.Equal(t, []string{"table:future"}, objects(t, db))
+	var x int
+	require.NoError(t, db.QueryRowContext(t.Context(), "SELECT x FROM future").Scan(&x))
+	assert.Equal(t, 42, x, "its rows are intact")
+}
+
+// header is the database file's write and read format versions, bytes 18
+// and 19 of its header: 1 for a rollback journal, 2 for WAL. Read from the
+// file itself, so no connection's cached journal mode can stand in for it.
+func header(t *testing.T, path string) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(path) // #nosec G304 -- a test's own scratch database
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(raw), 20)
+	return raw[18:20]
 }
 
 // TestOpenIsSafeConcurrently: openers racing on one fresh file all succeed.
@@ -271,14 +297,17 @@ func TestOpenWaitsForALockUpToTheBusyTimeout(t *testing.T) {
 	const long = store.BusyTimeout + 3*time.Second
 
 	tests := map[string]struct {
-		lock   string // the statement the other connection holds its lock with
-		hold   time.Duration
-		cancel time.Duration // cancels Open's context after this; 0 never
-		want   error
-		within time.Duration // Open ends no later than this
-		after  time.Duration // and no sooner than this
+		migrated bool   // the file is already a migrated WAL database
+		lock     string // the statement the other connection holds its lock with
+		hold     time.Duration
+		cancel   time.Duration // cancels Open's context after this; 0 never
+		want     error
+		within   time.Duration // a failing Open ends no later than this
+		after    time.Duration // and Open ends no sooner than this
 	}{
-		"an exclusive lock released within the busy timeout": {lock: "BEGIN EXCLUSIVE", hold: 300 * time.Millisecond, after: 150 * time.Millisecond, within: 3 * time.Second},
+		// No upper bound on a success: after the lock goes, a fresh file
+		// costs ten fsyncs, which take seconds on a busy disk.
+		"an exclusive lock released within the busy timeout": {lock: "BEGIN EXCLUSIVE", hold: 300 * time.Millisecond, after: 150 * time.Millisecond},
 		"an exclusive lock held past the busy timeout": {
 			lock: "BEGIN EXCLUSIVE", hold: long, want: store.ErrOpen,
 			after: store.BusyTimeout - 200*time.Millisecond, within: store.BusyTimeout + 2*time.Second,
@@ -287,7 +316,7 @@ func TestOpenWaitsForALockUpToTheBusyTimeout(t *testing.T) {
 			lock: "BEGIN EXCLUSIVE", hold: long, cancel: 200 * time.Millisecond, want: store.ErrOpen,
 			within: store.BusyTimeout + 2*time.Second,
 		},
-		"a write lock released within the busy timeout": {lock: "BEGIN IMMEDIATE", hold: 300 * time.Millisecond, after: 150 * time.Millisecond, within: 3 * time.Second},
+		"a write lock released within the busy timeout": {lock: "BEGIN IMMEDIATE", hold: 300 * time.Millisecond, after: 150 * time.Millisecond},
 		"a write lock held past the busy timeout": {
 			lock: "BEGIN IMMEDIATE", hold: long, want: store.ErrOpen,
 			after: store.BusyTimeout - 200*time.Millisecond, within: store.BusyTimeout + 2*time.Second,
@@ -296,11 +325,23 @@ func TestOpenWaitsForALockUpToTheBusyTimeout(t *testing.T) {
 			lock: "BEGIN IMMEDIATE", hold: long, cancel: 200 * time.Millisecond, want: context.Canceled,
 			within: 2 * time.Second,
 		},
+		// Already WAL and migrated: the switch passes, and the wait is the
+		// migration transaction's BEGIN IMMEDIATE. A held lock is ErrOpen
+		// there too, never a failed migration.
+		"a write lock on a migrated database held past the busy timeout": {
+			migrated: true, lock: "BEGIN IMMEDIATE", hold: long, want: store.ErrOpen,
+			after: store.BusyTimeout - 200*time.Millisecond, within: store.BusyTimeout + 2*time.Second,
+		},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			path := dbPath(t)
+			if tc.migrated {
+				s, err := store.Open(t.Context(), path)
+				require.NoError(t, err)
+				require.NoError(t, s.Close())
+			}
 			conn, err := raw(t, path).Conn(t.Context())
 			require.NoError(t, err)
 			_, err = conn.ExecContext(t.Context(), tc.lock)
@@ -323,7 +364,9 @@ func TestOpenWaitsForALockUpToTheBusyTimeout(t *testing.T) {
 			start := time.Now()
 			s, err := store.Open(ctx, path)
 			elapsed := time.Since(start)
-			assert.Less(t, elapsed, tc.within)
+			if tc.within > 0 {
+				assert.Less(t, elapsed, tc.within)
+			}
 			assert.GreaterOrEqual(t, elapsed, tc.after)
 			if tc.want == nil {
 				require.NoError(t, err)

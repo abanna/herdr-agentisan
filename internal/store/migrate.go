@@ -89,6 +89,43 @@ func blank(sql string) bool {
 	return true
 }
 
+// checkVersion refuses a database this build cannot migrate, with a plain
+// read that writes nothing: Open runs it before anything else touches the
+// file. A read that fails (a file that is not a database, a lock held past
+// BusyTimeout) is ErrOpen. migrateNext checks the version again under the
+// write lock, for an opener that migrates meanwhile.
+func checkVersion(ctx context.Context, db *sql.DB, known int) error {
+	var current int
+	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&current); err != nil {
+		return fmt.Errorf("%w: read user_version: %w", ErrOpen, err)
+	}
+	return versionError(current, known)
+}
+
+// versionError says why a database at schema version current cannot be
+// migrated by a build that knows up to version known, or nil when it can.
+func versionError(current, known int) error {
+	switch {
+	case current < 0:
+		return fmt.Errorf("%w: the database records schema version %d; versions count up from 0",
+			ErrMigration, current)
+	case current > known:
+		return fmt.Errorf("%w: the database is at schema version %d; this build knows up to %d",
+			ErrSchemaTooNew, current, known)
+	}
+	return nil
+}
+
+// failed names a failure on the migration path. A lock another connection
+// held past BusyTimeout is ErrOpen, as everywhere in Open; anything else is a
+// failed migration.
+func failed(what string, err error) error {
+	if busy(err) {
+		return fmt.Errorf("%w: %s: %w", ErrOpen, what, err)
+	}
+	return fmt.Errorf("%w: %s: %w", ErrMigration, what, err)
+}
+
 // migrate applies the migrations db has not had, in order, and returns the
 // version it is then at. Each runs in its own transaction with the
 // user_version bump, so a failure leaves the database at the last migration
@@ -116,7 +153,7 @@ func migrate(ctx context.Context, db *sql.DB, set []migration) (int, error) {
 func migrateNext(ctx context.Context, db *sql.DB, set []migration) (applied bool, err error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
-		return false, fmt.Errorf("%w: begin: %w", ErrMigration, err)
+		return false, failed("begin", err)
 	}
 	defer func() {
 		if !applied {
@@ -125,29 +162,25 @@ func migrateNext(ctx context.Context, db *sql.DB, set []migration) (applied bool
 	}()
 	var current int
 	if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&current); err != nil {
-		return false, fmt.Errorf("%w: read user_version: %w", ErrMigration, err)
+		return false, failed("read user_version", err)
 	}
-	switch {
-	case current < 0:
-		return false, fmt.Errorf("%w: the database records schema version %d; versions count up from 0",
-			ErrMigration, current)
-	case current > len(set):
-		return false, fmt.Errorf("%w: the database is at schema version %d; this build knows up to %d",
-			ErrSchemaTooNew, current, len(set))
-	case current == len(set):
+	if err := versionError(current, len(set)); err != nil {
+		return false, err
+	}
+	if current == len(set) {
 		return false, nil
 	}
 	m := set[current]
 	if _, err := tx.ExecContext(ctx, m.sql); err != nil {
-		return false, fmt.Errorf("%w: %s: %w", ErrMigration, m.name, err)
+		return false, failed(m.name, err)
 	}
 	// PRAGMA takes no bound parameters.
 	// #nosec G201 -- the version is an integer parsed from the migration's file name.
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", m.version)); err != nil {
-		return false, fmt.Errorf("%w: %s: set user_version: %w", ErrMigration, m.name, err)
+		return false, failed(m.name+": set user_version", err)
 	}
 	if err := tx.Commit(); err != nil {
-		return false, fmt.Errorf("%w: %s: commit: %w", ErrMigration, m.name, err)
+		return false, failed(m.name+": commit", err)
 	}
 	return true, nil
 }

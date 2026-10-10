@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,16 +49,28 @@ func query(t *testing.T, path, q string) []string {
 	return out
 }
 
-// focusIs waits until the daemon's focus history, newest first, is want.
+// focusIs waits until the daemon's focus history, newest first, is want. It
+// waits for progress, not for a total time: every row is its own transaction,
+// whose wait for a lock store.BusyTimeout bounds but whose fsync nothing does,
+// and on a busy disk forty of them take longer than any fixed window. It
+// fails once the history has not changed for ready.
 func focusIs(t *testing.T, stateDir string, h *fakeHerdr, want ...string) {
 	t.Helper()
 	db := paths(t, stateDir, h).DB
-	var got []string
-	if !assert.Eventually(t, func() bool {
+	var got, seen []string
+	progress := time.Now()
+	for {
 		got = query(t, db, "SELECT pane_id FROM focus ORDER BY seq DESC")
-		return assert.ObjectsAreEqual(want, got)
-	}, 3*time.Second, 10*time.Millisecond) {
-		t.Fatalf("focus history is %q, want %q", got, want)
+		if assert.ObjectsAreEqual(want, got) {
+			return
+		}
+		if !assert.ObjectsAreEqual(seen, got) {
+			seen, progress = got, time.Now()
+		}
+		if time.Since(progress) > ready {
+			t.Fatalf("focus history is %q, want %q; unchanged for %v", got, want, ready)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
@@ -183,7 +196,7 @@ func TestFocusFollowsOnlyItsOwnServer(t *testing.T) {
 		h.nextStream(t)
 
 		h.restart()
-		require.ErrorIs(t, r.wait(t, 3*time.Second), daemon.ErrHerdrGone)
+		require.ErrorIs(t, r.wait(t, ready), daemon.ErrHerdrGone)
 		assert.Zero(t, h.subscribes())
 	})
 }
@@ -221,7 +234,7 @@ func TestFocusIgnoresAServerReplacedWhileSubscribing(t *testing.T) {
 
 	select {
 	case <-swap:
-	case <-time.After(3 * time.Second):
+	case <-time.After(ready):
 		t.Fatal("the daemon did not subscribe")
 	}
 	require.NoError(t, os.Remove(h.path))
@@ -236,6 +249,72 @@ func TestFocusIgnoresAServerReplacedWhileSubscribing(t *testing.T) {
 		"nothing from a subscription made across the swap is recorded")
 	assert.Empty(t, replacement.srv.Requests(), "the replacement is never asked for its panes or its events")
 	assert.True(t, r.alive(), "the collector stops; Run's poll ends the daemon")
+}
+
+// TestFocusIgnoresAPaneListAnsweredAcrossASwap is DB6's check-to-use race on
+// the snapshot: pane.list is a connection of its own, dialled after the
+// subscription's identity check, so herdr's socket can be replaced while it
+// is answered. The answer is then not recorded, nor anything after it, since
+// it may have come from the replacement. Both snapshots are checked: the
+// first, and the resync after events_lost.
+func TestFocusIgnoresAPaneListAnsweredAcrossASwap(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		swapAt int      // the pane.list call that is answered across the swap
+		before []string // the rows legitimately recorded before it
+	}{
+		"the first snapshot":           {swapAt: 1, before: []string{}},
+		"the resync after events_lost": {swapAt: 2, before: []string{"w1:listed"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := &fakeHerdr{t: t, path: filepath.Join(shortDir(t), "h.sock"), streams: make(chan *stream, 64)}
+			h.focus("w1:listed")
+			normal := h.serve(22)
+			swap, swapped := make(chan struct{}), make(chan struct{})
+			var lists atomic.Int32
+			h.h = func(r herdrtest.Request) herdrtest.Reply {
+				if r.Method == "pane.list" && int(lists.Add(1)) == tc.swapAt {
+					h.focus("w1:across")
+					close(swap)
+					<-swapped
+				}
+				return normal(r)
+			}
+			h.srv = herdrtest.StartAt(t, h.path, h.h)
+			dir := shortDir(t)
+			o := opts(t, dir, h)
+			o.Poll = time.Hour // the poll never runs: only the collector can react
+			r := run(t, o)
+
+			s := h.nextStream(t)
+			if tc.swapAt == 2 {
+				focusIs(t, dir, h, "w1:listed")
+				s.lines <- herdrtest.EventsLost(s.id)
+				close(s.lines)
+				s = h.nextStream(t)
+			}
+			select {
+			case <-swap:
+			case <-time.After(ready):
+				t.Fatal("the daemon did not read the focused pane")
+			}
+			require.NoError(t, os.Remove(h.path))
+			replacement := &fakeHerdr{t: t, path: h.path, streams: make(chan *stream, 64)}
+			replacement.focus("w2:replacement")
+			replacement.h = replacement.serve(22)
+			replacement.srv = herdrtest.StartAt(t, replacement.path, replacement.h)
+			close(swapped)
+			s.lines <- herdrtest.PaneFocused("w9:after", "w9") // on the original's open stream
+
+			time.Sleep(time.Second)
+			assert.Equal(t, tc.before, query(t, paths(t, dir, h).DB, "SELECT pane_id FROM focus ORDER BY seq DESC"),
+				"nothing answered across the swap, or after it, is recorded")
+			assert.Empty(t, replacement.srv.Requests(), "the replacement is never asked anything")
+			assert.True(t, r.alive(), "the collector stops; Run's poll ends the daemon")
+		})
+	}
 }
 
 // TestRunStoreFailures: a state database the daemon cannot use stops it at
@@ -276,7 +355,7 @@ func TestRunStoreFailures(t *testing.T) {
 			tc.plant(t, p.DB)
 
 			r := run(t, opts(t, dir, h))
-			require.ErrorIs(t, r.wait(t, 3*time.Second), tc.want)
+			require.ErrorIs(t, r.wait(t, ready), tc.want)
 			assert.NoFileExists(t, p.Socket, "a daemon without its store never serves")
 
 			tc.fix(t, p.DB)
@@ -343,7 +422,7 @@ func TestRunPrunesFinishedHandoffs(t *testing.T) {
 	run(t, o)
 	handoffs := func() []string { return query(t, p.DB, "SELECT old_pane FROM handoffs ORDER BY old_pane") }
 	require.Eventually(t, func() bool { return assert.ObjectsAreEqual([]string{"pending", "soon"}, handoffs()) },
-		3*time.Second, 10*time.Millisecond, "the prune at start removes the handoff past retention")
+		ready, 10*time.Millisecond, "the prune at start removes the handoff past retention")
 
 	clk.advance(2 * time.Hour) // "soon" is now past retention, but no prune is due
 	time.Sleep(15 * o.Poll)
@@ -355,7 +434,7 @@ func TestRunPrunesFinishedHandoffs(t *testing.T) {
 
 	clk.advance(time.Nanosecond) // exactly PruneInterval after the first prune
 	require.Eventually(t, func() bool { return assert.ObjectsAreEqual([]string{"pending"}, handoffs()) },
-		3*time.Second, 10*time.Millisecond, "the next prune removes it; a pending handoff stays")
+		ready, 10*time.Millisecond, "the next prune removes it; a pending handoff stays")
 	assert.Equal(t, 24*time.Hour, daemon.PruneInterval)
 }
 
@@ -387,7 +466,7 @@ func TestRunClosesTheStoreOnEveryExit(t *testing.T) {
 			require.FileExists(t, db+"-wal", "the running daemon holds the database open")
 
 			tc.end(r, h)
-			err := r.wait(t, 3*time.Second)
+			err := r.wait(t, ready)
 			if tc.want == nil {
 				require.NoError(t, err)
 			} else {

@@ -64,11 +64,13 @@ func (o Options) followFocus(ctx context.Context, st *store.Store, ident Identit
 // records every focus event until the subscription ends, and returns why it
 // ended. An event resets failures: the subscription is working.
 //
-// The identity is checked again once the subscription is acknowledged. A
-// socket replaced at any moment from the last check up to then is seen: a
-// socket identity never recurs, so a connection that may have reached the
-// replacement is closed unread (ErrHerdrGone), and nothing it, or the
-// replacement's pane.list, says is recorded.
+// The identity is checked again once the subscription is acknowledged, and
+// snapshotFocus checks it once more after pane.list answers. A socket
+// identity never recurs, so a check that passes after an answer proves the
+// connection reached the daemon's own server, and one that fails means it may
+// have reached the replacement: that subscription is closed unread, or that
+// pane.list answer is dropped, and collection stops (ErrHerdrGone). Nothing
+// the replacement says is recorded.
 func (o Options) streamFocus(ctx context.Context, st *store.Store, ident Identity, failures *int) error {
 	sub, err := o.Herdr.Subscribe(ctx, herdr.SubscribePaneFocused)
 	if err != nil {
@@ -78,7 +80,9 @@ func (o Options) streamFocus(ctx context.Context, st *store.Store, ident Identit
 	if !o.sameServer(ident) {
 		return fmt.Errorf("%w: the socket was replaced while subscribing to focus events", ErrHerdrGone)
 	}
-	o.snapshotFocus(ctx, st)
+	if err := o.snapshotFocus(ctx, st, ident); err != nil {
+		return err
+	}
 	for {
 		ev, err := sub.Next(ctx)
 		if err != nil {
@@ -93,18 +97,27 @@ func (o Options) streamFocus(ctx context.Context, st *store.Store, ident Identit
 
 // snapshotFocus records the pane herdr reports focused now. herdr reports at
 // most one: the focused pane of the active tab of the active workspace.
-func (o Options) snapshotFocus(ctx context.Context, st *store.Store) {
+// pane.list is a connection of its own, dialled after the subscription's
+// identity check, so the identity is checked again once it has answered: if
+// the socket was replaced meanwhile, the answer may be the replacement's, and
+// it is dropped unrecorded (ErrHerdrGone). A pane.list that fails costs only
+// the snapshot.
+func (o Options) snapshotFocus(ctx context.Context, st *store.Store, ident Identity) error {
 	panes, err := o.Herdr.ListPanes(ctx)
 	if err != nil {
 		o.Logger.Warn().Err(err).Msg("read the focused pane")
-		return
+		return nil
+	}
+	if !o.sameServer(ident) {
+		return fmt.Errorf("%w: the socket was replaced while pane.list was answered", ErrHerdrGone)
 	}
 	for _, p := range panes {
 		if p.Focused {
 			o.recordFocus(ctx, st, p.PaneID)
-			return
+			return nil
 		}
 	}
+	return nil
 }
 
 func (o Options) recordFocus(ctx context.Context, st *store.Store, pane string) {

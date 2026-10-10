@@ -95,7 +95,8 @@ type Focus struct {
 // Open opens the state database at path, creating it owner-only if it does
 // not exist, and migrates it to the newest schema this build knows. It
 // returns the daemon's single write connection (A1). A database a newer
-// build has migrated is refused with ErrSchemaTooNew. Openers racing on one
+// build has migrated is refused with ErrSchemaTooNew before anything writes
+// to it, so it is left exactly as it was. Openers racing on one
 // file, even a fresh one, all succeed: each migration runs once, under the
 // write lock. A lock another connection holds is waited for up to
 // BusyTimeout, then is ErrOpen.
@@ -145,6 +146,11 @@ func open(ctx context.Context, path string, migrations fs.FS) (*Store, error) {
 func (s *Store) init(ctx context.Context, path string, set []migration) error {
 	if err := s.db.PingContext(ctx); err != nil {
 		return fmt.Errorf("%w: %s: %w", ErrOpen, path, err)
+	}
+	// A database a newer build migrated is refused before anything writes
+	// to it: the switch to WAL below rewrites the file's header.
+	if err := checkVersion(ctx, s.db, len(set)); err != nil {
+		return err
 	}
 	if err := enableWAL(ctx, s.db); err != nil {
 		return fmt.Errorf("%w: %s: %w", ErrOpen, path, err)
