@@ -86,6 +86,8 @@ exempts whatever is later added under that name.
   entry, `btop`, is the popup the dashboard's `[ btop ]` button asks herdr to
   open (`plugin.pane.open`); herdr runs it, the plugin starts no process, and
   `TestManifestDeclaresTheBtopPopup` pins it to `plugin.ID`/`plugin.BtopPane`.
+  The `back` action's prefix+b binding, for herdr's own config, is
+  `docs/config/herdr-keys.example.toml` (`TestKeySnippetBindsBack`).
 - `cmd/herdr-agentisan/` — the plugin binary's entrypoint. Wires config,
   logging (stderr only — stdout is the command's output) and tracing; no logic.
 - `cmd/devctl/` — development operations CLI entrypoint. A thin shim.
@@ -94,7 +96,7 @@ exempts whatever is later added under that name.
   concern; no command holds a rule of its own.
 - `internal/plugin/` — the plugin's domain: the runtime environment herdr
   injects (`EnvFrom`), the manifest (`LoadManifest`, with its actions and
-  panes) and the actions' logic.
+  panes) and the actions' logic, such as Back's toast when it went nowhere.
 - `internal/report/` — an agent pushing its own state to its pane as herdr
   tokens (ADR-001 D4), and the token contract for the keys it writes.
   `report statusline` turns Claude's statusline JSON into `ctx`, and
@@ -106,10 +108,12 @@ exempts whatever is later added under that name.
   server's socket inode; the protocol pin; `daemon.log` capped at 10 MB; the
   server's `state.db`, which it holds open while it runs and records every
   `pane.focused` event in (resubscribing and resyncing on `events_lost`); and
-  the plugin socket (D6) that answers `health`. `daemon start` spawns a
-  detached `daemon run`; herdr's `[[startup]]` hook runs it, and the
-  `daemon-restart` action covers linking. Tests run daemons in process against
-  herdrtest and a scratch state dir, never the real ones.
+  the plugin socket (D6) that answers `health` and `back` (A16: walk the
+  focus history, un-zoom the pane left, then focus the target). `daemon
+  start` spawns a detached `daemon run`; herdr's
+  `[[startup]]` hook runs it, and the `daemon-restart` action covers linking.
+  Tests run daemons in process against herdrtest and a scratch state dir,
+  never the real ones.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
   references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check.

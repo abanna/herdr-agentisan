@@ -65,6 +65,16 @@ type fakeHerdr struct {
 	refuse  int    // how many events.subscribe requests to refuse first
 	// streams carries every subscription the server opens, in order.
 	streams chan *stream
+
+	// What Back reads and moves (back_test.go). panes lists every pane;
+	// nil keeps pane.list to one unfocused filler plus the focused pane.
+	panes  []string
+	zoomed map[string]bool
+	outbox [][]byte          // pane_focused events not yet streamed
+	eager  bool              // stream an event before answering, not after
+	fail   map[string]string // method -> the error code it answers
+	hang   chan struct{}     // pane.zoom waits for it to close
+	live   *stream           // the newest subscription
 }
 
 // stream is one events.subscribe connection the fake herdr is serving.
@@ -92,6 +102,9 @@ func (f *fakeHerdr) serve(protocol uint32) herdrtest.Handler {
 			if f.listErr {
 				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "server_unavailable", Message: "busy"}}
 			}
+			if f.panes != nil {
+				return f.list()
+			}
 			panes := []map[string]any{{"pane_id": "w9:p9", "workspace_id": "w9", "focused": false}}
 			if f.focused != "" {
 				panes = append(panes, map[string]any{"pane_id": f.focused, "workspace_id": "w1", "focused": true})
@@ -108,11 +121,16 @@ func (f *fakeHerdr) serve(protocol uint32) herdrtest.Handler {
 				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "server_unavailable", Message: "try again"}}
 			}
 			s := &stream{id: r.ID, lines: make(chan []byte, 64)}
+			f.mu.Lock()
+			f.live = s
+			f.mu.Unlock()
 			select {
 			case f.streams <- s:
 			default:
 			}
 			return herdrtest.Reply{Result: herdrtest.SubscriptionStarted(), Stream: s.lines}
+		case "pane.zoom", "pane.focus":
+			return f.move(r)
 		}
 		return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "invalid_request", Message: "unknown method " + r.Method}}
 	}
@@ -872,6 +890,7 @@ func TestSocketProtocolClasses(t *testing.T) {
 		"invalid UTF-8 in the op":   {line: "{\"v\":1,\"op\":\"he\xffalth\"}\n", code: "unknown_op"},
 		"over the request size cap": {line: `{"v":1,"op":"health","args":"` + strings.Repeat("x", 1<<20) + `"}` + "\n", code: "bad_request"},
 		"op is not a string":        {line: `{"v":1,"op":7}` + "\n", code: "bad_request"},
+		"back with no history":      {line: `{"v":1,"op":"back","args":{}}` + "\n", code: "no_history"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -938,10 +957,21 @@ func TestHealthClientClasses(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			_, err := daemon.Health(t.Context(), tc.sock(t))
+			sock := tc.sock(t)
+			_, err := daemon.Health(t.Context(), sock)
 			require.ErrorIs(t, err, tc.want)
+			_, err = daemon.Back(t.Context(), sock)
+			require.ErrorIs(t, err, tc.want, "back fails the same way")
 		})
 	}
+
+	t.Run("a back answer naming no pane", func(t *testing.T) {
+		t.Parallel()
+		for _, reply := range []string{`{"ok":true,"data":{"from":"w1:p1"}}`, `{"ok":true,"data":{"to":7}}`} {
+			_, err := daemon.Back(t.Context(), serve(t, reply+"\n"))
+			require.ErrorIs(t, err, daemon.ErrProtocol, reply)
+		}
+	})
 
 	t.Run("an error reply carries its code", func(t *testing.T) {
 		t.Parallel()

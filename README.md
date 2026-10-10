@@ -61,6 +61,27 @@ short. Like `report statusline`, it prints nothing and exits 0 whether or not
 it reported; only a malformed command line (an unknown flag, an extra
 argument) fails.
 
+## Back on prefix+b
+
+The `back` action returns to the pane you were on before, un-zooming the one
+you leave. Pressed again it keeps walking back, like a browser's: after jumps
+to A, B, C and D, Back goes to C, B, then A; any other focus change ends the
+walk. The daemon picks the pane from its focus history; when Back cannot go
+anywhere (no daemon, nothing older), a toast says why. Plugins cannot ship
+key bindings, so bind it in `~/.config/herdr/config.toml`, in place of the
+`pkill` workaround, and reload herdr's config:
+
+```toml
+[[keys.command]]
+key = "prefix+b"
+type = "plugin_action"
+command = "nerdsrun.agentisan.back"
+description = "Agentisan: back to the previous pane"
+```
+
+This takes prefix+b from herdr's default `toggle_sidebar`; see
+[`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml).
+
 ## Gates
 
 `task check` runs most of what CI runs: lint, format, vet, gosec, gitleaks,
