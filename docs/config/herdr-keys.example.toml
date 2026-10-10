@@ -1,8 +1,18 @@
-# herdr key binding for Agentisan's Back action (ADR-001 D5, A9, A16).
+# herdr key bindings for Agentisan: search (ADR-001 D5, A20) and Back (D5,
+# A9, A16). herdr plugins cannot ship key bindings: add these to herdr's own
+# config (~/.config/herdr/config.toml) and reload herdr's config.
 #
-# herdr plugins cannot ship key bindings: add this block to herdr's own
-# config (~/.config/herdr/config.toml), in place of the `pkill` workaround on
-# prefix+b, and reload herdr's config. Each press runs the `back` action.
+# Search: prefix+/ opens herdr's own Go To, the session navigator, beside its
+# default prefix+g. Put the goto line in the [keys] table your config already
+# has; a second [keys] header is a TOML error. In Go To, press / to type a
+# query: it matches agents by name and spaces by label, and Enter jumps.
+# (Inside the Agentisan dashboard, / filters the agents instead.)
+
+[keys]
+goto = ["prefix+g", "prefix+/"]
+
+# Back: in place of the `pkill` workaround on prefix+b. Each press runs the
+# `back` action.
 #
 # prefix+b is herdr's default toggle_sidebar key. A [[keys.command]] binding
 # takes it over silently (herdr 0.9.3, src/config/keybinds.rs:1099-1102), so
@@ -11,7 +21,8 @@
 # binding, with a "kept keys.toggle_sidebar, disabled keys.command[N].key"
 # diagnostic.
 #
-# TestKeySnippetBindsBack (internal/plugin) keeps this and the README in step.
+# TestKeySnippetBindsBack and TestKeySnippetBindsGoTo (internal/plugin) keep
+# this and the README in step.
 
 [[keys.command]]
 key = "prefix+b"

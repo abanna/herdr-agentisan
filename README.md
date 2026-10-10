@@ -96,6 +96,23 @@ short. Like `report statusline`, it prints nothing and exits 0 whether or not
 it reported; only a malformed command line (an unknown flag, an extra
 argument) fails.
 
+## Search on prefix+/ and in the dashboard
+
+prefix+/ opens herdr's own Go To, which lists every workspace and pane: press
+`/` there and type, and it matches agents by name and spaces by label; Enter
+jumps. Bind it beside herdr's default prefix+g by adding the `goto` line to
+the `[keys]` table of `~/.config/herdr/config.toml`:
+
+```toml
+[keys]
+goto = ["prefix+g", "prefix+/"]
+```
+
+Inside the dashboard, `/` narrows the agents as you type. Each word of the
+query matches letters in order, gaps allowed, across an agent's name, group,
+item and stage, so `cod 5255` finds the coder on NERD-5255. The arrows move
+among the matches, Enter jumps and zooms, and Esc clears the query.
+
 ## Back on prefix+b
 
 The `back` action returns to the pane you were on before, un-zooming the one

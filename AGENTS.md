@@ -86,8 +86,9 @@ exempts whatever is later added under that name.
   entry, `btop`, is the popup the dashboard's `[ btop ]` button asks herdr to
   open (`plugin.pane.open`); herdr runs it, the plugin starts no process, and
   `TestManifestDeclaresTheBtopPopup` pins it to `plugin.ID`/`plugin.BtopPane`.
-  The `back` action's prefix+b binding, for herdr's own config, is
-  `docs/config/herdr-keys.example.toml` (`TestKeySnippetBindsBack`).
+  The `back` action's prefix+b binding and Go To's prefix+/ (ADR-001 A20),
+  for herdr's own config, are `docs/config/herdr-keys.example.toml`
+  (`TestKeySnippetBindsBack`, `TestKeySnippetBindsGoTo`).
 - `cmd/herdr-agentisan/` — the plugin binary's entrypoint. Wires config,
   logging (stderr only — stdout is the command's output) and tracing; no logic.
 - `cmd/devctl/` — development operations CLI entrypoint. A thin shim.
@@ -134,7 +135,8 @@ exempts whatever is later added under that name.
   slots. Decoding is strict: exact keys, closed enums, RFC 3339 times.
 - `internal/dashboard/` — the bubbletea team dashboard and its pure renderer:
   a header box, then the groups stacked as boxes with one dense line per
-  agent, scrolling to keep the selection in view. Goldens in `testdata/`
+  agent, scrolling to keep the selection in view. `/` narrows the agents to a
+  search query in place (`search.go`, ADR-001 A20). Goldens in `testdata/`
   (`go test ./internal/dashboard/ -update`, then read every one).
 - `internal/devctl/` — the `devctl` cobra tree: the coverage floor, the
   docs-parity check and the large-file ceiling, none of which the Go toolchain

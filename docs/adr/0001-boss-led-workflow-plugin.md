@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A16 and A22 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A16, A20 and A22 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -601,6 +601,18 @@ NERD-5244 delivers this document. It moves to Done when the pull request that ad
 - **Un-zoom, then focus.** At v0.9.3 `pane.zoom` focuses its target whatever the mode (`apply_pane_zoom`, `src/app/actions.rs:822`). Back therefore un-zooms the pane the user is on first, then sends `pane.focus` for the target. That pane is already focused, so the un-zoom moves nothing and announces nothing (`actions.rs:238-240`). Un-zooming a tab that is not zoomed answers `already_unzoomed` and is harmless (`actions.rs:843`).
 - **Announcements come late.** herdr emits `pane.focused` from a diff of the focused pane once per loop, after it has answered the request (`src/server/headless.rs:467`, `src/app/api.rs:842-873`). The daemon remembers the moves Back made and takes their announcements, whenever they arrive, as Back's own. It also compares `pane.list`'s focused pane with where the walk left the user, which catches a move herdr has not announced yet; that move's late announcement then does not end the walk the Back starts.
 - **Transport and key.** The socket op `back` (D6) answers the pane moved to and the pane left, or refuses with `no_history`, `herdr_failed` or `state_failed`. The `back` action runs `herdr-agentisan back`, and run from a key a refusal shows a toast, because herdr only logs a failed plugin command (`src/app/api.rs:136-163`). The key is a `[[keys.command]]` with `type = "plugin_action"` and `command = "nerdsrun.agentisan.back"` in herdr's own config (A9), sampled in `docs/config/herdr-keys.example.toml`. On prefix+b it displaces herdr's default `toggle_sidebar` (`src/config/model.rs:1179`, `src/config/keybinds.rs:1099-1102`).
+
+### A20. Search is herdr's Go To anywhere, and a filter in the dashboard
+
+*Clarifies:* the Search bullet in D5, and item 11's acceptance ("bound, or a popup that jumps on Enter").
+
+Go To was evaluated first, as D5 asks, against the herdr source at v0.9.3 (read, not driven). The boss chose this split on 2026-10-10.
+
+- **What Go To is.** herdr's session navigator, bound as `keys.goto`, prefix+g by default (`src/config/model.rs:1130`). It is a centred modal over every machine, workspace and pane, agents and plain terminals alike (`src/client/shell/overlay_input.rs:193`). Enter focuses the pane or workspace and closes it, without a zoom.
+- **What it matches.** The query is lowercased and split on white space, and every word must be a substring of one field (`src/client/shell/aggregate_navigation.rs:283-297`). The fields: workspace label and branch, tab label, the row label (the pane's label, else the agent's name), title, cwd, agent kind and pane id. Agents by name and spaces are covered: "search" finds dev-search, "coders" finds ◆ coders. It is not fuzzy ("pe1" misses pee01, "coders poo" finds nothing), and tokens are not searched, so an item such as NERD-5259 finds no one. It opens with its search box unfocused: `/` focuses it, and until then b, w, i, d, a, j and k are filters and moves (`overlay_input.rs:721-773`).
+- **What it cannot do.** Nothing on the socket opens it: the navigator is the client's own overlay, absent from `src/api/schema/commands.rs` and `src/app/api*.rs`. The dashboard's `/` cannot hand off to it.
+- **prefix+/ anywhere is Go To.** `keys.goto` takes one key or a list (`BindingConfig`, `src/config/keybinds.rs:47`), and prefix+/ is unbound by default; help is prefix+?, shift+/ (`keybinds.rs:1853-1858`). The snippet adds prefix+/ and keeps prefix+g: `goto = ["prefix+g", "prefix+/"]` in `[keys]`, sampled in `docs/config/herdr-keys.example.toml`. No popup pane is built: it would rebuild Go To, and its data would need the daemon's snapshot op or a second resolver.
+- **`/` in the dashboard filters in place.** Printable keys, q and ? included, are query text; the arrows move among the matches; Backspace edits; Enter jumps (agent.focus, then zoom, as D5's Jump) and ends the search, as a click does; Esc ends it, keeping the selection. Each word of the query must appear, letters in order with gaps allowed and case folded, in the agent's name, group, item and stage joined, so "cod 5255" finds the coder on NERD-5255. Groups keep their order, a group with no match is hidden, and every snapshot is filtered as it arrives. The boss is not searched: it sits in the header and is not selectable, and Go To finds it.
 
 ### A22. Codex context: findings from item 7
 
