@@ -99,7 +99,9 @@ exempts whatever is later added under that name.
   panes) and the actions' logic, such as Back's toast when it went nowhere.
 - `internal/report/` — an agent pushing its own state to its pane as herdr
   tokens (ADR-001 D4), and the token contract for the keys it writes.
-  `report statusline` turns Claude's statusline JSON into `ctx`, and
+  `report statusline` turns Claude's statusline JSON into `ctx`,
+  `report codex` does the same from a Codex hook and its session's rollout
+  (A22, hooks sampled in `docs/config/codex-hooks.example.toml`), and
   `report stage` pushes `item` and `stage` on each agentisan step
   transition. They read `HERDR_PANE_ID`, a pane-shell variable, which is why
   it is not in `plugin.Env`.

@@ -182,7 +182,7 @@ func newReportCmd() *cobra.Command {
 			return fmt.Errorf("%s needs a subcommand; see --help", cmd.CommandPath())
 		},
 	}
-	c.AddCommand(newReportStatuslineCmd(), newReportStageCmd())
+	c.AddCommand(newReportStatuslineCmd(), newReportStageCmd(), newReportCodexCmd())
 	return c
 }
 
@@ -214,6 +214,40 @@ func newReportStatuslineCmd() *cobra.Command {
 				return nil
 			}
 			logger.Debug().Str("pane", pane.PaneID).Str("reported_to", res.PaneID).Int(report.CtxKey, res.Ctx).Msg("report statusline")
+			return nil
+		},
+	}
+}
+
+func newReportCodexCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "codex",
+		Short: "Push ctx from a Codex hook's payload on stdin",
+		Long: "Reads the JSON a Codex hook passes on stdin and sets this pane's ctx\n" +
+			"token to what Codex shows as \"Context N% used\", from the latest token\n" +
+			"count in the session's transcript. Run it as an async PostToolUse and\n" +
+			"Stop hook (docs/config/codex-hooks.example.toml), and start Codex with\n" +
+			"--no-daemon: a hook run by the shared app-server daemon cannot tell which\n" +
+			"pane it belongs to, and reports nothing.\n\n" +
+			"It prints nothing and always exits 0; why it reported nothing goes to\n" +
+			"the debug log (HERDR_AGENTISAN_LOG_LEVEL=debug).",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx := cmd.Context()
+			// Read the lineage first, as statusline does: the pane is found
+			// through the processes running when the hook fired.
+			lineage := lineageFrom(ctx)()
+			logger := logging.From(ctx)
+			pane := report.PaneFrom(lookupEnvFrom(ctx))
+			pane.Lineage = lineage
+			res, err := report.Codex(ctx, herdr.Client{SocketPath: pane.SocketPath}, pane, cmd.InOrStdin())
+			// A hook's output is Codex's to read: anything on stdout could
+			// fail a synchronous hook, so a failure goes to the debug log.
+			if err != nil {
+				logger.Debug().Err(err).Str("pane", pane.PaneID).Ints("lineage", lineage.PIDs()).Msg("report codex: nothing reported")
+				return nil
+			}
+			logger.Debug().Str("pane", pane.PaneID).Str("reported_to", res.PaneID).Int(report.CtxKey, res.Ctx).Msg("report codex")
 			return nil
 		},
 	}
