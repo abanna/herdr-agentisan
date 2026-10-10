@@ -1,0 +1,14 @@
+{
+  "v": 1,
+  "at": "2026-10-09T17:19:00Z",
+  "team": "assay",
+  "groups": [
+    {"name": "coders", "agents": [
+      {"name": "pee11", "pane_id": "w4:p1", "status": "blocked", "model": "claude-opus-4-1", "ctx": 91, "item": "NERD-5261", "stage": "rotation: handoff not acknowledged"},
+      {"name": "pee12", "pane_id": "w4:p2", "status": "working", "model": "opus", "ctx": 58, "item": "NERD-5262", "stage": "go-coder"}
+    ]},
+    {"name": "qa", "agents": [
+      {"name": "qa", "pane_id": "w5:p1", "status": "working", "model": "sonnet", "ctx": 66, "item": "NERD-5262", "stage": "e2e"}
+    ]}
+  ]
+}

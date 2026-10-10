@@ -527,6 +527,160 @@ func TestPaneQueryFailureClasses(t *testing.T) {
 	}
 }
 
+// agentInfo is an agent_info result as herdr 0.9.3's handle_agent_focus
+// answers it, with the schema's required fields.
+func agentInfo(paneID, name string) map[string]any {
+	return map[string]any{"type": "agent_info", "agent": map[string]any{
+		"terminal_id": "t1", "agent_status": "working", "workspace_id": "w2", "tab_id": "w2:t1",
+		"pane_id": paneID, "focused": true, "revision": 7, "name": name,
+	}}
+}
+
+func TestFocusAgentSendsTheSchemaShape(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		target string
+		reply  map[string]any
+		want   herdr.AgentInfo
+	}{
+		"focuses by name":                     {target: "pee01", reply: agentInfo("w2:p1", "pee01"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "pee01"}},
+		"an unnamed agent decodes to no name": {target: "w2:p3", reply: agentInfo("w2:p3", ""), want: herdr.AgentInfo{PaneID: "w2:p3"}},
+		// Agent names come from the snapshot: whatever bytes they hold, the
+		// request stays one valid JSON line.
+		"target with a newline":           {target: "pee\n01", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "x"}},
+		"target with invalid UTF-8":       {target: "pee\xff", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "x"}},
+		"target with shell metachars":     {target: "pé;$(x) *", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "x"}},
+		"a non-ASCII target":              {target: "エージェント", reply: agentInfo("w2:p1", "エージェント"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "エージェント"}},
+		"a truncated multibyte target":    {target: "pee\xe2\x82", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "x"}},
+		"a target with a NUL":             {target: "pee\x0001", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "x"}},
+		"a target with a byte-order mark": {target: "\ufeffpee01", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "x"}},
+		// Sent as a JSON value, never an argv: an option-like name is a name.
+		"an option-like target": {target: "--help", reply: agentInfo("w2:p1", "--help"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "--help"}},
+		// The client sends what it is given; herdr decides an empty target
+		// names no agent.
+		"an empty target is sent": {target: "", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "x"}},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Result: tc.reply} })
+
+			got, err := herdr.Client{SocketPath: srv.Path}.FocusAgent(t.Context(), tc.target)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+
+			reqs := srv.Requests()
+			require.Len(t, reqs, 1)
+			assert.Equal(t, "agent.focus", reqs[0].Method)
+			want, mErr := json.Marshal(map[string]string{"target": tc.target})
+			require.NoError(t, mErr)
+			assert.JSONEq(t, string(want), string(reqs[0].Params))
+		})
+	}
+}
+
+// zoomReply is a pane_zoom result as herdr 0.9.3's handle_pane_zoom answers
+// it, with the schema's required fields.
+func zoomReply(paneID string, zoomed, changed bool, reason any) map[string]any {
+	return map[string]any{"type": "pane_zoom", "zoom": map[string]any{
+		"changed": changed, "zoom_changed": changed, "focus_changed": false,
+		"pane_id": paneID, "focused_pane_id": paneID, "zoomed": zoomed, "reason": reason,
+		"layout": map[string]any{},
+	}}
+}
+
+func TestZoomPaneSendsTheSchemaShape(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		paneID string
+		reply  map[string]any
+		want   herdr.PaneZoom
+	}{
+		"zooms the pane on":                    {paneID: "w2:p1", reply: zoomReply("w2:p1", true, true, nil), want: herdr.PaneZoom{PaneID: "w2:p1", Zoomed: true, Changed: true}},
+		"already zoomed":                       {paneID: "w2:p1", reply: zoomReply("w2:p1", true, false, "already_zoomed"), want: herdr.PaneZoom{PaneID: "w2:p1", Zoomed: true, Reason: "already_zoomed"}},
+		"alone in its tab":                     {paneID: "w2:p1", reply: zoomReply("w2:p1", false, false, "single_pane"), want: herdr.PaneZoom{PaneID: "w2:p1", Reason: "single_pane"}},
+		"an alias answers with the current id": {paneID: "wP:p1", reply: zoomReply("wN:p2", true, true, nil), want: herdr.PaneZoom{PaneID: "wN:p2", Zoomed: true, Changed: true}},
+		// A null pane_id would zoom the focused pane — the dashboard itself —
+		// so an empty id must still be sent as a string.
+		"empty pane id is sent as a string, never null": {paneID: "", reply: zoomReply("w2:p1", true, true, nil), want: herdr.PaneZoom{PaneID: "w2:p1", Zoomed: true, Changed: true}},
+		"pane id with a newline":                        {paneID: "w2\np1", reply: zoomReply("w2:p1", true, true, nil), want: herdr.PaneZoom{PaneID: "w2:p1", Zoomed: true, Changed: true}},
+		"pane id with invalid UTF-8":                    {paneID: "w2\xff", reply: zoomReply("w2:p1", true, true, nil), want: herdr.PaneZoom{PaneID: "w2:p1", Zoomed: true, Changed: true}},
+		"pane id with a NUL":                            {paneID: "w2\x00p1", reply: zoomReply("w2:p1", true, true, nil), want: herdr.PaneZoom{PaneID: "w2:p1", Zoomed: true, Changed: true}},
+		"a non-ASCII pane id":                           {paneID: "wé:p1", reply: zoomReply("w2:p1", true, true, nil), want: herdr.PaneZoom{PaneID: "w2:p1", Zoomed: true, Changed: true}},
+		"an option-like pane id":                        {paneID: "-p1", reply: zoomReply("w2:p1", true, true, nil), want: herdr.PaneZoom{PaneID: "w2:p1", Zoomed: true, Changed: true}},
+		"pane id with a truncated multibyte":            {paneID: "w2\xe2\x82", reply: zoomReply("w2:p1", true, true, nil), want: herdr.PaneZoom{PaneID: "w2:p1", Zoomed: true, Changed: true}},
+		"pane id with a byte-order mark":                {paneID: "\ufeffw2:p1", reply: zoomReply("w2:p1", true, true, nil), want: herdr.PaneZoom{PaneID: "w2:p1", Zoomed: true, Changed: true}},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Result: tc.reply} })
+
+			got, err := herdr.Client{SocketPath: srv.Path}.ZoomPane(t.Context(), tc.paneID)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+
+			reqs := srv.Requests()
+			require.Len(t, reqs, 1)
+			assert.Equal(t, "pane.zoom", reqs[0].Method)
+			want, mErr := json.Marshal(map[string]string{"pane_id": tc.paneID, "mode": "on"})
+			require.NoError(t, mErr)
+			assert.JSONEq(t, string(want), string(reqs[0].Params))
+		})
+	}
+}
+
+// TestFocusAndZoomFailureClasses: both calls fail the way every call does,
+// and a result missing what the schema requires is a protocol violation
+// rather than a silently empty answer.
+func TestFocusAndZoomFailureClasses(t *testing.T) {
+	t.Parallel()
+
+	reply := func(result map[string]any) herdrtest.Handler {
+		return func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Result: result} }
+	}
+	apiErr := func(code string) herdrtest.Handler {
+		return func(herdrtest.Request) herdrtest.Reply {
+			return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: code, Message: code}}
+		}
+	}
+	silent := func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Silent: true} }
+	focus := func(c herdr.Client) error { _, err := c.FocusAgent(t.Context(), "pee01"); return err }
+	zoom := func(c herdr.Client) error { _, err := c.ZoomPane(t.Context(), "w2:p1"); return err }
+
+	tests := map[string]struct {
+		handler herdrtest.Handler
+		call    func(herdr.Client) error
+		want    error
+	}{
+		"focus: agent not found":         {handler: apiErr("agent_not_found"), call: focus, want: herdr.ErrAPI},
+		"focus: wrong result type":       {handler: reply(map[string]any{"type": "ok"}), call: focus, want: herdr.ErrProtocol},
+		"focus: agent missing":           {handler: reply(map[string]any{"type": "agent_info"}), call: focus, want: herdr.ErrProtocol},
+		"focus: agent without a pane_id": {handler: reply(agentInfo("", "pee01")), call: focus, want: herdr.ErrProtocol},
+		"focus: closed without a reply":  {handler: silent, call: focus, want: herdr.ErrUnavailable},
+		"focus: agent is not an object":  {handler: reply(map[string]any{"type": "agent_info", "agent": "pee01"}), call: focus, want: herdr.ErrProtocol},
+		"focus: pane_id is not a string": {handler: reply(map[string]any{"type": "agent_info", "agent": map[string]any{"pane_id": 7}}), call: focus, want: herdr.ErrProtocol},
+		"zoom: pane not found":           {handler: apiErr("pane_not_found"), call: zoom, want: herdr.ErrPaneNotFound},
+		"zoom: wrong result type":        {handler: reply(map[string]any{"type": "pane_layout"}), call: zoom, want: herdr.ErrProtocol},
+		"zoom: zoom missing":             {handler: reply(map[string]any{"type": "pane_zoom"}), call: zoom, want: herdr.ErrProtocol},
+		"zoom: zoom without a pane_id":   {handler: reply(zoomReply("", true, true, nil)), call: zoom, want: herdr.ErrProtocol},
+		"zoom: closed without a reply":   {handler: silent, call: zoom, want: herdr.ErrUnavailable},
+		"zoom: zoom is not an object":    {handler: reply(map[string]any{"type": "pane_zoom", "zoom": []any{}}), call: zoom, want: herdr.ErrProtocol},
+		"zoom: zoomed is not a bool":     {handler: reply(map[string]any{"type": "pane_zoom", "zoom": map[string]any{"pane_id": "w2:p1", "zoomed": "yes"}}), call: zoom, want: herdr.ErrProtocol},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, tc.handler)
+
+			err := tc.call(herdr.Client{SocketPath: srv.Path})
+			require.ErrorIs(t, err, tc.want)
+		})
+	}
+}
+
 // silentSocket accepts connections and never answers, like a wedged herdr.
 func silentSocket(t *testing.T) string {
 	t.Helper()

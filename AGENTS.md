@@ -118,6 +118,8 @@ exempts whatever is later added under that name.
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real
   socket set, and a test that reads it would toast a live session.
+- `internal/snapshot/` — the versioned snapshot contract (ADR-001 D5/D6).
+- `internal/dashboard/` — the bubbletea team dashboard and its pure renderer.
 - `internal/devctl/` — the `devctl` cobra tree: the coverage floor, the
   docs-parity check and the large-file ceiling, none of which the Go toolchain
   provides.
