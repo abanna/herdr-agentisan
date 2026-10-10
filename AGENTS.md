@@ -93,9 +93,10 @@ exempts whatever is later added under that name.
   injects (`EnvFrom`), the manifest (`LoadManifest`) and the actions' logic.
 - `internal/report/` — an agent pushing its own state to its pane as herdr
   tokens (ADR-001 D4), and the token contract for the keys it writes.
-  `report statusline` turns Claude's statusline JSON into `ctx`. It reads
-  `HERDR_PANE_ID`, a pane-shell variable, which is why it is not in
-  `plugin.Env`.
+  `report statusline` turns Claude's statusline JSON into `ctx`, and
+  `report stage` pushes `item` and `stage` on each agentisan step
+  transition. They read `HERDR_PANE_ID`, a pane-shell variable, which is why
+  it is not in `plugin.Env`.
 - `internal/daemon/` — the daemon's lifecycle (ADR-001 D3, A3, A4): one daemon
   per herdr server, enforced by a flock'd `daemon.lock` that records the
   server's socket inode; the protocol pin; `daemon.log` capped at 10 MB; and
