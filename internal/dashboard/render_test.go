@@ -975,11 +975,11 @@ func TestHelpOverlay(t *testing.T) {
 		t.Run(fmt.Sprint("btop=", btop), func(t *testing.T) {
 			t.Parallel()
 			out := dashboard.Render(dashboard.Frame{Snapshot: fixture(t, "full"), Now: at, Help: true, Btop: btop}, 120, 40, plain)
-			for _, s := range []string{"╭ help", "↑ ↓", "enter", "click", "?", "q", "◐ working", "● idle", "⚠ blocked", "✔ done", "⟳ ready", "? unknown"} {
+			for _, s := range []string{"╭ help", "↑ ↓", "enter", "click", "/         search", "?", "q", "◐ working", "● idle", "⚠ blocked", "✔ done", "⟳ ready", "? unknown"} {
 				assert.Contains(t, out, s)
 			}
 			assert.Equal(t, btop, strings.Contains(out, "[ btop ]  btop in a herdr popup"))
-			for _, s := range []string{"← →", "/ ", "b back"} {
+			for _, s := range []string{"← →", "b back"} {
 				assert.NotContains(t, out, s, "keys that do nothing are not advertised")
 			}
 		})

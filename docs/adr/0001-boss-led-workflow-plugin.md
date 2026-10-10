@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A17 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A17 and A20 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -612,3 +612,15 @@ NERD-5244 delivers this document. It moves to Done when the pull request that ad
 - **`$team`.** `N · ◐w ●i[ ⚠b][ ⟳r]`, byte for byte v12's. N counts every pane in the space, shells and `unknown` included. ● counts idle plus done. ⟳ counts every pane carrying a non-empty `handoff` token, where v12 missed some. A space with no panes gets `0 · ◐0 ●0`.
 - **The push.** Every poll, to each group target, with source `agentisan` and a 9,000 ms TTL. Nothing clears the token: once the daemon stops or crashes, or its herdr goes, the pushes stop and the TTL clears it within about 9 s. Each call proves, once connected and before it sends anything, that the socket still names the daemon's own server (A3), so nothing reaches a replacement.
 - **The project.** `[spaces] project`, in the shared file or `--set` only, names the project the ◆ spaces belong to, and must name a configured project. Unset, it is the one configured project; with none or several, the spaces belong to one unnamed project. The daemon reads it once at start. A file that does not resolve is logged, and the spaces fall back to the unnamed project, because `$team` does not depend on it.
+
+### A20. Search is herdr's Go To anywhere, and a filter in the dashboard
+
+*Clarifies:* the Search bullet in D5, and item 11's acceptance ("bound, or a popup that jumps on Enter").
+
+Go To was evaluated first, as D5 asks, against the herdr source at v0.9.3 (read, not driven). The boss chose this split on 2026-10-10.
+
+- **What Go To is.** herdr's session navigator, bound as `keys.goto`, prefix+g by default (`src/config/model.rs:1130`). It is a centred modal over every machine, workspace and pane, agents and plain terminals alike (`src/client/shell/overlay_input.rs:193`). Enter focuses the pane or workspace and closes it, without a zoom.
+- **What it matches.** The query is lowercased and split on white space, and every word must be a substring of one field (`src/client/shell/aggregate_navigation.rs:283-297`). The fields: workspace label and branch, tab label, the row label (the pane's label, else the agent's name), title, cwd, agent kind and pane id. Agents by name and spaces are covered: "search" finds dev-search, "coders" finds ◆ coders. It is not fuzzy ("pe1" misses pee01, "coders poo" finds nothing), and tokens are not searched, so an item such as NERD-5259 finds no one. It opens with its search box unfocused: `/` focuses it, and until then b, w, i, d, a, j and k are filters and moves (`overlay_input.rs:721-773`).
+- **What it cannot do.** Nothing on the socket opens it: the navigator is the client's own overlay, absent from `src/api/schema/commands.rs` and `src/app/api*.rs`. The dashboard's `/` cannot hand off to it.
+- **prefix+/ anywhere is Go To.** `keys.goto` takes one key or a list (`BindingConfig`, `src/config/keybinds.rs:47`), and prefix+/ is unbound by default; help is prefix+?, shift+/ (`keybinds.rs:1853-1858`). The snippet adds prefix+/ and keeps prefix+g: `goto = ["prefix+g", "prefix+/"]` in `[keys]`, sampled in `docs/config/herdr-keys.example.toml`. No popup pane is built: it would rebuild Go To, and its data would need the daemon's snapshot op or a second resolver.
+- **`/` in the dashboard filters in place.** Printable keys, q and ? included, are query text; the arrows move among the matches; Backspace edits; Enter jumps (agent.focus, then zoom, as D5's Jump) and ends the search, as a click does; Esc ends it, keeping the selection. Each word of the query must appear, letters in order with gaps allowed and case folded, in the agent's name, group, item and stage joined, so "cod 5255" finds the coder on NERD-5255. Groups keep their order, a group with no match is hidden, and every snapshot is filtered as it arrives. The boss is not searched: it sits in the header and is not selectable, and Go To finds it.
