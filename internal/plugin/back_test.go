@@ -1,16 +1,12 @@
 package plugin_test
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
-	"github.com/pelletier/go-toml/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -91,30 +87,12 @@ func TestBackTellsTheUserWhyNothingMoved(t *testing.T) {
 }
 
 // TestKeySnippetBindsBack keeps the documented [[keys.command]] (sample and
-// README) from rotting. It decodes with herdr 0.9.3's CommandKeybindConfig
-// fields only (src/config/keybinds.rs:122-137), since herdr ignores an
-// unknown key, and names the action by its qualified id, plugin and action
-// joined by a dot (src/app/api/plugins/mod.rs:640-643).
+// README) from rotting. It decodes the sample strictly (keySnippet), and
+// names the action by its qualified id, plugin and action joined by a dot
+// (src/app/api/plugins/mod.rs:640-643).
 func TestKeySnippetBindsBack(t *testing.T) {
 	t.Parallel()
-	sample, err := os.ReadFile(filepath.Join("..", "..", "docs", "config", "herdr-keys.example.toml"))
-	require.NoError(t, err)
-
-	var cfg struct {
-		Keys struct {
-			Command []struct {
-				Key         string `toml:"key"`
-				Command     string `toml:"command"`
-				Type        string `toml:"type"`
-				Description string `toml:"description"`
-				Width       any    `toml:"width"`
-				Height      any    `toml:"height"`
-			} `toml:"command"`
-		} `toml:"keys"`
-	}
-	dec := toml.NewDecoder(bytes.NewReader(sample))
-	dec.DisallowUnknownFields()
-	require.NoError(t, dec.Decode(&cfg))
+	sample, cfg := readKeySnippet(t)
 	require.Len(t, cfg.Keys.Command, 1)
 	bind := cfg.Keys.Command[0]
 
@@ -136,15 +114,7 @@ func TestKeySnippetBindsBack(t *testing.T) {
 	assert.Nil(t, bind.Width, "popup sizes apply to type popup only")
 	assert.Nil(t, bind.Height, "popup sizes apply to type popup only")
 
-	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
-	require.NoError(t, err)
-	var block string
-	for _, b := range regexp.MustCompile("(?s)```toml\n(.*?)```").FindAllStringSubmatch(string(readme), -1) {
-		if strings.Contains(b[1], "[[keys.command]]") {
-			block = b[1]
-		}
-	}
-	assert.Equal(t, settings(string(sample)), settings(block), "the README binds the key as the sample does")
+	assert.Equal(t, settings(sample), settings(readmeKeys(t)), "the README binds the keys as the sample does")
 }
 
 // settings is a TOML text's lines that are neither blank nor comments.

@@ -111,6 +111,12 @@ type Frame struct {
 	Note string
 	// Errors are shown in the footer, first to last. Nil entries are skipped.
 	Errors []error
+	// Search is set while a query is typed: the footer leads with Query, and
+	// a Snapshot with no groups left reads "no matches". Snapshot is already
+	// narrowed by the query (Filter).
+	Search bool
+	// Query is the search query as typed.
+	Query string
 }
 
 // Render draws f for a w x h terminal: exactly h lines, none wider than w,
@@ -133,6 +139,8 @@ func Render(f Frame, w, h int, opts Options) string {
 	case l.avail == 0:
 	case f.Snapshot == nil:
 		canvas[l.top] = line{{" ", plainStyle}, {waiting, dimStyle}}
+	case len(l.groups) == 0 && f.Search && strings.TrimSpace(f.Query) != "":
+		canvas[l.top] = line{{" ", plainStyle}, {noMatches, dimStyle}}
 	case len(l.groups) == 0:
 		canvas[l.top] = line{{" ", plainStyle}, {noTeam, dimStyle}}
 	default:
@@ -852,6 +860,9 @@ func footer(f Frame, l layout) line {
 	return slices.Concat(left.truncate(room).pad(l.w-1-markW), line{{mark, dimStyle}})
 }
 
+// searchHints are the keys that work while a query is typed.
+const searchHints = "enter jump · ↑↓ move · esc clear"
+
 // hints are the keys that work, as the footer names them. ctrl-b m is
 // herdr's own popup key for btop in this setup, named only where herdr is
 // reachable.
@@ -864,6 +875,10 @@ func hints(btop bool) string {
 
 func footerParts(f Frame) []seg {
 	var parts []seg
+	if f.Search {
+		// The query leads, so errors never push it off the line.
+		parts = append(parts, seg{"/" + clean(f.Query) + "▏", boldStyle})
+	}
 	for _, err := range f.Errors {
 		if err != nil {
 			parts = append(parts, seg{"✖ " + clean(err.Error()), errorStyle})
@@ -871,6 +886,9 @@ func footerParts(f Frame) []seg {
 	}
 	if f.Note != "" {
 		parts = append(parts, seg{clean(f.Note), noteStyle})
+	}
+	if f.Search {
+		return append(parts, seg{searchHints, dimStyle})
 	}
 	return append(parts, seg{hints(f.Btop), dimStyle})
 }
@@ -880,8 +898,9 @@ func footerParts(f Frame) []seg {
 func helpRows(btop bool) [][2]string {
 	rows := [][2]string{
 		{"↑ ↓", "move through the agents"},
-		{"enter", "jump: focus and zoom"},
+		{keyEnter, "jump: focus and zoom"},
 		{"click", "jump: focus and zoom"},
+		{"/", "search name, group, item, stage"},
 	}
 	if btop {
 		rows = append(rows, [2]string{btopButton, "btop in a herdr popup"})
