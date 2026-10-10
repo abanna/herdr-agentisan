@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A15 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A17 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -591,6 +591,16 @@ NERD-5244 delivers this document. It moves to Done when the pull request that ad
 
 - **Socket path.** On Linux the usable maximum is 107 path bytes plus the NUL terminator, not 108. The daemon's check, under 104 bytes for macOS, is unchanged.
 - **A closed pane takes its tokens with it.** Verified against the Herdr source at v0.9.3. Tokens are stored on the terminal the pane is attached to, not under its pane id (`src/terminal/state.rs:138`; `pane.report_metadata` writes them there, `src/app/api/panes.rs:1777-1786` and `1832-1835`). A terminal is dropped, tokens included, once no pane is attached to it (`remove_unattached_terminal_ids`, `src/app/actions.rs:628-647`, `terminals.remove` at line 641). Both ways a pane closes call it: `pane.close` (`src/app/api/panes.rs:1976` and `2003`, or `close_selected_workspace` at `1986` for a workspace's last pane, which calls it at `src/app/actions.rs:690`), and a pane whose process exits (`handle_pane_died`, `src/app/actions.rs:2025`, calling it at `2056` and `2085`). `pane.move` takes the pane and reinserts it with its terminal, and never removes a terminal, even when it drops an emptied source workspace (`handle_pane_move`, `src/app/api/panes.rs:940-1361`: taken at `1133`, workspace dropped at `1161`), so a moved pane keeps its tokens under its new id. `report stage` therefore writes straight to the pane. The 24 h TTL (A5) stays for a session that exits while its shell keeps the pane.
+
+### A16. Back walks the focus history
+
+*Clarifies:* the Back bullet in D5, and item 10's acceptance ("works across 3 consecutive jumps"). *Adds to:* A11.
+
+- **Walk back.** The user chose this on 2026-10-10, browser-style. After focus moves A, B, C, D, Back goes to C, then B, then A. Back's own moves do not restart the walk. Any other focus change ends it, whether a dashboard jump or the user moving, and the next Back starts again from the newest history. After A B C D, two Backs and a jump to E, the history reads A B C D C B E, and Back from E goes to B.
+- **History and cursor.** The `focus` table stays the truthful record of every focus, Back's included. The walk is a cursor in the daemon's memory over the history as it stood when the walk began, so it can reach all 32 rows. A restarted daemon starts a fresh walk. Back skips the pane the user is on, rows repeating it, and panes `pane.list` no longer lists. With nowhere older to go it refuses with `no_history` and moves nothing. Jumps made from the dashboard put the dashboard pane in the history too, so a walk passes through it between agents.
+- **Un-zoom, then focus.** At v0.9.3 `pane.zoom` focuses its target whatever the mode (`apply_pane_zoom`, `src/app/actions.rs:822`). Back therefore un-zooms the pane the user is on first, then sends `pane.focus` for the target. That pane is already focused, so the un-zoom moves nothing and announces nothing (`actions.rs:238-240`). Un-zooming a tab that is not zoomed answers `already_unzoomed` and is harmless (`actions.rs:843`).
+- **Announcements come late.** herdr emits `pane.focused` from a diff of the focused pane once per loop, after it has answered the request (`src/server/headless.rs:467`, `src/app/api.rs:842-873`). The daemon remembers the moves Back made and takes their announcements, whenever they arrive, as Back's own. It also compares `pane.list`'s focused pane with where the walk left the user, which catches a move herdr has not announced yet; that move's late announcement then does not end the walk the Back starts.
+- **Transport and key.** The socket op `back` (D6) answers the pane moved to and the pane left, or refuses with `no_history`, `herdr_failed` or `state_failed`. The `back` action runs `herdr-agentisan back`, and run from a key a refusal shows a toast, because herdr only logs a failed plugin command (`src/app/api.rs:136-163`). The key is a `[[keys.command]]` with `type = "plugin_action"` and `command = "nerdsrun.agentisan.back"` in herdr's own config (A9), sampled in `docs/config/herdr-keys.example.toml`. On prefix+b it displaces herdr's default `toggle_sidebar` (`src/config/model.rs:1179`, `src/config/keybinds.rs:1099-1102`).
 
 ### A17. The spaces resolver and `$team`
 

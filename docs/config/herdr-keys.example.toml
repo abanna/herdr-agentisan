@@ -1,0 +1,20 @@
+# herdr key binding for Agentisan's Back action (ADR-001 D5, A9, A16).
+#
+# herdr plugins cannot ship key bindings: add this block to herdr's own
+# config (~/.config/herdr/config.toml), in place of the `pkill` workaround on
+# prefix+b, and reload herdr's config. Each press runs the `back` action.
+#
+# prefix+b is herdr's default toggle_sidebar key. A [[keys.command]] binding
+# takes it over silently (herdr 0.9.3, src/config/keybinds.rs:1099-1102), so
+# bind keys.toggle_sidebar to another key if you use it. If your config sets
+# keys.toggle_sidebar = "prefix+b" itself, herdr keeps that and disables this
+# binding, with a "kept keys.toggle_sidebar, disabled keys.command[N].key"
+# diagnostic.
+#
+# TestKeySnippetBindsBack (internal/plugin) keeps this and the README in step.
+
+[[keys.command]]
+key = "prefix+b"
+type = "plugin_action"
+command = "nerdsrun.agentisan.back"
+description = "Agentisan: back to the previous pane"

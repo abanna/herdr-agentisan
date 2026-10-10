@@ -16,3 +16,11 @@ var Backoff = backoff
 func HealthOver(ctx context.Context, st *store.Store, base HealthInfo) HealthInfo {
 	return Options{Logger: zerolog.Nop()}.health(ctx, st, base)()
 }
+
+// BackCode is the refusal code the back op answers err with.
+var BackCode = backCode
+
+// BackOver runs one back op on st through h, as a fresh daemon would.
+func BackOver(ctx context.Context, h HerdrClient, st *store.Store) (BackResult, error) {
+	return Options{Herdr: h, Logger: zerolog.Nop()}.withDefaults().back(ctx, st, newWalker())
+}

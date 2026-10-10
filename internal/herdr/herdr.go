@@ -451,10 +451,21 @@ type PaneZoom struct {
 // always sent as a string: herdr reads a null pane_id as the focused pane,
 // which is never what a caller naming a pane means.
 func (c Client) ZoomPane(ctx context.Context, paneID string) (PaneZoom, error) {
+	return c.zoomPane(ctx, paneID, "on")
+}
+
+// UnzoomPane zooms one pane's tab off. herdr focuses the pane first whatever
+// the mode (apply_pane_zoom, src/app/actions.rs:822 at v0.9.3). A tab not
+// zoomed answers Reason "already_unzoomed" (actions.rs:843): no error.
+func (c Client) UnzoomPane(ctx context.Context, paneID string) (PaneZoom, error) {
+	return c.zoomPane(ctx, paneID, "off")
+}
+
+func (c Client) zoomPane(ctx context.Context, paneID, mode string) (PaneZoom, error) {
 	params := struct {
 		PaneID string `json:"pane_id"`
 		Mode   string `json:"mode"`
-	}{PaneID: paneID, Mode: "on"}
+	}{PaneID: paneID, Mode: mode}
 	var out struct {
 		Type string    `json:"type"`
 		Zoom *PaneZoom `json:"zoom"`
@@ -469,6 +480,29 @@ func (c Client) ZoomPane(ctx context.Context, paneID string) (PaneZoom, error) {
 		return PaneZoom{}, fmt.Errorf("%w: pane.zoom: result has no zoom.pane_id", ErrProtocol)
 	}
 	return *out.Zoom, nil
+}
+
+// FocusPane focuses one pane, switching workspace and tab, and returns it
+// (src/app/api/panes.rs:484-500 at v0.9.3). If focus changed, herdr streams
+// pane.focused after answering (src/server/headless.rs:467, api.rs:842-873).
+func (c Client) FocusPane(ctx context.Context, paneID string) (PaneInfo, error) {
+	params := struct {
+		PaneID string `json:"pane_id"`
+	}{PaneID: paneID}
+	var out struct {
+		Type string    `json:"type"`
+		Pane *PaneInfo `json:"pane"`
+	}
+	if err := c.Call(ctx, "pane.focus", params, &out); err != nil {
+		return PaneInfo{}, err
+	}
+	if out.Type != "pane_info" {
+		return PaneInfo{}, fmt.Errorf("%w: pane.focus: result type %q, want \"pane_info\"", ErrProtocol, out.Type)
+	}
+	if out.Pane == nil || out.Pane.PaneID == "" {
+		return PaneInfo{}, fmt.Errorf("%w: pane.focus: result has no pane.pane_id", ErrProtocol)
+	}
+	return *out.Pane, nil
 }
 
 // PluginPopup opens one of a plugin's manifest [[panes]] entrypoints as a

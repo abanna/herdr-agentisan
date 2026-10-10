@@ -71,6 +71,8 @@ type HerdrClient interface {
 	Ping(ctx context.Context) (herdr.Pong, error)
 	ListPanes(ctx context.Context) ([]herdr.PaneInfo, error)
 	Subscribe(ctx context.Context, types ...string) (*herdr.Subscription, error)
+	UnzoomPane(ctx context.Context, paneID string) (herdr.PaneZoom, error)
+	FocusPane(ctx context.Context, paneID string) (herdr.PaneInfo, error)
 }
 
 // Hooks are the process operations, injected so tests can run daemons in
@@ -101,6 +103,8 @@ type Options struct {
 	StartWait time.Duration
 	// StopWait bounds Stop's wait for the lock; zero is DefaultStopWait.
 	StopWait time.Duration
+	// BackBudget bounds one back op; zero is DefaultBackBudget.
+	BackBudget time.Duration
 	// AllowUnverified runs against an unverified protocol (A4).
 	AllowUnverified bool
 	// Version and Commit are reported by health.
@@ -125,6 +129,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.StopWait <= 0 {
 		o.StopWait = DefaultStopWait
+	}
+	if o.BackBudget <= 0 {
+		o.BackBudget = DefaultBackBudget
 	}
 	if o.Now == nil {
 		o.Now = time.Now
@@ -233,10 +240,11 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}()
 
+	w := newWalker() // shared: the collector tells it where focus goes
 	srv, err := listen(paths.Socket, o.health(ctx, st, HealthInfo{
 		PID: os.Getpid(), Version: o.Version, Commit: o.Commit, StartedAt: startedAt,
 		HerdrProtocol: pong.Protocol, HerdrSocket: o.HerdrSocket, Herdr: ident,
-	}), o.Logger)
+	}), func() (BackResult, error) { return o.back(ctx, st, w) }, o.Logger)
 	if err != nil {
 		return err
 	}
@@ -244,7 +252,7 @@ func Run(ctx context.Context, o Options) error {
 
 	focusCtx, stopFocus := context.WithCancel(ctx)
 	var focus sync.WaitGroup
-	focus.Go(func() { o.followFocus(focusCtx, st, ident) })
+	focus.Go(func() { o.followFocus(focusCtx, st, w, ident) })
 	defer func() {
 		stopFocus()
 		focus.Wait()

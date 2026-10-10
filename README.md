@@ -61,6 +61,27 @@ short. Like `report statusline`, it prints nothing and exits 0 whether or not
 it reported; only a malformed command line (an unknown flag, an extra
 argument) fails.
 
+## Back on prefix+b
+
+The `back` action returns to the pane you were on before, un-zooming the one
+you leave. Pressed again it keeps walking back, like a browser's: after jumps
+to A, B, C and D, Back goes to C, B, then A; any other focus change ends the
+walk. The daemon picks the pane from its focus history; when Back cannot go
+anywhere (no daemon, nothing older), a toast says why. Plugins cannot ship
+key bindings, so bind it in `~/.config/herdr/config.toml`, in place of the
+`pkill` workaround, and reload herdr's config:
+
+```toml
+[[keys.command]]
+key = "prefix+b"
+type = "plugin_action"
+command = "nerdsrun.agentisan.back"
+description = "Agentisan: back to the previous pane"
+```
+
+This takes prefix+b from herdr's default `toggle_sidebar`; see
+[`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml).
+
 ## `$team` on the ◆ spaces
 
 The daemon pushes each `◆ <group>` workspace its `$team` token every 3 s:
@@ -76,7 +97,8 @@ Each key has one writer (ADR-001 D4). Once a daemon with this push is
 running, delete the `report_team_tokens(...)` call at line 231 of
 `herdr-dashboard-v12.py` and restart v12. Until then both write `$team` and
 the last write wins; after, the daemon's next push, within 3 s, replaces the
-value v12 left.
+value v12 left on each group space. The daemon never writes `◆ herdr`, so
+v12's last value there clears itself when its 30 s TTL runs out.
 
 ## Gates
 

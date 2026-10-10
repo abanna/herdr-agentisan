@@ -635,6 +635,58 @@ func TestZoomPaneSendsTheSchemaShape(t *testing.T) {
 	}
 }
 
+// paneInfo is a pane_info result as herdr 0.9.3's handle_pane_focus answers it.
+func paneInfo(paneID string) map[string]any {
+	return map[string]any{"type": "pane_info", "pane": map[string]any{
+		"pane_id": paneID, "terminal_id": "t1", "workspace_id": "w2", "tab_id": "w2:t1", "focused": true,
+		"agent_status": "idle", "revision": 3,
+	}}
+}
+
+// TestFocusPaneAndUnzoomPaneSendTheSchemaShape: pane.focus takes a required
+// pane_id string, and pane.zoom off is ZoomPane's request with mode off. Both
+// always send the id as a string, whatever its bytes: a null pane_id makes
+// pane.zoom act on the focused pane.
+func TestFocusPaneAndUnzoomPaneSendTheSchemaShape(t *testing.T) {
+	t.Parallel()
+
+	ids := map[string]string{
+		"a pane id": "w2:p1", "an empty pane id is sent as a string": "", "pane id with a newline": "w2\np1",
+		"pane id with invalid UTF-8": "w2\xff", "pane id with a NUL": "w2\x00p1", "a non-ASCII pane id": "wé:p1",
+		"an option-like pane id": "-p1", "pane id with a byte-order mark": "\ufeffw2:p1", "pane id with a truncated multibyte": "w2\xe2\x82",
+	}
+	for name, id := range ids {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, func(r herdrtest.Request) herdrtest.Reply {
+				if r.Method == "pane.focus" {
+					return herdrtest.Reply{Result: paneInfo("w2:p1")}
+				}
+				return herdrtest.Reply{Result: zoomReply("w2:p1", false, false, "already_unzoomed")}
+			})
+			c := herdr.Client{SocketPath: srv.Path}
+
+			pane, err := c.FocusPane(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, herdr.PaneInfo{PaneID: "w2:p1", WorkspaceID: "w2", Focused: true, AgentStatus: "idle"}, pane)
+			zoom, err := c.UnzoomPane(t.Context(), id)
+			require.NoError(t, err)
+			assert.Equal(t, herdr.PaneZoom{PaneID: "w2:p1", Reason: "already_unzoomed"}, zoom, "a tab that is not zoomed is no error")
+
+			reqs := srv.Requests()
+			require.Len(t, reqs, 2)
+			assert.Equal(t, "pane.focus", reqs[0].Method)
+			want, mErr := json.Marshal(map[string]string{"pane_id": id})
+			require.NoError(t, mErr)
+			assert.JSONEq(t, string(want), string(reqs[0].Params))
+			assert.Equal(t, "pane.zoom", reqs[1].Method)
+			want, mErr = json.Marshal(map[string]string{"pane_id": id, "mode": "off"})
+			require.NoError(t, mErr)
+			assert.JSONEq(t, string(want), string(reqs[1].Params))
+		})
+	}
+}
+
 // TestFocusAndZoomFailureClasses: both calls fail the way every call does,
 // and a result missing what the schema requires is a protocol violation
 // rather than a silently empty answer.
@@ -652,6 +704,8 @@ func TestFocusAndZoomFailureClasses(t *testing.T) {
 	silent := func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Silent: true} }
 	focus := func(c herdr.Client) error { _, err := c.FocusAgent(t.Context(), "pee01"); return err }
 	zoom := func(c herdr.Client) error { _, err := c.ZoomPane(t.Context(), "w2:p1"); return err }
+	focusPane := func(c herdr.Client) error { _, err := c.FocusPane(t.Context(), "w2:p1"); return err }
+	unzoom := func(c herdr.Client) error { _, err := c.UnzoomPane(t.Context(), "w2:p1"); return err }
 
 	tests := map[string]struct {
 		handler herdrtest.Handler
@@ -672,6 +726,16 @@ func TestFocusAndZoomFailureClasses(t *testing.T) {
 		"zoom: closed without a reply":   {handler: silent, call: zoom, want: herdr.ErrUnavailable},
 		"zoom: zoom is not an object":    {handler: reply(map[string]any{"type": "pane_zoom", "zoom": []any{}}), call: zoom, want: herdr.ErrProtocol},
 		"zoom: zoomed is not a bool":     {handler: reply(map[string]any{"type": "pane_zoom", "zoom": map[string]any{"pane_id": "w2:p1", "zoomed": "yes"}}), call: zoom, want: herdr.ErrProtocol},
+		"pane focus: pane not found":     {handler: apiErr("pane_not_found"), call: focusPane, want: herdr.ErrPaneNotFound},
+		"pane focus: wrong result type":  {handler: reply(map[string]any{"type": "pane_current"}), call: focusPane, want: herdr.ErrProtocol},
+		"pane focus: pane missing":       {handler: reply(map[string]any{"type": "pane_info"}), call: focusPane, want: herdr.ErrProtocol},
+		"pane focus: pane without an id": {handler: reply(paneInfo("")), call: focusPane, want: herdr.ErrProtocol},
+		"pane focus: closed, no reply":   {handler: silent, call: focusPane, want: herdr.ErrUnavailable},
+		"pane focus: pane not an object": {handler: reply(map[string]any{"type": "pane_info", "pane": "w2:p1"}), call: focusPane, want: herdr.ErrProtocol},
+		"unzoom: pane not found":         {handler: apiErr("pane_not_found"), call: unzoom, want: herdr.ErrPaneNotFound},
+		"unzoom: wrong result type":      {handler: reply(map[string]any{"type": "pane_info"}), call: unzoom, want: herdr.ErrProtocol},
+		"unzoom: zoom without a pane_id": {handler: reply(zoomReply("", false, true, nil)), call: unzoom, want: herdr.ErrProtocol},
+		"unzoom: closed without a reply": {handler: silent, call: unzoom, want: herdr.ErrUnavailable},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
