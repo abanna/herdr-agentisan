@@ -1,0 +1,40 @@
+ ◆ agentisan · 15 agents   ◐6 working ●4 idle ⚠1 blocked ✔2 done ⟳1 ready ?1 unknown                              17:19
+ boss ▸ #867 release · review · ctx ▓▓░░░░░░ 23%
+╭ coders 9 ───────────────────────────╮ ╭ precheck 2 ─────────────────────────╮ ╭ qa 1 ───────────────────────────────╮
+│◐ pee01              opus ▓▓░░░  38% │ │◐ precheck           son  ▓▓░░░  37% │ │✔ qa                 son  ▓░░░░  12% │
+│  r2 · J1 re-run                     │ │  running                            │ │  queue empty                        │
+│◐ pee02              opus ▓▓░░░  30% │ │● precheck2          son  ▓░░░░  10% │ ╰─────────────────────────────────────╯
+│  J1 re-queued                       │ │                                     │
+│● pee03              opus ▓░░░░  22% │ ╰─────────────────────────────────────╯
+│  PR3a · committed                   │
+│◐ pee04              opus ▓▓▓░░  61% │
+│  NERD-5255 · go-review              │
+│⚠ pee05              opus ▓▓▓▓░  78% │
+│  NERD-5247 · waiting on boss        │
+│● pee06              son  ▓░░░░  12% │
+│                                     │
+│✔ pee07              opus ▓▓░░░  47% │
+│  NERD-5246 · merged                 │
+│⟳ pee08              opus ░░░░░   -- │
+│  handoff read                       │
+│◐ pee09              opus ▓▓▓░░  69% │
+│  NERD-5268 · precheck: tdaddy impa… │
+╰─────────────────────────────────────╯
+╭ codex 1 ────────────────────────────╮ ╭ research 1 ─────────────────────────╮ ╭ clerk 1 ────────────────────────────╮
+│◐ codex              gpt- ▓▓░░░  41% │ │● research           hai  ░░░░░   5% │ │? clerk              hai  ░░░░░   -- │
+│  #868 · triage                      │ │  herdr 0.9.3 events                 │ │                                     │
+╰─────────────────────────────────────╯ ╰─────────────────────────────────────╯ ╰─────────────────────────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+ ←↑↓→ move · enter focus · ? help

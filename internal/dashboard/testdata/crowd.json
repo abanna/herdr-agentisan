@@ -1,0 +1,30 @@
+{
+  "v": 1,
+  "at": "2026-10-09T17:19:00Z",
+  "team": "crowd",
+  "boss": {"name": "boss", "pane_id": "w1:p1", "status": "idle", "model": "opus", "ctx": 64, "item": "#900", "stage": "plan"},
+  "groups": [
+    {"name": "coders", "agents": [
+      {"name": "pee01", "pane_id": "w2:p1", "status": "working", "model": "opus", "ctx": 7, "item": "NERD-5301", "stage": "go-coder"},
+      {"name": "pee02", "pane_id": "w2:p2", "status": "idle", "model": "opus", "ctx": 14, "item": "NERD-5302", "stage": "precheck"},
+      {"name": "pee03", "pane_id": "w2:p3", "status": "working", "model": "opus", "ctx": 21, "item": "NERD-5303", "stage": "go-coder"},
+      {"name": "pee04", "pane_id": "w2:p4", "status": "blocked", "model": "sonnet", "ctx": 28, "item": "NERD-5304", "stage": "precheck"},
+      {"name": "pee05", "pane_id": "w2:p5", "status": "working", "model": "opus", "ctx": 35, "item": "NERD-5305", "stage": "go-coder"},
+      {"name": "pee06", "pane_id": "w2:p6", "status": "done", "model": "opus", "ctx": 42, "item": "NERD-5306", "stage": "precheck"},
+      {"name": "pee07", "pane_id": "w2:p7", "status": "idle", "model": "opus", "ctx": 49, "item": "NERD-5307", "stage": "go-coder"},
+      {"name": "pee08", "pane_id": "w2:p8", "status": "ready", "model": "sonnet", "ctx": 56, "item": "NERD-5308", "stage": "precheck"},
+      {"name": "pee09", "pane_id": "w2:p9", "status": "working", "model": "opus", "ctx": 63, "item": "NERD-5309", "stage": "go-coder"},
+      {"name": "pee10", "pane_id": "w2:p10", "status": "working", "model": "opus", "ctx": 70, "item": "NERD-5310", "stage": "precheck"},
+      {"name": "pee11", "pane_id": "w2:p11", "status": "idle", "model": "opus", "ctx": 77, "item": "NERD-5311", "stage": "go-coder"},
+      {"name": "pee12", "pane_id": "w2:p12", "status": "unknown", "model": "sonnet", "item": "NERD-5312", "stage": "precheck"},
+      {"name": "pee13", "pane_id": "w2:p13", "status": "working", "model": "opus", "ctx": 91, "item": "NERD-5313", "stage": "go-coder"},
+      {"name": "pee14", "pane_id": "w2:p14", "status": "idle", "model": "opus", "ctx": 98, "item": "NERD-5314", "stage": "precheck"},
+      {"name": "pee15", "pane_id": "w2:p15", "status": "working", "model": "opus", "ctx": 5, "item": "NERD-5315", "stage": "go-coder"},
+      {"name": "pee16", "pane_id": "w2:p16", "status": "done", "model": "sonnet", "ctx": 12, "item": "NERD-5316", "stage": "precheck"},
+      {"name": "pee17", "pane_id": "w2:p17", "status": "working", "model": "opus", "ctx": 19, "item": "NERD-5317", "stage": "go-coder"},
+      {"name": "pee18", "pane_id": "w2:p18", "status": "blocked", "model": "opus", "ctx": 26, "item": "NERD-5318", "stage": "precheck"},
+      {"name": "pee19", "pane_id": "w2:p19", "status": "idle", "model": "opus", "ctx": 33, "item": "NERD-5319", "stage": "go-coder"},
+      {"name": "pee20", "pane_id": "w2:p20", "status": "working", "model": "sonnet", "ctx": 40, "item": "NERD-5320", "stage": "precheck"}
+    ]}
+  ]
+}
