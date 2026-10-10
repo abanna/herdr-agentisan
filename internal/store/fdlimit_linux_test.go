@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"syscall"
 	"testing"
 
@@ -36,17 +37,53 @@ type fdResult struct {
 	Leaked int    `json:"leaked"`
 }
 
-func openFDs() int {
+// openFDs lists the descriptors open now. The one ReadDir reads the
+// listing through is closed again when it returns, so each number is
+// re-checked with fstat.
+func openFDs() []int {
 	entries, err := os.ReadDir("/proc/self/fd")
 	if err != nil {
-		return -1
+		return nil
 	}
-	return len(entries)
+	var fds []int
+	for _, e := range entries {
+		fd, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		var st syscall.Stat_t
+		if syscall.Fstat(fd, &st) == nil {
+			fds = append(fds, fd)
+		}
+	}
+	return fds
+}
+
+// limitFor is the RLIMIT_NOFILE value that leaves exactly room descriptor
+// numbers free. The limit caps a new descriptor's number, not how many are
+// open: a process that inherited a high descriptor (a CI runner passes
+// several) has free numbers below it, which the open count plus room would
+// let Open use.
+func limitFor(open []int, room int) uint64 {
+	used := make(map[int]bool, len(open))
+	for _, fd := range open {
+		used[fd] = true
+	}
+	free := 0
+	for n := 0; ; n++ {
+		if used[n] {
+			continue
+		}
+		if free == room {
+			return uint64(n) //nolint:gosec // a small non-negative descriptor number
+		}
+		free++
+	}
 }
 
 // helperFDLimit opens a fresh database with the descriptor limit set to
-// what is open now plus 0, 1, 2 and so on, and reports, for each, how Open
-// ended and how many descriptors it left open.
+// leave 0, 1, 2 and so on free descriptor numbers, and reports, for each,
+// how Open ended and how many descriptors it left open.
 func helperFDLimit(dir string) {
 	var lim syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
@@ -61,7 +98,7 @@ func helperFDLimit(dir string) {
 	for extra := range 12 {
 		before := openFDs()
 		capped := lim
-		capped.Cur = uint64(before + extra) //nolint:gosec // a small positive count
+		capped.Cur = limitFor(before, extra)
 		if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &capped); err != nil {
 			os.Exit(4)
 		}
@@ -72,7 +109,7 @@ func helperFDLimit(dir string) {
 		if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
 			os.Exit(5)
 		}
-		r := fdResult{Extra: extra, Leaked: openFDs() - before}
+		r := fdResult{Extra: extra, Leaked: len(openFDs()) - len(before)}
 		for _, sentinel := range []error{store.ErrOpen, store.ErrPragma, store.ErrMigration, store.ErrStore} {
 			if err != nil && errors.Is(err, sentinel) {
 				r.Err = sentinel.Error()
