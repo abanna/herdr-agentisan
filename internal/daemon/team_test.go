@@ -121,6 +121,25 @@ func lists(srv *herdrtest.Server) int {
 	return n
 }
 
+// teamCalls returns the requests srv got that only the team poll makes:
+// workspace.list and the pushes. The daemon's own client (HerdrClient) has
+// neither. pane.list is left out because focus lists the panes too: focus,
+// like Run's ping, has no Dialed hook and finds a replaced socket by its own
+// identity check, so a call of theirs dialled just after a swap can still
+// reach the replacement (focus.go; stillServed in daemon.go). Every team
+// pane.list that a replacement answers is followed, on the same client, by a
+// workspace.list, so a team poll that reached the replacement shows here all
+// the same.
+func teamCalls(srv *herdrtest.Server) []string {
+	var out []string
+	for _, r := range srv.Requests() {
+		if r.Method == "workspace.list" || r.Method == "workspace.report_metadata" {
+			out = append(out, r.Method)
+		}
+	}
+	return out
+}
+
 // polled waits until srv has answered n more polls than it had, so every
 // push of the polls before has landed.
 func polled(t *testing.T, srv *herdrtest.Server, n int) {
@@ -174,12 +193,14 @@ func liveSpaces() ([]herdr.WorkspaceInfo, []map[string]any) {
 
 // wantPushes are the exact params each group space of liveSpaces receives,
 // every poll: its own $team, source agentisan, TTL 9000 ms, and no other
-// token. Written out by hand, escapes and all, rather than from the
-// package's constants.
+// token. Written out by hand rather than from the package's constants, with
+// the glyphs as JSON escapes so the test cannot share a mistyped glyph with
+// the code: \u00b7 ·, \u25d0 ◐, \u25cf ●, \u26a0 ⚠, \u27f3 ⟳. An escape
+// takes exactly four hex digits, so \u25d01 is ◐ then 1.
 var wantPushes = map[string]string{
-	"wN": `{"workspace_id":"wN","source":"agentisan","tokens":{"team":"4 · ◐1 ●1 ⚠1 ⟳1"},"ttl_ms":9000}`,
-	"wY": `{"workspace_id":"wY","source":"agentisan","tokens":{"team":"1 · ◐0 ●1"},"ttl_ms":9000}`,
-	"w0": `{"workspace_id":"w0","source":"agentisan","tokens":{"team":"0 · ◐0 ●0"},"ttl_ms":9000}`,
+	"wN": `{"workspace_id":"wN","source":"agentisan","tokens":{"team":"4 \u00b7 \u25d01 \u25cf1 \u26a01 \u27f31"},"ttl_ms":9000}`,
+	"wY": `{"workspace_id":"wY","source":"agentisan","tokens":{"team":"1 \u00b7 \u25d00 \u25cf1"},"ttl_ms":9000}`,
+	"w0": `{"workspace_id":"w0","source":"agentisan","tokens":{"team":"0 \u00b7 \u25d00 \u25cf0"},"ttl_ms":9000}`,
 }
 
 // TestRunPushesTeamToEachGroupSpace is D4's $team on the spaces layout: on
@@ -233,8 +254,17 @@ func TestTeamPushStopsWithTheDaemon(t *testing.T) {
 			} else {
 				require.NoError(t, err)
 			}
+			// Run has joined the poll, so everything it will ever send is
+			// sent, but the server records a request on a goroutine of its
+			// own once it has accepted the connection and read the line: a
+			// push written just before the stop can land after Run returns.
+			// Settle before the baseline, so it holds every push sent before
+			// the stop, and before the second look, so that holds every push
+			// sent since.
+			original.Settle(t)
 			after := pushes(t, original)
 			time.Sleep(10 * 20 * time.Millisecond) // ten polls' worth
+			original.Settle(t)
 			assert.Equal(t, after, pushes(t, original), "no push after the daemon stopped")
 			for ws, params := range after {
 				for _, p := range params {
@@ -242,7 +272,8 @@ func TestTeamPushStopsWithTheDaemon(t *testing.T) {
 				}
 			}
 			if th.srv != original {
-				assert.Empty(t, th.srv.Requests(), "the replacement, which the next daemon belongs to, gets nothing")
+				th.srv.Settle(t)
+				assert.Empty(t, teamCalls(th.srv), "the replacement, which the next daemon belongs to, gets no team call")
 			}
 		})
 	}
@@ -263,8 +294,8 @@ func (th *teamHerdr) replace() {
 // being answered, after the poll's identity check. Every call after that
 // dials the replacement, which the next daemon belongs to, and finds so once
 // connected, before it sends anything: nothing more is asked of the original,
-// nothing is pushed to either server, and the replacement never sees a
-// request.
+// nothing is pushed to either server, and the replacement never sees a team
+// call (teamCalls: focus finds the swap its own way).
 func TestTeamPushIgnoresAServerReplacedMidPoll(t *testing.T) {
 	t.Parallel()
 
@@ -302,7 +333,8 @@ func TestTeamPushIgnoresAServerReplacedMidPoll(t *testing.T) {
 			if during == "pane.list" {
 				assert.Zero(t, lists(original), "workspace.list, dialled after the swap, never reaches the original")
 			}
-			assert.Empty(t, replacement.Requests(), "the replacement is never asked anything")
+			replacement.Settle(t)
+			assert.Empty(t, teamCalls(replacement), "the team poll never asks the replacement anything, above all no push")
 			assert.True(t, r.alive(), "the poll stops; Run's own check ends the daemon")
 		})
 	}

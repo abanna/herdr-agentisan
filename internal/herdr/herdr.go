@@ -51,8 +51,10 @@ const (
 )
 
 // maxResponseBytes bounds one response line. The largest response this client
-// asks for is a few hundred bytes; the cap stops a misbehaving peer from
-// growing the buffer without limit.
+// asks for is pane.list, which the daemon's team poll reads every 3 s: about
+// 20 KB for a realistic layout, and up to about 12 KB per pane at herdr's
+// token limits. The cap leaves room for that and stops a misbehaving peer
+// from growing the buffer without limit.
 const maxResponseBytes = 1 << 20
 
 // APIError is herdr's {"error":{"code","message"}} body. It unwraps to ErrAPI.

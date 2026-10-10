@@ -70,7 +70,11 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity) 
 	tick := time.NewTicker(o.Poll)
 	defer tick.Stop()
 	for {
-		err := onServer() // a socket that is gone fails no dial: stop at once
+		// Checked here as well as on every dial: a socket that is gone fails
+		// the dial itself, before Dialed runs, and a failed dial is only
+		// ErrUnavailable, which the poll logs and retries. This stops it at
+		// once instead.
+		err := onServer()
 		if err == nil {
 			err = o.pushTeam(ctx, c, st, resolver)
 		}

@@ -40,8 +40,9 @@ var secretNames = map[string]bool{"token": true, "api_key": true, "password": tr
 
 func leafOf(k kind) *node { return &node{kind: k} }
 
-// profileSchema is the body of a profile: the shared tables, a
-// [projects.<name>] table, a repo file and --set all share it.
+// profileSchema is the body of a profile: a [projects.<name>] table and a
+// repo file are checked against it. The shared file's top level and each
+// --set are checked against sharedSchema, which adds [spaces] to it.
 var profileSchema = &node{kind: kindTable, fields: map[string]*node{
 	"repo":   leafOf(kindString),
 	"color":  leafOf(kindString),
