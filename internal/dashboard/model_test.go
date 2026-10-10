@@ -307,7 +307,8 @@ func requests(srv *herdrtest.Server) []sent {
 }
 
 // TestHerdrFocuserFocusesThenZooms drives Enter end to end against the fake
-// herdr: agent.focus by name, then pane.zoom on the agent's pane.
+// herdr: agent.focus by name, then pane.zoom on the pane herdr answered with,
+// not the snapshot's (w2:p2 here), which can be stale.
 func TestHerdrFocuserFocusesThenZooms(t *testing.T) {
 	t.Parallel()
 
@@ -321,7 +322,7 @@ func TestHerdrFocuserFocusesThenZooms(t *testing.T) {
 
 	assert.Equal(t, []sent{
 		{Method: "agent.focus", Params: `{"target":"pee02"}`},
-		{Method: "pane.zoom", Params: `{"pane_id":"w2:p2","mode":"on"}`},
+		{Method: "pane.zoom", Params: `{"pane_id":"w9:p9","mode":"on"}`},
 	}, requests(srv))
 	assert.NotContains(t, m.View().Content, "✖")
 }
@@ -336,13 +337,16 @@ func TestHerdrFocuser(t *testing.T) {
 		want      []sent
 		err       error
 	}{
-		"zooms the snapshot's pane": {
+		// pane.zoom also focuses its target, so zooming a stale snapshot id
+		// (a moved pane, a reissued id) would move the user off the agent.
+		// Only herdr's answer names the pane it just focused.
+		"zooms the pane herdr focused, not the snapshot's": {
 			agent: snapshot.Agent{Name: "qa", PaneID: "w5:p1"},
-			want:  []sent{{"agent.focus", `{"target":"qa"}`}, {"pane.zoom", `{"pane_id":"w5:p1","mode":"on"}`}},
+			want:  []sent{{"agent.focus", `{"target":"qa"}`}, {"pane.zoom", `{"pane_id":"w9:p9","mode":"on"}`}},
 		},
-		// Without a pane id in the snapshot, the pane herdr just focused is
-		// the agent's: never send an empty id, which herdr would refuse.
-		"falls back to the focused pane": {
+		// A snapshot without a pane id zooms the same pane: never an empty
+		// id, which herdr would refuse.
+		"a snapshot without a pane id still zooms": {
 			agent: snapshot.Agent{Name: "qa"},
 			want:  []sent{{"agent.focus", `{"target":"qa"}`}, {"pane.zoom", `{"pane_id":"w9:p9","mode":"on"}`}},
 		},
