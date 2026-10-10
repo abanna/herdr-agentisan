@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -169,20 +170,25 @@ func TestTranscriptContextFileClasses(t *testing.T) {
 		path string
 		err  error
 	}{
-		"a regular file":              {path: good},
-		"a symlink to one":            {path: link},
-		"a relative path":             {path: "rollout.jsonl", err: report.ErrMalformed},
-		"a relative path with ..":     {path: "../../etc/passwd", err: report.ErrMalformed},
-		"a drive-relative path":       {path: `C:rollout.jsonl`, err: report.ErrMalformed},
-		"a UNC path":                  {path: `\\server\share\rollout.jsonl`, err: report.ErrMalformed},
-		"an empty path":               {path: "", err: report.ErrMalformed},
-		"a missing file":              {path: filepath.Join(dir, "gone.jsonl"), err: report.ErrMalformed},
-		"a directory":                 {path: dir, err: report.ErrMalformed},
-		"a character device":          {path: os.DevNull, err: report.ErrMalformed},
-		"a dangling symlink":          {path: filepath.Join(dir, "dangling"), err: report.ErrMalformed},
-		"a NUL byte in the path":      {path: dir + "/a\x00b", err: report.ErrMalformed},
-		"a path with spaces and UTF":  {path: transcriptAt(t, "sessions/2026/10/10/rollout é .jsonl")},
-		"non-UTF-8 bytes in the name": {path: transcriptAt(t, "rollout-\xff\xfe.jsonl")},
+		"a regular file":             {path: good},
+		"a symlink to one":           {path: link},
+		"a relative path":            {path: "rollout.jsonl", err: report.ErrMalformed},
+		"a relative path with ..":    {path: "../../etc/passwd", err: report.ErrMalformed},
+		"a drive-relative path":      {path: `C:rollout.jsonl`, err: report.ErrMalformed},
+		"a UNC path":                 {path: `\\server\share\rollout.jsonl`, err: report.ErrMalformed},
+		"an empty path":              {path: "", err: report.ErrMalformed},
+		"a missing file":             {path: filepath.Join(dir, "gone.jsonl"), err: report.ErrMalformed},
+		"a directory":                {path: dir, err: report.ErrMalformed},
+		"a character device":         {path: os.DevNull, err: report.ErrMalformed},
+		"a dangling symlink":         {path: filepath.Join(dir, "dangling"), err: report.ErrMalformed},
+		"a NUL byte in the path":     {path: dir + "/a\x00b", err: report.ErrMalformed},
+		"a path with spaces and UTF": {path: transcriptAt(t, "sessions/2026/10/10/rollout é .jsonl")},
+	}
+	if runtime.GOOS == "linux" { // APFS refuses a name that is not UTF-8
+		tests["non-UTF-8 bytes in the name"] = struct {
+			path string
+			err  error
+		}{path: transcriptAt(t, "rollout-\xff\xfe.jsonl")}
 	}
 	require.NoError(t, os.Symlink(filepath.Join(dir, "nowhere"), filepath.Join(dir, "dangling")))
 
@@ -300,8 +306,7 @@ func (c *countingReader) Read(p []byte) (int, error) {
 }
 
 // TestParseCodexHookSizeCap pins the cap at its boundary and shows a payload
-// over it is still read to its end: Codex fails a hook whose stdin it cannot
-// finish writing.
+// over it is still read to its end, so its writer never meets a closed pipe.
 func TestParseCodexHookSizeCap(t *testing.T) {
 	t.Parallel()
 
@@ -463,11 +468,11 @@ func TestCodexRefusesWhatItCannotPlace(t *testing.T) {
 	}
 }
 
-// TestCodexDrainsStdinOnEveryPath: Codex writes the payload while it waits on
-// the hook and fails a hook that exits before taking it all, so every path,
-// including the ones that report nothing, reads stdin to its end. The payload
-// is bigger than a pipe buffer, so a hook that stopped reading early would
-// leave the writer blocked, then broken.
+// TestCodexDrainsStdinOnEveryPath: every path, including the ones that report
+// nothing, reads stdin to its end, so Codex's write of the payload completes.
+// Codex 0.161 tolerates a closed pipe anyway; this keeps the hook from
+// depending on that. The payload is bigger than a pipe buffer, so a hook that
+// stopped reading early would leave the writer blocked, then broken.
 func TestCodexDrainsStdinOnEveryPath(t *testing.T) {
 	t.Parallel()
 

@@ -57,8 +57,9 @@ type CodexHook struct {
 }
 
 // ParseCodexHook reads a Codex hook payload from r, and reads r to its end
-// whatever it finds: Codex writes the payload while it waits on the hook,
-// and fails a hook that exits before taking all of it. Fields other than
+// whatever it finds, so Codex's write of the payload always completes rather
+// than meeting a closed pipe. (Codex 0.161 tolerates a closed pipe too: a
+// broken pipe on a hook's stdin counts as written.) Fields other than
 // transcript_path and agent_id are Codex's to add or change, and ignored.
 func ParseCodexHook(r io.Reader) (CodexHook, error) {
 	// Run by hand in a pane, stdin is the terminal: reading it would wait

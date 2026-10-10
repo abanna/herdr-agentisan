@@ -622,7 +622,7 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
 - **The writer.**
   - `herdr-agentisan report codex` runs from async Codex `PostToolUse` (matcher `*`) and `Stop` hooks, sampled in `docs/config/codex-hooks.example.toml`.
   - A hook gets JSON on stdin. Its `transcript_path` names the live rollout, flushed before the hook runs. No hook payload carries token counts.
-  - The report reads the last 4 MiB of that transcript for the newest count with usage; the longest rollout line measured was 2.6 MB. It pushes `ctx` under the unchanged contract, and always drains stdin, because Codex fails a hook that exits before taking all of its payload.
+  - The report reads the last 4 MiB of that transcript for the newest count with usage; the longest rollout line measured was 2.6 MB. It pushes `ctx` under the unchanged contract, and always reads stdin to its end. Codex 0.161 ignores a broken pipe on a hook's stdin (`hooks/src/engine/command_runner.rs:260-264`), so draining only keeps the hook from depending on that.
   - D4 holds. Codex hands the hook its own session's transcript, so the agent still reports itself. Nothing scans files for other agents, and the daemon reads nothing.
 - **One deliberate difference from the TUI.** When the context overflows, Codex records the window as the cumulative total with nothing else counted, and a last usage near 0 (`fill_to_context_window`, `protocol/src/protocol.rs:2316-2330`). The TUI therefore shows almost nothing used at the moment the context is full. `report codex` reports 100 for that record.
 - **Workers run `codex --no-daemon`.**
