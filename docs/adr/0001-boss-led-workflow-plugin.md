@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A16, A20 and A22 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A16, A20, A22 and A25 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -649,3 +649,21 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
 - **D7.** A Codex worker rotates on its context levels like a Claude worker, provided it was launched with `--no-daemon` and its hooks are installed and trusted (NERD-5278). A Codex worker without `ctx` rotates only when the boss directs it.
 - **Item 3 under Codex.** `report stage` runs as a Codex shell tool command, so under the daemon it carries the same stale `HERDR_PANE_ID` and lineage as a hook. Under `--no-daemon`, a sandboxed command runs in a bubblewrap PID namespace (`--unshare-pid`, `linux-sandbox/src/bwrap.rs:355-378`), so its parent walk cannot reach the pane. Whether herdr's socket is reachable from inside that sandbox is unverified. Item 3's "works from a Codex pane" stays open (NERD-5279).
 - **Back and the dashboard.** The focus history and Back are pane-level and never consult the agent kind, so they treat Codex panes like any other. The dashboard shows a Codex agent's `ctx` once its hooks run.
+
+### A25. Item and stage from a Codex pane
+
+*Settles:* A22's "Item 3 under Codex" bullet. *Clarifies:* item 3's acceptance, "work from a Codex pane", and Report commands. Verified against the codex-rs source at `rust-v0.161.0` (NERD-5279).
+
+- **Detection.** `report stage` knows it was run by a Codex tool command because `CODEX_THREAD_ID` is set; Codex sets it on every tool command (`core/src/exec_env.rs:30-37`). The lineage then decides where to report. Without that variable nothing changes, so Claude and scripts behave as before.
+- **Under Codex, `report stage` lands on the pane of its own Codex or nowhere.** Before calling herdr it refuses:
+  - Codex's network sandbox (`CODEX_SANDBOX_NETWORK_DISABLED`, `core/src/spawn.rs:91-92`), with `ErrCodexSandboxed`. There seccomp denies every `connect`, Unix sockets included (`linux-sandbox/src/landlock.rs:202-203`).
+  - A lineage that `CheckCodexHost` does not accept:
+    - one through a Codex app-server (`ErrCodexDaemon`), whose inherited `HERDR_PANE_ID` names the pane that started the daemon;
+    - one with no Codex process in it (`ErrNoCodexHost`), as inside the sandbox's pid namespace, where the walk sees only the namespace's own processes;
+    - one it cannot read (`ErrHostUnverified`). That includes every lineage off Linux, so off Linux, under Codex, nothing is reported.
+- **`CheckCodexHost` now requires the pane's own Codex.** That is a `codex` process among the ancestors, either the native binary or the node launcher, and no app-server. `report codex` (A22) shares the rule.
+- **So item and stage from Codex need an embedded, unsandboxed session:** `codex --no-daemon`, with tool commands outside the sandbox. Item 3's "work from a Codex pane" holds for that session only.
+  - A sandboxed Codex worker reports no item or stage.
+  - A Codex `allow` rule for `herdr-agentisan report stage` would not change that. A rule bypasses the sandbox only when every part of the top-level tool command matches (`core/src/exec_policy.rs:440-455`), and Agentisan runs the report from inside its own step scripts.
+  - The worker launch settings belong to NERD-5278.
+  - Binding a Codex thread to its pane from the `report codex` hook, so that a stage could find its pane by `CODEX_THREAD_ID`, is deferred. It would add a key to the token contract, and the default sandbox would still deny the connect.

@@ -96,6 +96,11 @@ short. Like `report statusline`, it prints nothing and exits 0 whether or not
 it reported; only a malformed command line (an unknown flag, an extra
 argument) fails.
 
+Run by Codex (it carries `CODEX_THREAD_ID`), `report stage` reports only from
+the pane's own Codex: `codex --no-daemon`, with tool commands outside Codex's
+sandbox. Under the shared app-server daemon, in the sandbox, or off Linux, it
+reports nothing (ADR-001 A25).
+
 ## Search on prefix+/ and in the dashboard
 
 prefix+/ opens herdr's own Go To, which lists every workspace and pane: press

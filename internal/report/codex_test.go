@@ -426,6 +426,7 @@ func TestCodexRefusesWhatItCannotPlace(t *testing.T) {
 	}
 	viaNode := map[int][]string{5000: daemonArgv[5000], 4000: {"node", "/usr/lib/node_modules/@openai/codex/bin/codex.js", "app-server"}, 3000: {"code"}, 900: {"codex"}, 600: {"-zsh"}}
 	loopOnly := map[int][]string{5000: daemonArgv[5000], 4000: {"codex-code-mode-host"}, 3000: daemonArgv[3000], 900: {"codex"}, 600: {"-zsh"}}
+	noCodex := map[int][]string{5000: embeddedArgv[5000], 4998: embeddedArgv[4998], 900: {"claude"}, 899: {"python3", "launch.py"}, 600: {"-zsh"}, 100: {"herdr", "server"}}
 	unreadable := map[int][]string{5000: embeddedArgv[5000], 4998: embeddedArgv[4998], 900: embeddedArgv[900]}
 	reused := newProcTable(embeddedProcs())
 	reusedLineage := report.ReadLineage(5000, reused.stat).WithCmdline(func(pid int) ([]string, error) {
@@ -446,6 +447,7 @@ func TestCodexRefusesWhatItCannotPlace(t *testing.T) {
 		"no lineage (off Linux)":             {lineage: nil, want: report.ErrHostUnverified},
 		"a lineage with no cmdline reader":   {lineage: report.ReadLineage(5000, newProcTable(embeddedProcs()).stat), want: report.ErrHostUnverified},
 		"an ancestor's cmdline unreadable":   {lineage: codexLineage(embeddedProcs(), unreadable), want: report.ErrHostUnverified},
+		"no codex among the ancestors":       {lineage: codexLineage(embeddedProcs(), noCodex), want: report.ErrNoCodexHost},
 		"an ancestor's pid reused mid-check": {lineage: reusedLineage, want: report.ErrHostUnverified},
 		"a hook inside a subagent":           {lineage: codexLineage(embeddedProcs(), embeddedArgv), hook: `{"transcript_path":"/r","agent_id":"a1"}`, want: report.ErrSubagent},
 		"an ephemeral session":               {lineage: codexLineage(embeddedProcs(), embeddedArgv), hook: hookJSON("", 1), want: report.ErrNoContext},

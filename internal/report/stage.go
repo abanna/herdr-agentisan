@@ -86,7 +86,10 @@ func CheckValue(v string) error {
 // neither calls herdr.
 //
 // The pane is resolved exactly as Statusline resolves it (NERD-5268): a stale
-// or reissued HERDR_PANE_ID never receives another pane's tokens. One
+// or reissued HERDR_PANE_ID never receives another pane's tokens. Run by a
+// Codex tool command (CODEX_THREAD_ID), it first refuses Codex's network
+// sandbox and any lineage that is not the pane's own Codex (A25), before
+// calling herdr. One
 // herdr.CallTimeout bounds the whole report, the resolution included.
 func Stage(ctx context.Context, rep Reporter, pane Pane, item, stage string) (StageResult, error) {
 	if pane.SocketPath == "" || pane.PaneID == "" {
@@ -97,6 +100,9 @@ func Stage(ctx context.Context, rep Reporter, pane Pane, item, stage string) (St
 	}
 	if err := CheckValue(stage); err != nil {
 		return StageResult{}, fmt.Errorf("%s: %w", StageKey, err)
+	}
+	if err := pane.checkCodex(); err != nil {
+		return StageResult{}, err
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, herdr.CallTimeout)
