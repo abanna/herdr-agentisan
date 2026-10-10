@@ -1199,7 +1199,6 @@ func TestUnboundKeysDoNothing(t *testing.T) {
 		"left":                  keyLeft,
 		"right":                 keyRight,
 		"m":                     {Code: 'm', Text: "m"},
-		"slash":                 {Code: '/', Text: "/"},
 		"b":                     {Code: 'b', Text: "b"},
 	}
 	for name, k := range tests {

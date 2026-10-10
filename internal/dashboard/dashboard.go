@@ -1,8 +1,9 @@
 // Package dashboard is the team dashboard (ADR-001 D5): a bubbletea program
 // that draws, from snapshots, a header box (the project's PRs, issues and
 // test slots; the boss), then one box per group stacked under it with one
-// line per agent. Enter or a click focuses an agent; a click on [ btop ]
-// opens btop in a herdr popup.
+// line per agent. Enter or a click focuses an agent; / narrows the agents to
+// a search query (search.go); a click on [ btop ] opens btop in a herdr
+// popup.
 //
 // The model polls a snapshot.Source on a tea.Tick. Its View is Render applied
 // to the model's Frame and size, a pure function, so frames are golden-tested
@@ -111,8 +112,12 @@ type Model struct {
 	ctx context.Context
 	cfg Config
 
-	snap *snapshot.Snapshot
-	sel  Selection
+	// raw is the last snapshot as it arrived; snap is the one drawn: raw,
+	// narrowed by the query while one is typed (search.go).
+	raw    *snapshot.Snapshot
+	snap   *snapshot.Snapshot
+	search search
+	sel    Selection
 	// anchor is the selected agent's name. The selection follows the agent,
 	// not its position, across refreshes.
 	anchor string
@@ -136,6 +141,9 @@ const (
 	keyUp   = "up"
 	keyDown = "down"
 )
+
+// keyEnter is Enter, as tea.KeyPressMsg.String names it: the jump.
+const keyEnter = "enter"
 
 // Messages the model sends itself.
 type (
@@ -191,7 +199,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.tick()
 		}
 		s := msg.snap
-		m.snap, m.sourceErr = &s, nil
+		m.sourceErr = nil
+		m.show(&s)
 		m.reanchor()
 		m.settle()
 		return m, m.tick()
@@ -223,9 +232,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.search.on {
+		return m.searchKey(msg)
+	}
 	switch msg.String() {
 	case "q", "ctrl+c":
 		return m, tea.Quit
+	case "/":
+		m.startSearch()
 	case "?":
 		m.help = !m.help
 	case "esc":
@@ -233,7 +247,7 @@ func (m Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case keyUp, keyDown:
 		m.move(msg.String())
 		m.settle()
-	case "enter":
+	case keyEnter:
 		return m, m.focus()
 	}
 	return m, nil
@@ -253,8 +267,10 @@ func (m Model) click(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	switch what {
 	case hitAgent:
 		m.choose(sel)
+		cmd := m.focus()
+		m.endSearch() // a jump ends a search, as Enter does
 		m.settle()
-		return m, m.focus()
+		return m, cmd
 	case hitBtop:
 		return m, m.openBtop()
 	default:
@@ -276,6 +292,7 @@ func (m Model) Frame() Frame {
 	f := Frame{
 		Snapshot: m.snap, Selection: m.sel, Scroll: m.scroll, Now: m.clock,
 		Help: m.help, Btop: m.cfg.Btop != nil, Note: m.cfg.Note,
+		Search: m.search.on, Query: m.search.query,
 	}
 	for _, err := range []error{m.sourceErr, m.focusErr, m.btopErr} {
 		if err != nil {
