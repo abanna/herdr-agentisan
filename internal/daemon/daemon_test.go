@@ -21,6 +21,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
+	"github.com/abanna/herdr-agentisan/internal/store"
 )
 
 // shortDir returns a fresh directory with a short path: unix socket paths
@@ -39,19 +40,102 @@ func pong(protocol uint32) herdrtest.Handler {
 	}
 }
 
-// fakeHerdr is a herdrtest server at a path the test can restart it at.
+// fakeHerdr is a herdrtest server at a path the test can restart it at. It
+// answers ping, pane.list (with the pane the test says is focused) and
+// events.subscribe, whose streams the test drives.
 type fakeHerdr struct {
 	t    *testing.T
 	path string
 	srv  *herdrtest.Server
 	h    herdrtest.Handler
+
+	mu      sync.Mutex
+	focused string // the pane pane.list reports focused; "" for none
+	listErr bool   // pane.list answers with an error
+	refuse  int    // how many events.subscribe requests to refuse first
+	// streams carries every subscription the server opens, in order.
+	streams chan *stream
+}
+
+// stream is one events.subscribe connection the fake herdr is serving.
+type stream struct {
+	id    string
+	lines chan []byte
 }
 
 func newHerdr(t *testing.T, protocol uint32) *fakeHerdr {
 	t.Helper()
-	f := &fakeHerdr{t: t, path: filepath.Join(shortDir(t), "h.sock"), h: pong(protocol)}
+	f := &fakeHerdr{t: t, path: filepath.Join(shortDir(t), "h.sock"), streams: make(chan *stream, 64)}
+	f.h = f.serve(protocol)
 	f.srv = herdrtest.StartAt(t, f.path, f.h)
 	return f
+}
+
+func (f *fakeHerdr) serve(protocol uint32) herdrtest.Handler {
+	return func(r herdrtest.Request) herdrtest.Reply {
+		switch r.Method {
+		case "ping":
+			return pong(protocol)(r)
+		case "pane.list":
+			f.mu.Lock()
+			defer f.mu.Unlock()
+			if f.listErr {
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "server_unavailable", Message: "busy"}}
+			}
+			panes := []map[string]any{{"pane_id": "w9:p9", "workspace_id": "w9", "focused": false}}
+			if f.focused != "" {
+				panes = append(panes, map[string]any{"pane_id": f.focused, "workspace_id": "w1", "focused": true})
+			}
+			return herdrtest.Reply{Result: map[string]any{"type": "pane_list", "panes": panes}}
+		case "events.subscribe":
+			f.mu.Lock()
+			refused := f.refuse > 0
+			if refused {
+				f.refuse--
+			}
+			f.mu.Unlock()
+			if refused {
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "server_unavailable", Message: "try again"}}
+			}
+			s := &stream{id: r.ID, lines: make(chan []byte, 64)}
+			select {
+			case f.streams <- s:
+			default:
+			}
+			return herdrtest.Reply{Result: herdrtest.SubscriptionStarted(), Stream: s.lines}
+		}
+		return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "invalid_request", Message: "unknown method " + r.Method}}
+	}
+}
+
+// focus sets the pane pane.list reports focused.
+func (f *fakeHerdr) focus(pane string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.focused = pane
+}
+
+// nextStream waits for the daemon's next subscription.
+func (f *fakeHerdr) nextStream(t *testing.T) *stream {
+	t.Helper()
+	select {
+	case s := <-f.streams:
+		return s
+	case <-time.After(3 * time.Second):
+		t.Fatal("the daemon did not subscribe to focus events")
+		return nil
+	}
+}
+
+// subscribes counts the events.subscribe requests the current server got.
+func (f *fakeHerdr) subscribes() int {
+	n := 0
+	for _, r := range f.srv.Requests() {
+		if r.Method == "events.subscribe" {
+			n++
+		}
+	}
+	return n
 }
 
 // restart replaces the socket at the same path, so its inode changes, as a
@@ -216,6 +300,7 @@ func TestPathsForClasses(t *testing.T) {
 			assert.Equal(t, filepath.Join(p.Dir, "daemon.lock"), p.Lock)
 			assert.Equal(t, filepath.Join(p.Dir, "daemon.log"), p.Log)
 			assert.Equal(t, filepath.Join(p.Dir, "daemon.sock"), p.Socket)
+			assert.Equal(t, filepath.Join(p.Dir, "state.db"), p.DB)
 			assert.Len(t, p.Socket, 103)
 		})
 	}
@@ -256,6 +341,8 @@ func TestRunServesHealthUntilCancelled(t *testing.T) {
 	assert.Equal(t, h.path, info.HerdrSocket)
 	assert.Equal(t, mustIdentity(t, h.path), info.Herdr)
 	assert.WithinDuration(t, time.Now(), info.StartedAt, 5*time.Second)
+	assert.Equal(t, store.SchemaVersion(), info.StoreVersion)
+	assert.Zero(t, info.FocusRows, "no pane is focused, so nothing is recorded")
 
 	st, err := os.Stat(socketPath(t, dir, h.path))
 	require.NoError(t, err)

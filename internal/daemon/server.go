@@ -70,6 +70,11 @@ type HealthInfo struct {
 	HerdrSocket   string    `json:"herdr_socket"`
 	// Herdr is the server the daemon belongs to.
 	Herdr Identity `json:"herdr"`
+	// StoreVersion is the state database's schema version (user_version).
+	StoreVersion int `json:"store_version"`
+	// FocusRows is how many rows the focus history holds, or -1 when the
+	// state database could not be read.
+	FocusRows int `json:"focus_rows"`
 }
 
 type request struct {
@@ -91,16 +96,17 @@ type response struct {
 
 // server serves the daemon socket.
 type server struct {
-	ln     net.Listener
-	path   string
-	health HealthInfo
+	ln   net.Listener
+	path string
+	// health reports the daemon's health when asked.
+	health func() HealthInfo
 	log    zerolog.Logger
 	wg     sync.WaitGroup
 }
 
 // listen binds the daemon socket, replacing a stale one: only the lock holder
 // calls it. The socket is the owner's only.
-func listen(path string, health HealthInfo, log zerolog.Logger) (*server, error) {
+func listen(path string, health func() HealthInfo, log zerolog.Logger) (*server, error) {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("remove stale socket %s: %w", path, err)
 	}
@@ -165,7 +171,7 @@ func (s *server) dispatch(line []byte, readErr error) response {
 	}
 	switch req.Op {
 	case "health":
-		h := s.health
+		h := s.health()
 		h.UptimeSeconds = int64(time.Since(h.StartedAt).Seconds())
 		data, _ := json.Marshal(h)
 		return response{OK: true, Data: data}

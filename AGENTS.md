@@ -98,11 +98,18 @@ exempts whatever is later added under that name.
   `plugin.Env`.
 - `internal/daemon/` — the daemon's lifecycle (ADR-001 D3, A3, A4): one daemon
   per herdr server, enforced by a flock'd `daemon.lock` that records the
-  server's socket inode; the protocol pin; `daemon.log` capped at 10 MB; and
+  server's socket inode; the protocol pin; `daemon.log` capped at 10 MB; the
+  server's `state.db`, which it holds open while it runs and records every
+  `pane.focused` event in (resubscribing and resyncing on `events_lost`); and
   the plugin socket (D6) that answers `health`. `daemon start` spawns a
   detached `daemon run`; herdr's `[[startup]]` hook runs it, and the
   `daemon-restart` action covers linking. Tests run daemons in process against
   herdrtest and a scratch state dir, never the real ones.
+- `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
+  `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
+  embedded from `migrations/` and tracked by `user_version`. The daemon holds
+  the only write connection. Tests open a fresh database in a temp dir; the
+  store is never mocked.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real

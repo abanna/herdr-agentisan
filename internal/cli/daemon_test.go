@@ -131,6 +131,7 @@ func TestDaemonLifecycleCommands(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(out), &info))
 	assert.Equal(t, os.Getpid(), info.PID)
 	assert.EqualValues(t, 22, info.HerdrProtocol)
+	assert.Equal(t, 1, info.StoreVersion)
 
 	out, err = runCtx(ctx, "daemon", "restart")
 	require.NoError(t, err)
@@ -151,8 +152,8 @@ func TestDaemonLifecycleCommands(t *testing.T) {
 	assert.Equal(t, 3, p.runs, "start, restart and restart each spawned once; the second start did not")
 }
 
-// TestDaemonHealthText: the human form names the pid, the herdr protocol and
-// the socket.
+// TestDaemonHealthText: the human form names the pid, the herdr protocol, the
+// socket and the state database's schema version and focus rows.
 func TestDaemonHealthText(t *testing.T) {
 	t.Parallel()
 	e := newDaemonEnv(t)
@@ -166,6 +167,7 @@ func TestDaemonHealthText(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "pid")
 	assert.Contains(t, out, "protocol 22")
+	assert.Contains(t, out, "state schema 1, 0 focus rows")
 }
 
 // TestDaemonCommandsFailClearly: what each command reports when it cannot do
