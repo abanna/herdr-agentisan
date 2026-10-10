@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A14 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A15 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -535,8 +535,8 @@ The daemon writes the group and project header tokens (A5). When the first agent
 | Installed Herdr version | Closed. The server is 0.9.3, private protocol 22 |
 | Focus event stream | Closed. `pane.focused` exists, so Back uses events |
 | Can a token have no TTL? | Closed: yes (A11). `item` and `stage` use the maximum TTL anyway (A5) |
-| Does a closed pane take its tokens with it? | Open. Settled in item 3 |
-| Does Claude's statusline refresh on a timer? | Open. `refreshInterval: 60` is set. Settled by the item 1 live check |
+| Does a closed pane take its tokens with it? | Closed: yes (A15). At v0.9.3 tokens live on the pane's terminal (`src/terminal/state.rs:138`), and closing the pane removes that terminal (`src/app/actions.rs:641`). The `report stage` fallback through the daemon is not needed |
+| Does Claude's statusline refresh on a timer? | Closed: yes, every 60 s (`refreshInterval: 60`), idle sessions included (measured 2026-10-09, Claude Code 2.1.295). The 180 s `ctx` TTL stands |
 | What signal reports Codex context usage? | Open. Settled in item 7 |
 
 ### A13. Implementation plan
@@ -584,3 +584,10 @@ The Linear hook chore is already tracked as NERD-5236.
 *Clarifies:* when NERD-5244 closes. A13 replaces the original "On approval" checklist, which said to move it to Done on approval.
 
 NERD-5244 delivers this document. It moves to Done when the pull request that adds this file merges, not when the plan was approved.
+
+### A15. Findings from item 3
+
+*Overrides:* the socket-path sentence in A3. *Adds to:* A11, and closes two A12 rows.
+
+- **Socket path.** On Linux the usable maximum is 107 path bytes plus the NUL terminator, not 108. The daemon's check, under 104 bytes for macOS, is unchanged.
+- **A closed pane takes its tokens with it.** Verified against the Herdr source at v0.9.3. Tokens are stored on the terminal the pane is attached to, not under its pane id (`src/terminal/state.rs:138`; `pane.report_metadata` writes them there, `src/app/api/panes.rs:1777-1786` and `1832-1835`). A terminal is dropped, tokens included, once no pane is attached to it (`remove_unattached_terminal_ids`, `src/app/actions.rs:628-647`, `terminals.remove` at line 641). Both ways a pane closes call it: `pane.close` (`src/app/api/panes.rs:1976` and `2003`, or `close_selected_workspace` at `1986` for a workspace's last pane, which calls it at `src/app/actions.rs:690`), and a pane whose process exits (`handle_pane_died`, `src/app/actions.rs:2025`, calling it at `2056` and `2085`). `pane.move` takes the pane and reinserts it with its terminal, and never removes a terminal, even when it drops an emptied source workspace (`handle_pane_move`, `src/app/api/panes.rs:940-1361`: taken at `1133`, workspace dropped at `1161`), so a moved pane keeps its tokens under its new id. `report stage` therefore writes straight to the pane. The 24 h TTL (A5) stays for a session that exits while its shell keeps the pane.

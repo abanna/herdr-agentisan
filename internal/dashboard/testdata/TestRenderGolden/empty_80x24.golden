@@ -1,4 +1,8 @@
- ◆ agentisan · 0 agents   ◐0 working ●0 idle ⚠0 blocked                   17:19
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ agentisan                                                           [ btop ] │
+│ boss ▸ not running                                                     17:19 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
  no agents in this team
 
 
@@ -17,8 +21,4 @@
 
 
 
-
-
-
-
- ←↑↓→ move · enter focus · ? help
+ enter jump · ↑↓ move · ctrl-b m btop · ? help · q quit
