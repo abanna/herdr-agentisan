@@ -62,6 +62,15 @@ slots = 1
 [integrations.github]
 token = { env = "GITHUB_TOKEN" }
 
+# The project today's ◆ group spaces belong to (ADR-001 A17): the daemon
+# pushes $team to each "◆ <group>" workspace and files its panes under this
+# project. It must name a project below. Only this file and --set may set
+# it. Left out, the one project configured is used; with none or several,
+# the spaces belong to one unnamed project. The daemon reads it when it
+# starts: run the daemon-restart action after changing it.
+[spaces]
+project = "agentisan"
+
 # ---------------------------------------------------------------------------
 # Projects. The key is the project's name: lower case, digits and dashes.
 # ---------------------------------------------------------------------------
