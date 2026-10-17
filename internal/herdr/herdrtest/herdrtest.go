@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -57,9 +58,14 @@ type Handler func(Request) Reply
 type Server struct {
 	// Path is the unix socket to dial.
 	Path string
+	// socket is the socket file StartAt bound at Path (Settle).
+	socket os.FileInfo
 
 	mu       sync.Mutex
 	requests []Request
+	// unread counts the connections accepted whose request line is not yet
+	// read and recorded (Settle).
+	unread int
 
 	ln    net.Listener
 	wg    sync.WaitGroup
@@ -73,6 +79,100 @@ func (s *Server) Requests() []Request {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]Request(nil), s.requests...)
+}
+
+// settleTimeout bounds Settle.
+const settleTimeout = 5 * time.Second
+
+// Settle waits until every request sent to s before it was called is in
+// Requests, so a test can take Requests as a baseline that a request still in
+// flight will not land after. A client can write its request, and even
+// return, before the server has accepted the connection or read the line, so
+// a client having returned proves nothing.
+//
+// Settle dials a connection of its own and sends nothing on it. The listener
+// accepts connections in the order they were made, so once the server has
+// read the end of that connection, it has accepted every connection made
+// before it; Settle then waits until it has read and recorded each of them.
+// Settle's own connection is never recorded. Streams already open do not hold
+// it up: a connection counts as read once its request line is. One that has
+// sent nothing and stays open does, for up to settleTimeout.
+//
+// It dials Path, and a test can remove or replace what Path names while s is
+// still open. Settle then fails the test rather than settle a server it never
+// reached: once the server has closed the settle connection, Path must still
+// name the socket StartAt bound. A socket file is never bound twice, so short
+// of a test linking that file back in meanwhile, Path naming it after the
+// connection proves the connection reached s. On a server that is closed
+// Settle returns once Close has, since Close waits for every connection it
+// accepted.
+func (s *Server) Settle(t testing.TB) {
+	t.Helper()
+	if s.closed() {
+		return
+	}
+	deadline := time.Now().Add(settleTimeout)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	// Each failure below is the test's only if s is still open: a Close
+	// meanwhile unlinks Path and resets a connection it never accepted, and
+	// has waited for every connection it did.
+	fail := func(format string, args ...any) {
+		t.Helper()
+		if !s.closed() {
+			t.Fatalf("herdrtest: settle: "+format, args...)
+		}
+	}
+	var d net.Dialer
+	conn, err := d.DialContext(ctx, "unix", s.Path)
+	if err != nil {
+		fail("dial %s, which may no longer name this server: %v", s.Path, err)
+		return
+	}
+	defer conn.Close() //nolint:errcheck // nothing was sent; the server has closed it already
+	_ = conn.SetDeadline(deadline)
+	uc, ok := conn.(*net.UnixConn)
+	if !ok {
+		t.Fatalf("herdrtest: settle: dialled a %T, not a unix connection", conn)
+	}
+	// An empty request: the server reads EOF, records nothing and closes the
+	// connection, which ends the copy.
+	if err := uc.CloseWrite(); err != nil {
+		fail("close write: %v", err)
+		return
+	}
+	if _, err := io.Copy(io.Discard, uc); err != nil {
+		fail("the server did not read the settle connection: %v", err)
+		return
+	}
+	if now, err := os.Stat(s.Path); err != nil || !os.SameFile(now, s.socket) {
+		fail("%s no longer names this server's socket", s.Path)
+		return
+	}
+	for {
+		s.mu.Lock()
+		unread := s.unread
+		s.mu.Unlock()
+		if unread == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("herdrtest: settle: %d connections still unread after %v", unread, settleTimeout)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// closed reports whether Close has been called, and if so waits for it to
+// finish.
+func (s *Server) closed() bool {
+	select {
+	case <-s.done:
+		s.Close() // returns once the first call's Close has
+		return true
+	default:
+		return false
+	}
 }
 
 // Start listens on a fresh socket and serves one request per connection, as
@@ -102,12 +202,21 @@ func StartAt(t testing.TB, path string, handle Handler) *Server {
 		t.Fatalf("herdrtest: listen: %v", err)
 	}
 	s.ln = ln
+	if s.socket, err = os.Stat(path); err != nil {
+		_ = ln.Close()
+		t.Fatalf("herdrtest: stat the socket: %v", err)
+	}
 	s.wg.Go(func() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return // listener closed
 			}
+			// Counted here, in accept order, not in serve, which may not
+			// have started by the time Settle looks.
+			s.mu.Lock()
+			s.unread++
+			s.mu.Unlock()
 			s.wg.Go(func() { s.serve(conn, handle) })
 		}
 	})
@@ -139,16 +248,10 @@ func (s *Server) serve(conn net.Conn, handle Handler) {
 	defer conn.Close() //nolint:errcheck // test server; nothing to report to
 
 	line, err := bufio.NewReader(conn).ReadBytes('\n')
-	if err != nil && !errors.Is(err, net.ErrClosed) && len(line) == 0 {
+	req, ok := s.record(line, err)
+	if !ok {
 		return
 	}
-	var req Request
-	if err := json.Unmarshal(line, &req); err != nil {
-		return
-	}
-	s.mu.Lock()
-	s.requests = append(s.requests, req)
-	s.mu.Unlock()
 
 	reply := handle(req)
 	if reply.Silent {
@@ -175,6 +278,21 @@ func (s *Server) serve(conn net.Conn, handle Handler) {
 		return
 	}
 	s.stream(conn, reply.Stream)
+}
+
+// record decodes and records the request line read from a connection, and
+// reports whether there was one. Either way the connection is read.
+func (s *Server) record(line []byte, readErr error) (Request, bool) {
+	var req Request
+	ok := (readErr == nil || errors.Is(readErr, net.ErrClosed) || len(line) > 0) &&
+		json.Unmarshal(line, &req) == nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unread--
+	if ok {
+		s.requests = append(s.requests, req)
+	}
+	return req, ok
 }
 
 // streamWriteTimeout bounds one stream write, so a client that stops reading

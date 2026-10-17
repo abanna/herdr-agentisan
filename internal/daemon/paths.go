@@ -6,7 +6,8 @@
 //
 // While it runs, the daemon holds the server's state database, state.db
 // (D13, A1), records every pane.focused event in it for Back (D5), and prunes
-// finished handoffs. It exits when its herdr server goes away.
+// finished handoffs. Every poll it rebuilds the team model and pushes `$team`
+// to each group target (D4, A17). It exits when its herdr server goes away.
 package daemon
 
 import (

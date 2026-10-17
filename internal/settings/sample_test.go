@@ -43,6 +43,7 @@ func TestSampleConfigResolves(t *testing.T) {
 	all, err := settings.Load(opts)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"agentisan", "assay"}, all.Projects)
+	assert.Equal(t, "agentisan", all.SpacesProject(), "the sample names the spaces' project")
 
 	for name, repo := range repos {
 		t.Run(name, func(t *testing.T) {
