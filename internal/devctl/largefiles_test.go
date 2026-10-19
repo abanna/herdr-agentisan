@@ -28,28 +28,29 @@ func gitEnv(base []string) []string {
 	return append(env, "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
 }
 
-// gitIn runs git in dir with base as its environment, isolated by gitEnv, and
-// returns what it printed.
-func gitIn(t *testing.T, base []string, dir string, args ...string) (string, error) {
+// gitIn runs git in dir with the test process's environment, isolated by
+// gitEnv, and returns what it printed.
+func gitIn(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = gitEnv(base)
+	cmd.Env = gitEnv(os.Environ())
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
 
-// runGit is gitIn with the test's own environment, failing the test if git
-// fails. Every git a test runs goes through it.
+// runGit is gitIn failing the test if git fails. Every git a test runs goes
+// through gitIn.
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	out, err := gitIn(t, os.Environ(), dir, args...)
+	out, err := gitIn(t, dir, args...)
 	require.NoError(t, err, "git %v: %s", args, out)
 }
 
 // newGitRepo builds a throwaway repo so the check is exercised against real
 // `git ls-files` output rather than a stubbed file list. Its signing programs
-// exit 1. That does not turn signing off, which only gitEnv does; it makes a
-// signing attempt fail at once rather than reach a real key or agent.
+// exit 1, for every gpg.format. That does not turn signing off, which only
+// gitEnv does: were the isolation ever lost, a signing attempt that reads the
+// repo's config fails at once rather than reaching a real key or agent.
 func newGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -59,6 +60,7 @@ func newGitRepo(t *testing.T) string {
 		{"user.name", "t"},
 		{"gpg.program", "false"},
 		{"gpg.ssh.program", "false"},
+		{"gpg.x509.program", "false"},
 	} {
 		runGit(t, dir, "config", kv[0], kv[1])
 	}
@@ -76,47 +78,53 @@ func writeTracked(t *testing.T, dir, name string, size int) {
 // TestGitReposNeverSign: a throwaway repo reads no config but its own, so a
 // developer whose git signs every commit (here through 1Password's
 // op-ssh-sign) never has a test sign, prompt or wait on an agent. Each case
-// turns signing on the way a developer's machine can, and the repo's signing
-// programs exit 1, so any attempt fails the commit or the tag. The global
-// config also names a hooks directory whose pre-commit refuses every commit.
+// turns signing on in the test process's environment, as a developer's shell
+// does, and the repo's signing programs exit 1, so any attempt fails the
+// commit or the tag. The global config also names a hooks directory whose
+// pre-commit refuses every commit.
+//
+// It is not parallel: t.Setenv changes what every git child inherits, and
+// Go runs it before any parallel test starts.
 func TestGitReposNeverSign(t *testing.T) {
-	t.Parallel()
 	home := t.TempDir()
 	hooks := filepath.Join(home, "hooks")
 	require.NoError(t, os.Mkdir(hooks, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o700)) //nolint:gosec // a hook must be executable
-	require.NoError(t, os.WriteFile(filepath.Join(home, ".gitconfig"), []byte(
+	global := filepath.Join(home, ".gitconfig")
+	require.NoError(t, os.WriteFile(global, []byte(
 		"[commit]\n\tgpgsign = true\n[tag]\n\tgpgsign = true\n[gpg]\n\tformat = ssh\n"+
 			"[user]\n\tsigningkey = key::ssh-ed25519 AAAAtest\n[core]\n\thooksPath = "+hooks+"\n",
 	), 0o600))
-	tests := map[string][]string{
-		// The developer's global config, which GIT_CONFIG_GLOBAL replaces.
-		"signing in ~/.gitconfig": {"HOME=" + home},
+	tests := map[string]map[string]string{
+		// The developer's global config: ~/.gitconfig, or the file
+		// GIT_CONFIG_GLOBAL names.
+		"signing in the global config": {"HOME": home, "GIT_CONFIG_GLOBAL": global},
 		// Config an outer git passes down, which outranks the repo's own.
 		"signing passed down in the environment": {
-			"GIT_CONFIG_COUNT=2",
-			"GIT_CONFIG_KEY_0=commit.gpgsign", "GIT_CONFIG_VALUE_0=true",
-			"GIT_CONFIG_KEY_1=tag.gpgsign", "GIT_CONFIG_VALUE_1=true",
+			"GIT_CONFIG_COUNT": "2",
+			"GIT_CONFIG_KEY_0": "commit.gpgsign", "GIT_CONFIG_VALUE_0": "true",
+			"GIT_CONFIG_KEY_1": "tag.gpgsign", "GIT_CONFIG_VALUE_1": "true",
 		},
 	}
-	for name, extra := range tests {
+	for name, env := range tests {
 		t.Run(name, func(t *testing.T) {
-			t.Parallel()
+			for k, v := range env {
+				t.Setenv(k, v)
+			}
 			dir := newGitRepo(t)
 			writeTracked(t, dir, "a.txt", 1)
-			env := append(os.Environ(), extra...)
 
-			out, err := gitIn(t, env, dir, "commit", "-qm", "a")
+			out, err := gitIn(t, dir, "commit", "-qm", "a")
 			require.NoError(t, err, "a test commit must never try to sign: %s", out)
-			out, err = gitIn(t, env, dir, "tag", "-a", "v1", "-m", "v1")
+			out, err = gitIn(t, dir, "tag", "-a", "v1", "-m", "v1")
 			require.NoError(t, err, "a test tag must never try to sign: %s", out)
-			out, err = gitIn(t, env, dir, "cat-file", "commit", "HEAD")
+			out, err = gitIn(t, dir, "cat-file", "commit", "HEAD")
 			require.NoError(t, err, out)
 			assert.NotContains(t, out, "gpgsig")
 
 			// The control: asked outright to sign, the commit fails, so the
 			// one above would have failed too had git tried to sign it.
-			out, err = gitIn(t, env, dir, "commit", "--allow-empty", "-S", "-qm", "signed")
+			out, err = gitIn(t, dir, "commit", "--allow-empty", "-S", "-qm", "signed")
 			require.Error(t, err, "the repo's signing program must refuse: %s", out)
 		})
 	}
