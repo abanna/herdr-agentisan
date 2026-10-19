@@ -929,6 +929,24 @@ func TestEnterAndClickReachUnnamedRows(t *testing.T) {
 			},
 			want: []sent{{"agent.focus", `{"target":"notes"}`}, {"pane.zoom", `{"pane_id":"w9:p9","mode":"on"}`}},
 		},
+		"Enter on the agent the label echoes, after a refresh": {
+			act: func(t *testing.T, m dashboard.Model) (dashboard.Model, tea.Cmd) {
+				for range 3 {
+					m, _ = update(t, m, keyDown)
+				}
+				m = run(t, m, m.Init())
+				return update(t, m, keyEnter)
+			},
+			want: []sent{{"agent.focus", `{"target":"notes"}`}, {"pane.zoom", `{"pane_id":"w9:p9","mode":"on"}`}},
+		},
+		"Enter on a label, after a refresh": {
+			act: func(t *testing.T, m dashboard.Model) (dashboard.Model, tea.Cmd) {
+				m, _ = update(t, m, keyDown)
+				m = run(t, m, m.Init())
+				return update(t, m, keyEnter)
+			},
+			want: []sent{{"pane.focus", `{"pane_id":"w2:p3"}`}, {"pane.zoom", `{"pane_id":"w8:p8","mode":"on"}`}},
+		},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -943,6 +961,69 @@ func TestEnterAndClickReachUnnamedRows(t *testing.T) {
 			assert.NotContains(t, m.View().Content, "✖", "the focus succeeded")
 		})
 	}
+}
+
+// TestSelectionFollowsTheRow: across a refresh the selection follows a
+// named agent by its name and an unnamed row by its pane id. Labels repeat
+// (every dashboard split carries the manifest's title) and a label can echo
+// an agent's name, so following the name alone would move the selection,
+// and Jump with it, to another row (ADR-001 A18).
+func TestSelectionFollowsTheRow(t *testing.T) {
+	t.Parallel()
+
+	team := func(coders ...snapshot.Agent) *snapshot.Snapshot {
+		return &snapshot.Snapshot{V: 1, At: at, Team: "agentisan", Groups: []snapshot.Group{
+			{Name: "coders", Agents: coders},
+			{Name: "qa", Agents: []snapshot.Agent{{Name: "notes", PaneID: "w5:p1", Status: snapshot.StatusIdle}}},
+		}}
+	}
+	pee01 := snapshot.Agent{Name: "pee01", PaneID: "w2:p1", Status: snapshot.StatusWorking}
+	moved := pee01
+	moved.PaneID = "w2:p9"
+	notes := snapshot.Agent{Name: "notes", Unnamed: true, PaneID: "w2:p3", Status: snapshot.StatusUnknown}
+	reissued := notes
+	reissued.PaneID = "w2:p7"
+	dash1 := snapshot.Agent{Name: "Agentisan dashboard", Unnamed: true, PaneID: "w2:p5", Status: snapshot.StatusUnknown}
+	dash2 := snapshot.Agent{Name: "Agentisan dashboard", Unnamed: true, PaneID: "w2:p6", Status: snapshot.StatusUnknown}
+	base := team(pee01, notes, dash1, dash2)
+
+	tests := map[string]struct {
+		next *snapshot.Snapshot
+		keys []tea.KeyPressMsg
+		pick string // the pane selected before the refresh
+		want string // and after it
+	}{
+		"the agent a label echoes":                   {next: base, keys: repeat(keyDown, 4), pick: "w5:p1", want: "w5:p1"},
+		"the label that echoes an agent":             {next: base, keys: repeat(keyDown, 1), pick: "w2:p3", want: "w2:p3"},
+		"the second of two rows sharing a label":     {next: base, keys: repeat(keyDown, 3), pick: "w2:p6", want: "w2:p6"},
+		"a shared label after the rows before leave": {next: team(dash1, dash2), keys: repeat(keyDown, 3), pick: "w2:p6", want: "w2:p6"},
+		"a named agent in a new pane":                {next: team(notes, dash1, dash2, moved), pick: "w2:p1", want: "w2:p9"},
+		"an unnamed row whose pane id is reissued keeps its place": {
+			next: team(pee01, reissued, dash1, dash2), keys: repeat(keyDown, 1), pick: "w2:p3", want: "w2:p7",
+		},
+		"while searching, the agent a label echoes": {
+			next: base, keys: keys([]tea.KeyPressMsg{keySlash}, typing("notes"), repeat(keyDown, 1)), pick: "w5:p1", want: "w5:p1",
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			src := &script{steps: []func() (snapshot.Snapshot, error){serve(base), serve(tc.next)}}
+			m := started(t, config(src, &recorder{}), 120, 40)
+			m, _ = press(t, m, tc.keys...)
+			require.Equal(t, tc.pick, selectedPane(t, m))
+
+			m = run(t, m, m.Init())
+			assert.Equal(t, tc.want, selectedPane(t, m))
+		})
+	}
+}
+
+func selectedPane(t *testing.T, m dashboard.Model) string {
+	t.Helper()
+	a, ok := m.Selected()
+	require.True(t, ok, "nothing is selected")
+	return a.PaneID
 }
 
 func TestHerdrConfig(t *testing.T) {

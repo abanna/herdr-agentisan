@@ -133,9 +133,9 @@ type Model struct {
 	snap   *snapshot.Snapshot
 	search search
 	sel    Selection
-	// anchor is the selected agent's name. The selection follows the agent,
-	// not its position, across refreshes.
-	anchor string
+	// anchor is the selected row's identity (rowKey). The selection follows
+	// the row, not its position, across refreshes.
+	anchor rowKey
 	// scroll is the first line of the groups the last frame drew (see
 	// Frame.Scroll). It is settled after every change that can move the
 	// selection or the layout, so the frame a click lands on is the frame
@@ -395,22 +395,45 @@ func (m *Model) settle() {
 	m.scroll = plan(m.Frame(), m.Width(), m.Height()).offset
 }
 
-// choose selects sel and anchors the selection to its agent.
+// rowKey is the identity the selection follows across refreshes: a named
+// agent by its name, which herdr keeps unique and which outlives a handoff
+// to a new pane; an unnamed row by its pane id, since labels repeat (every
+// dashboard split carries the manifest's title) and a label can echo an
+// agent's name (ADR-001 A18). The zero key anchors nothing.
+type rowKey struct {
+	unnamed bool
+	id      string
+}
+
+// keyOf is a's rowKey: zero for a row with no name, or an unnamed row with
+// no pane id.
+func keyOf(a snapshot.Agent) rowKey {
+	k := rowKey{id: a.Name}
+	if a.Unnamed {
+		k = rowKey{unnamed: true, id: a.PaneID}
+	}
+	if k.id == "" {
+		return rowKey{}
+	}
+	return k
+}
+
+// choose selects sel and anchors the selection to its row.
 func (m *Model) choose(sel Selection) {
 	m.sel = sel
 	if a, ok := m.Selected(); ok {
-		m.anchor = a.Name
+		m.anchor = keyOf(a)
 	}
 }
 
-// reanchor puts the selection back on the anchored agent after a refresh.
-// When that agent is gone, the selection keeps its place, clamped to an
+// reanchor puts the selection back on the anchored row after a refresh.
+// When that row is gone, the selection keeps its place, clamped to an
 // agent that exists.
 func (m *Model) reanchor() {
 	groups := m.snap.Groups
 	for g, grp := range groups {
 		for a, ag := range grp.Agents {
-			if m.anchor != "" && ag.Name == m.anchor {
+			if m.anchor != (rowKey{}) && keyOf(ag) == m.anchor {
 				m.sel = Selection{Group: g, Agent: a}
 				return
 			}

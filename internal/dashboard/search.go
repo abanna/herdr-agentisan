@@ -192,14 +192,14 @@ func (m *Model) first() {
 	}
 }
 
-// shows reports whether an agent named name is drawn.
-func (m *Model) shows(name string) bool {
-	if m.snap == nil || name == "" {
+// shows reports whether the row k anchors is drawn.
+func (m *Model) shows(k rowKey) bool {
+	if m.snap == nil || k == (rowKey{}) {
 		return false
 	}
 	for _, g := range m.snap.Groups {
 		for _, a := range g.Agents {
-			if a.Name == name {
+			if keyOf(a) == k {
 				return true
 			}
 		}
