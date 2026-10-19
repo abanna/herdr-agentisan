@@ -184,7 +184,7 @@ func (m *Model) first() {
 	if m.snap == nil {
 		return
 	}
-	for g, grp := range Order(m.snap.Groups) {
+	for g, grp := range m.snap.Groups {
 		if len(grp.Agents) > 0 {
 			m.choose(Selection{Group: g})
 			return

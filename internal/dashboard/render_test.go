@@ -43,12 +43,13 @@ func fixture(t *testing.T, name string) *snapshot.Snapshot {
 	return &s
 }
 
-// groupsOf returns the groups in the dashboard's display order.
+// groupsOf returns the groups as the dashboard shows them: in the snapshot's
+// order.
 func groupsOf(s *snapshot.Snapshot) []snapshot.Group {
-	return dashboard.Order(s.Groups)
+	return s.Groups
 }
 
-// selections is every agent of s, in display order.
+// selections is every agent of s, in the order the dashboard shows them.
 func selections(s *snapshot.Snapshot) []dashboard.Selection {
 	var out []dashboard.Selection
 	for g, grp := range groupsOf(s) {
@@ -737,33 +738,52 @@ func TestRenderIgnoresAnInvalidSelection(t *testing.T) {
 	}
 }
 
-// TestOrder: the known groups come in the team's working order, any other
-// group follows alphabetically.
-func TestOrder(t *testing.T) {
+// TestGroupsKeepTheSnapshotOrder: the daemon orders the groups, so the
+// dashboard draws them, and walks them, in the order the snapshot gives:
+// worker types it has never heard of in the user's order, and v12's groups
+// in any order, never re-sorted by a rank of its own.
+func TestGroupsKeepTheSnapshotOrder(t *testing.T) {
 	t.Parallel()
 
-	names := func(gs []snapshot.Group) []string {
-		out := make([]string, 0, len(gs))
-		for _, g := range gs {
-			out = append(out, g.Name)
+	snap := func(names ...string) *snapshot.Snapshot {
+		s := &snapshot.Snapshot{V: 1, At: at, Team: "t"}
+		for _, n := range names {
+			s.Groups = append(s.Groups, snapshot.Group{Name: n, Agents: []snapshot.Agent{{Name: n + "-1", PaneID: "w:" + n, Status: snapshot.StatusIdle}}})
 		}
-		return out
+		return s
 	}
-	in := []snapshot.Group{
-		{Name: "zeta"},
-		{Name: "debugger"},
-		{Name: "alpha"},
-		{Name: "coders"},
-		{Name: "qa"},
-		{Name: "clerk"},
-		{Name: "research"},
-		{Name: "codex"},
-		{Name: "precheck"},
-		{Name: "Beta"},
+	tests := map[string][]string{
+		"the user's worker types":        {"coder", "qa", "precheck", "review", "research", "librarian", "debugger"},
+		"v12's groups, reversed":         {"clerk", "research", "codex", "qa", "precheck", "coders"},
+		"not alphabetical":               {"zeta", "Beta", "alpha"},
+		"a non-ASCII group first":        {"日本語", "coders"},
+		"one group":                      {"qa"},
+		"v12's groups in v12's order":    {"coders", "precheck", "qa", "codex", "research", "clerk"},
+		"a debugger before the coders":   {"debugger", "coders"},
+		"case variants keep their place": {"QA", "qa", "Qa"},
 	}
-	got := dashboard.Order(in)
-	assert.Equal(t, []string{"coders", "precheck", "qa", "codex", "research", "clerk", "debugger", "alpha", "Beta", "zeta"}, names(got))
-	assert.Equal(t, "zeta", in[0].Name, "Order must not reorder its argument")
+	for name, names := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := snap(names...)
+			frame := dashboard.Render(dashboard.Frame{Snapshot: s, Now: at}, 120, 60, plain)
+			last := -1
+			for _, n := range names {
+				// Each group's one row, by its agent's name: a title is
+				// upper-cased, so case variants share one.
+				i := strings.Index(frame, " "+n+"-1 ")
+				require.GreaterOrEqual(t, i, 0, "group %q is not drawn:\n%s", n, frame)
+				assert.Greater(t, i, last, "group %q is drawn out of the snapshot's order", n)
+				last = i
+			}
+			src := &script{steps: []func() (snapshot.Snapshot, error){serve(s)}}
+			m := started(t, config(src, &recorder{}), 120, 60)
+			for i, n := range names {
+				assert.Equal(t, n+"-1", selected(t, m), "step %d walks the snapshot's order", i)
+				m, _ = update(t, m, keyDown)
+			}
+		})
+	}
 }
 
 func TestShortModel(t *testing.T) {

@@ -10,7 +10,7 @@ import (
 )
 
 func newDashboardCmd() *cobra.Command {
-	var fixture string
+	var fixture, stateDir string
 
 	c := &cobra.Command{
 		Use:   "dashboard",
@@ -21,20 +21,32 @@ func newDashboardCmd() *cobra.Command {
 			"scroll when they do not fit. Up and down move, Enter or a left click\n" +
 			"focuses and zooms the agent through HERDR_SOCKET_PATH, a click on\n" +
 			"[ btop ] opens btop in a herdr popup, ? shows help and q quits.\n\n" +
-			"The daemon does not serve snapshots yet, so --fixture is required: a\n" +
-			"snapshot JSON file, re-read on every refresh. Try:\n\n" +
+			"Snapshots come from the daemon of the herdr server in HERDR_SOCKET_PATH,\n" +
+			"under the plugin state directory (HERDR_PLUGIN_STATE_DIR, or --state-dir),\n" +
+			"where `daemon health` looks; herdr's dashboard pane sets both. With no\n" +
+			"daemon running the footer says so and the dashboard keeps asking.\n" +
+			"--fixture reads a snapshot JSON file instead, again on every refresh:\n\n" +
 			"  herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			if fixture == "" {
-				return fmt.Errorf("%w: the daemon does not serve snapshots yet; run with --fixture FILE", dashboard.ErrNoSource)
-			}
 			env, err := plugin.EnvFrom(lookupEnvFrom(ctx))
 			if err != nil {
 				return fmt.Errorf("read plugin environment: %w", err)
 			}
-			cfg, err := dashboard.FixtureConfig(ctx, fixture, env.SocketPath)
+			var cfg dashboard.Config
+			if fixture != "" {
+				cfg, err = dashboard.FixtureConfig(ctx, fixture, env.SocketPath)
+			} else {
+				dir := stateDir
+				if dir == "" {
+					dir = env.StateDir
+				}
+				cfg, err = dashboard.DaemonConfig(dir, env.SocketPath)
+				if err != nil {
+					err = fmt.Errorf("%w (run this from herdr, pass --state-dir, or read a snapshot file with --fixture)", err)
+				}
+			}
 			if err != nil {
 				return fmt.Errorf("dashboard: %w", err)
 			}
@@ -45,5 +57,6 @@ func newDashboardCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&fixture, "fixture", "", "read snapshots from this JSON file instead of the daemon")
+	c.Flags().StringVar(&stateDir, "state-dir", "", "plugin state directory the daemon runs under (default: HERDR_PLUGIN_STATE_DIR)")
 	return c
 }

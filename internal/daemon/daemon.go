@@ -241,10 +241,11 @@ func Run(ctx context.Context, o Options) error {
 	}()
 
 	w := newWalker() // shared: the collector tells it where focus goes
+	snapshots := &snapshotCache{}
 	srv, err := listen(paths.Socket, o.health(ctx, st, HealthInfo{
 		PID: os.Getpid(), Version: o.Version, Commit: o.Commit, StartedAt: startedAt,
 		HerdrProtocol: pong.Protocol, HerdrSocket: o.HerdrSocket, Herdr: ident,
-	}), func() (BackResult, error) { return o.back(ctx, st, w) }, o.Logger)
+	}), func() (BackResult, error) { return o.back(ctx, st, w) }, snapshots.load, o.Logger)
 	if err != nil {
 		return err
 	}
@@ -257,7 +258,7 @@ func Run(ctx context.Context, o Options) error {
 		stopFocus()
 		focus.Wait()
 	}()
-	stopTeam := o.startTeam(ctx, st, ident)
+	stopTeam := o.startTeam(ctx, st, ident, snapshots)
 	defer stopTeam()
 	o.Logger.Info().Int("pid", os.Getpid()).Uint32("protocol", pong.Protocol).Str("socket", paths.Socket).
 		Int("store_version", st.UserVersion()).Msg("daemon running")

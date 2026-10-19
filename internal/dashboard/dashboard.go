@@ -19,6 +19,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 )
@@ -88,6 +89,20 @@ func HerdrConfig(src snapshot.Source, socketPath string) Config {
 	cfg.Focuser = HerdrFocuser{Client: client}
 	cfg.Btop = HerdrBtop{Client: client}
 	return cfg
+}
+
+// DaemonConfig is HerdrConfig reading snapshots from the daemon of the herdr
+// server at herdrSocket, whose state lives under stateDir: the socket `daemon
+// health` asks (daemon.PathsFor). A state dir or herdr socket that names no
+// daemon socket is the caller's mistake, reported before the terminal is
+// taken over; a daemon that is not running is not, and shows in the footer
+// while the dashboard keeps polling.
+func DaemonConfig(stateDir, herdrSocket string) (Config, error) {
+	paths, err := daemon.PathsFor(stateDir, herdrSocket)
+	if err != nil {
+		return Config{}, fmt.Errorf("daemon socket: %w", err)
+	}
+	return HerdrConfig(daemon.SnapshotSource{Socket: paths.Socket}, herdrSocket), nil
 }
 
 // FixtureConfig is HerdrConfig reading snapshots from the JSON file at path,
@@ -323,7 +338,7 @@ func (m Model) Selected() (snapshot.Agent, bool) {
 	if m.snap == nil {
 		return snapshot.Agent{}, false
 	}
-	groups := Order(m.snap.Groups)
+	groups := m.snap.Groups
 	if !validSelection(groups, m.sel) {
 		return snapshot.Agent{}, false
 	}
@@ -392,7 +407,7 @@ func (m *Model) choose(sel Selection) {
 // When that agent is gone, the selection keeps its place, clamped to an
 // agent that exists.
 func (m *Model) reanchor() {
-	groups := Order(m.snap.Groups)
+	groups := m.snap.Groups
 	for g, grp := range groups {
 		for a, ag := range grp.Agents {
 			if m.anchor != "" && ag.Name == m.anchor {
@@ -421,13 +436,13 @@ func clamp(groups []snapshot.Group, sel Selection) Selection {
 	return Selection{}
 }
 
-// move applies one arrow key. Up and down walk the agents in display order,
-// crossing into the previous or next group, and stop at either end.
+// move applies one arrow key. Up and down walk the agents in the snapshot's
+// order, crossing into the previous or next group, and stop at either end.
 func (m *Model) move(key string) {
 	if m.snap == nil {
 		return
 	}
-	groups := Order(m.snap.Groups)
+	groups := m.snap.Groups
 	if !validSelection(groups, m.sel) {
 		return
 	}

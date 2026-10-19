@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A17, A20 and A22 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A18, A20 and A22 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -612,6 +612,23 @@ NERD-5244 delivers this document. It moves to Done when the pull request that ad
 - **`$team`.** `N · ◐w ●i[ ⚠b][ ⟳r]`, byte for byte v12's. N counts every pane in the space, shells and `unknown` included. ● counts idle plus done. ⟳ counts every pane carrying a non-empty `handoff` token, where v12 missed some. A space with no panes gets `0 · ◐0 ●0`.
 - **The push.** Every poll, to each group target, with source `agentisan` and a 9,000 ms TTL. Nothing clears the token: once the daemon stops or crashes, or its herdr goes, the pushes stop and the TTL clears it within about 9 s. Each call proves, once connected and before it sends anything, that the socket still names the daemon's own server (A3), so nothing reaches a replacement.
 - **The project.** `[spaces] project`, in the shared file or `--set` only, names the project the ◆ spaces belong to, and must name a configured project. Unset, it is the one configured project; with none or several, the spaces belong to one unnamed project. The daemon reads it once at start. A file that does not resolve is logged, and the spaces fall back to the unnamed project, because `$team` does not depend on it.
+
+### A18. The snapshot op
+
+*Adds to:* D3, D5, D6 and the snapshot contract. *Overrides:* "`agent.list` adds nothing it needs" in A17. Recorded with item 8 (NERD-5255).
+
+- **The op.** `{"v":1,"op":"snapshot"}` answers with one snapshot v1 document. The team poll builds it from the model every poll and caches it encoded, so the op never calls herdr. Before the first poll with agent names it refuses with `not_ready` (`daemon.ErrNotReady`). A failed `agent.list` costs only that poll's snapshot, never `$team`: the last snapshot stays served, and its `at` shows its age.
+- **Groups and rows.** There is one group per resolver group, in the resolver's order, then the rest by name, compared exactly. For the ◆ spaces that is v12's order (coders, precheck, qa, codex, research, clerk), then debugger, where the dashboard ranked it; a later resolver brings its own. The dashboard keeps the snapshot's order and ranks no group itself. Rows are in model order.
+  - Name: `agent.list`'s name, else the pane's label, else its pane id.
+  - Status: herdr's own; `ready` when the pane carries a non-empty `handoff`; `unknown` for a plain shell.
+  - `ctx`: the token, if it is a canonical integer from 0 to 100; otherwise left out. `item` and `stage` are the tokens.
+  - `stage_started_at`: when this daemon first saw the pane at its current `stage`, held in memory and keyed by pane id. It restarts when the value changes or the pane drops the token, and with the daemon.
+  - `model`: left out, since the daemon does not know it and the screen is not scraped.
+- **The boss.** The first agent pane by pane id in `◆ boss`, or none. The contract has one boss, and a shell there is never it.
+- **The project.** `team` is `[spaces] project`, and `project.color` is that project's colour, from the shared file and its project table only. Both are absent for the unnamed project. PRs, issues and slots stay unreported until item 9.
+- **A new optional key, `unnamed`.** It is set on a row named by a label or a pane id. `agent.focus` resolves only an agent's name or an agent's pane id (herdr 0.9.3 `src/app/terminal_targets.rs:74-104`). So Jump sends that row to `pane.focus` with its pane id (`src/app/api/panes.rs:484-500`), and a label that matches another agent's name cannot reach that agent. Absent means false, so every earlier snapshot keeps its meaning. The precedent is A5, an amendment to a contract table.
+  - Accepted risk: herdr can reissue an unnamed row's pane id between the snapshot and the click, a window of a few seconds. The click then focuses the wrong pane or none.
+- **The pane and the key.** `herdr-plugin.toml` declares `[[panes]] dashboard`, `placement = "split"`, which runs `dashboard` against the daemon. herdr 0.9.3 reads no direction or size for a split from the manifest: the side comes from the open request and defaults to right. There is no `plugin_pane` key type (`src/config/keybinds.rs:113-118`). So the prefix+d snippet, sampled in `docs/config/herdr-keys.example.toml` and the README, which replaces `dashboard-tab.sh`, is a shell key running `herdr plugin pane open … --entrypoint dashboard --focus`. Each press opens a new split.
 
 ### A20. Search is herdr's Go To anywhere, and a filter in the dashboard
 
