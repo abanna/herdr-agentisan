@@ -44,6 +44,7 @@ func TestSampleConfigResolves(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"agentisan", "assay"}, all.Projects)
 	assert.Equal(t, "agentisan", all.SpacesProject(), "the sample names the spaces' project")
+	assert.Equal(t, "localhost:4318", all.TelemetryEndpoint(), "the sample names the events' collector")
 
 	for name, repo := range repos {
 		t.Run(name, func(t *testing.T) {

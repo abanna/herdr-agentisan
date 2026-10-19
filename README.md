@@ -143,6 +143,15 @@ tokens clear themselves within 9 s of the daemon stopping. `◆ boss` and
 project the spaces belong to; with no config file they belong to one unnamed
 project. See ADR-001 A17.
 
+## Workflow events
+
+With `[telemetry] endpoint = "localhost:4318"` in `herdr-agentisan.toml`, the
+daemon sends every agent status change it sees between two polls to that
+OTLP/HTTP collector as a log record, `agentisan.worker.status_changed`, for
+Elastic. Without it nothing is exported. Run the `daemon-restart` action after
+setting it. The schema is [`docs/telemetry.md`](docs/telemetry.md); see
+ADR-001 A21.
+
 ### Cutover from v12's `$team` push
 
 Each key has one writer (ADR-001 D4). Once a daemon with this push is

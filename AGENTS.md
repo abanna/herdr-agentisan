@@ -113,10 +113,11 @@ exempts whatever is later added under that name.
   `pane.focused` event in (resubscribing and resyncing on `events_lost`); and
   the plugin socket (D6) that answers `health` and `back` (A16: walk the
   focus history, un-zoom the pane left, then focus the target). Every poll
-  it also rebuilds the team model and pushes `$team` (`team.go`). `daemon
-  start` spawns a detached `daemon run`; herdr's `[[startup]]` hook runs it,
-  and the `daemon-restart` action covers linking. Tests run daemons in
-  process against herdrtest and a scratch state dir, never the real ones.
+  it also rebuilds the team model and pushes `$team` (`team.go`), and sends
+  each status change since the last poll as a workflow event (`events.go`).
+  `daemon start` spawns a detached `daemon run`; herdr's `[[startup]]` hook
+  runs it, and the `daemon-restart` action covers linking. Tests run daemons
+  in process against herdrtest and a scratch state dir, never the real ones.
 - `internal/team/` — the team domain model (ADR-001 D5, A17): project → group
   → logical worker → current pane, built from `pane.list`, `workspace.list`
   and `state.db`'s `workers` rows. A `Resolver` maps the layout onto it;
@@ -150,8 +151,11 @@ exempts whatever is later added under that name.
   it is configuration resolved from the environment the binary was BUILT in,
   and keeping it in a package of its own made every caller import two.
 - `internal/logging/` — zerolog construction and context plumbing.
-- `internal/telemetry/` — OpenTelemetry tracing over OTLP/HTTP. With no
-  endpoint configured it installs propagation only and exports nothing.
+- `internal/telemetry/` — OpenTelemetry tracing over OTLP/HTTP, and the
+  daemon's workflow events (ADR-001 D10, A21) as OTLP log records, schema in
+  `docs/telemetry.md`. With no endpoint configured it installs propagation
+  only and exports nothing. `telemetrytest` records events in memory: tests
+  assert on it and never on a real collector.
 - `.devcontainer/` — the reproducible dev environment: Go 1.26.9 plus the
   two tools `go tool` does not resolve (Task, uv).
 - `docs/architecture.md` — why the pieces are shaped this way, and the

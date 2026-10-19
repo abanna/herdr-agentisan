@@ -12,6 +12,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
+	"github.com/abanna/herdr-agentisan/internal/telemetry"
 )
 
 // TeamOptions turn on the team poll (D3, D4, D5): on start and every poll
@@ -21,6 +22,9 @@ type TeamOptions struct {
 	// ConfigDir holds herdr-agentisan.toml (HERDR_PLUGIN_CONFIG_DIR). The
 	// poll reads [spaces] project from it once, when it starts.
 	ConfigDir string
+	// Events receive each status change between two polls (D10, A21); nil
+	// emits none. `daemon run` builds them with SetupEvents.
+	Events *telemetry.Events
 }
 
 // startTeam starts the team poll when o.Team is set. The function it returns
@@ -69,18 +73,30 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity) 
 	c := herdr.Client{SocketPath: o.HerdrSocket, Dialed: onServer}
 	tick := time.NewTicker(o.Poll)
 	defer tick.Stop()
+	// last is the last model a poll built: the baseline status events are
+	// diffed against. Nil until a poll lists both panes and workspaces, so
+	// the first poll after a start emits nothing, and a poll that fails a
+	// list never becomes the baseline (A21).
+	var last *team.Model
 	for {
 		// Checked here as well as on every dial: a socket that is gone fails
 		// the dial itself, before Dialed runs, and a failed dial is only
 		// ErrUnavailable, which the poll logs and retries. This stops it at
 		// once instead.
 		err := onServer()
+		var built *team.Model
 		if err == nil {
-			err = o.pushTeam(ctx, c, st, resolver)
+			built, err = o.pushTeam(ctx, c, st, resolver)
 		}
 		if err != nil {
 			o.Logger.Info().Err(err).Msg("team poll stops: the daemon's herdr server is gone or was replaced")
 			return
+		}
+		if built != nil {
+			if last != nil && o.Team.Events != nil {
+				o.Team.emitTransitions(ctx, *last, *built)
+			}
+			last = built
 		}
 		select {
 		case <-ctx.Done():
@@ -94,15 +110,16 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity) 
 // state.db's workers rows, and pushes each group target its `$team`. A
 // failed list costs the poll; a failed push is logged and the others go on.
 // It returns ErrHerdrGone, and pushes nothing more, once a call finds the
-// socket no longer names the daemon's server.
-func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, r team.Resolver) error {
+// socket no longer names the daemon's server. The model it returns is nil
+// when a list failed and no model was built.
+func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, r team.Resolver) (*team.Model, error) {
 	panes, err := c.ListPanes(ctx)
 	if err != nil {
-		return o.teamCallFailed(ctx, err, "team poll: list panes")
+		return nil, o.teamCallFailed(ctx, err, "team poll: list panes")
 	}
 	workspaces, err := c.ListWorkspaces(ctx)
 	if err != nil {
-		return o.teamCallFailed(ctx, err, "team poll: list workspaces")
+		return nil, o.teamCallFailed(ctx, err, "team poll: list workspaces")
 	}
 	rows, err := st.Workers(ctx)
 	if err != nil {
@@ -110,7 +127,8 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 		o.warnUnlessStopping(ctx, err, "team poll: read workers")
 		rows = nil
 	}
-	for _, t := range team.Tokens(team.Build(team.Layout{Workspaces: workspaces, Panes: panes}, r, rows)) {
+	model := team.Build(team.Layout{Workspaces: workspaces, Panes: panes}, r, rows)
+	for _, t := range team.Tokens(model) {
 		// Once ctx ends, each push fails before it dials.
 		err := c.ReportWorkspaceMetadata(ctx, herdr.WorkspaceMetadata{
 			WorkspaceID: t.Target.WorkspaceID,
@@ -119,13 +137,13 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 			TTLMillis:   uint64(team.TTL / time.Millisecond),
 		})
 		if errors.Is(err, ErrHerdrGone) {
-			return fmt.Errorf("push $team to %s: %w", t.Target.WorkspaceID, err)
+			return nil, fmt.Errorf("push $team to %s: %w", t.Target.WorkspaceID, err)
 		}
 		if err != nil && ctx.Err() == nil {
 			o.Logger.Warn().Err(err).Str("workspace", t.Target.WorkspaceID).Msg("push $team")
 		}
 	}
-	return nil
+	return &model, nil
 }
 
 // teamCallFailed is ErrHerdrGone for a call that found another server, and

@@ -81,4 +81,6 @@ rough edge.
 - **Tracing exports only when told to.** `HERDR_AGENTISAN_OTLP_ENDPOINT` is empty by
   default, so `task run:cli` on a laptop records no spans and needs no
   collector. W3C propagation is installed either way, so a trace context still
-  passes through to the next hop.
+  passes through to the next hop. The daemon's workflow events follow the same
+  rule: no `[telemetry] endpoint` and no variable, nothing is built
+  (`docs/telemetry.md`).
