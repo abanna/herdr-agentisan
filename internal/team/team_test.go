@@ -48,8 +48,9 @@ func TestBuildTheModel(t *testing.T) {
 
 	wN, wY := team.Target{WorkspaceID: "wN"}, team.Target{WorkspaceID: "wY"}
 	assert.Equal(t, team.Model{Projects: []team.Project{{
-		Name: "agentisan",
-		Boss: []team.Worker{{ID: "boss", Bound: true, Pane: team.Pane{ID: "wJ:p1", Agent: "claude", Status: team.StatusWorking}}},
+		Name:       "agentisan",
+		Workspaces: []string{"w12", "wJ", "wN", "wY"},
+		Boss:       []team.Worker{{ID: "boss", Bound: true, Pane: team.Pane{ID: "wJ:p1", Agent: "claude", Status: team.StatusWorking}}},
 		Groups: []team.Group{
 			{Name: "coders", Targets: []team.Target{wN}, Workers: []team.Worker{
 				{ID: "coders-1", Bound: true, Target: wN, Pane: team.Pane{ID: "wN:p1", Agent: "claude", Status: team.StatusWorking}},

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,11 +17,42 @@ import (
 
 // TeamOptions turn on the team poll (D3, D4, D5): on start and every poll
 // after, the daemon rebuilds the team model from herdr and state.db and
-// pushes `$team` to every group target. `daemon run` always sets them.
+// pushes `$team` to every group target and tabs team. `daemon run` always
+// sets them.
 type TeamOptions struct {
 	// ConfigDir holds herdr-agentisan.toml (HERDR_PLUGIN_CONFIG_DIR). The
-	// poll reads [spaces] project from it once, when it starts.
+	// poll reads every project's team from it once, when it starts (A19): a
+	// team added later is found after a daemon restart.
 	ConfigDir string
+}
+
+// teamConfig is what the poll reads of the configuration: the project the ◆
+// spaces belong to, and every tabs team.
+type teamConfig struct {
+	spaces team.Spaces
+	tabs   []team.Tabs
+}
+
+func teamConfigOf(teams []settings.Team) teamConfig {
+	var c teamConfig
+	for _, t := range teams {
+		if t.Layout == settings.LayoutSpaces {
+			c.spaces = team.Spaces{Project: t.Project, Color: t.Color}
+			continue
+		}
+		c.tabs = append(c.tabs, team.Tabs{Project: t.Project, Short: t.Short, Color: t.Color})
+	}
+	return c
+}
+
+// resolver resolves the ◆ spaces and every tabs team.
+func (c teamConfig) resolver() team.Resolvers {
+	rs := make(team.Resolvers, 0, 1+len(c.tabs))
+	rs = append(rs, c.spaces)
+	for _, t := range c.tabs {
+		rs = append(rs, t)
+	}
+	return rs
 }
 
 // startTeam starts the team poll when o.Team is set. The function it returns
@@ -43,10 +75,11 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity)
 // carries team.TTL, so they expire within about 9 s, after a crash just as
 // after a clean stop.
 //
-// The project the ◆ spaces belong to is read once, here. A configuration
-// that does not resolve is logged and the spaces fall back to the unnamed
-// project: `$team` does not depend on the project, and a typo in the file
-// must not stop $team, focus and Back. `config resolve` names the error.
+// The teams are read once, here. A configuration that does not resolve is
+// logged, the spaces fall back to the unnamed project and no tabs team is
+// found: the spaces' `$team` does not depend on the project, and a typo in
+// the file must not stop $team, focus and Back. `config resolve` names the
+// error.
 //
 // Every call the poll makes proves, once connected and before it sends
 // anything, that the socket still names the daemon's own server (A3): a
@@ -54,12 +87,20 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity)
 // next daemon's business. So the poll is a client of its own, whose Dialed
 // hook checks the identity; a failed check stops the poll (ErrHerdrGone).
 func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity) {
-	project, err := settings.SpacesProject(o.Team.ConfigDir)
+	teams, err := settings.Teams(o.Team.ConfigDir)
 	if err != nil {
-		o.Logger.Error().Err(err).Msg("herdr-agentisan.toml does not resolve; the ◆ spaces belong to the unnamed project until it is fixed and the daemon restarts")
+		o.Logger.Error().Err(err).Msg("herdr-agentisan.toml does not resolve; the ◆ spaces belong to the unnamed project, and no tabs team is found, until it is fixed and the daemon restarts")
+		teams = nil
 	}
-	o.Logger.Info().Str("project", project).Msg("team poll running")
-	resolver := team.Spaces{Project: project}
+	cfg := teamConfigOf(teams)
+	tabs := make([]string, 0, len(cfg.tabs))
+	for _, t := range cfg.tabs {
+		tabs = append(tabs, t.Project)
+	}
+	o.Logger.Info().Str("project", cfg.spaces.Project).Strs("tabs_teams", tabs).Msg("team poll running")
+	// warned holds each tabs team's ignored workspaces as last logged. Only
+	// the poll's goroutine touches it.
+	warned := map[string]string{}
 	onServer := func() error {
 		if !o.sameServer(ident) {
 			return fmt.Errorf("%w: the socket now names another server, or none", ErrHerdrGone)
@@ -76,7 +117,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity) 
 		// once instead.
 		err := onServer()
 		if err == nil {
-			err = o.pushTeam(ctx, c, st, resolver)
+			err = o.pushTeam(ctx, c, st, cfg, warned)
 		}
 		if err != nil {
 			o.Logger.Info().Err(err).Msg("team poll stops: the daemon's herdr server is gone or was replaced")
@@ -90,12 +131,13 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity) 
 	}
 }
 
-// pushTeam is one poll: it lists panes and workspaces, builds the model with
-// state.db's workers rows, and pushes each group target its `$team`. A
-// failed list costs the poll; a failed push is logged and the others go on.
-// It returns ErrHerdrGone, and pushes nothing more, once a call finds the
-// socket no longer names the daemon's server.
-func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, r team.Resolver) error {
+// pushTeam is one poll: it lists panes, workspaces and, with a tabs team
+// configured, tabs; builds the model with state.db's workers rows; and
+// pushes each group target and tabs team its `$team`. A failed list costs
+// the poll; a failed push is logged and the others go on. It returns
+// ErrHerdrGone, and pushes nothing more, once a call finds the socket no
+// longer names the daemon's server.
+func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, cfg teamConfig, warned map[string]string) error {
 	panes, err := c.ListPanes(ctx)
 	if err != nil {
 		return o.teamCallFailed(ctx, err, "team poll: list panes")
@@ -104,13 +146,20 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	if err != nil {
 		return o.teamCallFailed(ctx, err, "team poll: list workspaces")
 	}
+	var tabs []herdr.TabInfo
+	if len(cfg.tabs) > 0 {
+		if tabs, err = c.ListTabs(ctx); err != nil {
+			return o.teamCallFailed(ctx, err, "team poll: list tabs")
+		}
+	}
+	o.warnIgnored(cfg.tabs, workspaces, warned)
 	rows, err := st.Workers(ctx)
 	if err != nil {
 		// The counts need no logical id: push them, provisional ids and all.
 		o.warnUnlessStopping(ctx, err, "team poll: read workers")
 		rows = nil
 	}
-	for _, t := range team.Tokens(team.Build(team.Layout{Workspaces: workspaces, Panes: panes}, r, rows)) {
+	for _, t := range team.Tokens(team.Build(team.Layout{Workspaces: workspaces, Panes: panes, Tabs: tabs}, cfg.resolver(), rows)) {
 		// Once ctx ends, each push fails before it dials.
 		err := c.ReportWorkspaceMetadata(ctx, herdr.WorkspaceMetadata{
 			WorkspaceID: t.Target.WorkspaceID,
@@ -126,6 +175,23 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 		}
 	}
 	return nil
+}
+
+// warnIgnored logs a tabs team's other workspaces labelled with its name,
+// which are not part of the model, when they change rather than every poll.
+func (o Options) warnIgnored(tabs []team.Tabs, workspaces []herdr.WorkspaceInfo, warned map[string]string) {
+	for _, t := range tabs {
+		_, ignored := t.Workspace(workspaces)
+		key := strings.Join(ignored, "\x00")
+		if key == warned[t.Project] {
+			continue
+		}
+		warned[t.Project] = key
+		if key != "" {
+			o.Logger.Warn().Str("project", t.Project).Strs("ignored", ignored).
+				Msg("team poll: more than one workspace has the team's label; only the first in the sidebar is the team")
+		}
+	}
 }
 
 // teamCallFailed is ErrHerdrGone for a call that found another server, and

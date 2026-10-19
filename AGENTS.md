@@ -119,8 +119,9 @@ exempts whatever is later added under that name.
   process against herdrtest and a scratch state dir, never the real ones.
 - `internal/team/` — the team domain model (ADR-001 D5, A17): project → group
   → logical worker → current pane, built from `pane.list`, `workspace.list`
-  and `state.db`'s `workers` rows. A `Resolver` maps the layout onto it;
-  `Spaces` is today's ◆ spaces. Also the frozen `$team` format.
+  and `state.db`'s `workers` rows. A `Resolver` maps the layout onto it:
+  `Spaces` for the ◆ spaces, `Tabs` for a team's one workspace and one tab
+  per worker (A19). Also the frozen `$team` format.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
   references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check.

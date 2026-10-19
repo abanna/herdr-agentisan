@@ -28,12 +28,13 @@ var sharedSchema = func() *node {
 
 // spaces checks that spaces.project names a configured project, exactly.
 // When no layer sets it and exactly one project is configured, that project
-// is its default, reported from the default layer; with none or several, the
-// spaces belong to the unnamed project and nothing is reported.
-func (m merged) spaces(names []string) error {
+// is its default, reported from the default layer, unless its own table sets
+// layout = "tabs" (A19); otherwise the spaces belong to the unnamed project
+// and nothing is reported. views are the projects' own merges (projectViews).
+func (m merged) spaces(names []string, views map[string]merged) error {
 	v, set := m.get(spacesProjectPath)
 	if !set {
-		if len(names) == 1 {
+		if len(names) == 1 && views[names[0]].str("layout") != LayoutTabs {
 			table, _ := m.values["spaces"].(map[string]any)
 			if table == nil {
 				table = map[string]any{}

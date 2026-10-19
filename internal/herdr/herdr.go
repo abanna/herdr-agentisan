@@ -323,6 +323,8 @@ func (c Client) ShowNotification(ctx context.Context, n Notification) (Notificat
 type PaneInfo struct {
 	PaneID      string `json:"pane_id"`
 	WorkspaceID string `json:"workspace_id"`
+	// TabID is the tab the pane is in (src/api/schema/panes.rs:453).
+	TabID string `json:"tab_id"`
 	// Focused is true for the one pane that has the user's focus: the
 	// focused pane of the active tab of the active workspace. Every other
 	// pane, including the focused pane of a background tab, is false.

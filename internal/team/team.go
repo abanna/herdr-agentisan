@@ -4,9 +4,10 @@
 //
 // The tree does not depend on the layout. A Resolver maps herdr's layout onto
 // it: which panes belong to which project and group, which are the boss's,
-// and where each group's derived tokens go. Spaces is today's resolver, the ◆
-// group spaces; the 8-tab project layout (NERD-5263) replaces only the
-// resolver.
+// and where each group's derived tokens go. Spaces resolves the ◆ group
+// spaces (A17); Tabs resolves the team model's one workspace per team and one
+// tab per worker (A19). The daemon runs one of each layout's resolvers per
+// configured project, joined with Resolvers.
 //
 // The model holds nothing between polls. Build is a function of herdr's
 // answers and the workers rows alone, so a restarted daemon rebuilds the same
@@ -59,7 +60,22 @@ type Model struct {
 // names none.
 type Project struct {
 	Name string
-	// Boss holds the panes in the boss's place, the ◆ boss space today.
+	// Color is the project's configured colour as #rrggbb; "" when unset.
+	Color string
+	// Workspaces are the ids of the workspaces the team occupies, sorted,
+	// whether or not any worker is there yet: a tabs team's workspace, or
+	// every ◆ space, ◆ boss and ◆ herdr included.
+	Workspaces []string
+	// Order is the order the project's groups are shown in. Groups it does
+	// not name follow by name.
+	Order []string
+	// Target is where the team's `$team` goes when the layout gives the
+	// whole team one place, a tabs team's workspace, so a team with no
+	// worker yet still has a count there; zero for the spaces, whose
+	// groups each have their own.
+	Target Target
+	// Boss holds the panes in the boss's place: the ◆ boss space, or a tabs
+	// team's <short>-boss tab.
 	Boss   []Worker
 	Groups []Group
 }
@@ -107,11 +123,13 @@ type Pane struct {
 	Handoff bool
 }
 
-// Layout is herdr's answers the model is built from: one pane.list and one
-// workspace.list.
+// Layout is herdr's answers the model is built from: one pane.list, one
+// workspace.list and, when a tabs team is configured, one tab.list.
 type Layout struct {
 	Workspaces []herdr.WorkspaceInfo
 	Panes      []herdr.PaneInfo
+	// Tabs gives panes their tab labels. Only Tabs reads it.
+	Tabs []herdr.TabInfo
 }
 
 // Place is one part of the layout a resolver gives a role: a group target
@@ -126,14 +144,48 @@ type Place struct {
 	Panes  []herdr.PaneInfo
 }
 
+// Site is a project's team as a resolver finds it in the layout, whether or
+// not it places any pane there. See Project for the fields.
+type Site struct {
+	Project    string
+	Color      string
+	Workspaces []string
+	Order      []string
+	Target     Target
+}
+
+// Resolution is a resolver's answer: the teams it finds and the places it
+// gives their panes.
+type Resolution struct {
+	Sites  []Site
+	Places []Place
+}
+
 // A Resolver maps herdr's layout onto the model. Panes it places nowhere are
 // not part of the model.
 type Resolver interface {
-	Resolve(l Layout) []Place
+	Resolve(l Layout) Resolution
 }
 
-// Build builds the model: the resolver places herdr's panes, and the workers
-// rows give the panes they bind their logical ids. The join is by pane id
+// Resolvers resolves with each resolver in turn. The daemon runs one per
+// configured team; their layouts never claim the same workspace, since a
+// tabs team's label is a project name and a space's starts with ◆.
+type Resolvers []Resolver
+
+// Resolve joins every resolver's sites and places.
+func (rs Resolvers) Resolve(l Layout) Resolution {
+	var out Resolution
+	for _, r := range rs {
+		res := r.Resolve(l)
+		out.Sites = append(out.Sites, res.Sites...)
+		out.Places = append(out.Places, res.Places...)
+	}
+	return out
+}
+
+// Build builds the model: the resolver finds the teams and places herdr's
+// panes, and the workers rows give the panes they bind their logical ids. A
+// team with a site is in the model even with no pane placed in it. The join is by pane id
 // and gives ids only; where a worker sits is the resolver's, so a bound pane
 // moved into another group's space is counted where it is. A row whose pane
 // herdr no longer lists has no current pane and is not in the model. When
@@ -148,12 +200,22 @@ func Build(l Layout, r Resolver, workers []store.Worker) Model {
 
 	projects := map[string]*Project{}
 	groups := map[string]map[string]*Group{}
-	for _, pl := range r.Resolve(l) {
-		pr, ok := projects[pl.Project]
+	project := func(name string) *Project {
+		pr, ok := projects[name]
 		if !ok {
-			pr = &Project{Name: pl.Project}
-			projects[pl.Project], groups[pl.Project] = pr, map[string]*Group{}
+			pr = &Project{Name: name}
+			projects[name], groups[name] = pr, map[string]*Group{}
 		}
+		return pr
+	}
+	res := r.Resolve(l)
+	for _, s := range res.Sites {
+		pr := project(s.Project)
+		pr.Color, pr.Order, pr.Target = s.Color, s.Order, s.Target
+		pr.Workspaces = append(pr.Workspaces, s.Workspaces...)
+	}
+	for _, pl := range res.Places {
+		pr := project(pl.Project)
 		ws := make([]Worker, 0, len(pl.Panes))
 		for _, p := range pl.Panes {
 			ws = append(ws, worker(p, pl.Target, ids))
@@ -176,6 +238,8 @@ func Build(l Layout, r Resolver, workers []store.Worker) Model {
 	var m Model
 	for _, name := range slices.Sorted(maps.Keys(projects)) {
 		pr := projects[name]
+		slices.Sort(pr.Workspaces)
+		pr.Workspaces = slices.Compact(pr.Workspaces)
 		slices.SortFunc(pr.Boss, byPlace)
 		for _, gname := range slices.Sorted(maps.Keys(groups[name])) {
 			g := groups[name][gname]

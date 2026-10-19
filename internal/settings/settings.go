@@ -136,6 +136,10 @@ type Resolved struct {
 	Sources map[string]string
 	// Projects lists every project in the shared file, sorted.
 	Projects []string
+	// Teams holds every project's team, sorted by project, from the
+	// defaults, the shared tables, the project's own table and the
+	// overrides: never a repo file, which the daemon does not read.
+	Teams []Team
 }
 
 // Leaf is one resolved value and the layer it came from.

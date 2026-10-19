@@ -19,7 +19,7 @@ import (
 func TestSpacesProjectPrecedence(t *testing.T) {
 	t.Parallel()
 
-	const two = "[projects.app]\nrepo = \"REPO\"\n[projects.alpha]\nrepo = \"/nonexistent\"\n"
+	const two = "[projects.app]\nrepo = \"REPO\"\nshort = \"app\"\n[projects.alpha]\nrepo = \"/nonexistent\"\nshort = \"al\"\n"
 	tests := map[string]struct {
 		file    string // the shared file after schema_version; "-" for no file
 		project string // the project selected; "" for none
@@ -70,7 +70,7 @@ func TestSpacesProjectPrecedence(t *testing.T) {
 func TestSpacesProjectErrors(t *testing.T) {
 	t.Parallel()
 
-	const two = "[projects.app]\nrepo = \"REPO\"\n[projects.alpha]\nrepo = \"/nonexistent\"\n"
+	const two = "[projects.app]\nrepo = \"REPO\"\nshort = \"app\"\n[projects.alpha]\nrepo = \"/nonexistent\"\nshort = \"al\"\n"
 	tests := map[string]struct {
 		file     string
 		repoFile string
@@ -143,7 +143,7 @@ func TestSpacesProjectForTheDaemon(t *testing.T) {
 	}{
 		"no config dir":          {file: "nodir"},
 		"no file":                {},
-		"the key":                {file: "[spaces]\nproject = \"app\"\n[projects.app]\nrepo = \"/nonexistent\"\n[projects.b]\nrepo = \"/x\"\n", want: "app"},
+		"the key":                {file: "[spaces]\nproject = \"app\"\n[projects.app]\nrepo = \"/nonexistent\"\n[projects.b]\nrepo = \"/x\"\nshort = \"b\"\n", want: "app"},
 		"the sole project":       {file: "[projects.app]\nrepo = \"/nonexistent\"\n", want: "app"},
 		"an unknown project":     {file: "[spaces]\nproject = \"x\"\n", wantErr: settings.ErrNoProject},
 		"an unrelated bad value": {file: "color = \"red\"\n", wantErr: settings.ErrInvalid},
