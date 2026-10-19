@@ -49,8 +49,10 @@ func runGit(t *testing.T, dir string, args ...string) {
 // newGitRepo builds a throwaway repo so the check is exercised against real
 // `git ls-files` output rather than a stubbed file list. Its signing programs
 // exit 1, for every gpg.format. That does not turn signing off, which only
-// gitEnv does: were the isolation ever lost, a signing attempt that reads the
-// repo's config fails at once rather than reaching a real key or agent.
+// gitEnv does, and it is a backstop with limits: were the isolation ever
+// lost, a signing program this config picks fails at once, but one passed
+// down in the environment outranks it, and a global gpg.ssh.defaultKeyCommand
+// still runs before it.
 func newGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -99,11 +101,15 @@ func TestGitReposNeverSign(t *testing.T) {
 		// The developer's global config: ~/.gitconfig, or the file
 		// GIT_CONFIG_GLOBAL names.
 		"signing in the global config": {"HOME": home, "GIT_CONFIG_GLOBAL": global},
-		// Config an outer git passes down, which outranks the repo's own.
-		"signing passed down in the environment": {
+		// Config an outer git passes down, which outranks the repo's own:
+		// GIT_CONFIG_COUNT, and what `git -c` hands the git it runs.
+		"signing passed down in GIT_CONFIG_COUNT": {
 			"GIT_CONFIG_COUNT": "2",
 			"GIT_CONFIG_KEY_0": "commit.gpgsign", "GIT_CONFIG_VALUE_0": "true",
 			"GIT_CONFIG_KEY_1": "tag.gpgsign", "GIT_CONFIG_VALUE_1": "true",
+		},
+		"signing passed down by git -c": {
+			"GIT_CONFIG_PARAMETERS": "'commit.gpgsign'='true' 'tag.gpgsign'='true'",
 		},
 	}
 	for name, env := range tests {
