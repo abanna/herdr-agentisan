@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A18, A20 and A22 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A18, A20, A21 and A22 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -647,7 +647,7 @@ Go To was evaluated first, as D5 asks, against the herdr source at v0.9.3 (read,
 
 *Adds to:* D9 and D10. Recorded with item 2d (NERD-5251). The schema is `docs/telemetry.md`.
 
-- **Transport.** Events are OTLP/HTTP log records with an event name, exported by `internal/telemetry` to the trace endpoint's collector, which stores them in Elastic's logs data streams. Spans were rejected because they pass the trace sampler, so a ratio below 1 would silently drop events. Writing to Elastic directly was rejected because D10 names the existing OTLP exporter, and the collector already holds Elastic's credentials.
+- **Transport.** Events are OTLP/HTTP log records with an event name, exported by `internal/telemetry` to the OTLP collector `[telemetry] endpoint` names, which stores them in Elastic's logs data streams. Spans were rejected because they pass the trace sampler, so a ratio below 1 would silently drop events. Writing to Elastic directly was rejected because D10 names the existing OTLP exporter, and the collector already holds Elastic's credentials.
 - **Endpoint.** `[telemetry] endpoint`, `host:port`, in the shared file or `--set` only, like `[spaces] project`: one daemon serves one herdr server, not one project. `HERDR_AGENTISAN_OTLP_ENDPOINT` overrides it, held to the same rule, and neither is ever echoed in an error. `OTEL_EXPORTER_OTLP_*` is ignored for events. The daemon inherits herdr's environment through the `[[startup]]` hook or `daemon-restart`, so an environment variable set later never reaches it without a herdr restart, which I7 forbids; the file does. The daemon reads it once at start.
 - **No credentials yet.** The connection is plaintext to a collector on localhost. A collector across the network gets a `[telemetry] token` secret reference (D9), sent as `Authorization` over TLS, when one is needed.
 - **Status events.** `agentisan.worker.status_changed` comes from the team poll (A17): every pane whose agent status changed between two polls, or that appeared in or left the model, with its logical id, project, group, role, agent, pane, and the statuses before and after (`absent` on the side it was missing). The diff is by pane id; the logical id rides along. The first poll after a start is the baseline and emits nothing, and a poll that fails a list emits nothing and keeps the baseline, so neither a restart nor a herdr hiccup reads as every pane appearing. Stage changes, threshold crossings, handoff steps and rotations use the same helper when their items land.

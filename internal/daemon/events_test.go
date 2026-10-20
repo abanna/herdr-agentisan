@@ -1,6 +1,7 @@
 package daemon_test
 
 import (
+	"context"
 	"database/sql"
 	"io"
 	"maps"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/settings"
+	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/telemetry"
 	"github.com/abanna/herdr-agentisan/internal/telemetry/telemetrytest"
@@ -160,6 +163,110 @@ func TestTeamPollKeepsItsBaselineAcrossAFailedList(t *testing.T) {
 	assert.Equal(t, "qa", got[0].Attrs["agentisan.group"])
 }
 
+// TestTeamPollEventsSurviveAFailedAgentList: agent.list only names the
+// panes, so a poll whose agent.list fails still builds the model the events
+// diff. It reports no pane appearing, leaving or changing, and a change made
+// while agent.list fails is reported then, not held back with the snapshot.
+func TestTeamPollEventsSurviveAFailedAgentList(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	events, rec := telemetrytest.NewEvents()
+	o := teamOpts(t, shortDir(t), th, "")
+	o.Team.Events = events
+	run(t, o)
+	polled(t, th.srv, 1)
+
+	th.mu.Lock()
+	th.agentsErr = true
+	th.mu.Unlock()
+	polled(t, th.srv, 2)
+	assert.Empty(t, rec.Events(), "a failed agent.list is no change")
+
+	next := th.listedPanes()
+	for _, p := range next {
+		if p["pane_id"] == "wY:p1" {
+			p["agent_status"] = "working"
+		}
+	}
+	th.setPanes(next)
+	require.Eventually(t, func() bool { return len(rec.Events()) > 0 }, ready, 5*time.Millisecond,
+		"the change made while agent.list fails gave no event")
+	polled(t, th.srv, 2)
+	got := rec.Events()
+	require.Len(t, got, 1, "only the real change: %v", got)
+	assert.Equal(t, "wY:p1", got[0].Attrs["herdr.pane.id"])
+	assert.Equal(t, "idle", got[0].Attrs["agentisan.status.from"])
+	assert.Equal(t, "working", got[0].Attrs["agentisan.status.to"])
+}
+
+// hungCollector takes each export's connection and never answers, until the
+// test ends; exports counts the exports it took.
+func hungCollector(t *testing.T) (endpoint string, exports *atomic.Int32) {
+	t.Helper()
+	exports = new(atomic.Int32)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		exports.Add(1)
+		<-release
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) }) // runs first: the hung handlers return before Close waits for them
+	return strings.TrimPrefix(srv.URL, "http://"), exports
+}
+
+// TestTeamPollIsNotHeldUpByAHungCollector: an emit only queues the event,
+// and the batch processor exports on its own goroutine, so a collector that
+// takes the connection and never answers costs the poll nothing. With an
+// export hung, every poll still has a change to send, and both things the
+// poll exists for keep coming at its pace rather than the exporter's 10 s
+// timeout: $team is pushed and the snapshot is cached.
+func TestTeamPollIsNotHeldUpByAHungCollector(t *testing.T) {
+	t.Parallel()
+	endpoint, exports := hungCollector(t)
+	events, shutdown, err := telemetry.SetupEvents(t.Context(), telemetryConfig(endpoint))
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		_ = shutdown(ctx) // the hung export never lands: this only stops the processor
+	})
+
+	th := newTeamHerdr(t)
+	// The boss flips between two statuses after every poll's workspace.list,
+	// which only the team poll asks for, so every poll after the baseline
+	// sees a change.
+	var polls atomic.Int64
+	th.mu.Lock()
+	th.onCall = func(method string) {
+		if method != "workspace.list" {
+			return
+		}
+		status := []string{"working", "idle"}[polls.Add(1)%2]
+		next := th.listedPanes()
+		for _, p := range next {
+			if p["pane_id"] == "wJ:p1" {
+				p["agent_status"] = status
+			}
+		}
+		th.setPanes(next)
+	}
+	th.mu.Unlock()
+	dir := shortDir(t)
+	o := teamOpts(t, dir, th, "")
+	o.Team.Events = events
+	run(t, o)
+	sock := socketPath(t, dir, th.path)
+
+	require.Eventually(t, func() bool { return exports.Load() > 0 }, ready, 5*time.Millisecond,
+		"no export reached the collector")
+	before := len(pushes(t, th.srv)["wN"])
+	polled(t, th.srv, 10) // ten polls, each with an event to send, while the export hangs
+	assert.GreaterOrEqual(t, len(pushes(t, th.srv)["wN"]), before+10, "$team was pushed every poll")
+	for _, status := range []string{"idle", "working"} {
+		served(t, sock, func(s snapshot.Snapshot) bool { return s.Boss != nil && string(s.Boss.Status) == status })
+	}
+}
+
 // collector is an OTLP/HTTP receiver on loopback that records each export.
 type collector struct {
 	srv    *httptest.Server
@@ -263,7 +370,9 @@ func TestSetupEventsReadsTheEndpoint(t *testing.T) {
 }
 
 // TestSetupEventsLogsExportErrors: a collector that refuses the export is a
-// warning in the daemon's log, never a failure of the daemon.
+// warning in the daemon's log, never a failure of the daemon. The batch
+// exports on its own every second, so the warning comes through otel's error
+// handler as the export fails, not only from the exit flush.
 //
 // Not parallel: it owns otel's process-wide error handler.
 func TestSetupEventsLogsExportErrors(t *testing.T) {
@@ -272,9 +381,29 @@ func TestSetupEventsLogsExportErrors(t *testing.T) {
 	events, flush := daemon.SetupEvents(t.Context(), "", telemetryConfig(c.endpoint()), zerolog.New(&logs))
 	require.NotNil(t, events)
 	events.StatusChanged(t.Context(), telemetry.StatusChange{WorkerID: "w", From: "idle", To: "working"})
-	flush()
 
+	require.Eventually(t, func() bool { return strings.Contains(logs.String(), `"message":"telemetry export"`) }, ready, 10*time.Millisecond,
+		"the failed export was not logged before the flush")
 	assert.NotEmpty(t, c.received(), "the export was tried")
 	assert.Contains(t, logs.String(), `"level":"warn"`)
-	assert.Contains(t, logs.String(), "telemetry export")
+	flush()
+}
+
+// TestSetupEventsFlushIsBounded: the exit flush gives a collector that takes
+// the connection and never answers EventsFlushTimeout, then gives up and
+// says so, so a hung collector cannot hold a stopped daemon's exit.
+//
+// Not parallel: it owns otel's process-wide error handler.
+func TestSetupEventsFlushIsBounded(t *testing.T) {
+	endpoint, exports := hungCollector(t)
+	var logs lockedLog
+	events, flush := daemon.SetupEvents(t.Context(), "", telemetryConfig(endpoint), zerolog.New(&logs))
+	require.NotNil(t, events)
+	events.StatusChanged(t.Context(), telemetry.StatusChange{WorkerID: "w", From: "idle", To: "working"})
+
+	start := time.Now()
+	flush()
+	assert.Less(t, time.Since(start), daemon.EventsFlushTimeout+time.Second, "the flush gives up at its bound")
+	assert.Positive(t, exports.Load(), "the flush tried the export")
+	assert.Contains(t, logs.String(), "flush workflow events", "a flush that did not land is logged")
 }

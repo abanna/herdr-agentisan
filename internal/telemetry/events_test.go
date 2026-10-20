@@ -3,6 +3,7 @@ package telemetry_test
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -245,20 +246,33 @@ func TestSetupEventsIgnoresInheritedOTLPVariables(t *testing.T) {
 // (settings) refuses before it gets here, still never panics or hangs: it is
 // refused at setup, or every export fails and the flush ends inside its
 // deadline.
+//
+// Each case is a loopback address and a port this test holds open, made
+// malformed, so whatever the exporter makes of it reaches nothing but that
+// port and never asks a resolver: IDNA drops a byte-order mark, which leaves
+// the owned address, never a collector the machine runs. A host that needs
+// resolving (non-ASCII, invalid UTF-8, like a flag) and a missing port
+// (which dials :80) cannot be built that way, so only settings tries them
+// (TestTelemetryEndpointErrors, TestTelemetryEndpointChecksTheOverride).
 func TestSetupEventsWithAnUnusableEndpoint(t *testing.T) {
 	t.Parallel()
+	release := make(chan struct{})
+	owned := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-release }))
+	t.Cleanup(owned.Close)
+	t.Cleanup(func() { close(release) }) // runs first: a hung handler returns before Close waits for it
+	addr := strings.TrimPrefix(owned.URL, "http://")
+	host, port, err := net.SplitHostPort(addr)
+	require.NoError(t, err)
+	require.NotNil(t, net.ParseIP(host), "an address, so no case is ever looked up")
+
 	for name, endpoint := range map[string]string{
-		"a non-ASCII host":       "kollektör:4318",
-		"invalid UTF-8":          "local\xffhost:4318",
-		"a NUL byte":             "localhost\x00:4318",
-		"a byte-order mark":      "\uFEFFlocalhost:4318",
-		"a trailing CR":          "localhost:4318\r",
-		"white space":            "local host:4318",
-		"like a flag":            "--help",
-		"a URL, not host:port":   "http://localhost:4318",
-		"no port":                "localhost",
-		"64 KiB of host":         strings.Repeat("a", 64<<10) + ":4318",
-		"a port that is no port": "localhost:99999",
+		"a NUL byte":             host + "\x00:" + port,
+		"a byte-order mark":      "\uFEFF" + addr,
+		"a trailing CR":          addr + "\r",
+		"white space":            host + " :" + port,
+		"a URL, not host:port":   "http://" + addr,
+		"64 KiB of port":         host + ":" + strings.Repeat("9", 64<<10),
+		"a port that is no port": host + ":99999",
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

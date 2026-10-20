@@ -99,6 +99,7 @@ func TestTelemetryEndpointErrors(t *testing.T) {
 		"a path in the host":       {file: bad("a/b:4318"), wantErr: settings.ErrInvalid},
 		"white space in the host":  {file: bad("local host:4318"), wantErr: settings.ErrInvalid},
 		"user info in the host":    {file: bad("u:s3cret@localhost:4318"), wantErr: settings.ErrInvalid, wantOut: []string{"s3cret"}},
+		"a user and no password":   {file: bad("token@localhost:4318"), wantErr: settings.ErrInvalid, wantOut: []string{"token@"}},
 		"a URL from --set":         {file: app, set: []string{"telemetry.endpoint=https://x:443"}, wantErr: settings.ErrInvalid, wantIn: []string{"telemetry.endpoint", "--set"}},
 		"not a string":             {file: "[telemetry]\nendpoint = 4318\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"telemetry.endpoint", "want a string"}},
 		"telemetry is not a table": {file: "telemetry = \"localhost:4318\"\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"telemetry", "want a table"}},
@@ -148,6 +149,7 @@ func TestTelemetryEndpointChecksTheOverride(t *testing.T) {
 	for name, override := range map[string]string{
 		"a URL":              "http://localhost:4318",
 		"credentials":        "user:s3cret@localhost:4318",
+		"a user only":        "token@localhost:4318",
 		"no port":            "collector",
 		"a path":             "localhost:4318/v1/logs",
 		"white space":        "localhost :4318",
