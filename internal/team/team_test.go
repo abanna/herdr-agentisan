@@ -53,7 +53,7 @@ func TestBuildTheModel(t *testing.T) {
 		Groups: []team.Group{
 			{Name: "coders", Targets: []team.Target{wN}, Workers: []team.Worker{
 				{ID: "coders-1", Bound: true, Target: wN, Pane: team.Pane{ID: "wN:p1", Agent: "claude", Status: team.StatusWorking}},
-				{ID: "wN:p2", Target: wN, Pane: team.Pane{ID: "wN:p2", Agent: "claude", Status: team.StatusDone, Handoff: true}},
+				{ID: "wN:p2", Target: wN, Pane: team.Pane{ID: "wN:p2", Agent: "claude", Status: team.StatusDone, Handoff: true, Ctx: "40"}},
 				{ID: "wN:p3", Target: wN, Pane: team.Pane{ID: "wN:p3", Status: team.StatusUnknown}},
 			}},
 			{Name: "qa", Targets: []team.Target{wY}, Workers: []team.Worker{
@@ -187,4 +187,59 @@ func TestRebuildAfterARestartIsEqual(t *testing.T) {
 		ids[w.ID] = w.Bound
 	}
 	assert.Equal(t, map[string]bool{"coders-1": true, "qa-1": true, "wN:p2": false}, ids, "a retired row binds nothing")
+}
+
+// TestBuildReadsNamesLabelsAndTokens: what the snapshot shows of a pane
+// comes into the model with it. agent.list gives agent names, joined by pane
+// id: a name for a pane outside the model, or the empty name of an unnamed
+// agent, names nothing, and a pane listed twice takes the lowest name, so
+// the model does not depend on herdr's order. pane.list gives the label and
+// the ctx, item and stage tokens, as written.
+func TestBuildReadsNamesLabelsAndTokens(t *testing.T) {
+	t.Parallel()
+
+	l := team.Layout{
+		Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wN", Label: "◆ coders"}},
+		Panes: []herdr.PaneInfo{
+			{
+				PaneID: "wN:p1", WorkspaceID: "wN", Agent: "claude", AgentStatus: "working", Label: "left",
+				Tokens: map[string]string{"ctx": "38", "item": "NERD-5255", "stage": "build_test", "other": "x"},
+			},
+			{PaneID: "wN:p2", WorkspaceID: "wN", Agent: "codex", AgentStatus: "idle"},
+			{PaneID: "wN:p3", WorkspaceID: "wN", AgentStatus: "unknown", Label: "notes"},
+		},
+		Agents: []herdr.AgentInfo{
+			{PaneID: "wN:p1", Name: "pee02"},
+			{PaneID: "wN:p1", Name: "pee01"},
+			{PaneID: "wN:p2", Name: ""},
+			{PaneID: "w9:p9", Name: "elsewhere"},
+		},
+	}
+	want := []team.Pane{
+		{ID: "wN:p1", Name: "pee01", Label: "left", Agent: "claude", Status: team.StatusWorking, Ctx: "38", Item: "NERD-5255", Stage: "build_test"},
+		{ID: "wN:p2", Agent: "codex", Status: team.StatusIdle},
+		{ID: "wN:p3", Label: "notes", Status: team.StatusUnknown},
+	}
+	for name, layout := range map[string]team.Layout{"as listed": l, "listed in reverse": reversed(l)} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			m := team.Build(layout, team.Spaces{}, nil)
+			require.Len(t, m.Projects, 1)
+			require.Len(t, m.Projects[0].Groups, 1)
+			var got []team.Pane
+			for _, w := range m.Projects[0].Groups[0].Workers {
+				got = append(got, w.Pane)
+			}
+			assert.Equal(t, want, got)
+		})
+	}
+}
+
+// reversed is l with every list in reverse order.
+func reversed(l team.Layout) team.Layout {
+	out := team.Layout{Workspaces: slices.Clone(l.Workspaces), Panes: slices.Clone(l.Panes), Agents: slices.Clone(l.Agents)}
+	slices.Reverse(out.Workspaces)
+	slices.Reverse(out.Panes)
+	slices.Reverse(out.Agents)
+	return out
 }

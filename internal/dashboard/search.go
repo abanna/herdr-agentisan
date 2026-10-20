@@ -184,7 +184,7 @@ func (m *Model) first() {
 	if m.snap == nil {
 		return
 	}
-	for g, grp := range Order(m.snap.Groups) {
+	for g, grp := range m.snap.Groups {
 		if len(grp.Agents) > 0 {
 			m.choose(Selection{Group: g})
 			return
@@ -192,14 +192,14 @@ func (m *Model) first() {
 	}
 }
 
-// shows reports whether an agent named name is drawn.
-func (m *Model) shows(name string) bool {
-	if m.snap == nil || name == "" {
+// shows reports whether the row k anchors is drawn.
+func (m *Model) shows(k rowKey) bool {
+	if m.snap == nil || k == (rowKey{}) {
 		return false
 	}
 	for _, g := range m.snap.Groups {
 		for _, a := range g.Agents {
-			if a.Name == name {
+			if keyOf(a) == k {
 				return true
 			}
 		}
