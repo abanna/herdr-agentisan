@@ -1,8 +1,10 @@
-// Package telemetry wires OpenTelemetry tracing.
+// Package telemetry wires OpenTelemetry tracing and the daemon's workflow
+// events (events.go).
 //
 // Traces go over OTLP/HTTP to a collector when one is configured; with no
 // endpoint the process still installs W3C propagation and exports nothing,
-// which is what a plain `go run` on a laptop wants.
+// which is what a plain `go run` on a laptop wants. Events follow the same
+// rule: no endpoint, nothing built, nothing exported.
 package telemetry
 
 import (
@@ -58,25 +60,9 @@ func SetupTracing(ctx context.Context, cfg Config) (func(context.Context) error,
 		return nil, fmt.Errorf("create otlp trace exporter: %w", err)
 	}
 
-	// resource.Merge REFUSES two different schema URLs, so this semconv import
-	// must track the schema resource.Default() declares for the SDK version in
-	// go.mod. Drifting them does not fail the build — it fails at startup, the
-	// moment an OTLP endpoint is configured, which is the worst place to find
-	// out. TestSetupTracingExportsSpansOverOTLP is what turns that into a test
-	// failure instead; if it starts reporting "conflicting Schema URL", bump
-	// this import to match the SDK rather than dropping the schema.
-	res, err := resource.Merge(resource.Default(), resource.NewWithAttributes(
-		semconv.SchemaURL,
-		semconv.ServiceName(cfg.ServiceName),
-		semconv.ServiceVersion(cfg.Version),
-		// Spelled literally rather than via semconv: the constant name for this
-		// attribute has moved between semconv versions, and pinning to one
-		// spelling breaks the build on the next bump.
-		attribute.String("deployment.environment", cfg.Env),
-		attribute.String("service.commit", cfg.Commit),
-	))
+	res, err := newResource(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("build otel resource: %w", err)
+		return nil, err
 	}
 
 	tp := sdktrace.NewTracerProvider(
@@ -94,4 +80,32 @@ func SetupTracing(ctx context.Context, cfg Config) (func(context.Context) error,
 		}
 		return nil
 	}, nil
+}
+
+// newResource is the resource traces and workflow events both carry: one
+// builder, so the two can never disagree on the schema URL.
+//
+// resource.Merge REFUSES two different schema URLs, so this semconv import
+// must track the schema resource.Default() declares for the SDK version in
+// go.mod. Drifting them does not fail the build — it fails at startup, the
+// moment an OTLP endpoint is configured, which is the worst place to find
+// out. TestSetupTracingExportsSpansOverOTLP and TestSetupEventsExportsOverOTLP
+// are what turn that into a test failure instead; if they start reporting
+// "conflicting Schema URL", bump this import to match the SDK rather than
+// dropping the schema.
+func newResource(cfg Config) (*resource.Resource, error) {
+	res, err := resource.Merge(resource.Default(), resource.NewWithAttributes(
+		semconv.SchemaURL,
+		semconv.ServiceName(cfg.ServiceName),
+		semconv.ServiceVersion(cfg.Version),
+		// Spelled literally rather than via semconv: the constant name for this
+		// attribute has moved between semconv versions, and pinning to one
+		// spelling breaks the build on the next bump.
+		attribute.String("deployment.environment", cfg.Env),
+		attribute.String("service.commit", cfg.Commit),
+	))
+	if err != nil {
+		return nil, fmt.Errorf("build otel resource: %w", err)
+	}
+	return res, nil
 }

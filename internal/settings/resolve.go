@@ -98,7 +98,7 @@ func lookup(tree map[string]any, path string) (any, bool) {
 // checkFields runs the field rules and the D12 command checks on whatever
 // the merged layers set. None of them needs a selected project.
 func (m merged) checkFields() error {
-	for _, check := range []func() error{m.checkColor, m.checkGitHub, m.checkAgent, m.checkGroups, m.checkVerify, m.checkRotation} {
+	for _, check := range []func() error{m.checkColor, m.checkGitHub, m.checkAgent, m.checkGroups, m.checkVerify, m.checkRotation, m.checkTelemetry} {
 		if err := check(); err != nil {
 			return err
 		}
