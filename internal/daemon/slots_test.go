@@ -172,7 +172,11 @@ func TestTestSlotsLogABadListOnce(t *testing.T) {
 
 	served(t, sock, anySnapshot)
 	polled(t, th.srv, 3)
-	require.NoError(t, os.WriteFile(standIn, []byte("1: FLOCK  ADVISORY  WRITE 1 08:01:9 0 EOF\n2: FLOCK\n"), 0o600))
+	// Replaced whole, as the kernel's list is: a poll must never read it half
+	// written, which would be a good list and a recovery.
+	next := standIn + ".next"
+	require.NoError(t, os.WriteFile(next, []byte("1: FLOCK  ADVISORY  WRITE 1 08:01:9 0 EOF\n2: FLOCK\n"), 0o600))
+	require.NoError(t, os.Rename(next, standIn))
 	polled(t, th.srv, 3)
 	got := served(t, sock, anySnapshot)
 	assert.True(t, got.Project == nil || got.Project.Slots == nil, "no slots while the list cannot be read")

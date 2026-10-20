@@ -63,16 +63,13 @@ func (o Options) fillSlots(c *slotCounter, s *snapshot.Snapshot) {
 	s.Project.Slots = &slots
 }
 
-// failureKind is what a counting failure is, for logging it once: the kind
-// of read that failed, not its text, since a lock list that cannot be read
-// names the line it stopped at, which moves as other locks come and go.
+// failureKind is what a counting failure is, for logging it once. A lock
+// list that cannot be read is one failure, whatever its text says: that
+// names the line it stopped at, which moves as other locks come and go. Any
+// other failure is its text, which names the lock file and what went wrong.
 func failureKind(err error) string {
-	switch {
-	case errors.Is(err, testslots.ErrLocks):
+	if errors.Is(err, testslots.ErrLocks) {
 		return "the lock list"
-	case errors.Is(err, testslots.ErrLockFile):
-		return "a lock file"
-	default:
-		return err.Error()
 	}
+	return err.Error()
 }
