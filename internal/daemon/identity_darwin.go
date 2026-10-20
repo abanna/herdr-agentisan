@@ -17,7 +17,7 @@ func socketIdentity(path string) (Identity, bool, error) {
 		return Identity{}, false, fmt.Errorf("stat %s: no system stat", path)
 	}
 	return Identity{
-		Dev:  uint64(st.Dev), //nolint:gosec // a device number is never negative
+		Dev:  uint64(st.Dev), // #nosec G115 -- darwin's dev_t is an int32 and can be negative; it stays sign-extended because daemon.lock and health record it and a later run compares it
 		Ino:  st.Ino,
 		Born: st.Birthtimespec.Nano(),
 	}, fi.Mode()&os.ModeSocket != 0, nil
