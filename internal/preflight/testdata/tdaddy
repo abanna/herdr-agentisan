@@ -26,6 +26,14 @@ crlf)
 	printf 'first line\r\nsecond line\r\n' >&2
 	exit 1
 	;;
+blankfirst)
+	printf '\n  \nthe reason after a blank line\n' >&2
+	exit 1
+	;;
+stdout)
+	echo "tdaddy: the reason, on stdout"
+	exit 1
+	;;
 longutf8)
 	printf 'x' >&2
 	i=0
@@ -51,6 +59,13 @@ orphan)
 	exit 0
 	;;
 hang)
+	sleep 300 &
+	echo $! >"$d/child"
+	wait
+	;;
+stubborn)
+	# A hang that ignores SIGTERM, and so does its child: only SIGKILL ends it.
+	trap '' TERM
 	sleep 300 &
 	echo $! >"$d/child"
 	wait

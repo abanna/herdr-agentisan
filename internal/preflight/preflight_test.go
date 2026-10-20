@@ -41,7 +41,8 @@ tasks:
 `
 
 // fake is a System over a map of files, with a PATH that holds bin or
-// nothing, and a run that answers runErr. It records what the check asked.
+// nothing, and a run that answers runErr. The repo is a directory unless
+// statErr or files say otherwise. It records what the check asked.
 type fake struct {
 	files   map[string]string // path -> contents
 	dirs    map[string]bool
@@ -96,6 +97,9 @@ func (f *fake) system() preflight.System {
 			}
 			if _, ok := f.files[name]; ok {
 				return info{}, nil
+			}
+			if name == repo {
+				return info{dir: true}, nil
 			}
 			return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrNotExist}
 		},
@@ -159,6 +163,22 @@ func TestTdaddyClasses(t *testing.T) {
 		"an empty repo": {
 			repo: "", want: []error{preflight.ErrRepo}, says: []string{`"" is not an absolute path`},
 		},
+		"the repo is gone": {
+			setup: func(f *fake) {
+				f.statErr = map[string]error{repo: &fs.PathError{Op: "stat", Path: repo, Err: fs.ErrNotExist}}
+			},
+			want: []error{preflight.ErrRepo, fs.ErrNotExist}, says: []string{"stat " + repo + ": file does not exist; check the project's repo path: it must be a directory the daemon can read"},
+		},
+		"the repo cannot be checked": {
+			setup: func(f *fake) {
+				f.statErr = map[string]error{repo: &fs.PathError{Op: "stat", Path: repo, Err: fs.ErrPermission}}
+			},
+			want: []error{preflight.ErrRepo, fs.ErrPermission}, says: []string{"check the project's repo path: it must be a directory the daemon can read"},
+		},
+		"the repo is a file": {
+			setup: func(f *fake) { f.files[repo] = "" },
+			want:  []error{preflight.ErrRepo}, says: []string{repo + " is not a directory; check the project's repo path: it must be a directory the daemon can read"},
+		},
 		"go.mod cannot be checked": {
 			setup: func(f *fake) { f.statErr = map[string]error{repo + "/go.mod": denied} },
 			want:  []error{preflight.ErrRepo, fs.ErrPermission}, says: []string{"check the project's repo path: it must be a directory the daemon can read"},
@@ -207,6 +227,14 @@ func TestTdaddyClasses(t *testing.T) {
 		"an empty Taskfile": {
 			setup: func(f *fake) { f.files[repo+"/Taskfile.yml"] = "" },
 			want:  []error{preflight.ErrTdaddyTasks}, says: []string{"has no tdaddy:index or tdaddy:impact task;"},
+		},
+		// Only top-level task keys count: a comment, an include named tdaddy,
+		// a dependency and a command naming the tasks do not.
+		"the tasks named only outside the top-level keys": {
+			setup: func(f *fake) {
+				f.files[repo+"/Taskfile.yml"] = "version: \"3\"\n# tdaddy:index and tdaddy:impact come from the include\nincludes:\n  tdaddy: ./tdaddy.yml\ntasks:\n  check:\n    deps: [tdaddy:index]\n    cmds: [task tdaddy:impact]\n"
+			},
+			want: []error{preflight.ErrTdaddyTasks}, says: []string{"has no tdaddy:index or tdaddy:impact task;"},
 		},
 		"a Taskfile that does not parse": {
 			setup: func(f *fake) { f.files[repo+"/Taskfile.yml"] = "tasks: [tdaddy:index, tdaddy:impact]\n" },
@@ -314,16 +342,33 @@ func TestTdaddyReadsTheTaskfileTaskWould(t *testing.T) {
 	})
 }
 
-// TestTdaddyCanceled: a check whose context ends is that context's error,
-// never a claim that tdaddy is missing.
+// TestTdaddyCanceled: a check whose context ends, before the check or while
+// tdaddy runs, is that context's error, never a claim that tdaddy is missing.
 func TestTdaddyCanceled(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-	err := preflight.Tdaddy(ctx, repo, goRepo().system())
-	require.ErrorIs(t, err, context.Canceled)
-	assert.NotErrorIs(t, err, preflight.ErrTdaddyMissing)
-	assert.NotErrorIs(t, err, preflight.ErrTdaddyTasks)
+	t.Run("before the check", func(t *testing.T) {
+		t.Parallel()
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		err := preflight.Tdaddy(ctx, repo, goRepo().system())
+		require.ErrorIs(t, err, context.Canceled)
+		assert.NotErrorIs(t, err, preflight.ErrTdaddyMissing)
+		assert.NotErrorIs(t, err, preflight.ErrTdaddyTasks)
+	})
+	t.Run("while tdaddy runs", func(t *testing.T) {
+		t.Parallel()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		sys := goRepo().system()
+		sys.Run = func(ctx context.Context, _, _ string, _ ...string) error {
+			cancel()
+			return ctx.Err()
+		}
+		err := preflight.Tdaddy(ctx, repo, sys)
+		require.ErrorIs(t, err, context.Canceled)
+		assert.NotErrorIs(t, err, preflight.ErrTdaddyMissing)
+		assert.NotErrorIs(t, err, preflight.ErrTdaddyTasks)
+	})
 }
 
 // standIn is the checked-in stand-in tdaddy, a runner whose environment
@@ -384,6 +429,8 @@ func TestRunnerFailures(t *testing.T) {
 		"floods its output":        {mode: "flood", says: []string{"exit status 1: tdaddy"}, not: []string{"tdaddy\ntdaddy"}},
 		"bytes that are not UTF-8": {mode: "garbled", says: []string{"exit status 1: bad bytes"}, not: []string{"\ufffd"}},
 		"CRLF line ends":           {mode: "crlf", says: []string{"exit status 1: first line"}, not: []string{"\r", "second line"}},
+		"blank lines first":        {mode: "blankfirst", says: []string{"exit status 1: the reason after a blank line"}},
+		"the reason on stdout":     {mode: "stdout", says: []string{"exit status 1: tdaddy: the reason, on stdout"}},
 		// x then 150 two-byte é: the cut at 200 bytes falls inside an é.
 		"a cut inside a character": {mode: "longutf8", says: []string{"exit status 1: x" + strings.Repeat("é", 99)}, not: []string{strings.Repeat("é", 100)}},
 		"no such file": {
@@ -446,17 +493,23 @@ func childGone(t *testing.T, rec string) {
 }
 
 // TestRunnerTimeoutKillsTheGroup: a tdaddy that hangs is killed at the
-// timeout, and so is every process it started.
+// timeout, and so is every process it started, even when they ignore
+// SIGTERM.
 func TestRunnerTimeoutKillsTheGroup(t *testing.T) {
 	t.Parallel()
-	bin, r, rec := standIn(t, "hang")
-	r.Timeout = 300 * time.Millisecond
-	start := time.Now()
-	err := r.Run(t.Context(), t.TempDir(), bin, "--version")
-	require.ErrorIs(t, err, preflight.ErrTimeout)
-	assert.Contains(t, err.Error(), "no answer within 300ms")
-	assert.Less(t, time.Since(start), slow)
-	childGone(t, rec)
+	for name, mode := range map[string]string{"a hang": "hang", "a hang that ignores SIGTERM": "stubborn"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			bin, r, rec := standIn(t, mode)
+			r.Timeout = 300 * time.Millisecond
+			start := time.Now()
+			err := r.Run(t.Context(), t.TempDir(), bin, "--version")
+			require.ErrorIs(t, err, preflight.ErrTimeout)
+			assert.Contains(t, err.Error(), "no answer within 300ms")
+			assert.Less(t, time.Since(start), slow)
+			childGone(t, rec)
+		})
+	}
 }
 
 // TestRunnerCancelKillsTheGroup: a run whose context is canceled ends with
@@ -542,7 +595,7 @@ func TestRunnerInheritsTheEnvironment(t *testing.T) {
 // TestTdaddyOnARealRepo: the check end to end on a repo on disk, through
 // the stand-in tdaddy, found where the injected PATH search says. The repo's
 // path is used as it is: with spaces, non-ASCII and shell characters, through
-// a symlink, gone, or a file.
+// a symlink, gone, a symlink to nothing, or a file.
 func TestTdaddyOnARealRepo(t *testing.T) {
 	t.Parallel()
 	goRepoAt := func(t *testing.T, dir string) {
@@ -579,16 +632,25 @@ func TestTdaddyOnARealRepo(t *testing.T) {
 			require.NoError(t, os.Symlink(d, link))
 			return link
 		}},
-		"gone since the profile resolved": {mode: "fail", repo: func(t *testing.T) string {
-			return filepath.Join(t.TempDir(), "gone")
-		}},
+		"gone since the profile resolved": {
+			mode: "ok", repo: func(t *testing.T) string { return filepath.Join(t.TempDir(), "gone") },
+			want: []error{preflight.ErrRepo, fs.ErrNotExist}, says: "check the project's repo path: it must be a directory the daemon can read",
+		},
+		"a symlink to nothing": {
+			mode: "ok", repo: func(t *testing.T) string {
+				link := filepath.Join(t.TempDir(), "link")
+				require.NoError(t, os.Symlink(filepath.Join(t.TempDir(), "gone"), link))
+				return link
+			},
+			want: []error{preflight.ErrRepo, fs.ErrNotExist}, says: "check the project's repo path: it must be a directory the daemon can read",
+		},
 		"a file, not a directory": {
 			mode: "ok", repo: func(t *testing.T) string {
 				f := filepath.Join(t.TempDir(), "repo")
 				require.NoError(t, os.WriteFile(f, nil, 0o600))
 				return f
 			},
-			want: []error{preflight.ErrRepo}, says: "not a directory; check the project's repo path: it must be a directory the daemon can read",
+			want: []error{preflight.ErrRepo}, says: "is not a directory; check the project's repo path: it must be a directory the daemon can read",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -617,6 +679,10 @@ func TestTdaddyOnARealRepo(t *testing.T) {
 			}
 			assert.NotErrorIs(t, err, preflight.ErrTdaddyTasks)
 			assert.Contains(t, err.Error(), tc.says)
+			if errors.Is(err, preflight.ErrRepo) {
+				_, err := os.Stat(filepath.Join(rec, "args"))
+				assert.ErrorIs(t, err, fs.ErrNotExist, "tdaddy did not run")
+			}
 		})
 	}
 }
@@ -654,4 +720,56 @@ func TestHostCheck(t *testing.T) {
 	assert.Equal(t, 10*time.Second, preflight.DefaultTimeout, "A34's timeout")
 	var check preflight.Check = preflight.HostCheck
 	require.NoError(t, check(t.Context(), t.TempDir()))
+}
+
+// TestHostCheckInAGoRepo: HostCheck, through Host(), in a Go repo on disk.
+// PATH is a temp dir holding the stand-in as tdaddy, so the host's own PATH
+// search finds it and nothing searches the real PATH or runs the real
+// tdaddy. Not parallel: it sets PATH.
+func TestHostCheckInAGoRepo(t *testing.T) {
+	standIn, err := filepath.Abs(filepath.Join("testdata", "tdaddy"))
+	require.NoError(t, err)
+	pathDir := t.TempDir()
+	require.NoError(t, os.Symlink(standIn, filepath.Join(pathDir, "tdaddy")))
+	rec := t.TempDir()
+	t.Setenv("PATH", pathDir)
+	t.Setenv("FAKE_TDADDY_DIR", rec)
+	repoAt := func(t *testing.T, tf string) string {
+		t.Helper()
+		d := t.TempDir()
+		require.NoError(t, os.WriteFile(filepath.Join(d, "go.mod"), []byte("module m\n"), 0o600))
+		require.NoError(t, os.WriteFile(filepath.Join(d, "Taskfile.yml"), []byte(tf), 0o600))
+		return d
+	}
+	t.Run("set up", func(t *testing.T) {
+		t.Setenv("FAKE_TDADDY_MODE", "ok")
+		d := repoAt(t, taskfile)
+		require.NoError(t, preflight.HostCheck(t.Context(), d))
+		cwd, err := os.ReadFile(filepath.Join(rec, "cwd"))
+		require.NoError(t, err, "tdaddy ran")
+		assert.Equal(t, realPath(t, d), realPath(t, string(cwd)), "in the repo")
+		args, err := os.ReadFile(filepath.Join(rec, "args"))
+		require.NoError(t, err)
+		assert.Equal(t, "--version\n", string(args))
+	})
+	t.Run("tdaddy does not run", func(t *testing.T) {
+		t.Setenv("FAKE_TDADDY_MODE", "fail")
+		err := preflight.HostCheck(t.Context(), repoAt(t, taskfile))
+		require.ErrorIs(t, err, preflight.ErrTdaddyMissing)
+		assert.NotErrorIs(t, err, preflight.ErrTdaddyTasks)
+		assert.Contains(t, err.Error(), filepath.Join(pathDir, "tdaddy")+" --version failed")
+		assert.Contains(t, err.Error(), "mise ERROR No version is set for shim: tdaddy")
+	})
+	t.Run("no tasks", func(t *testing.T) {
+		t.Setenv("FAKE_TDADDY_MODE", "ok")
+		err := preflight.HostCheck(t.Context(), repoAt(t, "version: \"3\"\n"))
+		require.ErrorIs(t, err, preflight.ErrTdaddyTasks)
+		assert.NotErrorIs(t, err, preflight.ErrTdaddyMissing)
+	})
+	t.Run("not on the PATH", func(t *testing.T) {
+		t.Setenv("PATH", t.TempDir())
+		err := preflight.HostCheck(t.Context(), repoAt(t, taskfile))
+		require.ErrorIs(t, err, preflight.ErrTdaddyMissing)
+		assert.Contains(t, err.Error(), "no tdaddy on the daemon's PATH")
+	})
 }

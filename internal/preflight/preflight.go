@@ -55,7 +55,8 @@ var taskfiles = []string{
 // what to fix.
 var (
 	// ErrRepo means the check could not tell whether the repo is a Go repo:
-	// the path is not absolute, or its go.mod could not be checked.
+	// the path is not absolute, is not a directory the daemon can stat, or its
+	// go.mod could not be checked.
 	ErrRepo = errors.New("cannot check the repo")
 	// ErrTdaddyMissing means tdaddy is not on the daemon's PATH, or is there
 	// but `tdaddy --version` does not exit 0 in the repo.
@@ -87,8 +88,8 @@ func Host() System {
 }
 
 // Check is a spawn precondition for the repo at repo, the absolute path of a
-// project's repo. `worker spawn` and `team up` (NERD-5254 part 3) are to run
-// one before they open a pane.
+// project's repo. `worker spawn` and `team up` (NERD-5254 parts 4 and 5) are
+// to run one before they open a pane.
 type Check func(ctx context.Context, repo string) error
 
 var _ Check = HostCheck
@@ -99,14 +100,22 @@ func HostCheck(ctx context.Context, repo string) error {
 	return Tdaddy(ctx, repo, Host())
 }
 
-// Tdaddy is D12's check for a Go repo, as A10 and A34 define it. A repo with
-// no go.mod passes at once. In a Go repo, tdaddy must be on the PATH and
-// `tdaddy --version` must exit 0 in the repo, and the repo's Taskfile must
-// have tdaddy:index and tdaddy:impact. It reports every failure it finds, so
-// one refusal says everything there is to fix.
+// Tdaddy is D12's check for a Go repo, as A10 and A34 define it. The repo
+// must be a directory; one with no go.mod passes at once. In a Go repo,
+// tdaddy must be on the PATH and `tdaddy --version` must exit 0 in the repo,
+// and the repo's Taskfile must have tdaddy:index and tdaddy:impact. It
+// reports every failure it finds, so one refusal says everything there is to
+// fix.
 func Tdaddy(ctx context.Context, repo string, sys System) error {
 	if !filepath.IsAbs(repo) {
 		return fmt.Errorf("%w: %q is not an absolute path; give the project an absolute repo path", ErrRepo, repo)
+	}
+	const fixRepo = "check the project's repo path: it must be a directory the daemon can read"
+	switch fi, err := sys.Stat(repo); {
+	case err != nil:
+		return fmt.Errorf("%w: %w; %s", ErrRepo, err, fixRepo)
+	case !fi.IsDir():
+		return fmt.Errorf("%w: %s is not a directory; %s", ErrRepo, repo, fixRepo)
 	}
 	gomod := filepath.Join(repo, "go.mod")
 	fi, err := sys.Stat(gomod)
@@ -114,7 +123,7 @@ func Tdaddy(ctx context.Context, repo string, sys System) error {
 	case errors.Is(err, fs.ErrNotExist):
 		return nil
 	case err != nil:
-		return fmt.Errorf("%w: %w; check the project's repo path: it must be a directory the daemon can read", ErrRepo, err)
+		return fmt.Errorf("%w: %w; %s", ErrRepo, err, fixRepo)
 	case fi.IsDir():
 		return fmt.Errorf("%w: %s is a directory, not a module file; remove or rename it", ErrRepo, gomod)
 	}
