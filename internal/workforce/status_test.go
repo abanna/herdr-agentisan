@@ -95,7 +95,8 @@ func TestStatusOrdersTheGroupsItFinds(t *testing.T) {
 }
 
 // TestStatusOfTheSpacesProject: --project names the ◆ spaces project too,
-// whose groups are its spaces; the default never picks it.
+// whose groups are its spaces, in their own order; the default never picks
+// it.
 func TestStatusOfTheSpacesProject(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, "schema_version = 1\n[projects.agentisan]\nrepo = \"REPO\"\n[projects.agentisan.groups.coders]\nworkers = 1\nslots = 2\n")
@@ -112,6 +113,17 @@ func TestStatusOfTheSpacesProject(t *testing.T) {
 
 	_, err = f.svc.Status(t.Context(), workforce.StatusRequest{})
 	require.ErrorIs(t, err, workforce.ErrBadRequest, "the default never picks the spaces project")
+
+	for _, space := range []string{"◆ codex", "◆ qa"} {
+		f.h.addTab(f.h.addWorkspace(space), "1", "claude", "idle")
+	}
+	got, err = f.svc.Status(t.Context(), workforce.StatusRequest{Selector: workforce.Selector{Project: "agentisan"}})
+	require.NoError(t, err)
+	var names []string
+	for _, g := range got.Groups {
+		names = append(names, g.Name)
+	}
+	assert.Equal(t, []string{"coders", "qa", "codex"}, names, "the spaces' own order (v12's), not the tabs teams' or by name")
 }
 
 // TestStatusPicksTheTeam: --project wins; else the team whose workspace holds

@@ -206,10 +206,9 @@ func (s *Service) profile(project string) (*settings.Profile, error) {
 	return res.Profile, nil
 }
 
-// groupOrder is the order groups are reported in: the team model's types,
-// then the rest by name.
-func groupOrder(names []string) []string {
-	order := team.TypeOrder()
+// groupOrder is the order groups are reported in: those order names first,
+// in that order, then the rest by name.
+func groupOrder(names, order []string) []string {
 	rest := slices.DeleteFunc(slices.Clone(names), func(n string) bool { return slices.Contains(order, n) })
 	slices.Sort(rest)
 	out := make([]string, 0, len(names))

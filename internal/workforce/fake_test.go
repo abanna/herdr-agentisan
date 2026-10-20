@@ -118,15 +118,6 @@ func (f *fakeHerdr) pane(id string) *fakePane {
 	return nil
 }
 
-// methods is every method called, in order.
-func (f *fakeHerdr) methods() []string {
-	var out []string
-	for _, r := range f.srv.Requests() {
-		out = append(out, r.Method)
-	}
-	return out
-}
-
 func errReply(code string) herdrtest.Reply {
 	return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: code, Message: code}}
 }
@@ -198,7 +189,6 @@ func (f *fakeHerdr) handle(r herdrtest.Request) herdrtest.Reply {
 // workspace holds the boss's tab.
 type fixture struct {
 	h    *fakeHerdr
-	st   *store.Store
 	db   string
 	svc  *workforce.Service
 	ws   string
@@ -238,7 +228,7 @@ func newFixture(t *testing.T, config string) *fixture {
 	t.Cleanup(func() { _ = st.Close() })
 
 	h := newFake(t)
-	f := &fixture{h: h, st: st, db: db}
+	f := &fixture{h: h, db: db}
 	f.ws = h.addWorkspace("herdr-agentisan")
 	f.boss = h.addTab(f.ws, "ha-boss", "claude", "working")
 	f.svc = &workforce.Service{

@@ -203,7 +203,10 @@ the `herdr-workforce` skill drives it. `worker retire`, `worker spawn` and
 
 It prints one JSON object and exits 1 when refused. Without `--project` it
 reads the team whose workspace the command runs in, else the only tabs team.
-A worker is named by its logical id, `<short>-<type>-<n>`, its tab's label.
+A tabs team's worker is named by its logical id, `<short>-<type>-<n>`, its
+tab's label; a pane of the ◆ spaces by its pane id. Idle times start when
+the daemon does, and a team added to the configuration since gets them
+after a `daemon-restart`.
 ## The dashboard
 
 `herdr-agentisan dashboard` draws the team from the daemon (ADR-001 D5,

@@ -32,6 +32,8 @@ const (
 	codeBadRequest         = "bad_request"
 	codeUnsupportedVersion = "unsupported_version"
 	codeUnknownOp          = "unknown_op"
+	// codeTimeout answers an op whose own budget ended.
+	codeTimeout = "timeout"
 )
 
 // Client-side sentinel errors.
@@ -242,6 +244,11 @@ func (s *server) run(name string, o op, args json.RawMessage, extend func(time.D
 	res, err := o.run(ctx, args)
 	if err != nil {
 		s.log.Info().Err(err).Str("op", name).Msg("op refused")
+		// An op whose own budget ended is a timeout, whichever call it was
+		// in; the error says what it was waiting on.
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return refuse(codeTimeout, fmt.Sprintf("%s ran past its %s budget: %v", name, budget, err))
+		}
 		return refuse(o.code(err), err.Error())
 	}
 	data, err := json.Marshal(res)

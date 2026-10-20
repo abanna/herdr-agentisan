@@ -201,13 +201,14 @@ func TestAnOpGetsItsBudget(t *testing.T) {
 	assert.JSONEq(t, `{"done":"yes"}`, string(data))
 
 	short := filepath.Join(shortDir(t), "e.sock")
-	gone := make(chan struct{})
+	ended := make(chan error, 1)
 	stopShort, err := daemon.ServeOp(t.Context(), short, "slow", 3*time.Second, func(ctx context.Context) (any, error) {
-		defer close(gone)
 		select {
 		case <-time.After(500 * time.Millisecond):
+			ended <- nil
 			return nil, nil
 		case <-ctx.Done():
+			ended <- ctx.Err()
 			return nil, ctx.Err()
 		}
 	})
@@ -216,7 +217,8 @@ func TestAnOpGetsItsBudget(t *testing.T) {
 	_, err = daemon.CallWith(t.Context(), short, "slow", json.RawMessage(`{}`), 50*time.Millisecond)
 	require.ErrorIs(t, err, daemon.ErrUnavailable, "the client gave up")
 	select {
-	case <-gone:
+	case err := <-ended:
+		require.NoError(t, err, "the op ran to its end, not cancelled with its client")
 	case <-time.After(ready):
 		t.Fatal("the op did not finish after its client went")
 	}
@@ -273,6 +275,37 @@ func TestAClientWaitsOutItsOpsBudget(t *testing.T) {
 	assert.Equal(t, "ha", st.Project)
 }
 
+// TestAnOpPastItsBudgetIsATimeout: an op whose own budget ends answers
+// timeout, whatever its own code for the error, and says what it waited on;
+// a deadline of an inner call, the op's budget still running, keeps the op's
+// own code.
+func TestAnOpPastItsBudgetIsATimeout(t *testing.T) {
+	t.Parallel()
+	sock := filepath.Join(shortDir(t), "d.sock")
+	stop, err := daemon.ServeOp(t.Context(), sock, "wait", 200*time.Millisecond, func(ctx context.Context) (any, error) {
+		<-ctx.Done()
+		return nil, fmt.Errorf("list panes: %w", ctx.Err())
+	})
+	require.NoError(t, err)
+	t.Cleanup(stop)
+	_, err = daemon.CallWith(t.Context(), sock, "wait", json.RawMessage(`{}`), ready)
+	var re *daemon.RequestError
+	require.ErrorAs(t, err, &re)
+	assert.Equal(t, "timeout", re.Code)
+	assert.Contains(t, re.Message, "wait ran past its 200ms budget")
+	assert.Contains(t, re.Message, "list panes")
+
+	inner := filepath.Join(shortDir(t), "e.sock")
+	stopInner, err := daemon.ServeOp(t.Context(), inner, "call", time.Minute, func(context.Context) (any, error) {
+		return nil, fmt.Errorf("list panes: %w", context.DeadlineExceeded)
+	})
+	require.NoError(t, err)
+	t.Cleanup(stopInner)
+	_, err = daemon.CallWith(t.Context(), inner, "call", json.RawMessage(`{}`), ready)
+	require.ErrorAs(t, err, &re)
+	assert.Equal(t, "failed", re.Code, "the op's own code: its budget had not ended")
+}
+
 // TestAnOpEndsWithTheDaemon: an op runs under the context the daemon's
 // socket was given, so it ends when that ends, whatever its own budget.
 func TestAnOpEndsWithTheDaemon(t *testing.T) {
@@ -319,7 +352,6 @@ func TestWorkforceCodes(t *testing.T) {
 		fmt.Errorf("%w: %w", workforce.ErrHerdr, daemon.ErrHerdrGone): "herdr_gone",
 		workforce.ErrHerdr:          "herdr_failed",
 		store.ErrStore:              "store_failed",
-		context.DeadlineExceeded:    "timeout",
 		errors.New("anything else"): "failed",
 	} {
 		assert.Equal(t, code, daemon.WorkforceCode(err), err.Error())

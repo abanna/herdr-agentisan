@@ -36,7 +36,6 @@ var workforceCodes = []struct {
 	{ErrHerdrGone, "herdr_gone"},
 	{workforce.ErrHerdr, codeHerdrFailed},
 	{store.ErrStore, "store_failed"},
-	{context.DeadlineExceeded, "timeout"},
 }
 
 // workforceCode is the refusal code for a workforce op's error.

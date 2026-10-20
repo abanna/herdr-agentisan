@@ -31,7 +31,9 @@ type Member struct {
 	Item  string `json:"item"`
 	Stage string `json:"stage"`
 	// IdleS is how long the pane has been idle or done, in seconds, as
-	// far as this daemon has seen; null when it is not at rest.
+	// far as this daemon has seen; null when it is not at rest, or when
+	// the poll does not time its team: the poll reads the teams once, at
+	// start (A19), so one added since has none until the daemon restarts.
 	IdleS *int64 `json:"idle_s"`
 }
 
@@ -116,7 +118,9 @@ func (s *Service) Status(ctx context.Context, req StatusRequest) (StatusResult, 
 			all = append(all, name)
 		}
 	}
-	for _, name := range groupOrder(all) {
+	// The team model's own order, the spaces' v12 one included; a team
+	// herdr shows no workspace of has none, and is by name.
+	for _, name := range groupOrder(all, pr.Order) {
 		cfg, ok := p.Groups[name]
 		g := GroupStatus{Name: name, Workers: cfg.Workers, Slots: cfg.Slots, Configured: ok, Occupied: occupied(pr, name), Targets: []string{}, Members: []Member{}}
 		g.Open = max(g.Slots-g.Occupied, 0)
