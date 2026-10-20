@@ -89,8 +89,8 @@ token = { env = "GITHUB_TOKEN" }
 #                        empty unless you know which prompt it will answer.
 #   shell_ready_after_s  default 3, at most 60.
 #
-# A worker's shell has HERDR_AGENTISAN_WORKER set to its logical id, so your
-# shell profile can skip its questions there instead.
+# Once spawn lands, a worker's shell will have HERDR_AGENTISAN_WORKER set to
+# its logical id, so your shell profile can skip its questions there instead.
 [spawn]
 shell_prompt = '❯\s*$'
 

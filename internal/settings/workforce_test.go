@@ -47,7 +47,8 @@ func TestAgentFor(t *testing.T) {
 }
 
 // TestLoadReadsTheWorkforceKeys: a group's agent and [spawn] reach the
-// profile, from any layer; a tabs project's short code and layout do too.
+// profile, from any layer, --set included; a tabs project's short code and
+// layout do too.
 func TestLoadReadsTheWorkforceKeys(t *testing.T) {
 	t.Parallel()
 	repo, dir := newRepo(t), t.TempDir()
@@ -76,13 +77,16 @@ agent = { command = ["codex", "--search"] }
 `, repo)
 	writeFile(t, repo, settings.RepoFileName, "schema_version = 1\n[groups.qa]\nworkers = 1\nslots = 1\nagent = { model = \"sonnet\" }\n", repo)
 
-	got, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
+	got, err := settings.Load(settings.LoadOptions{
+		ConfigDir: dir, Project: "app", LookupEnv: envOf(nil),
+		Set: []string{"spawn.shell_ready_after_s=20", "groups.research.agent.model=o3"},
+	})
 	require.NoError(t, err)
 	p := got.Profile
 	assert.Equal(t, []settings.Team{{Project: "app", Short: "app", Layout: settings.LayoutTabs}}, got.Teams)
-	assert.Equal(t, settings.Spawn{ShellPrompt: `❯\s*$`, ShellReadyKeys: []string{"enter"}, ShellReadyAfter: 10 * time.Second}, p.Spawn)
+	assert.Equal(t, settings.Spawn{ShellPrompt: `❯\s*$`, ShellReadyKeys: []string{"enter"}, ShellReadyAfter: 20 * time.Second}, p.Spawn, "--set over the project's wait")
 	assert.Equal(t, settings.Agent{Command: []string{"codex", "--no-daemon"}, Model: "gpt-5"}, p.AgentFor("review"))
-	assert.Equal(t, settings.Agent{Command: []string{"codex", "--search"}}, p.AgentFor("research"))
+	assert.Equal(t, settings.Agent{Command: []string{"codex", "--search"}, Model: "o3"}, p.AgentFor("research"), "--set adds a model to the project's command")
 	assert.Equal(t, settings.Agent{Command: []string{"claude"}, Model: "sonnet"}, p.AgentFor("qa"), "the repo file sets a group's agent too")
 	assert.Equal(t, settings.Agent{Command: []string{"claude"}}, p.AgentFor("coder"))
 }
