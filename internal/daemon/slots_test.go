@@ -331,9 +331,9 @@ func TestEveryTeamCarriesTheSlotsAndItsOwnBoss(t *testing.T) {
 	assert.Equal(t, t0, *spaces.Boss.StartedAt, "the spaces' boss keeps its own start")
 	require.NotNil(t, spaces.Groups[0].Agents[0].StageStartedAt)
 	assert.Equal(t, t0, *spaces.Groups[0].Agents[0].StageStartedAt, "the spaces' coder keeps its stage start")
+	// A poll stamped t1 can see both swaps and still count the locks before
+	// release(), so each team waits for the freed slot itself.
 	for _, p := range teams {
-		s := servedTeam(t, sock, p, at(t1))
-		require.NotNil(t, s.Project, p)
-		assert.Equal(t, &snapshot.Slots{Used: 0, Total: 2}, s.Project.Slots, "team %s sees the slot freed", p)
+		servedTeam(t, sock, p, func(s snapshot.Snapshot) bool { return at(t1)(s) && slotsAre(0, 2)(s) })
 	}
 }
