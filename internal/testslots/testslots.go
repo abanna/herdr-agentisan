@@ -47,7 +47,8 @@ type File struct {
 // Held reads the content of /proc/locks into the files some process holds a
 // lock on. flock(2), POSIX and open-file-description locks all count; a
 // waiter (a "->" line) holds nothing, and a lease or a delegation is not a
-// lock. A line in any other form is ErrLocks.
+// lock, so their files are not read: the kernel names none, "<none>:0", for
+// the opener waiting to break a lease. A line in any other form is ErrLocks.
 func Held(content []byte) (map[File]bool, error) {
 	held := map[File]bool{}
 	for n, line := range bytes.Split(content, []byte("\n")) {
@@ -92,11 +93,14 @@ func parseLine(fields []string) (File, bool, error) {
 	default:
 		return File{}, false, fmt.Errorf("%q is not a lock type", rest[0])
 	}
+	if !lock || waiter {
+		return File{}, false, nil
+	}
 	f, err := parseFile(rest[4])
 	if err != nil {
 		return File{}, false, err
 	}
-	return f, lock && !waiter, nil
+	return f, true, nil
 }
 
 func parseFile(s string) (File, error) {

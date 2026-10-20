@@ -152,6 +152,34 @@ func TestTestSlotsNotCounted(t *testing.T) {
 	})
 }
 
+// TestTestSlotsLogABadListOnce: a lock list the daemon cannot read is
+// logged once while it stays unreadable, even as the line it stops at moves
+// with other locks coming and going.
+func TestTestSlotsLogABadListOnce(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	th.layout(fullTeam())
+	locks := t.TempDir()
+	standIn := filepath.Join(locks, "proc-locks")
+	require.NoError(t, os.WriteFile(standIn, []byte("1: FLOCK\n"), 0o600))
+	var logs lockedLog
+	dir := shortDir(t)
+	o := teamOpts(t, dir, th, slotsConfig(t, filepath.Join(locks, "gate.0.lock")))
+	o.Team = new(daemon.WithProcLocks(*o.Team, standIn))
+	o.Logger = zerolog.New(&logs)
+	run(t, o)
+	sock := socketPath(t, dir, th.path)
+
+	served(t, sock, anySnapshot)
+	polled(t, th.srv, 3)
+	require.NoError(t, os.WriteFile(standIn, []byte("1: FLOCK  ADVISORY  WRITE 1 08:01:9 0 EOF\n2: FLOCK\n"), 0o600))
+	polled(t, th.srv, 3)
+	got := served(t, sock, anySnapshot)
+	assert.True(t, got.Project == nil || got.Project.Slots == nil, "no slots while the list cannot be read")
+	assert.Equal(t, 1, strings.Count(logs.String(), "test slots: cannot count them"), "logged once, though the bad line moved from 1 to 2")
+	assert.Contains(t, logs.String(), "line 1", "the first failure is the one logged")
+}
+
 // TestSnapshotBossRuntime: the boss's started_at is when this daemon first
 // saw its pane run an agent in the boss's place (A31). It keeps that start
 // poll after poll; a handoff to another pane starts again at the poll that
