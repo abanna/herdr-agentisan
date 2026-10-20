@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -230,6 +231,21 @@ func opts(t *testing.T, stateDir string, h *fakeHerdr) daemon.Options {
 	}
 }
 
+// restarted is o for a daemon that follows one which has exited, as the
+// new process `daemon run` would be: its StartTime hook gives this process
+// a later start than opts' 77. Every daemon a test runs shares the test's
+// pid, so with the same start the record the last one left in daemon.lock
+// names a holder still alive. A child forked anywhere in the test process
+// while that daemon held the lock keeps a copy of its descriptor until the
+// child execs, so the lock can outlive the daemon for a moment, and a
+// daemon taking the record for a live holder stops at once with
+// ErrAlreadyRunning (NERD-5335). A new process finds the holder gone and
+// waits for the lock, up to LockWait, as it does outside a test.
+func restarted(o daemon.Options) daemon.Options {
+	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 78}}).startTime
+	return o
+}
+
 // running is a daemon.Run in a goroutine, as `daemon run` would be.
 type running struct {
 	cancel context.CancelFunc
@@ -299,6 +315,30 @@ func healthy(t *testing.T, stateDir string, h *fakeHerdr) daemon.HealthInfo {
 		return err == nil
 	}, ready, 10*time.Millisecond, "the daemon never answered health")
 	return info
+}
+
+// healthy waits, as healthy does, until r answers health in stateDir, and
+// fails at once with r's exit error if r stops first, rather than waiting
+// out ready for a daemon that is gone.
+func (r *running) healthy(t *testing.T, stateDir string, h *fakeHerdr) daemon.HealthInfo {
+	t.Helper()
+	sock := socketPath(t, stateDir, h.path)
+	deadline := time.Now().Add(ready)
+	for {
+		info, err := daemon.Health(t.Context(), sock)
+		if err == nil {
+			return info
+		}
+		select {
+		case exit := <-r.done:
+			r.done <- exit // keep it for Cleanup
+			t.Fatalf("the daemon stopped before it answered health: %v", exit)
+		case <-time.After(10 * time.Millisecond):
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the daemon never answered health within %v: %v", ready, err)
+		}
+	}
 }
 
 func TestPathsForClasses(t *testing.T) {
@@ -530,6 +570,51 @@ func holdLock(t *testing.T, stateDir string, h *fakeHerdr, info string) (release
 }
 
 // staleHolder is a lock held by a daemon bound to some earlier herdr socket.
+// TestRunAfterADaemonExits: a daemon's lock can outlive it for a moment,
+// held by a child forked while it ran, which keeps a copy of the lock's
+// descriptor until it execs, with the daemon's record still in the file. A
+// new process finds that record's holder gone and waits for the lock. In a
+// test, whose daemons share one pid, the predecessor's own start time makes
+// the record read as a live daemon of this server: ErrAlreadyRunning at
+// once, the flake in NERD-5335, which restarted avoids.
+func TestRunAfterADaemonExits(t *testing.T) {
+	t.Parallel()
+
+	// lingering runs a daemon, stops it, then holds its lock as a forked
+	// child would: through another descriptor, its record left as written.
+	lingering := func(t *testing.T) (dir string, h *fakeHerdr, release func()) {
+		t.Helper()
+		h = newHerdr(t, 22)
+		dir = shortDir(t)
+		first := run(t, opts(t, dir, h))
+		healthy(t, dir, h)
+		first.cancel()
+		require.NoError(t, first.wait(t, ready))
+		record, err := os.ReadFile(paths(t, dir, h).Lock)
+		require.NoError(t, err)
+		require.Contains(t, string(record), fmt.Sprintf(`"pid":%d,"start":77,`, os.Getpid()))
+		return dir, h, holdLock(t, dir, h, string(record))
+	}
+
+	t.Run("a new process waits for the lock, then serves", func(t *testing.T) {
+		t.Parallel()
+		dir, h, release := lingering(t)
+		o := restarted(opts(t, dir, h))
+		o.LockWait = 5 * time.Second
+		r := run(t, o)
+
+		time.Sleep(150 * time.Millisecond)
+		require.True(t, r.alive(), "it waits while the lock outlives its holder")
+		release()
+		assert.Equal(t, os.Getpid(), r.healthy(t, dir, h).PID)
+	})
+	t.Run("the predecessor's start time reads as a live daemon", func(t *testing.T) {
+		t.Parallel()
+		dir, h, _ := lingering(t)
+		require.ErrorIs(t, daemon.Run(t.Context(), opts(t, dir, h)), daemon.ErrAlreadyRunning)
+	})
+}
+
 const staleHolder = `{"v":1,"pid":1234567,"start":5,"herdr":{"dev":1,"ino":1},"started_at":"2026-10-09T00:00:00Z"}`
 
 // TestRunWaitsForAStaleHolder is ADR-001 A3: during a live handoff the new
