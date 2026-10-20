@@ -67,7 +67,7 @@ func (o Options) followFocus(ctx context.Context, st *store.Store, w *walker, id
 // ended. An event resets failures: the subscription is working.
 //
 // Every connection proves, once made and before anything is sent on it, that
-// the socket still names the daemon's own server (forFocus), so none reaches
+// the socket still names the daemon's own server (forServer), so none reaches
 // the replacement. The identity is checked again once the subscription is
 // acknowledged, and snapshotFocus checks it once more after pane.list
 // answers: a check that fails then means the socket was replaced while the

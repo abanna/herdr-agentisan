@@ -340,7 +340,7 @@ func (o Options) stillServed(ctx context.Context, ident Identity, protocol uint3
 	case !o.sameServer(ident):
 		return fmt.Errorf("%w: the socket the daemon belongs to was removed or replaced", ErrHerdrGone)
 	case errors.Is(err, ErrHerdrGone):
-		return fmt.Errorf("ping: %w", err)
+		return fmt.Errorf("poll check: %w", err)
 	case errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENOENT):
 		return fmt.Errorf("%w: nothing answers its socket: %w", ErrHerdrGone, err)
 	case err != nil:
