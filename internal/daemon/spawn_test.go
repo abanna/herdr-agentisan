@@ -235,8 +235,7 @@ func TestCreatedFilesKeepTheirModesUnderAnyUmask(t *testing.T) {
 
 	cmd := execHelper(t, "modes", "DAEMON_TEST_DIR="+dir)
 	raw, err := cmd.Output()
-	var exit *exitError
-	if errors.As(err, &exit) {
+	if exit, ok := errors.AsType[*exitError](err); ok {
 		t.Fatalf("helper failed: %v: %s", err, exit.Stderr)
 	}
 	require.NoError(t, err, "helper failed")
