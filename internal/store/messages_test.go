@@ -23,15 +23,18 @@ var (
 	pane = store.Address{Kind: store.KindPane, ID: "w14:p9"}
 )
 
-// seedWorker binds id to pane at generation gen, live, the way the workforce
-// commands (NERD-5254) write the row.
+// seedWorker binds id to pane, on its terminal, at generation gen, live, the
+// way the workforce commands (NERD-5254) write the row.
 func seedWorker(t *testing.T, s *store.Store, id, pane string, gen int64) {
 	t.Helper()
 	_, err := store.DB(s).ExecContext(t.Context(),
-		"INSERT INTO workers (logical_id, project, grp, pane_id, generation, status, created_at) VALUES (?, 'agentisan', 'coders', ?, ?, 'active', 0)",
-		id, pane, gen)
+		"INSERT INTO workers (logical_id, project, grp, pane_id, generation, status, created_at, terminal_id) VALUES (?, 'agentisan', 'coders', ?, ?, 'active', 0, ?)",
+		id, pane, gen, terminal(pane))
 	require.NoError(t, err)
 }
+
+// terminal is the terminal the tests give pane.
+func terminal(pane string) string { return "term_" + pane }
 
 // retire ends id's binding, as `worker retire` does.
 func retire(t *testing.T, s *store.Store, id string) {

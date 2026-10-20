@@ -204,19 +204,25 @@ func (rs Resolvers) Resolve(l Layout) Resolution {
 
 // Build builds the model: the resolver finds the teams and places herdr's
 // panes, and the workers rows give the panes they bind their logical ids. A
-// team with a site is in the model even with no pane placed in it. The join is by pane id
-// and gives ids only; where a worker sits is the resolver's, so a bound pane
-// moved into another group's space is counted where it is. A row whose pane
-// herdr no longer lists has no current pane and is not in the model. When
-// two rows bind one pane, the lowest logical id takes it.
+// team with a site is in the model even with no pane placed in it. A row
+// binds the pane herdr lists with its terminal, never the pane at its pane
+// id, which herdr can reissue (A35); a lost row, or one with no terminal,
+// binds none. The join gives ids only; where a worker sits is the
+// resolver's, so a bound pane moved into another group's space is counted
+// where it is. A row whose terminal herdr no longer lists has no current
+// pane and is not in the model. When two rows bind one terminal, the lowest
+// logical id takes it.
 //
 // agent.list's names join by pane id the same way: an empty name names
 // nothing, and when it lists one pane twice the lowest name takes it.
 func Build(l Layout, r Resolver, workers []store.Worker) Model {
 	ids := map[string]string{}
 	for _, w := range workers {
-		if id, taken := ids[w.PaneID]; !taken || w.LogicalID < id {
-			ids[w.PaneID] = w.LogicalID
+		if w.TerminalID == "" || w.Status == store.StatusLost {
+			continue
+		}
+		if id, taken := ids[w.TerminalID]; !taken || w.LogicalID < id {
+			ids[w.TerminalID] = w.LogicalID
 		}
 	}
 	names := agentNames(l.Agents)
@@ -287,13 +293,14 @@ func agentNames(agents []herdr.AgentInfo) map[string]string {
 	return names
 }
 
+// worker is pane p at t, with the logical id ids gives its terminal.
 func worker(p herdr.PaneInfo, t Target, ids, names map[string]string) Worker {
 	w := Worker{ID: p.PaneID, Target: t, Pane: Pane{
 		ID: p.PaneID, Name: names[p.PaneID], Label: p.Label, Agent: p.Agent,
 		Status: statusOf(p.AgentStatus), Handoff: p.Tokens[HandoffKey] != "",
 		Ctx: p.Tokens[report.CtxKey], Item: p.Tokens[report.ItemKey], Stage: p.Tokens[report.StageKey],
 	}}
-	if id, ok := ids[p.PaneID]; ok {
+	if id, ok := ids[p.TerminalID]; ok {
 		w.ID, w.Bound = id, true
 	}
 	return w

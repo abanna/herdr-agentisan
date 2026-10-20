@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -257,9 +258,10 @@ func Run(ctx context.Context, o Options) error {
 	w := newWalker() // shared: the collector tells it where focus goes
 	snapshots := &snapshotCache{}
 	idle := &team.IdleClock{} // shared: the poll times rests, team status reads them
+	ready := &atomic.Bool{}   // shared: the poll's first reconcile opens the workforce ops (A35)
 	var ops map[string]op
 	if svc := o.newWorkforce(st, ident, idle); svc != nil {
-		ops = workforceOps(svc)
+		ops = workforceOps(svc, ready)
 	}
 	srv, err := listen(ctx, paths.Socket, o.health(ctx, st, HealthInfo{
 		PID: os.Getpid(), Version: o.Version, Commit: o.Commit, StartedAt: startedAt,
@@ -277,7 +279,7 @@ func Run(ctx context.Context, o Options) error {
 		stopFocus()
 		focus.Wait()
 	}()
-	stopTeam := o.startTeam(ctx, st, ident, snapshots, idle)
+	stopTeam := o.startTeam(ctx, st, ident, snapshots, idle, ready)
 	defer stopTeam()
 	o.Logger.Info().Int("pid", os.Getpid()).Uint32("protocol", pong.Protocol).Str("socket", paths.Socket).
 		Int("store_version", st.UserVersion()).Msg("daemon running")

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
@@ -79,14 +80,16 @@ type teamPoll struct {
 	// header is each project's GitHub state, which the collector keeps
 	// (A29).
 	header *headerCache
+	// bind keeps the workers rows bound to their panes (A35).
+	bind *binder
 }
 
 // startTeam starts the team poll when o.Team is set, and beside it the
-// header's GitHub collection; the poll caches each snapshot in cache and
-// times each pane's rest in idle. The function it returns stops both and
-// waits for them, so once it returns nothing more is pushed and no gh is
-// left running.
-func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, idle *team.IdleClock) (stop func()) {
+// header's GitHub collection; the poll caches each snapshot in cache, times
+// each pane's rest in idle, and sets ready once it has reconciled the
+// workers rows (A35). The function it returns stops both and waits for
+// them, so once it returns nothing more is pushed and no gh is left running.
+func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, idle *team.IdleClock, ready *atomic.Bool) (stop func()) {
 	if o.Team == nil {
 		return func() {}
 	}
@@ -94,7 +97,7 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 	header := newHeaderCache(o.Team.GitHub)
 	var wg sync.WaitGroup
 	wg.Go(func() { o.collectGitHub(ctx, header) })
-	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header, idle) })
+	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header, idle, ready) })
 	return func() {
 		cancel()
 		wg.Wait()
@@ -118,7 +121,7 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 // read answered by the replacement, or a push landing on it, would be the
 // next daemon's business. So the poll is a client of its own, whose Dialed
 // hook checks the identity; a failed check stops the poll (ErrHerdrGone).
-func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, header *headerCache, idle *team.IdleClock) {
+func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, header *headerCache, idle *team.IdleClock, ready *atomic.Bool) {
 	teams, err := settings.Teams(o.Team.ConfigDir)
 	if err != nil {
 		o.Logger.Error().Err(err).Msg("herdr-agentisan.toml does not resolve; the ◆ spaces belong to the unnamed project, and no tabs team is found, until it is fixed and the daemon restarts")
@@ -130,7 +133,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 		tabs = append(tabs, t.Project)
 	}
 	o.Logger.Info().Str("project", cfg.spaces.Project).Str("color", cfg.spaces.Color).Strs("tabs_teams", tabs).Msg("team poll running")
-	tp := teamPoll{cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, idle: idle, cache: cache, header: header}
+	tp := teamPoll{cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, idle: idle, cache: cache, header: header, bind: &binder{ready: ready}}
 	onServer := o.onServer(ident)
 	c := herdr.Client{SocketPath: o.HerdrSocket, Dialed: onServer}
 	tick := time.NewTicker(o.Poll)
@@ -168,22 +171,33 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 	}
 }
 
-// pushTeam is one poll: it lists panes, workspaces, with a tabs team
-// configured tabs, and agents; builds the model with state.db's workers
-// rows; caches every team's snapshot, each with its project's GitHub header
-// (A29), and the workspaces each team holds (A24); pushes each group target
-// and tabs team its `$team`; and pushes every agent pane its ctx display. A
-// failed pane, workspace or tab list costs the poll; a failed agent list
-// costs only the snapshots, which `$team` does not need, so the last ones
-// built with names stay served, teams and index alike, and the ctx display
-// of a pane herdr knows only by name; a failed push is logged and the
-// others go on. It returns ErrHerdrGone, and pushes nothing more, once a
+// pushTeam is one poll: it reads state.db's workers rows; lists panes,
+// workspaces, with a tabs team configured tabs, and agents; reconciles the
+// rows with the panes (A35), unless the rows or the agents could not be
+// read; builds the model with the rows; caches every team's snapshot, each
+// with its project's GitHub header (A29), and the workspaces each team holds
+// (A24); pushes each group target and tabs team its `$team`; and pushes every
+// agent pane its ctx display. A failed pane, workspace or tab list costs the
+// poll; a failed agent list costs only the snapshots, which `$team` does not
+// need, so the last ones built with names stay served, teams and index
+// alike, and the ctx display of a pane herdr knows only by name; a failed
+// push is logged and the others go on. It returns ErrHerdrGone, and pushes nothing more, once a
 // call finds the socket no longer names the daemon's server.
 // The model it returns is nil when a pane, workspace or tab list failed and
 // no model was built; agent names change neither which panes it holds nor
 // their statuses, so a failed agent list still gives the status events their
 // model.
 func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, tp teamPoll) (*team.Model, error) {
+	// The rows are read before the panes: the workforce commands write a
+	// row only once its pane exists, so every row read is one whose pane,
+	// unless it closed, the list after holds, and the reconcile never takes
+	// a pane opened between the two reads for one that is gone (A35).
+	rows, rowsErr := st.Workers(ctx)
+	if rowsErr != nil {
+		// The counts need no logical id: push them, provisional ids and all.
+		o.warnUnlessStopping(ctx, rowsErr, "team poll: read workers")
+		rows = nil
+	}
 	panes, err := c.ListPanes(ctx)
 	if err != nil {
 		return nil, o.teamCallFailed(ctx, err, "team poll: list panes")
@@ -205,13 +219,14 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 			return nil, err
 		}
 	}
-	rows, err := st.Workers(ctx)
-	if err != nil {
-		// The counts need no logical id: push them, provisional ids and all.
-		o.warnUnlessStopping(ctx, err, "team poll: read workers")
-		rows = nil
-	}
 	l := team.Layout{Workspaces: workspaces, Panes: panes, Agents: agents, Tabs: tabs}
+	// A candidate pane can be the one herdr names a worker by, so a failed
+	// agent list proves and loses nothing this poll.
+	if rowsErr == nil && agentsErr == nil {
+		if rows, err = o.reconcile(ctx, c, st, tp.bind, l, rows); err != nil {
+			return nil, err
+		}
+	}
 	m := team.Build(l, tp.cfg.resolver(), rows)
 	now := o.Now()
 	// A pane's rest is pane.list's status, so a failed agent list does not

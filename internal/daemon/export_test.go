@@ -112,7 +112,7 @@ func ServeOp(ctx context.Context, path, name string, budget time.Duration, run f
 	ops := map[string]op{name: {
 		budget: func(json.RawMessage) time.Duration { return budget },
 		run:    func(ctx context.Context, _ json.RawMessage) (any, error) { return run(ctx) },
-		code:   func(error) string { return "failed" },
+		code:   workforceCode,
 	}}
 	srv, err := listen(ctx, path, func() HealthInfo { return HealthInfo{} }, func() (BackResult, error) { return BackResult{}, nil },
 		func(Selector) (json.RawMessage, error) { return nil, ErrNotReady }, ops, zerolog.Nop())

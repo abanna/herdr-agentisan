@@ -40,8 +40,8 @@ func liveLayout() team.Layout {
 func TestBuildTheModel(t *testing.T) {
 	t.Parallel()
 	rows := []store.Worker{
-		{LogicalID: "boss", Project: "agentisan", Group: "boss", PaneID: "wJ:p1"},
-		{LogicalID: "coders-1", Project: "agentisan", Group: "coders", PaneID: "wN:p1", Generation: 2},
+		{LogicalID: "boss", Project: "agentisan", Group: "boss", PaneID: "wJ:p1", TerminalID: "term_wJ:p1"},
+		{LogicalID: "coders-1", Project: "agentisan", Group: "coders", PaneID: "wN:p1", TerminalID: "term_wN:p1", Generation: 2},
 	}
 
 	got := team.Build(liveLayout(), team.Spaces{Project: "agentisan"}, rows)
@@ -65,8 +65,9 @@ func TestBuildTheModel(t *testing.T) {
 	}}}, got)
 }
 
-// TestBuildJoinsWorkersRows: the join with state.db's workers rows is by pane
-// id, and only gives logical ids; where a pane sits is the resolver's.
+// TestBuildJoinsWorkersRows: the join with state.db's workers rows is by
+// terminal, never by pane id (A35), and only gives logical ids; where a pane
+// sits is the resolver's.
 func TestBuildJoinsWorkersRows(t *testing.T) {
 	t.Parallel()
 
@@ -78,30 +79,47 @@ func TestBuildJoinsWorkersRows(t *testing.T) {
 			want: map[string]string{"wJ:p1": "wJ:p1?", "wN:p1": "wN:p1?", "wN:p2": "wN:p2?", "wN:p3": "wN:p3?", "wY:p1": "wY:p1?"},
 		},
 		"a row binds its pane": {
-			rows: []store.Worker{{LogicalID: "qa-1", Group: "qa", PaneID: "wY:p1"}},
+			rows: []store.Worker{{LogicalID: "qa-1", Group: "qa", PaneID: "wY:p1", TerminalID: "term_wY:p1"}},
 			want: map[string]string{"wJ:p1": "wJ:p1?", "wN:p1": "wN:p1?", "wN:p2": "wN:p2?", "wN:p3": "wN:p3?", "wY:p1": "qa-1"},
 		},
 		// The table does not forbid it; the lowest logical id takes the
 		// pane, whatever order the rows come in, so a rebuild agrees.
 		"two rows on one pane": {
-			rows: []store.Worker{{LogicalID: "coders-9", PaneID: "wN:p1"}, {LogicalID: "coders-1", PaneID: "wN:p1"}},
+			rows: []store.Worker{{LogicalID: "coders-9", PaneID: "wN:p1", TerminalID: "term_wN:p1"}, {LogicalID: "coders-1", PaneID: "wN:p1", TerminalID: "term_wN:p1"}},
 			want: map[string]string{"wJ:p1": "wJ:p1?", "wN:p1": "coders-1", "wN:p2": "wN:p2?", "wN:p3": "wN:p3?", "wY:p1": "wY:p1?"},
 		},
 		// A worker whose pane herdr no longer lists has no current pane, so
 		// it is not in the model; the workforce commands own that row.
 		"a row whose pane is gone": {
-			rows: []store.Worker{{LogicalID: "coders-7", Group: "coders", PaneID: "wN:p99"}},
+			rows: []store.Worker{{LogicalID: "coders-7", Group: "coders", PaneID: "wN:p99", TerminalID: "term_wN:p99"}},
 			want: map[string]string{"wJ:p1": "wJ:p1?", "wN:p1": "wN:p1?", "wN:p2": "wN:p2?", "wN:p3": "wN:p3?", "wY:p1": "wY:p1?"},
 		},
 		// Moved by hand to ◆ coders while its row says qa: it is counted
 		// where it sits, and keeps its logical id.
 		"a bound pane in another group's space": {
-			rows: []store.Worker{{LogicalID: "qa-1", Group: "qa", PaneID: "wN:p3"}},
+			rows: []store.Worker{{LogicalID: "qa-1", Group: "qa", PaneID: "wN:p3", TerminalID: "term_wN:p3"}},
 			want: map[string]string{"wJ:p1": "wJ:p1?", "wN:p1": "wN:p1?", "wN:p2": "wN:p2?", "wN:p3": "qa-1", "wY:p1": "wY:p1?"},
+		},
+		// herdr reissued the row's pane id to another terminal: a stranger.
+		"a stranger at the row's pane id": {
+			rows: []store.Worker{{LogicalID: "coders-1", Group: "coders", PaneID: "wN:p1", TerminalID: "term_closed"}},
+			want: map[string]string{"wJ:p1": "wJ:p1?", "wN:p1": "wN:p1?", "wN:p2": "wN:p2?", "wN:p3": "wN:p3?", "wY:p1": "wY:p1?"},
+		},
+		// Moved to another workspace: a new pane id, the same terminal.
+		"a row whose pane moved": {
+			rows: []store.Worker{{LogicalID: "coders-1", Group: "coders", PaneID: "w7:p1", TerminalID: "term_wN:p2"}},
+			want: map[string]string{"wJ:p1": "wJ:p1?", "wN:p1": "wN:p1?", "wN:p2": "coders-1", "wN:p3": "wN:p3?", "wY:p1": "wY:p1?"},
+		},
+		"a lost row, and one from before A35 with no terminal": {
+			rows: []store.Worker{
+				{LogicalID: "coders-1", PaneID: "wN:p1", TerminalID: "term_wN:p1", Status: store.StatusLost},
+				{LogicalID: "coders-2", PaneID: "wN:p2"},
+			},
+			want: map[string]string{"wJ:p1": "wJ:p1?", "wN:p1": "wN:p1?", "wN:p2": "wN:p2?", "wN:p3": "wN:p3?", "wY:p1": "wY:p1?"},
 		},
 		// A row binding a pane outside the model binds nothing in it.
 		"a row on the edit shell": {
-			rows: []store.Worker{{LogicalID: "x", PaneID: "w12:p1"}},
+			rows: []store.Worker{{LogicalID: "x", PaneID: "w12:p1", TerminalID: "term_w12:p1"}},
 			want: map[string]string{"wJ:p1": "wJ:p1?", "wN:p1": "wN:p1?", "wN:p2": "wN:p2?", "wN:p3": "wN:p3?", "wY:p1": "wY:p1?"},
 		},
 	}
@@ -141,7 +159,7 @@ func TestBuildJoinsWorkersRows(t *testing.T) {
 // and workspaces in and whatever order the rows come in.
 func TestRebuildIsEqual(t *testing.T) {
 	t.Parallel()
-	rows := []store.Worker{{LogicalID: "b", PaneID: "wN:p2"}, {LogicalID: "a", PaneID: "wN:p1"}, {LogicalID: "c", PaneID: "wJ:p1"}}
+	rows := []store.Worker{{LogicalID: "b", PaneID: "wN:p2", TerminalID: "term_wN:p2"}, {LogicalID: "a", PaneID: "wN:p1", TerminalID: "term_wN:p1"}, {LogicalID: "c", PaneID: "wJ:p1", TerminalID: "term_wJ:p1"}}
 	first := team.Build(liveLayout(), team.Spaces{Project: "x"}, rows)
 
 	shuffled := liveLayout()
@@ -174,10 +192,10 @@ func TestRebuildAfterARestartIsEqual(t *testing.T) {
 
 	db, err := sql.Open("sqlite", path)
 	require.NoError(t, err)
-	_, err = db.ExecContext(t.Context(), `INSERT INTO workers (logical_id, project, grp, pane_id, generation, status, created_at, retired_at) VALUES
-		('coders-1', 'agentisan', 'coders', 'wN:p1', 1, 'active', 1, NULL),
-		('qa-1', 'agentisan', 'qa', 'wN:p3', 0, 'active', 1, NULL),
-		('coders-0', 'agentisan', 'coders', 'wN:p2', 0, 'retired', 1, 2)`)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO workers (logical_id, project, grp, pane_id, generation, status, created_at, retired_at, terminal_id) VALUES
+		('coders-1', 'agentisan', 'coders', 'wN:p1', 1, 'active', 1, NULL, 'term_wN:p1'),
+		('qa-1', 'agentisan', 'qa', 'wN:p3', 0, 'active', 1, NULL, 'term_wN:p3'),
+		('coders-0', 'agentisan', 'coders', 'wN:p2', 0, 'retired', 1, 2, 'term_wN:p2')`)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
