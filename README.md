@@ -194,12 +194,17 @@ the teams when it starts: run the `daemon-restart` action after adding one.
 See ADR-001 A19.
 ## The dashboard
 
-`herdr-agentisan dashboard` draws the team from the daemon (ADR-001 D5,
-A18). Once a second it asks the daemon socket for a snapshot, which the
-daemon answers from the team model its 3 s poll already builds, so drawing
-never calls herdr. Enter or a click jumps to an agent, or to a shell by its
-pane. With no daemon, the footer says `daemon not running` and the dashboard
-keeps asking.
+`herdr-agentisan dashboard` draws a team from the daemon (ADR-001 D5,
+A18, A24): the team whose workspace the dashboard's own pane is in, so a
+dashboard opened in any team's workspace shows that team, with nothing
+configured per team. Once a second it asks the daemon socket for that team's
+snapshot, which the daemon answers from the team model its 3 s poll already
+builds, so drawing never calls herdr; every 10 seconds the dashboard asks
+herdr which pane runs it, two calls once it has found its pane. Outside every
+team it draws no board and the footer says so; `--project <name>` shows that
+project's team instead. Enter or a click jumps to an agent, or to a shell by
+its pane. With no daemon, the footer says `daemon not running` and the
+dashboard keeps asking.
 
 herdr runs it as the plugin's `dashboard` pane, a split beside the focused
 pane. Plugins cannot ship key bindings, so replace the `dashboard-tab.sh`
