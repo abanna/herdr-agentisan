@@ -52,8 +52,9 @@ var profileSchema = &node{kind: kindTable, fields: map[string]*node{
 		"model":   leafOf(kindString),
 	}},
 	"groups": {kind: kindNames, elem: &node{kind: kindTable, fields: map[string]*node{
-		"workers": leafOf(kindInt),
-		"slots":   leafOf(kindInt),
+		"workers":     leafOf(kindInt),
+		"slots":       leafOf(kindInt),
+		"description": leafOf(kindString),
 	}}},
 	"verify": leafOf(kindArgvs),
 	"integrations": {kind: kindNames, secrets: true, elem: &node{kind: kindTable, fields: map[string]*node{

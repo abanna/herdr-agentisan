@@ -105,11 +105,21 @@ type Agent struct {
 }
 
 // Group is a worker group: how many workers team up starts, and the cap the
-// boss can scale to.
+// boss can scale to. A group that sets only a description describes a group
+// of the team's layout, such as a ◆ space, and starts no worker: its Workers
+// and Slots are zero (ADR-001 A36).
 type Group struct {
 	Workers int
 	Slots   int
+	// Description is the group's one-line purpose, drawn under its title on
+	// the dashboard; "" when unset.
+	Description string
 }
+
+// MaxDescriptionChars caps a group's description, in Unicode characters
+// (code points): one line under the group's title, as long as a herdr token
+// value.
+const MaxDescriptionChars = 80
 
 // Integration is an external service. Token is nil when unset.
 type Integration struct {
