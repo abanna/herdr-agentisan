@@ -301,6 +301,12 @@ func eventHook(path, event string) string {
 	return strings.Replace(hookJSON(path, 1), `"hook_event_name":"PostToolUse",`, field, 1)
 }
 
+// sessionEnd is a SessionEnd payload as Codex 0.161 sends it
+// (SessionEndCommandInput), naming path as its transcript.
+func sessionEnd(path string) string {
+	return `{"session_id":"0199","transcript_path":` + strconv.Quote(path) + `,"cwd":"/w","hook_event_name":"SessionEnd","reason":"other"}`
+}
+
 // TestParseCodexHookClasses walks the payload shapes. Only transcript_path
 // and agent_id matter; every other field is Codex's to add or change.
 func TestParseCodexHookClasses(t *testing.T) {
@@ -444,21 +450,28 @@ func codexLineage(procs map[int]report.Stat, cmds map[int][]string) *report.Line
 	return report.ReadLineage(5000, newProcTable(procs).stat).WithCmdline(argv(cmds))
 }
 
-// TestCodexPushesTheTokenContract: from an embedded Codex, every sampled
-// hook sets ctx on the pane the TUI runs in, under Claude's contract but for
-// Codex's 24 h TTL (A27). The event is never read: the count is the same
-// whichever hook read it.
+// TestCodexPushesTheTokenContract: from an embedded Codex, every hook sets
+// ctx on the pane the TUI runs in, under Claude's contract but for Codex's
+// 24 h TTL (A27). The event is never read: the count is the same whichever
+// hook read it. SessionEnd included: Codex also runs it when it unloads an
+// old thread after /new or /resume, so it must never clear ctx.
 func TestCodexPushesTheTokenContract(t *testing.T) {
 	t.Parallel()
 
-	for name, event := range map[string]string{"PostToolUse": "PostToolUse", "Stop": "Stop", "PostCompact": "PostCompact", "no event": ""} {
+	event := func(name string) func(string) string {
+		return func(path string) string { return eventHook(path, name) }
+	}
+	for name, payload := range map[string]func(path string) string{
+		"PostToolUse": event("PostToolUse"), "Stop": event("Stop"), "PostCompact": event("PostCompact"), "no event": event(""),
+		"a SessionEnd payload": sessionEnd,
+	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			srv := herdrtest.Start(t, fakeHerdr([]fakePane{{id: "w15:p4", shell: 600, pgid: 899, fg: []uint32{899, 900}}}))
 			pane := report.Pane{SocketPath: srv.Path, PaneID: "w15:p4", Lineage: codexLineage(embeddedProcs(), embeddedArgv)}
 			path := transcript(t, tokenCount(24610, window)+"\n")
 
-			got, err := report.Codex(t.Context(), herdr.Client{SocketPath: srv.Path}, pane, strings.NewReader(eventHook(path, event)))
+			got, err := report.Codex(t.Context(), herdr.Client{SocketPath: srv.Path}, pane, strings.NewReader(payload(path)))
 			require.NoError(t, err)
 			assert.Equal(t, report.Result{Ctx: 5, PaneID: "w15:p4"}, got)
 
