@@ -353,26 +353,26 @@ func TestRenderContents(t *testing.T) {
 		// merge state), then a count; issues and slots after them.
 		"PRs in full at 200": {
 			frame: from("full", 200, 60),
-			want:  []string{"│ agentisan · PRs #878 ⏳… blocked  #882 ✓💬 blocked  #884 ✗… dirty  #886 ✓👍 clean  #887 ✓👍 behind · issues 14 · slots 2/2 "},
+			want:  []string{"│ agentisan · PRs #878 ⏳ blocked  #882 💬 blocked  #884 ✗ dirty  #886 ✓ clean  #887 … behind · issues 14 · slots 2/2 "},
 		},
 		"PRs compact at 120": {
 			frame: from("full", 120, 40),
-			want:  []string{"│ agentisan · PRs #878⏳… #882✓💬 #884✗… #886✓👍 #887✓👍 · issues 14 · slots 2/2 "},
-			not:   []string{"#878 ⏳… blocked", "dirty"},
+			want:  []string{"│ agentisan · PRs #878⏳ #882💬 #884✗ #886✓ #887… · issues 14 · slots 2/2 "},
+			not:   []string{"#878 ⏳ blocked", "dirty"},
 		},
 		"PRs counted at 80": {frame: from("full", 80, 24), want: []string{"│ agentisan · PRs 5 · issues 14 · slots 2/2 "}, not: []string{"#878"}},
 		"no open PRs":       {frame: from("crowd", 120, 40), want: []string{"│ crowd · PRs none · issues 0 "}, not: []string{"slots"}},
 		// Nothing reported, nothing shown: no "PRs ?", no "issues 0".
 		"no project shows the name alone": {frame: from("blocked", 120, 40), match: []string{`│ assay +\[ btop \] │`}, not: []string{"PRs", "issues", "slots"}},
 		"a colour and slots alone":        {frame: from("wide", 120, 40), want: []string{"チーム​ · slots 0/3 "}, not: []string{"PRs", "issues"}},
-		"every PR state has a glyph": {
+		"every PR state has a mark": {
 			frame: of(withProject(&snapshot.Project{PRs: []snapshot.PR{
 				{Number: 1, CI: snapshot.CIUnknown, Codex: snapshot.CodexUnknown, Merge: snapshot.MergeUnknown},
 				{Number: 2, CI: snapshot.CIPending, Codex: snapshot.CodexPending, Merge: snapshot.MergeDraft},
 				{Number: 3, CI: snapshot.CIFailure, Codex: snapshot.CodexFindings, Merge: snapshot.MergeUnstable},
 				{Number: 4, CI: snapshot.CISuccess, Codex: snapshot.CodexApproved, Merge: snapshot.MergeHasHooks},
 			}}), 200, 30),
-			want: []string{"PRs #1 ?? unknown  #2 ⏳… draft  #3 ✗💬 unstable  #4 ✓👍 has_hooks"},
+			want: []string{"PRs #1 ? unknown  #2 ⏳ draft  #3 ✗ unstable  #4 … has_hooks"},
 		},
 		// Render draws what it is given, validated or not: a colour that is
 		// not #rrggbb is no colour, never a broken frame.
