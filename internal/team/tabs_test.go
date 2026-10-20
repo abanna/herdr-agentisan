@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/team"
@@ -51,7 +52,7 @@ func TestTabsResolverLabels(t *testing.T) {
 		"zero":                              {label: "ha-coder-0"},
 		"a leading zero":                    {label: "ha-coder-01"},
 		"a number with a letter":            {label: "ha-coder-1a"},
-		"a negative number":                 {label: "ha-coder--"},
+		"a dash and no number":              {label: "ha-coder--"},
 		"no type":                           {label: "ha--1"},
 		"the short code alone":              {label: "ha-"},
 		"no dash after the short code":      {label: "hacoder-1"},
@@ -284,4 +285,33 @@ func TestTabsTeamsResolveExactly(t *testing.T) {
 	slices.Reverse(shuffled.Tabs)
 	slices.Reverse(shuffled.Panes)
 	assert.Equal(t, got, team.Build(shuffled, r, nil), "a rebuild from the same tabs and panes in another order is equal")
+}
+
+// TestTabsPlacesOnlyItsOwnTabsOnce: a tab in another workspace adds no group
+// to the team, even one of a type the team lacks, and a tab tab.list names
+// twice is placed once.
+func TestTabsPlacesOnlyItsOwnTabsOnce(t *testing.T) {
+	t.Parallel()
+	l := team.Layout{
+		Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "w14", Label: "herdr-agentisan"}, {WorkspaceID: "w15", Label: "other"}},
+		Panes: []herdr.PaneInfo{
+			{PaneID: "w14:p1", WorkspaceID: "w14", TabID: "w14:t2", Agent: "claude", AgentStatus: "idle"},
+			{PaneID: "w15:p1", WorkspaceID: "w15", TabID: "w15:t1", Agent: "claude", AgentStatus: "idle"},
+		},
+		Tabs: []herdr.TabInfo{
+			{TabID: "w14:t2", WorkspaceID: "w14", Label: "ha-coder-1"},
+			{TabID: "w14:t2", WorkspaceID: "w14", Label: "ha-coder-1"},
+			{TabID: "w15:t1", WorkspaceID: "w15", Label: "ha-designer-1"},
+		},
+	}
+	m := team.Build(l, team.Tabs{Project: "herdr-agentisan", Short: "ha"}, nil)
+	require.Len(t, m.Projects, 1)
+	var names []string
+	for _, g := range m.Projects[0].Groups {
+		names = append(names, g.Name)
+	}
+	assert.Equal(t, []string{"coder"}, names, "another workspace's tab adds no group")
+	require.Len(t, m.Projects[0].Groups, 1)
+	assert.Len(t, m.Projects[0].Groups[0].Workers, 1, "a tab listed twice is placed once")
+	assert.Equal(t, []team.Token{{Target: team.Target{WorkspaceID: "w14"}, Value: "1 · ◐0 ●1"}}, team.Tokens(m))
 }

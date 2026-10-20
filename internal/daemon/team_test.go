@@ -571,3 +571,16 @@ func TestTeamPollCostsAFailedTabList(t *testing.T) {
 	assert.Contains(t, logs.String(), "team poll: list tabs")
 	assert.True(t, r.alive())
 }
+
+// TestTeamPollListsNoTabsWithoutATabsTeam: with no tabs team configured the
+// poll never sends tab.list, so a herdr whose tab.list fails cannot cost the
+// spaces' poll.
+func TestTeamPollListsNoTabsWithoutATabsTeam(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	run(t, teamOpts(t, shortDir(t), th, ""))
+	polled(t, th.srv, 2)
+	for _, r := range th.srv.Requests() {
+		assert.NotEqual(t, "tab.list", r.Method, "no tabs team, no tab.list")
+	}
+}
