@@ -73,13 +73,19 @@ func Load(opts LoadOptions) (Resolved, error) {
 			return Resolved{}, err
 		}
 		// Lint every project too, short of the repo checks, which touch
-		// the filesystem and wait for a selection.
+		// the filesystem and wait for a selection. The same merge gives
+		// each project's colour, short of its repo file.
+		colors := map[string]string{}
 		for _, name := range names {
-			if err := merge(slices.Concat([]*source{defaults(), shared, projects[name]}, flags)...).checkFields(); err != nil {
+			pm := merge(slices.Concat([]*source{defaults(), shared, projects[name]}, flags)...)
+			if err := pm.checkFields(); err != nil {
 				return Resolved{}, err
 			}
+			if v, ok := pm.get("color"); ok {
+				colors[name], _ = v.(string)
+			}
 		}
-		return Resolved{Values: m.values, Sources: m.sources, Projects: names}, nil
+		return Resolved{Values: m.values, Sources: m.sources, Projects: names, colors: colors}, nil
 	}
 
 	project, ok := projects[opts.Project]

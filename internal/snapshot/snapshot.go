@@ -3,10 +3,10 @@
 // agent's status, model, ctx, item and stage; the boss; and the project's
 // pull requests, issues and test slots.
 //
-// The daemon will serve this as the `snapshot` op of its socket protocol: the
-// request {"v":1,"op":"snapshot"} is answered with {"ok":true,"data":<Snapshot>}.
-// Until the daemon is on main, FileSource reads the same JSON from a file, and
-// the socket source arrives beside it as a second Source implementation.
+// The daemon serves this as the `snapshot` op of its socket protocol: the
+// request {"v":1,"op":"snapshot"} is answered with {"ok":true,"data":<Snapshot>}
+// (daemon.SnapshotSource reads it). FileSource reads the same JSON from a
+// file, for fixtures.
 //
 // Decoding is strict. A snapshot from a newer contract version is refused as
 // ErrUnsupportedVersion before its fields are looked at, so a reader one
@@ -75,14 +75,24 @@ func (s Status) Valid() bool {
 	}
 }
 
-// Agent is one agent: a herdr agent name and the pane it runs in.
+// Agent is one row of the team: an agent, or a plain shell in a group's
+// place, and the pane it runs in.
 type Agent struct {
-	// Name is the herdr agent name, the target agent.focus takes.
-	Name   string `json:"name"`
-	PaneID string `json:"pane_id"`
-	Status Status `json:"status"`
-	// Model is the model as the agent reports it, e.g. "claude-opus-4-1".
-	Model string `json:"model"`
+	// Name is the herdr agent name, the target agent.focus takes, unless
+	// Unnamed is set.
+	Name string `json:"name"`
+	// Unnamed is set when herdr knows the pane by no agent name: a plain
+	// shell, or an agent nobody named. Name is then the pane's label, or
+	// its pane id, neither of which agent.focus resolves (herdr 0.9.3
+	// src/app/terminal_targets.rs:74-104), so a jump goes by PaneID.
+	// Left out, it is false: every snapshot written before the key existed
+	// means what it meant (ADR-001 A18).
+	Unnamed bool   `json:"unnamed,omitempty"`
+	PaneID  string `json:"pane_id"`
+	Status  Status `json:"status"`
+	// Model is the model as the agent reports it, e.g. "claude-opus-4-1";
+	// empty, and left out, when it is not reported.
+	Model string `json:"model,omitempty"`
 	// Ctx is the context window used, 0..100. Nil means not reported.
 	Ctx   *int   `json:"ctx,omitempty"`
 	Item  string `json:"item,omitempty"`
@@ -379,7 +389,7 @@ type shape struct {
 
 var (
 	timeShape  = &shape{time: true}
-	agentKeys  = map[string]*shape{"name": nil, "pane_id": nil, "status": nil, "model": nil, "ctx": nil, "item": nil, "stage": nil, "stage_started_at": timeShape}
+	agentKeys  = map[string]*shape{"name": nil, "unnamed": nil, "pane_id": nil, "status": nil, "model": nil, "ctx": nil, "item": nil, "stage": nil, "stage_started_at": timeShape}
 	agentShape = &shape{keys: agentKeys}
 	bossShape  = &shape{keys: union(agentKeys, map[string]*shape{"watchers": nil, "started_at": timeShape})}
 	groupShape = &shape{keys: map[string]*shape{
@@ -487,8 +497,7 @@ type Source interface {
 }
 
 // FileSource reads a snapshot from a JSON file, again on every call, so an
-// edited file shows up on the next poll. It stands in for the daemon's
-// socket while that is not served.
+// edited file shows up on the next poll: a fixture in place of the daemon.
 type FileSource struct {
 	Path string
 }

@@ -1,7 +1,9 @@
 package snapshot_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -151,6 +153,14 @@ func TestDecodeAcceptsEveryContractValue(t *testing.T) {
 		"a null stage start time":    agent(`"status":"idle","stage_started_at":null`),
 		"a fraction of 30 digits":    agent(`"status":"idle","stage_started_at":"2026-10-09T17:12:30.123456789012345678901234567890Z"`),
 		"many PRs":                   manyPRs(500),
+		// unnamed marks a row herdr knows by no agent name (ADR-001 A18):
+		// absent and false both mean Name is an agent name.
+		"an unnamed agent":    agent(`"status":"unknown","unnamed":true`),
+		"unnamed false":       agent(`"status":"idle","unnamed":false`),
+		"an unnamed boss":     boss(`"unnamed":true`),
+		"no model":            `{"v":1,"team":"t","groups":[{"name":"g","agents":[{"name":"a","pane_id":"w1:p1","status":"idle"}]}]}`,
+		"an empty team name":  `{"v":1,"team":"","groups":[]}`,
+		"an empty agent list": `{"v":1,"team":"t","groups":[{"name":"g","agents":[]}]}`,
 	}
 	for name, in := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -216,6 +226,8 @@ func TestDecodeRefuses(t *testing.T) {
 		"a duplicate v":                {in: `{"v":1,"v":1,"team":"t","groups":[]}`, want: snapshot.ErrInvalid, contains: []string{`"v"`, "twice"}},
 		"a duplicate agent key":        {in: agent(`"name":"a","status":"idle","name":"b"`), want: snapshot.ErrInvalid, contains: []string{`"name"`, "twice"}},
 		"status in another case":       {in: agent(`"name":"a","status":"Idle"`), want: snapshot.ErrInvalid, contains: []string{`"Idle"`}},
+		"unnamed is not a bool":        {in: agent(`"name":"a","status":"idle","unnamed":"yes"`), want: snapshot.ErrInvalid},
+		"unnamed in another case":      {in: agent(`"name":"a","status":"idle","Unnamed":true`), want: snapshot.ErrInvalid, contains: []string{`"Unnamed"`}},
 		"v negative":                   {in: `{"v":-1}`, want: snapshot.ErrUnsupportedVersion},
 		"v past int64":                 {in: `{"v":99999999999999999999,"team":"t","groups":[]}`, want: snapshot.ErrInvalid},
 		"v not an integer":             {in: `{"v":1.0,"team":"t","groups":[]}`, want: snapshot.ErrInvalid},
@@ -565,4 +577,25 @@ func TestFileSourceFailures(t *testing.T) {
 			require.ErrorIs(t, err, tc.want)
 		})
 	}
+}
+
+// TestUnnamedIsLeftOutUnlessSet: a writer leaves unnamed out for a row
+// whose Name is an agent name, so every snapshot written before the key
+// existed still means what it meant; set, it survives a round trip.
+func TestUnnamedIsLeftOutUnlessSet(t *testing.T) {
+	t.Parallel()
+
+	named, err := json.Marshal(snapshot.Agent{Name: "pee01", PaneID: "w2:p1", Status: snapshot.StatusIdle})
+	require.NoError(t, err)
+	assert.NotContains(t, string(named), "unnamed")
+	assert.NotContains(t, string(named), "model", "a model not reported is left out")
+
+	doc := snapshot.Snapshot{V: snapshot.Version, Team: "t", Groups: []snapshot.Group{{Name: "g", Agents: []snapshot.Agent{
+		{Name: "notes", PaneID: "w2:p3", Status: snapshot.StatusUnknown, Unnamed: true},
+	}}}}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	got, err := snapshot.Decode(bytes.NewReader(raw))
+	require.NoError(t, err)
+	assert.True(t, got.Groups[0].Agents[0].Unnamed)
 }

@@ -602,7 +602,8 @@ func TestManifestMatchesTheBinary(t *testing.T) {
 	assert.Equal(t, "bin/herdr-agentisan", m.BuildOutput())
 	assert.Contains(t, string(taskfile), "-o {{.BINARY_DIR}}/herdr-agentisan ./cmd/herdr-agentisan")
 
-	// Every argv herdr runs: the actions, and the startup hooks.
+	// Every argv herdr runs of this binary: the actions, the startup hooks
+	// and the panes that run it (btop's runs btop).
 	argvs := map[string][]string{}
 	for _, a := range m.Actions {
 		argvs["action "+a.ID] = a.Command
@@ -611,6 +612,12 @@ func TestManifestMatchesTheBinary(t *testing.T) {
 	for i, s := range m.Startup {
 		argvs["startup "+strconv.Itoa(i)] = s.Command
 	}
+	for _, p := range m.Panes {
+		if len(p.Command) > 0 && p.Command[0] == m.BuildOutput() {
+			argvs["pane "+p.ID] = p.Command
+		}
+	}
+	require.Contains(t, argvs, "pane "+plugin.DashboardPane, "the dashboard pane runs this binary")
 
 	root := cli.Root()
 	for name, argv := range argvs {
@@ -649,6 +656,26 @@ func TestManifestDeclaresTheBtopPopup(t *testing.T) {
 	require.NotNil(t, btop, "the manifest declares no %q pane", plugin.BtopPane)
 	assert.Equal(t, "popup", btop.Placement)
 	assert.Equal(t, []string{"btop"}, btop.Command)
+}
+
+// TestManifestDeclaresTheDashboardSplit: herdr opens the dashboard as a split
+// pane (ADR-001 D5) running `dashboard`, which reads the daemon herdr's pane
+// environment names. Its entrypoint is the one the key snippet asks herdr to
+// open.
+func TestManifestDeclaresTheDashboardSplit(t *testing.T) {
+	t.Parallel()
+	m, err := plugin.LoadManifest(filepath.Join("..", "..", plugin.ManifestFile))
+	require.NoError(t, err)
+
+	var pane *plugin.Pane
+	for i := range m.Panes {
+		if m.Panes[i].ID == plugin.DashboardPane {
+			pane = &m.Panes[i]
+		}
+	}
+	require.NotNil(t, pane, "the manifest declares no %q pane", plugin.DashboardPane)
+	assert.Equal(t, "split", pane.Placement)
+	assert.Equal(t, []string{m.BuildOutput(), "dashboard"}, pane.Command, "no --fixture: it reads the daemon")
 }
 
 // TestManifestStartsTheDaemon: herdr's startup hook starts the daemon, and

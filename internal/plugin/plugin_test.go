@@ -189,6 +189,26 @@ placement = "popup"
 command = ["btop"]
 `
 
+// splitPane is a [[panes]] entry as the dashboard's: a split running the
+// plugin binary.
+const splitPane = `
+[[panes]]
+id = "dashboard"
+title = "Agentisan dashboard"
+placement = "split"
+command = ["bin/herdr-agentisan", "dashboard"]
+`
+
+// TestManifestSplitPane: a split pane declares what herdr 0.9.3 reads of one,
+// an id, a title, the placement and the command, and nothing else.
+func TestManifestSplitPane(t *testing.T) {
+	t.Parallel()
+	m, err := plugin.LoadManifest(writeManifest(t, validManifest+splitPane))
+	require.NoError(t, err)
+	require.Len(t, m.Panes, 2)
+	assert.Equal(t, plugin.Pane{ID: "dashboard", Title: "Agentisan dashboard", Placement: "split", Command: []string{"bin/herdr-agentisan", "dashboard"}}, m.Panes[1])
+}
+
 func writeManifest(t *testing.T, body string) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "herdr-plugin.toml")
@@ -321,6 +341,15 @@ func TestManifestRejections(t *testing.T) {
 		// empty argument in a command.
 		"a pane title of spaces":                replace(`title = "btop"`, `title = "   "`),
 		"a pane command with an empty argument": replace(`command = ["btop"]`, `command = ["btop", ""]`),
+		// herdr 0.9.3's manifest pane has no split fields: a split's side is
+		// the open request's (direction, default right) and its size is not
+		// configurable (src/app/api/plugins/manifest.rs:71-86,
+		// src/app/api/plugins/panes.rs:111-117). herdr ignores an unknown
+		// key, so a direction here would silently do nothing; and it refuses
+		// a size on anything but a popup (manifest.rs:423-430).
+		"a split pane with a direction": validManifest + splitPane + `direction = "down"` + "\n",
+		"a split pane with a size":      validManifest + splitPane + `width = "40%"` + "\n",
+		"a split pane with a ratio":     validManifest + splitPane + `size = 40` + "\n",
 	}
 	for name, body := range tests {
 		t.Run(name, func(t *testing.T) {

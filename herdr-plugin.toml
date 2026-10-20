@@ -54,3 +54,18 @@ title = "btop"
 description = "System monitor, in a popup"
 placement = "popup"
 command = ["btop"]
+
+# The team dashboard (ADR-001 D5, A18): a split beside the focused pane,
+# reading the daemon's snapshots. herdr runs it in the plugin root, as it
+# does an action (herdr 0.9.3 src/app/api/plugins/panes.rs:329-337), and sets
+# HERDR_PLUGIN_STATE_DIR and HERDR_SOCKET_PATH, which name the daemon's socket. Opened with
+# `herdr plugin pane open --plugin nerdsrun.agentisan --entrypoint dashboard
+# --focus`, which the README binds to prefix+d. herdr 0.9.3 reads no
+# direction or size for a split from here: the open request picks the side
+# (right by default) and the size is herdr's.
+[[panes]]
+id = "dashboard"
+title = "Agentisan dashboard"
+description = "The team dashboard, read from the daemon"
+placement = "split"
+command = ["bin/herdr-agentisan", "dashboard"]

@@ -327,6 +327,9 @@ type PaneInfo struct {
 	// focused pane of the active tab of the active workspace. Every other
 	// pane, including the focused pane of a background tab, is false.
 	Focused bool `json:"focused"`
+	// Label is the label the user gave the pane; "" when it has none
+	// (src/api/schema/panes.rs:462).
+	Label string `json:"label"`
 	// Agent is the agent herdr detected in the pane, such as "claude"; ""
 	// for a plain shell (null in herdr's schema).
 	Agent string `json:"agent"`

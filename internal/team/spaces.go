@@ -36,6 +36,15 @@ type Spaces struct {
 	Project string
 }
 
+// GroupOrder is the order the spaces' groups are shown in: v12's working
+// order (herdr-dashboard-v12.py:21, without its herdr, which is not in the
+// model), then debugger, the seventh group (ADR-001 Context), where the
+// dashboard ranked it before A18. Groups it does not name follow by name
+// (Snapshot). Another resolver orders its own groups.
+func (Spaces) GroupOrder() []string {
+	return []string{"coders", "precheck", "qa", "codex", "research", "clerk", "debugger"}
+}
+
 // Resolve places each group space's panes in its group, and the boss
 // space's panes with the boss. A workspace herdr lists twice is placed once.
 func (s Spaces) Resolve(l Layout) []Place {
