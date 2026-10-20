@@ -61,8 +61,11 @@ var (
 	// but `tdaddy --version` does not exit 0 in the repo.
 	ErrTdaddyMissing = errors.New("tdaddy is not set up")
 	// ErrTdaddyTasks means the repo has no Taskfile, or its Taskfile cannot
-	// be read or lacks tdaddy:index or tdaddy:impact.
-	ErrTdaddyTasks = errors.New("the Taskfile has no tdaddy tasks")
+	// be read or parsed, or lacks tdaddy:index or tdaddy:impact.
+	ErrTdaddyTasks = errors.New("the repo's Taskfile is not set up for tdaddy")
+	// ErrTimeout means `tdaddy --version` gave no answer within the timeout
+	// and was killed. It comes wrapped in ErrTdaddyMissing.
+	ErrTimeout = errors.New("tdaddy timed out")
 )
 
 // System is what the check reads: the daemon's PATH, the repo's files, and a
@@ -83,13 +86,14 @@ func Host() System {
 }
 
 // Check is a spawn precondition for the repo at repo, the absolute path of a
-// project's repo. The workforce commands run one before they open a pane.
+// project's repo. `worker spawn` and `team up` (NERD-5254 part 3) are to run
+// one before they open a pane.
 type Check func(ctx context.Context, repo string) error
 
 var _ Check = HostCheck
 
-// HostCheck is Tdaddy against the daemon's own system: the Check a spawn
-// runs unless a test gives it another.
+// HostCheck is Tdaddy against the daemon's own system: the Check a spawn is
+// to run unless a test gives it another.
 func HostCheck(ctx context.Context, repo string) error {
 	return Tdaddy(ctx, repo, Host())
 }
@@ -101,7 +105,7 @@ func HostCheck(ctx context.Context, repo string) error {
 // one refusal says everything there is to fix.
 func Tdaddy(ctx context.Context, repo string, sys System) error {
 	if !filepath.IsAbs(repo) {
-		return fmt.Errorf("%w: %q is not an absolute path", ErrRepo, repo)
+		return fmt.Errorf("%w: %q is not an absolute path; give the project an absolute repo path", ErrRepo, repo)
 	}
 	gomod := filepath.Join(repo, "go.mod")
 	fi, err := sys.Stat(gomod)
@@ -109,9 +113,9 @@ func Tdaddy(ctx context.Context, repo string, sys System) error {
 	case errors.Is(err, fs.ErrNotExist):
 		return nil
 	case err != nil:
-		return fmt.Errorf("%w: %w", ErrRepo, err)
+		return fmt.Errorf("%w: %w; make the repo readable by the daemon", ErrRepo, err)
 	case fi.IsDir():
-		return fmt.Errorf("%w: %s is a directory", ErrRepo, gomod)
+		return fmt.Errorf("%w: %s is a directory, not a module file; remove or rename it", ErrRepo, gomod)
 	}
 	runs := tdaddyRuns(ctx, repo, sys)
 	if ctx.Err() != nil {
@@ -144,13 +148,13 @@ func hasTasks(repo string, sys System) error {
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("%w: %w", ErrTdaddyTasks, err)
+			return fmt.Errorf("%w: %w; make it readable by the daemon", ErrTdaddyTasks, err)
 		}
 		var tf struct {
 			Tasks map[string]yaml.Node `yaml:"tasks"`
 		}
 		if err := yaml.Unmarshal(raw, &tf); err != nil {
-			return fmt.Errorf("%w: %s does not parse: %w", ErrTdaddyTasks, path, err)
+			return fmt.Errorf("%w: %s does not parse: %w; fix it so `task --list-all` reads it", ErrTdaddyTasks, path, err)
 		}
 		var missing []string
 		for _, task := range []string{TaskIndex, TaskImpact} {
@@ -217,7 +221,7 @@ func (r Runner) Run(ctx context.Context, dir, bin string, args ...string) error 
 	case ctx.Err() != nil:
 		return fmt.Errorf("%s: %w", bin, ctx.Err())
 	case errors.Is(callCtx.Err(), context.DeadlineExceeded):
-		return fmt.Errorf("no answer within %v: %w", timeout, context.DeadlineExceeded)
+		return fmt.Errorf("%w: no answer within %v", ErrTimeout, timeout)
 	case err != nil:
 		if reason := firstLine(out.String()); reason != "" {
 			return fmt.Errorf("%w: %s", err, reason)

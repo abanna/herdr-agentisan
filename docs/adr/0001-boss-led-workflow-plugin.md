@@ -819,10 +819,10 @@ Budget: an agent pane carries `ctx`, `item`, `stage`, `handoff` and the three ba
 
   A repo without a `go.mod` is not checked. A10 asked only for tdaddy on the PATH. But a mise shim with no Go version set sits on the PATH and fails every run, as it did on the author's machine. So A10's check alone passed a setup in which `task tdaddy:impact` fails.
 - **The daemon's environment.** The check runs in the daemon, so it searches the PATH herdr started the daemon with. That can differ from what a worker's shell has after its rc files run. A fix to that PATH needs a daemon restart; a fix to the Taskfile does not.
-- **The run.** `tdaddy --version` runs in the repo, with the daemon's environment and a 10 s timeout. It runs as the leader of its own process group, which is killed whole on a timeout or a cancel. The error carries the first line of what it printed, cut to 200 bytes; for a mise shim, that line says how to fix it.
+- **The run.** `tdaddy --version` runs in the repo, with the daemon's environment and a 10 s timeout. It runs as the leader of its own process group, which is killed whole on a timeout or a cancel. The error carries the first line of what it printed, cut to 200 bytes; for a mise shim, that line names the problem (`No version is set for shim: tdaddy`).
 - **The Taskfile.** It is the first of Task's own file names found in the repo root, in Task's order: `Taskfile.yml`, `taskfile.yml`, `Taskfile.yaml`, `taskfile.yaml`, then the `.dist` form of each. That order was checked against Task 3.49.1. Only the names of the top-level tasks count: includes are not followed, and a task's commands are not read.
 - **The errors.**
-  - `ErrTdaddyMissing`: tdaddy is not on the PATH, or the run fails.
+  - `ErrTdaddyMissing`: tdaddy is not on the PATH, or the run fails. A run that times out is `ErrTimeout` as well, so a caller can tell it from its own deadline.
   - `ErrTdaddyTasks`: there is no Taskfile, it cannot be read or parsed, or a task is missing.
   - `ErrRepo`: the check could not tell whether the repo is a Go repo, because the path is relative or its `go.mod` cannot be stat'ed or is a directory. The spawn is refused then too.
 

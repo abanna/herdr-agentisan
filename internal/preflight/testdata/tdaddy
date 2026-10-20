@@ -40,6 +40,16 @@ long)
 	printf '%0300d\n' 0 >&2
 	exit 1
 	;;
+chatty)
+	yes tdaddy | head -n 200000 >&2
+	echo finished >&2
+	exit 0
+	;;
+orphan)
+	sleep 300 &
+	echo $! >"$d/child"
+	exit 0
+	;;
 hang)
 	sleep 300 &
 	echo $! >"$d/child"
