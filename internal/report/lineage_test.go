@@ -463,15 +463,15 @@ func TestProcCmdlineClasses(t *testing.T) {
 
 // TestSelfLineageChecksTheRealCodexHost: the real lineage carries a cmdline
 // reader, so the Codex host check reads every ancestor rather than refusing
-// unverified. Whether one is a Codex app-server depends on who runs the
-// tests, so either answer but "unverified" passes.
+// unverified. Whether a Codex TUI or app-server is among them depends on who
+// runs the tests, so any answer but "unverified" passes.
 func TestSelfLineageChecksTheRealCodexHost(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS != "linux" {
 		t.Skip("no /proc to read a lineage from")
 	}
 	err := report.SelfLineage(func(string) (string, bool) { return "", false }).CheckCodexHost()
-	if err != nil {
+	if err != nil && !errors.Is(err, report.ErrNoCodexHost) {
 		require.ErrorIs(t, err, report.ErrCodexDaemon)
 	}
 }
