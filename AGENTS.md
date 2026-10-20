@@ -119,21 +119,24 @@ exempts whatever is later added under that name.
   the plugin socket (D6) that answers `health`, `back` (A16: walk the
   focus history, un-zoom the pane left, then focus the target) and
   `snapshot`. Every poll it also rebuilds the team model, pushes `$team`
-  (`team.go`) and caches every team's snapshot, with the workspaces each
-  holds, which the `snapshot` op serves by project or workspace, so the op
-  never calls herdr (A18, A24, `snapshot.go`, with `SnapshotSource`, the
-  dashboard's client), and sends each status change since the last poll as
-  a workflow event (`events.go`). `daemon start` spawns a detached `daemon
-  run`; herdr's `[[startup]]` hook runs it, and the `daemon-restart` action
-  covers linking. Tests run daemons in process against herdrtest and a
-  scratch state dir, never the real ones.
+  and every agent pane's ctx display (`team.go`, A28) and caches every
+  team's snapshot, with the workspaces each holds, which the `snapshot` op
+  serves by project or workspace, so the op never calls herdr (A18, A24,
+  `snapshot.go`, with `SnapshotSource`, the dashboard's client), and sends
+  each status change since the last poll as a workflow event
+  (`events.go`). `daemon start` spawns a detached `daemon run`; herdr's
+  `[[startup]]` hook runs it, and the `daemon-restart` action covers
+  linking. Tests run daemons in process against herdrtest and a scratch
+  state dir, never the real ones.
 - `internal/team/` — the team domain model (ADR-001 D5, A17): project → group
   → logical worker → current pane, built from `pane.list`, `workspace.list`,
   `tab.list`, `agent.list` and `state.db`'s `workers` rows. A `Resolver` maps
   the layout onto it: `Spaces` for the ◆ spaces, with v12's group order, and
   `Tabs` for a team's one workspace and one tab per worker (A19). Also the
-  frozen `$team` format, and the model as a snapshot v1 in the resolver's
-  group order, with the in-memory stage clock (A18).
+  `$team` format and the ctx display's band tokens (A28), with the sidebar
+  rows that show them, `docs/config/herdr-sidebar.example.toml`, for herdr's
+  own config (`TestSidebarSnippet`), and the model as a snapshot v1 in the
+  resolver's group order, with the in-memory stage clock (A18).
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
   references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check.

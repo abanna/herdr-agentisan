@@ -99,13 +99,13 @@ func TestTabsResolverLabels(t *testing.T) {
 			switch tc.group {
 			case "":
 				assert.Equal(t, map[string]string{"w14": "(team)"}, teamPlaced(m), "not part of the model")
-				assert.Equal(t, []team.Token{{Target: team.Target{WorkspaceID: "w14"}, Value: "0 · ◐0 ●0"}}, tokens)
+				assert.Equal(t, []team.Token{{Target: team.Target{WorkspaceID: "w14"}, Value: "0 agents · 0 working · 0 ready"}}, tokens)
 			case "(boss)":
 				assert.Equal(t, map[string]string{"w14": "(team)", "w14:p1": "(boss)"}, teamPlaced(m))
-				assert.Equal(t, []team.Token{{Target: team.Target{WorkspaceID: "w14"}, Value: "0 · ◐0 ●0"}}, tokens, "the boss is not counted")
+				assert.Equal(t, []team.Token{{Target: team.Target{WorkspaceID: "w14"}, Value: "0 agents · 0 working · 0 ready"}}, tokens, "the boss is not counted")
 			default:
 				assert.Equal(t, map[string]string{"w14": "(team)", "w14:p1": tc.group}, teamPlaced(m))
-				assert.Equal(t, []team.Token{{Target: team.Target{WorkspaceID: "w14"}, Value: "1 · ◐1 ●0"}}, tokens)
+				assert.Equal(t, []team.Token{{Target: team.Target{WorkspaceID: "w14"}, Value: "1 agent · 1 working · 0 ready"}}, tokens)
 			}
 		})
 	}
@@ -275,9 +275,9 @@ func TestTabsTeamsResolveExactly(t *testing.T) {
 		},
 	}}, got)
 	assert.Equal(t, []team.Token{
-		{Target: w14, Value: "5 · ◐1 ●2 ⚠1 ⟳1"},
-		{Target: team.Target{WorkspaceID: "w20"}, Value: "0 · ◐0 ●0"},
-		{Target: wN, Value: "1 · ◐1 ●0"},
+		{Target: w14, Value: "5 agents · 1 working · 1 ready · 1 blocked"},
+		{Target: team.Target{WorkspaceID: "w20"}, Value: "0 agents · 0 working · 0 ready"},
+		{Target: wN, Value: "1 agent · 1 working · 0 ready"},
 	}, team.Tokens(got))
 
 	shuffled := l
@@ -313,5 +313,5 @@ func TestTabsPlacesOnlyItsOwnTabsOnce(t *testing.T) {
 	assert.Equal(t, []string{"coder"}, names, "another workspace's tab adds no group")
 	require.Len(t, m.Projects[0].Groups, 1)
 	assert.Len(t, m.Projects[0].Groups[0].Workers, 1, "a tab listed twice is placed once")
-	assert.Equal(t, []team.Token{{Target: team.Target{WorkspaceID: "w14"}, Value: "1 · ◐0 ●1"}}, team.Tokens(m))
+	assert.Equal(t, []team.Token{{Target: team.Target{WorkspaceID: "w14"}, Value: "1 agent · 0 working · 0 ready"}}, team.Tokens(m))
 }

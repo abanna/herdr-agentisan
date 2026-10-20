@@ -63,9 +63,9 @@ func (t Thresholds) colour(ctx int) color.Color {
 	}
 }
 
-// StatusIcon is the glyph drawn for a status. Working and idle match
-// ADR-001's frozen $team token (`N · ◐w ●i[ ⚠b][ ⟳r]`), so the sidebar and
-// the dashboard agree.
+// StatusIcon is the glyph drawn for a status. Working and idle are the
+// glyphs v12's $team used (`N · ◐w ●i[ ⚠b][ ⟳r]`, ADR-001 A17), before A28
+// spelled it out.
 func StatusIcon(s snapshot.Status) string {
 	switch s {
 	case snapshot.StatusWorking:
