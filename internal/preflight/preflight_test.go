@@ -161,7 +161,7 @@ func TestTdaddyClasses(t *testing.T) {
 		},
 		"go.mod cannot be checked": {
 			setup: func(f *fake) { f.statErr = map[string]error{repo + "/go.mod": denied} },
-			want:  []error{preflight.ErrRepo, fs.ErrPermission}, says: []string{"make the repo readable by the daemon"},
+			want:  []error{preflight.ErrRepo, fs.ErrPermission}, says: []string{"check the project's repo path: it must be a directory the daemon can read"},
 		},
 		"go.mod is a directory": {
 			setup: func(f *fake) { delete(f.files, repo+"/go.mod"); f.dirs = map[string]bool{repo + "/go.mod": true} },
@@ -216,7 +216,7 @@ func TestTdaddyClasses(t *testing.T) {
 			setup: func(f *fake) {
 				f.readErr = map[string]error{repo + "/Taskfile.yml": &fs.PathError{Op: "open", Path: repo + "/Taskfile.yml", Err: fs.ErrPermission}}
 			},
-			want: []error{preflight.ErrTdaddyTasks, fs.ErrPermission}, says: []string{"make it readable by the daemon"},
+			want: []error{preflight.ErrTdaddyTasks, fs.ErrPermission}, says: []string{"make it a regular file the daemon can read"},
 		},
 		"tdaddy missing and no tasks": {
 			setup: func(f *fake) { f.noBin = true; delete(f.files, repo+"/Taskfile.yml") },
@@ -513,6 +513,21 @@ func TestRunnerBoundsAnOrphansPipes(t *testing.T) {
 	assert.Less(t, time.Since(start), slow)
 }
 
+// TestRunnerCallersDeadlineIsNotATimeout: when the caller's own deadline
+// ends the run before the Runner's timeout, the error is the caller's
+// deadline, not ErrTimeout.
+func TestRunnerCallersDeadlineIsNotATimeout(t *testing.T) {
+	t.Parallel()
+	bin, r, rec := standIn(t, "hang")
+	r.Timeout = slow
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	defer cancel()
+	err := r.Run(ctx, t.TempDir(), bin, "--version")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.NotErrorIs(t, err, preflight.ErrTimeout)
+	childGone(t, rec)
+}
+
 // TestRunnerInheritsTheEnvironment: with no Env, tdaddy gets the daemon's
 // own environment.
 func TestRunnerInheritsTheEnvironment(t *testing.T) {
@@ -573,7 +588,7 @@ func TestTdaddyOnARealRepo(t *testing.T) {
 				require.NoError(t, os.WriteFile(f, nil, 0o600))
 				return f
 			},
-			want: []error{preflight.ErrRepo}, says: "not a directory",
+			want: []error{preflight.ErrRepo}, says: "not a directory; check the project's repo path: it must be a directory the daemon can read",
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -604,6 +619,27 @@ func TestTdaddyOnARealRepo(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.says)
 		})
 	}
+}
+
+// TestTdaddyTaskfileThatIsADirectory: a directory at the Taskfile's name
+// cannot be read, so the repo's Taskfile is not set up, and the message
+// says to make it a file.
+func TestTdaddyTaskfileThatIsADirectory(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module m\n"), 0o600))
+	require.NoError(t, os.Mkdir(filepath.Join(dir, "Taskfile.yml"), 0o700))
+	bin, r, _ := standIn(t, "ok")
+	sys := preflight.System{
+		LookPath: func(string) (string, error) { return bin, nil },
+		Stat:     os.Stat,
+		ReadFile: os.ReadFile,
+		Run:      r.Run,
+	}
+	err := preflight.Tdaddy(t.Context(), dir, sys)
+	require.ErrorIs(t, err, preflight.ErrTdaddyTasks)
+	assert.NotErrorIs(t, err, preflight.ErrTdaddyMissing)
+	assert.Contains(t, err.Error(), "is a directory; make it a regular file the daemon can read")
 }
 
 // TestHostCheck: the host system is complete, and HostCheck passes a repo

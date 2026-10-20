@@ -63,8 +63,9 @@ var (
 	// ErrTdaddyTasks means the repo has no Taskfile, or its Taskfile cannot
 	// be read or parsed, or lacks tdaddy:index or tdaddy:impact.
 	ErrTdaddyTasks = errors.New("the repo's Taskfile is not set up for tdaddy")
-	// ErrTimeout means `tdaddy --version` gave no answer within the timeout
-	// and was killed. It comes wrapped in ErrTdaddyMissing.
+	// ErrTimeout means `tdaddy --version` gave no answer within the Runner's
+	// timeout and was killed. Runner.Run returns it as it is; Tdaddy wraps it
+	// in ErrTdaddyMissing.
 	ErrTimeout = errors.New("tdaddy timed out")
 )
 
@@ -113,7 +114,7 @@ func Tdaddy(ctx context.Context, repo string, sys System) error {
 	case errors.Is(err, fs.ErrNotExist):
 		return nil
 	case err != nil:
-		return fmt.Errorf("%w: %w; make the repo readable by the daemon", ErrRepo, err)
+		return fmt.Errorf("%w: %w; check the project's repo path: it must be a directory the daemon can read", ErrRepo, err)
 	case fi.IsDir():
 		return fmt.Errorf("%w: %s is a directory, not a module file; remove or rename it", ErrRepo, gomod)
 	}
@@ -148,7 +149,7 @@ func hasTasks(repo string, sys System) error {
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("%w: %w; make it readable by the daemon", ErrTdaddyTasks, err)
+			return fmt.Errorf("%w: %w; make it a regular file the daemon can read", ErrTdaddyTasks, err)
 		}
 		var tf struct {
 			Tasks map[string]yaml.Node `yaml:"tasks"`
