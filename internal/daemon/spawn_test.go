@@ -3,6 +3,7 @@ package daemon_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -95,15 +96,24 @@ func helperModes() {
 			LockWait: time.Second, Poll: 20 * time.Millisecond, Logger: zerolog.Nop(),
 		})
 	}()
-	deadline := time.Now().Add(5 * time.Second)
+	// ready, as for a daemon in the test process: this one opens a fresh
+	// state.db too, whose migrations fsync. Under the package's own disk load
+	// that has outlasted a literal 5 s, stalled in fsync (NERD-5335).
+	deadline := time.Now().Add(ready)
 	for {
 		if _, err := daemon.Health(ctx, p.Socket); err == nil {
 			break
 		}
+		select {
+		case err := <-done:
+			fmt.Fprintln(os.Stderr, "the daemon stopped before it answered health:", err)
+			os.Exit(8)
+		case <-time.After(10 * time.Millisecond):
+		}
 		if time.Now().After(deadline) {
+			fmt.Fprintln(os.Stderr, "the daemon never answered health within", ready)
 			os.Exit(6)
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
 	w, err := daemon.NewLogWriter(p.Log, 100)
 	if err != nil {
@@ -225,6 +235,10 @@ func TestCreatedFilesKeepTheirModesUnderAnyUmask(t *testing.T) {
 
 	cmd := execHelper(t, "modes", "DAEMON_TEST_DIR="+dir)
 	raw, err := cmd.Output()
+	var exit *exitError
+	if errors.As(err, &exit) {
+		t.Fatalf("helper failed: %v: %s", err, exit.Stderr)
+	}
 	require.NoError(t, err, "helper failed")
 	var modes map[string]string
 	require.NoError(t, json.Unmarshal(raw, &modes))
