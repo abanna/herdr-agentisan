@@ -25,8 +25,9 @@ type Member struct {
 	// Agent is the agent herdr detects, such as "claude"; "" for a shell.
 	Agent  string `json:"agent"`
 	Status string `json:"status"`
-	// Ctx is the context used, from the ctx token; null when absent or not
-	// a percentage, never 0 for unknown.
+	// Ctx is the context used, from the ctx token; null when absent, not a
+	// percentage or on a pane herdr detects no agent in (ADR-001 A27), never
+	// 0 for unknown.
 	Ctx   *int   `json:"ctx"`
 	Item  string `json:"item"`
 	Stage string `json:"stage"`

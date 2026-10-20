@@ -188,7 +188,8 @@ func TestSnapshotRowStatus(t *testing.T) {
 
 // TestSnapshotRowCtx: ctx is the token as `report statusline` writes it, a
 // bare integer from 0 to 100 (ADR-001 token contract). Anything else, from
-// another writer or a stale format, is left out rather than guessed at.
+// another writer or a stale format, is left out rather than guessed at, and
+// so is a ctx on a pane herdr detects no agent in (A27).
 func TestSnapshotRowCtx(t *testing.T) {
 	t.Parallel()
 
@@ -229,6 +230,11 @@ func TestSnapshotRowCtx(t *testing.T) {
 	t.Run("no ctx token", func(t *testing.T) {
 		t.Parallel()
 		assert.Nil(t, oneRow(t, pane("wN:p1", "", "claude", "working", nil), "pee01").Ctx)
+	})
+	t.Run("no agent detected", func(t *testing.T) {
+		t.Parallel()
+		row := oneRow(t, pane("wN:p1", "", "", "unknown", map[string]string{"ctx": "42"}), "pee01")
+		assert.Nil(t, row.Ctx, "a ctx a Codex left in a pane agent.list still names is ignored (ADR-001 A27)")
 	})
 }
 
