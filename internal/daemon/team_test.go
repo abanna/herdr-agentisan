@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,12 +24,13 @@ import (
 )
 
 // teamHerdr is a fakeHerdr that also answers what the team poll asks: a
-// layout of workspaces, panes and agents, and workspace.report_metadata,
-// which it refuses for the workspaces in refuse.
+// layout of workspaces, tabs, panes and agents, and
+// workspace.report_metadata, which it refuses for the workspaces in refuse.
 type teamHerdr struct {
 	*fakeHerdr
 	mu         sync.Mutex
 	workspaces []herdr.WorkspaceInfo
+	tabs       []map[string]any
 	panes      []map[string]any
 	// agents is agent.list's answer; agentsErr makes it fail instead.
 	agents    []map[string]any
@@ -44,7 +46,7 @@ func newTeamHerdr(t *testing.T) *teamHerdr {
 	workspaces, panes := liveSpaces()
 	th := &teamHerdr{
 		fakeHerdr:  &fakeHerdr{t: t, path: filepath.Join(shortDir(t), "h.sock"), streams: make(chan *stream, 64)},
-		workspaces: workspaces, panes: panes, refuse: map[string]bool{},
+		workspaces: workspaces, tabs: []map[string]any{}, panes: panes, refuse: map[string]bool{},
 	}
 	th.h = th.serveTeam(th.serve(22))
 	th.srv = herdrtest.StartAt(t, th.path, th.h)
@@ -69,6 +71,10 @@ func (th *teamHerdr) serveTeam(normal herdrtest.Handler) herdrtest.Handler {
 			defer th.mu.Unlock()
 			// A copy: the server encodes the reply after the lock is released.
 			return herdrtest.Reply{Result: map[string]any{"type": "workspace_list", "workspaces": slices.Clone(th.workspaces)}}
+		case "tab.list":
+			th.mu.Lock()
+			defer th.mu.Unlock()
+			return herdrtest.Reply{Result: map[string]any{"type": "tab_list", "tabs": slices.Clone(th.tabs)}}
 		case "agent.list":
 			th.mu.Lock()
 			defer th.mu.Unlock()
@@ -132,7 +138,7 @@ func lists(srv *herdrtest.Server) int {
 }
 
 // teamCalls returns the requests srv got that only the team poll makes:
-// workspace.list and the pushes. The daemon's own client (HerdrClient) has
+// workspace.list, tab.list and the pushes. The daemon's own client (HerdrClient) has
 // neither. pane.list is left out because focus lists the panes too: focus,
 // like Run's ping, has no Dialed hook and finds a replaced socket by its own
 // identity check, so a call of theirs dialled just after a swap can still
@@ -143,7 +149,7 @@ func lists(srv *herdrtest.Server) int {
 func teamCalls(srv *herdrtest.Server) []string {
 	var out []string
 	for _, r := range srv.Requests() {
-		if r.Method == "workspace.list" || r.Method == "agent.list" || r.Method == "workspace.report_metadata" {
+		if r.Method == "workspace.list" || r.Method == "tab.list" || r.Method == "agent.list" || r.Method == "workspace.report_metadata" {
 			out = append(out, r.Method)
 		}
 	}
@@ -309,13 +315,17 @@ func (th *teamHerdr) replace() {
 func TestTeamPushIgnoresAServerReplacedMidPoll(t *testing.T) {
 	t.Parallel()
 
-	for name, during := range map[string]string{
-		"while the panes are listed":      "pane.list",
-		"while the workspaces are listed": "workspace.list",
-		"while the agents are listed":     "agent.list",
+	// A tabs team, so the poll lists tabs too.
+	tabsTeam := "[projects.ha]\nrepo = \"/x\"\nshort = \"ha\"\nlayout = \"tabs\"\n"
+	for name, tc := range map[string]struct{ during, config string }{
+		"while the panes are listed":      {during: "pane.list"},
+		"while the workspaces are listed": {during: "workspace.list"},
+		"while the tabs are listed":       {during: "tab.list", config: tabsTeam},
+		"while the agents are listed":     {during: "agent.list"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
+			during := tc.during
 			th := newTeamHerdr(t)
 			original := th.srv
 			swap, swapped := make(chan struct{}), make(chan struct{})
@@ -326,7 +336,7 @@ func TestTeamPushIgnoresAServerReplacedMidPoll(t *testing.T) {
 					<-swapped // every such call waits, focus's pane.list included
 				}
 			}
-			o := teamOpts(t, shortDir(t), th, "")
+			o := teamOpts(t, shortDir(t), th, configDir(t, tc.config))
 			o.Poll = time.Hour // only the poll at start runs
 			r := run(t, o)
 
@@ -409,11 +419,14 @@ func TestTeamPushReadsTheConfiguredProject(t *testing.T) {
 		want     string
 		wantLogs []string
 	}{
-		"no config dir":       {file: "nodir", want: ""},
-		"no config file":      {want: ""},
-		"the key":             {file: "[spaces]\nproject = \"b\"\n[projects.a]\nrepo = \"/x\"\n[projects.b]\nrepo = \"/y\"\n", want: "b"},
-		"the sole project":    {file: "[projects.a]\nrepo = \"/x\"\n", want: "a"},
-		"several, no key":     {file: "[projects.a]\nrepo = \"/x\"\n[projects.b]\nrepo = \"/y\"\n", want: ""},
+		"no config dir":    {file: "nodir", want: ""},
+		"no config file":   {want: ""},
+		"the key":          {file: "[spaces]\nproject = \"b\"\n[projects.a]\nrepo = \"/x\"\nshort = \"a\"\n[projects.b]\nrepo = \"/y\"\n", want: "b"},
+		"the sole project": {file: "[projects.a]\nrepo = \"/x\"\n", want: "a"},
+		"several, no key":  {file: "[projects.a]\nrepo = \"/x\"\nshort = \"a\"\n[projects.b]\nrepo = \"/y\"\nshort = \"b\"\n", want: ""},
+		"tabs teams, no short": {
+			file: "[projects.a]\nrepo = \"/x\"\n[projects.b]\nrepo = \"/y\"\n", want: "", wantLogs: []string{`"level":"error"`, "projects.a.short"},
+		},
 		"an unknown project":  {file: "[spaces]\nproject = \"c\"\n[projects.a]\nrepo = \"/x\"\n", want: "", wantLogs: []string{`"level":"error"`, "no such project"}},
 		"an unsupported file": {file: "-", want: "", wantLogs: []string{`"level":"error"`, "schema_version"}},
 		"a non-ASCII project": {file: "[spaces]\nproject = \"ä\"\n[projects.a]\nrepo = \"/x\"\n", want: "", wantLogs: []string{`"level":"error"`}},
@@ -463,4 +476,111 @@ func (l *lockedLog) String() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.b.String()
+}
+
+// configDir is a config dir holding file as herdr-agentisan.toml after its
+// schema_version; "" for a dir with no file.
+func configDir(t *testing.T, file string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if file != "" {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte("schema_version = 1\n"+file), 0o600))
+	}
+	return dir
+}
+
+// TestRunPushesTeamToEachTabsTeam is A19's $team on the team model, beside
+// the ◆ spaces: each tabs team's workspace gets one count of its typed
+// worker tabs, the boss's tab and tabs that do not parse left out; a team
+// with only its boss's tab counts zero. A second workspace with the team's
+// label is not the team: it gets nothing and is logged once, not every poll.
+func TestRunPushesTeamToEachTabsTeam(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	pane := func(id, ws, tab, status string) map[string]any {
+		return map[string]any{"pane_id": id, "workspace_id": ws, "tab_id": tab, "agent": "claude", "agent_status": status, "focused": false}
+	}
+	tab := func(id, ws, label string) map[string]any {
+		return map[string]any{"tab_id": id, "workspace_id": ws, "number": 1, "label": label, "focused": false, "pane_count": 1, "agent_status": "idle"}
+	}
+	th.mu.Lock()
+	th.workspaces = append(th.workspaces,
+		herdr.WorkspaceInfo{WorkspaceID: "w14", Label: "herdr-agentisan"},
+		herdr.WorkspaceInfo{WorkspaceID: "w15", Label: "herdr-agentisan"},
+		herdr.WorkspaceInfo{WorkspaceID: "w20", Label: "assay"},
+	)
+	th.tabs = []map[string]any{
+		tab("w14:t1", "w14", "ha-boss"), tab("w14:t2", "w14", "ha-coder-1"), tab("w14:t3", "w14", "ha-qa-1"),
+		tab("w14:t4", "w14", "notes"), tab("w15:t1", "w15", "ha-coder-2"), tab("w20:t1", "w20", "as-boss"),
+	}
+	th.panes = append(th.panes,
+		pane("w14:p1", "w14", "w14:t1", "working"), pane("w14:p2", "w14", "w14:t2", "working"),
+		pane("w14:p3", "w14", "w14:t3", "blocked"), pane("w14:p4", "w14", "w14:t4", "working"),
+		pane("w15:p1", "w15", "w15:t1", "working"), pane("w20:p1", "w20", "w20:t1", "idle"),
+	)
+	th.mu.Unlock()
+	var logs lockedLog
+	o := teamOpts(t, shortDir(t), th, configDir(t, `[spaces]
+project = "agentisan"
+[projects.agentisan]
+repo = "/x"
+[projects.herdr-agentisan]
+repo = "/y"
+short = "ha"
+[projects.assay]
+repo = "/z"
+short = "as"
+`))
+	o.Logger = zerolog.New(&logs)
+	run(t, o)
+
+	polled(t, th.srv, 3)
+	got := pushes(t, th.srv)
+	assert.ElementsMatch(t, []string{"wN", "wY", "w0", "w14", "w20"}, slices.Collect(maps.Keys(got)), "the group spaces and each team's workspace")
+	want := map[string]string{
+		"w14": `{"workspace_id":"w14","source":"agentisan","tokens":{"team":"2 \u00b7 \u25d01 \u25cf0 \u26a01"},"ttl_ms":9000}`,
+		"w20": `{"workspace_id":"w20","source":"agentisan","tokens":{"team":"0 \u00b7 \u25d00 \u25cf0"},"ttl_ms":9000}`,
+	}
+	maps.Copy(want, wantPushes)
+	for ws, params := range got {
+		for _, p := range params {
+			assert.JSONEq(t, want[ws], p)
+		}
+	}
+	assert.Equal(t, 1, strings.Count(logs.String(), `"ignored":["w15"]`), "the duplicate is logged once: %s", logs.String())
+	assert.Contains(t, logs.String(), `"tabs_teams":["assay","herdr-agentisan"]`)
+}
+
+// TestTeamPollCostsAFailedTabList: with a tabs team configured, a tab.list
+// herdr answers wrongly costs the poll, as a failed pane or workspace list
+// does: nothing is pushed, the spaces included, it is logged, and the next
+// poll tries again.
+func TestTeamPollCostsAFailedTabList(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	th.mu.Lock()
+	th.tabs = nil // tab_list with no tabs: a protocol error
+	th.mu.Unlock()
+	var logs lockedLog
+	o := teamOpts(t, shortDir(t), th, configDir(t, "[projects.ha]\nrepo = \"/x\"\nshort = \"ha\"\nlayout = \"tabs\"\n"))
+	o.Logger = zerolog.New(&logs)
+	r := run(t, o)
+
+	polled(t, th.srv, 2)
+	assert.Empty(t, pushes(t, th.srv))
+	assert.Contains(t, logs.String(), "team poll: list tabs")
+	assert.True(t, r.alive())
+}
+
+// TestTeamPollListsNoTabsWithoutATabsTeam: with no tabs team configured the
+// poll never sends tab.list, so a herdr whose tab.list fails cannot cost the
+// spaces' poll.
+func TestTeamPollListsNoTabsWithoutATabsTeam(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	run(t, teamOpts(t, shortDir(t), th, ""))
+	polled(t, th.srv, 2)
+	for _, r := range th.srv.Requests() {
+		assert.NotEqual(t, "tab.list", r.Method, "no tabs team, no tab.list")
+	}
 }
