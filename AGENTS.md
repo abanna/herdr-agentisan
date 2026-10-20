@@ -116,8 +116,9 @@ exempts whatever is later added under that name.
   the plugin socket (D6) that answers `health`, `back` (A16: walk the
   focus history, un-zoom the pane left, then focus the target) and
   `snapshot`. Every poll it also rebuilds the team model, pushes `$team`
-  (`team.go`) and caches the snapshot the `snapshot` op serves, so the op
-  never calls herdr (A18, `snapshot.go`, with `SnapshotSource`, the
+  (`team.go`) and caches every team's snapshot, with the workspaces each
+  holds, which the `snapshot` op serves by project or workspace, so the op
+  never calls herdr (A18, A24, `snapshot.go`, with `SnapshotSource`, the
   dashboard's client). `daemon start` spawns a detached `daemon run`;
   herdr's `[[startup]]` hook runs it, and the `daemon-restart` action covers
   linking. Tests run daemons in process against herdrtest and a scratch

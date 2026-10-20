@@ -17,8 +17,9 @@ import (
 
 // TeamOptions turn on the team poll (D3, D4, D5): on start and every poll
 // after, the daemon rebuilds the team model from herdr and state.db, pushes
-// `$team` to every group target and tabs team, and caches the snapshot the
-// snapshot op serves (A18). `daemon run` always sets them.
+// `$team` to every group target and tabs team, and caches every team's
+// snapshot, which the snapshot op serves (A18, A24). `daemon run` always
+// sets them.
 type TeamOptions struct {
 	// ConfigDir holds herdr-agentisan.toml (HERDR_PLUGIN_CONFIG_DIR). The
 	// poll reads every project's team from it once, when it starts (A19): a
@@ -144,11 +145,12 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 
 // pushTeam is one poll: it lists panes, workspaces, with a tabs team
 // configured tabs, and agents; builds the model with state.db's workers
-// rows; caches the snapshot of it; and pushes each group target and tabs
-// team its `$team`. A failed pane, workspace or tab list costs the poll; a
-// failed agent list costs only the snapshot, which `$team` does not need, so
-// the last one built with names stays served; a failed push is logged and
-// the others go on. It returns ErrHerdrGone, and pushes nothing more, once a
+// rows; caches every team's snapshot, with the workspaces each team holds
+// (A24); and pushes each group target and tabs team its `$team`. A failed
+// pane, workspace or tab list costs the poll; a failed agent list costs only
+// the snapshots, which `$team` does not need, so the last ones built with
+// names stay served, teams and index alike; a failed push is logged and the
+// others go on. It returns ErrHerdrGone, and pushes nothing more, once a
 // call finds the socket no longer names the daemon's server.
 func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, tp teamPoll) error {
 	panes, err := c.ListPanes(ctx)
@@ -182,9 +184,8 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	if agentsErr == nil {
 		now := o.Now()
 		tp.stages.Observe(m, now)
-		snap := team.Snapshot(m, tp.cfg.spaces.Project, now, tp.stages)
-		if err := tp.cache.store(snap); err != nil {
-			o.Logger.Error().Err(err).Msg("team poll: cache the snapshot; the last one stays served")
+		if err := tp.cache.store(m, tp.cfg.spaces.Project, now, tp.stages); err != nil {
+			o.Logger.Error().Err(err).Msg("team poll: cache the snapshots; a team too large to serve keeps its last one")
 		}
 	}
 	for _, t := range team.Tokens(m) {

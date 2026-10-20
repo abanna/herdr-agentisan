@@ -69,6 +69,8 @@ func (e *RequestError) Is(target error) bool {
 		return target == ErrHerdrCall
 	case codeNotReady:
 		return target == ErrNotReady
+	case codeNoTeam:
+		return target == ErrNoTeam
 	}
 	return false
 }
@@ -116,15 +118,16 @@ type server struct {
 	health func() HealthInfo
 	// back runs the back op.
 	back func() (BackResult, error)
-	// snapshot is the last snapshot the team poll built, encoded.
-	snapshot func() (json.RawMessage, error)
+	// snapshot is the selected team's last snapshot the team poll built,
+	// encoded.
+	snapshot func(Selector) (json.RawMessage, error)
 	log      zerolog.Logger
 	wg       sync.WaitGroup
 }
 
 // listen binds the daemon socket, replacing a stale one: only the lock holder
 // calls it. The socket is the owner's only.
-func listen(path string, health func() HealthInfo, back func() (BackResult, error), snapshot func() (json.RawMessage, error), log zerolog.Logger) (*server, error) {
+func listen(path string, health func() HealthInfo, back func() (BackResult, error), snapshot func(Selector) (json.RawMessage, error), log zerolog.Logger) (*server, error) {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("remove stale socket %s: %w", path, err)
 	}
@@ -203,10 +206,16 @@ func (s *server) dispatch(line []byte, readErr error) response {
 		return response{OK: true, Data: data}
 	case "snapshot":
 		// The cached bytes: the op never calls herdr, so it is cheap however
-		// often a dashboard asks (D3).
-		data, err := s.snapshot()
+		// often a dashboard asks (D3). Args it does not know are ignored.
+		var sel Selector
+		if len(req.Args) > 0 && string(req.Args) != "null" {
+			if err := json.Unmarshal(req.Args, &sel); err != nil {
+				return refuse(codeBadRequest, "snapshot args: "+err.Error())
+			}
+		}
+		data, err := s.snapshot(sel)
 		if err != nil {
-			return refuse(codeNotReady, err.Error())
+			return refuse(snapshotCode(err), err.Error())
 		}
 		return response{OK: true, Data: data}
 	default:
@@ -260,8 +269,18 @@ func exchangeFailed(ctx context.Context, op string, err error) error {
 	return fmt.Errorf("%w: %s: %w", ErrUnavailable, op, err)
 }
 
-// call sends one request and returns the data of an ok answer.
+// call sends one request with no args and returns the data of an ok answer.
 func call(ctx context.Context, socket, op string) (json.RawMessage, error) {
+	return callArgs(ctx, socket, op, struct{}{})
+}
+
+// callArgs sends one request with args, encoded as one JSON object, and
+// returns the data of an ok answer.
+func callArgs(ctx context.Context, socket, op string, args any) (json.RawMessage, error) {
+	rawArgs, err := json.Marshal(args)
+	if err != nil {
+		return nil, fmt.Errorf("encode %s args: %w", op, err)
+	}
 	ctx, cancel := context.WithTimeout(ctx, ioTimeout)
 	defer cancel()
 	var d net.Dialer
@@ -277,7 +296,7 @@ func call(ctx context.Context, socket, op string) (json.RawMessage, error) {
 	// dashboard quitting never waits out a wedged daemon.
 	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
 	defer stop()
-	raw, _ := json.Marshal(request{V: protocolVersion, Op: op, Args: json.RawMessage(`{}`)})
+	raw, _ := json.Marshal(request{V: protocolVersion, Op: op, Args: rawArgs})
 	if _, err := conn.Write(append(raw, '\n')); err != nil {
 		return nil, exchangeFailed(ctx, op, err)
 	}

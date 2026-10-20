@@ -24,6 +24,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
+	"github.com/abanna/herdr-agentisan/internal/team"
 )
 
 // t0 is the instant the snapshot tests' clock starts at.
@@ -503,6 +504,12 @@ func TestSnapshotSourceClasses(t *testing.T) {
 			},
 			want: []error{daemon.ErrNotReady, daemon.ErrRequest}, contains: "daemon starting",
 		},
+		"no such team": {
+			sock: func(t *testing.T) string {
+				return serveOnce(t, `{"ok":false,"error":{"code":"no_team","message":"workspace w2 is no team's"}}`+"\n")
+			},
+			want: []error{daemon.ErrNoTeam, daemon.ErrRequest}, contains: "workspace w2 is no team's",
+		},
 		// A daemon from before the op answers unknown_op.
 		"an older daemon": {
 			sock: func(t *testing.T) string {
@@ -691,4 +698,440 @@ func TestSnapshotOpServesConcurrentReaders(t *testing.T) {
 	for err := range errs {
 		require.NoError(t, err)
 	}
+}
+
+// everyTeamConfig is the ◆ spaces' project, coloured, and two tabs teams,
+// one coloured and one not.
+const everyTeamConfig = `[spaces]
+project = "agentisan"
+[projects.agentisan]
+repo = "/x"
+color = "#7c3aed"
+[projects.alpha]
+repo = "/y"
+short = "al"
+color = "#16a34a"
+[projects.beta]
+repo = "/z"
+short = "be"
+`
+
+// tabPane is a pane in a tab, as pane.list answers it.
+func tabPane(id, ws, tab, agent, status string, tokens map[string]string) map[string]any {
+	p := teamPane(id, ws, agent, status, "", tokens)
+	p["tab_id"] = tab
+	return p
+}
+
+// tabOf is a tab as tab.list answers it.
+func tabOf(id, ws, label string) map[string]any {
+	return map[string]any{"tab_id": id, "workspace_id": ws, "number": 1, "label": label, "focused": false, "pane_count": 1, "agent_status": "idle"}
+}
+
+// everyTeam serves fullTeam's ◆ spaces beside two tabs teams: alpha in w14,
+// with its boss, a reviewer, a coder and a tab outside the model; beta in
+// w20, with a librarian and a researcher and no boss. Each team's types are
+// listed out of their working order, and out of name order too.
+func everyTeam(th *teamHerdr) {
+	ws, panes, agents := fullTeam()
+	ws = append(ws, herdr.WorkspaceInfo{WorkspaceID: "w14", Label: "alpha"}, herdr.WorkspaceInfo{WorkspaceID: "w20", Label: "beta"})
+	panes = append(panes,
+		tabPane("w14:p1", "w14", "w14:t1", "claude", "working", nil),
+		tabPane("w14:p2", "w14", "w14:t2", "claude", "idle", map[string]string{"ctx": "12"}),
+		tabPane("w14:p3", "w14", "w14:t3", "claude", "working", map[string]string{"ctx": "50", "item": "NERD-5285", "stage": "build_test"}),
+		tabPane("w14:p4", "w14", "w14:t4", "", "unknown", nil),
+		tabPane("w20:p1", "w20", "w20:t1", "claude", "blocked", nil),
+		tabPane("w20:p2", "w20", "w20:t2", "codex", "working", nil),
+	)
+	agents = append(agents, named("w14:p1", "al-boss"), named("w14:p2", "al-review-1"), named("w14:p3", "al-coder-1"), named("w20:p2", "be-research-1"))
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	th.workspaces, th.panes, th.agents = ws, panes, agents
+	th.tabs = []map[string]any{
+		tabOf("w14:t1", "w14", "al-boss"), tabOf("w14:t2", "w14", "al-review-1"),
+		tabOf("w14:t3", "w14", "al-coder-1"), tabOf("w14:t4", "w14", "notes"),
+		tabOf("w20:t1", "w20", "be-librarian-1"), tabOf("w20:t2", "w20", "be-research-1"),
+	}
+}
+
+// wantTeams is everyTeam's snapshot of each team at t0, by hand: each team in
+// its own resolver's group order and colour.
+func wantTeams() map[string]snapshot.Snapshot {
+	return map[string]snapshot.Snapshot{
+		"agentisan": wantFullTeam(),
+		"alpha": {
+			V: 1, At: t0, Team: "alpha", Project: &snapshot.Project{Color: "#16a34a"},
+			Boss: &snapshot.Boss{Agent: snapshot.Agent{Name: "al-boss", PaneID: "w14:p1", Status: "working"}},
+			Groups: []snapshot.Group{
+				{Name: "coder", Agents: []snapshot.Agent{
+					{Name: "al-coder-1", PaneID: "w14:p3", Status: "working", Ctx: new(50), Item: "NERD-5285", Stage: "build_test", StageStartedAt: new(t0)},
+				}},
+				{Name: "review", Agents: []snapshot.Agent{{Name: "al-review-1", PaneID: "w14:p2", Status: "idle", Ctx: new(12)}}},
+			},
+		},
+		"beta": {
+			V: 1, At: t0, Team: "beta",
+			Groups: []snapshot.Group{
+				{Name: "research", Agents: []snapshot.Agent{{Name: "be-research-1", PaneID: "w20:p2", Status: "working"}}},
+				{Name: "librarian", Agents: []snapshot.Agent{{Name: "w20:p1", Unnamed: true, PaneID: "w20:p1", Status: "blocked"}}},
+			},
+		},
+	}
+}
+
+// everyTeamDaemon runs a daemon on everyTeam at t0 and waits until it serves
+// all three teams; it returns the daemon's socket.
+func everyTeamDaemon(t *testing.T) (*teamHerdr, string) {
+	t.Helper()
+	th := newTeamHerdr(t)
+	everyTeam(th)
+	dir := shortDir(t)
+	o := teamOpts(t, dir, th, configDir(t, everyTeamConfig))
+	o.Now = func() time.Time { return t0 }
+	run(t, o)
+	sock := socketPath(t, dir, th.path)
+	served(t, sock, anySnapshot)
+	require.Eventually(t, func() bool {
+		_, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{Project: "beta"})
+		return err == nil
+	}, ready, 5*time.Millisecond, "the daemon never served the tabs teams")
+	return th, sock
+}
+
+// snapshotOp sends the snapshot op with args, a JSON value or "" for none,
+// and returns the answer's data exactly as sent, or its refusal code.
+func snapshotOp(t *testing.T, sock, args string) (json.RawMessage, string) {
+	t.Helper()
+	line := `{"v":1,"op":"snapshot"}`
+	if args != "" {
+		line = `{"v":1,"op":"snapshot","args":` + args + `}`
+	}
+	conn, err := net.Dial("unix", sock)
+	require.NoError(t, err)
+	defer conn.Close() //nolint:errcheck // test connection
+	_, err = conn.Write([]byte(line + "\n"))
+	require.NoError(t, err)
+	raw, err := bufio.NewReader(conn).ReadBytes('\n')
+	require.NoError(t, err)
+	var resp struct {
+		OK    bool            `json:"ok"`
+		Data  json.RawMessage `json:"data"`
+		Error *struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &resp))
+	if !resp.OK {
+		require.NotNil(t, resp.Error)
+		return nil, resp.Error.Code
+	}
+	return resp.Data, ""
+}
+
+// TestSnapshotOpServesEveryTeam is A24's daemon: one poll builds a snapshot
+// of every team, the ◆ spaces' and each tabs team's, and the op serves each
+// byte for byte as the snapshot v1 encoding of that team, in its own group
+// order and colour, with only its own panes.
+func TestSnapshotOpServesEveryTeam(t *testing.T) {
+	t.Parallel()
+	_, sock := everyTeamDaemon(t)
+
+	for project, want := range wantTeams() {
+		data, code := snapshotOp(t, sock, fmt.Sprintf(`{"project":%q}`, project))
+		require.Empty(t, code, project)
+		wantRaw, err := json.Marshal(want)
+		require.NoError(t, err)
+		assert.Equal(t, string(wantRaw), string(data), "team %s, byte for byte", project)
+		got, err := snapshot.Decode(bytes.NewReader(data))
+		require.NoError(t, err, "a strict snapshot v1 document")
+		assert.Equal(t, want, got)
+	}
+}
+
+// TestSnapshotOpSelectsTheTeam walks the op's args (A24): a project, which
+// wins over a workspace; a workspace, through the index of every team's
+// workspaces, ◆ boss and ◆ herdr included; neither, which is the ◆ spaces'
+// project as before; and what selects no team, which is no_team, matched by
+// ErrNoTeam, never another team's snapshot.
+func TestSnapshotOpSelectsTheTeam(t *testing.T) {
+	t.Parallel()
+	_, sock := everyTeamDaemon(t)
+
+	tests := map[string]struct {
+		args, team, code string
+	}{
+		"a tabs team by project":            {args: `{"project":"alpha"}`, team: "alpha"},
+		"the spaces by project":             {args: `{"project":"agentisan"}`, team: "agentisan"},
+		"a tabs team's workspace":           {args: `{"workspace_id":"w20"}`, team: "beta"},
+		"a group space":                     {args: `{"workspace_id":"wN"}`, team: "agentisan"},
+		"◆ boss":                            {args: `{"workspace_id":"wJ"}`, team: "agentisan"},
+		"◆ herdr, the edit shell":           {args: `{"workspace_id":"w12"}`, team: "agentisan"},
+		"a space no group's but the team's": {args: `{"workspace_id":"wZ"}`, team: "agentisan"},
+		"both: the project wins":            {args: `{"project":"beta","workspace_id":"w14"}`, team: "beta"},
+		"neither":                           {team: "agentisan"},
+		"empty args":                        {args: `{}`, team: "agentisan"},
+		"null args":                         {args: `null`, team: "agentisan"},
+		"empty strings select nothing":      {args: `{"project":"","workspace_id":""}`, team: "agentisan"},
+		"args it does not know":             {args: `{"team":"alpha"}`, team: "agentisan"},
+		"a workspace no team's":             {args: `{"workspace_id":"w2"}`, code: "no_team"},
+		"a workspace herdr does not show":   {args: `{"workspace_id":"w99"}`, code: "no_team"},
+		"an unknown project":                {args: `{"project":"gamma"}`, code: "no_team"},
+		"an unknown project wins too":       {args: `{"project":"gamma","workspace_id":"w14"}`, code: "no_team"},
+		"a project in another case":         {args: `{"project":"Alpha"}`, code: "no_team"},
+		"a workspace that is a label":       {args: `{"workspace_id":"alpha"}`, code: "no_team"},
+		"a project that is not a string":    {args: `{"project":["alpha"]}`, code: "bad_request"},
+		// Names are compared byte for byte: nothing is trimmed, folded or
+		// normalized, so a near miss is no team, never another one.
+		"a project with a space":        {args: `{"project":" alpha"}`, code: "no_team"},
+		"a project spelled with ä":      {args: `{"project":"älpha"}`, code: "no_team"},
+		"a workspace with a NUL":        {args: `{"workspace_id":"w14\u0000"}`, code: "no_team"},
+		"a workspace with a newline":    {args: `{"workspace_id":"w14\n"}`, code: "no_team"},
+		"a lone surrogate in a project": {args: `{"project":"\ud800"}`, code: "no_team"},
+		"invalid UTF-8 in a workspace":  {args: "{\"workspace_id\":\"w1\xff4\"}", code: "no_team"},
+		"args nested past their shape":  {args: `{"workspace_id":{"id":"w14"}}`, code: "bad_request"},
+		"a project that is a number":    {args: `{"project":1e400}`, code: "bad_request"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			data, code := snapshotOp(t, sock, tc.args)
+			assert.Equal(t, tc.code, code)
+			if tc.code != "" {
+				return
+			}
+			got, err := snapshot.Decode(bytes.NewReader(data))
+			require.NoError(t, err)
+			assert.Equal(t, tc.team, got.Team)
+		})
+	}
+
+	t.Run("the client", func(t *testing.T) {
+		t.Parallel()
+		got, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{WorkspaceID: "w14"})
+		require.NoError(t, err)
+		assert.Equal(t, wantTeams()["alpha"], got)
+		_, err = daemon.SnapshotOf(t.Context(), sock, daemon.Selector{Project: "gamma"})
+		require.ErrorIs(t, err, daemon.ErrNoTeam)
+		require.ErrorIs(t, err, daemon.ErrRequest)
+		assert.NotErrorIs(t, err, daemon.ErrNotReady)
+		got, err = daemon.SnapshotSource{Socket: sock, Selector: daemon.Selector{Project: "beta"}}.Snapshot(t.Context())
+		require.NoError(t, err)
+		assert.Equal(t, "beta", got.Team)
+	})
+}
+
+// TestSnapshotOpBeforeAnyPollSelectsNothing: before the first poll with
+// names, every selector is not_ready, a team the daemon cannot know yet
+// included, never no_team.
+func TestSnapshotOpBeforeAnyPollSelectsNothing(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	th.agentsErr = true
+	dir := shortDir(t)
+	run(t, teamOpts(t, dir, th, configDir(t, everyTeamConfig)))
+	polled(t, th.srv, 1)
+	sock := socketPath(t, dir, th.path)
+	for _, sel := range []daemon.Selector{{}, {Project: "alpha"}, {Project: "gamma"}, {WorkspaceID: "wN"}, {WorkspaceID: "w99"}} {
+		_, err := daemon.SnapshotOf(t.Context(), sock, sel)
+		require.ErrorIs(t, err, daemon.ErrNotReady, "%+v", sel)
+		assert.NotErrorIs(t, err, daemon.ErrNoTeam)
+	}
+}
+
+// TestSnapshotOpDropsAGoneTeam: a team gone from the layout answers no_team,
+// by project and by its old workspace alike, from the next poll on; the
+// others are served as before. A18's "the last one stays" is a failed
+// agent.list's alone.
+func TestSnapshotOpDropsAGoneTeam(t *testing.T) {
+	t.Parallel()
+	th, sock := everyTeamDaemon(t)
+
+	th.relabel("w14", "alpha (old)")
+	require.Eventually(t, func() bool {
+		_, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{Project: "alpha"})
+		return errors.Is(err, daemon.ErrNoTeam)
+	}, ready, 5*time.Millisecond, "alpha is still served")
+	_, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{WorkspaceID: "w14"})
+	require.ErrorIs(t, err, daemon.ErrNoTeam)
+	for _, project := range []string{"agentisan", "beta"} {
+		got, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{Project: project})
+		require.NoError(t, err)
+		assert.Equal(t, wantTeams()[project], got)
+	}
+
+	th.relabel("w14", "alpha")
+	got := served(t, sock, func(snapshot.Snapshot) bool {
+		_, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{Project: "alpha"})
+		return err == nil
+	})
+	assert.Equal(t, "agentisan", got.Team, "a team back in the layout is served again")
+}
+
+// workerNamed is a model team, project, in workspace ws, with one worker
+// whose name is name.
+func workerNamed(project, ws, name string) team.Project {
+	return team.Project{Name: project, Workspaces: []string{ws}, Groups: []team.Group{{Name: "g", Workers: []team.Worker{{
+		ID: ws + ":p1", Pane: team.Pane{ID: ws + ":p1", Name: name, Agent: "claude", Status: team.StatusIdle},
+	}}}}}
+}
+
+// TestSnapshotCacheKeepsATeamTooLarge: a team whose snapshot would not fit
+// one answer line keeps the last one that did, while every other team is
+// replaced as usual; one that has never fit is not_ready, not no_team, and
+// costs no other team its snapshot.
+func TestSnapshotCacheKeepsATeamTooLarge(t *testing.T) {
+	t.Parallel()
+	huge := strings.Repeat("x", daemon.MaxSnapshot)
+	load := func(t *testing.T, c *daemon.TeamCache, sel daemon.Selector) snapshot.Snapshot {
+		t.Helper()
+		raw, err := c.Load(sel)
+		require.NoError(t, err)
+		s, err := snapshot.Decode(bytes.NewReader(raw))
+		require.NoError(t, err)
+		return s
+	}
+	name := func(s snapshot.Snapshot) string { return s.Groups[0].Agents[0].Name }
+
+	var c daemon.TeamCache
+	t1 := t0.Add(3 * time.Second)
+	require.NoError(t, c.Store(team.Model{Projects: []team.Project{workerNamed("a", "wa", "a1"), workerNamed("b", "wb", "b1")}}, "a", t0))
+	before, err := c.Load(daemon.Selector{Project: "a"})
+	require.NoError(t, err)
+
+	err = c.Store(team.Model{Projects: []team.Project{workerNamed("a", "wa", huge), workerNamed("b", "wb", "b2")}}, "a", t1)
+	require.ErrorIs(t, err, daemon.ErrSnapshotTooLarge)
+	assert.Contains(t, err.Error(), `team "a"`)
+	after, err := c.Load(daemon.Selector{Project: "a"})
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after), "a keeps its last snapshot, byte for byte")
+	assert.Equal(t, "a1", name(load(t, &c, daemon.Selector{WorkspaceID: "wa"})))
+	b := load(t, &c, daemon.Selector{WorkspaceID: "wb"})
+	assert.Equal(t, "b2", name(b), "b is replaced as usual")
+	assert.True(t, b.At.Equal(t1))
+
+	var fresh daemon.TeamCache
+	err = fresh.Store(team.Model{Projects: []team.Project{workerNamed("a", "wa", huge), workerNamed("b", "wb", "b1")}}, "a", t0)
+	require.ErrorIs(t, err, daemon.ErrSnapshotTooLarge)
+	_, err = fresh.Load(daemon.Selector{})
+	require.ErrorIs(t, err, daemon.ErrNotReady, "a team that has never fit")
+	assert.NotErrorIs(t, err, daemon.ErrNoTeam)
+	_, err = fresh.Load(daemon.Selector{WorkspaceID: "wa"})
+	require.ErrorIs(t, err, daemon.ErrNotReady)
+	assert.Equal(t, "b1", name(load(t, &fresh, daemon.Selector{Project: "b"})))
+
+	require.NoError(t, fresh.Store(team.Model{Projects: []team.Project{workerNamed("b", "wb", "b3")}}, "a", t1))
+	_, err = fresh.Load(daemon.Selector{Project: "a"})
+	require.ErrorIs(t, err, daemon.ErrNoTeam, "gone from the model, a team too large to serve is gone too")
+	_, err = fresh.Load(daemon.Selector{})
+	require.ErrorIs(t, err, daemon.ErrNoTeam, "the spaces' project, with no team in the model")
+}
+
+// TestSnapshotOpNeverPairsTwoPolls is the one swap (A24): every poll moves
+// two teams between two workspaces and names each pane after the poll, while
+// dashboards ask by workspace. Each answer must be the team its workspace
+// belonged to in the very poll that built the snapshot, holding that
+// workspace's pane: an index from one poll with a snapshot from another
+// would serve a team without it, or with a name of the wrong parity.
+func TestSnapshotOpNeverPairsTwoPolls(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	var gen int
+	flip := func() {
+		th.mu.Lock()
+		defer th.mu.Unlock()
+		gen++
+		first, second := "alpha", "beta"
+		if gen%2 == 1 {
+			first, second = second, first
+		}
+		short := map[string]string{"alpha": "al", "beta": "be"}
+		th.workspaces = []herdr.WorkspaceInfo{{WorkspaceID: "w1", Label: first}, {WorkspaceID: "w2", Label: second}}
+		th.tabs = []map[string]any{tabOf("w1:t1", "w1", short[first]+"-coder-1"), tabOf("w2:t1", "w2", short[second]+"-coder-1")}
+		th.agents = []map[string]any{named("w1:p1", fmt.Sprintf("g%d-w1", gen)), named("w2:p1", fmt.Sprintf("g%d-w2", gen))}
+	}
+	th.panes = []map[string]any{
+		tabPane("w1:p1", "w1", "w1:t1", "claude", "working", nil),
+		tabPane("w2:p1", "w2", "w2:t1", "claude", "working", nil),
+	}
+	flip()
+	// Each poll lists the panes, which never change, then the workspaces:
+	// the layout moves there, before the tabs and the names are listed.
+	th.onCall = func(method string) {
+		if method == "workspace.list" {
+			flip()
+		}
+	}
+	dir := shortDir(t)
+	o := teamOpts(t, dir, th, configDir(t, "[projects.alpha]\nrepo = \"/y\"\nshort = \"al\"\n[projects.beta]\nrepo = \"/z\"\nshort = \"be\"\n"))
+	o.Poll = 5 * time.Millisecond
+	run(t, o)
+	sock := socketPath(t, dir, th.path)
+	require.Eventually(t, func() bool {
+		_, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{WorkspaceID: "w1"})
+		return err == nil
+	}, ready, 5*time.Millisecond)
+
+	var mu sync.Mutex
+	seen := map[int]bool{}
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	deadline := time.Now().Add(ready)
+	for i := range 8 {
+		ws := []string{"w1", "w2"}[i%2]
+		wg.Go(func() {
+			for n := 0; ; n++ {
+				mu.Lock()
+				enough := len(seen) >= 10 && n >= 20
+				mu.Unlock()
+				if enough || time.Now().After(deadline) {
+					errs <- nil
+					return
+				}
+				s, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{WorkspaceID: ws})
+				if err != nil {
+					errs <- err
+					return
+				}
+				g, err := pollOf(s, ws)
+				if err != nil {
+					errs <- err
+					return
+				}
+				want := "alpha"
+				if (g%2 == 1) == (ws == "w1") {
+					want = "beta"
+				}
+				if s.Team != want {
+					errs <- fmt.Errorf("%s in poll %d is %s's, but %s was served", ws, g, want, s.Team)
+					return
+				}
+				mu.Lock()
+				seen[g] = true
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	assert.GreaterOrEqual(t, len(seen), 10, "the readers saw the polls change under them")
+}
+
+// pollOf is the poll that named ws's pane in s, which must hold it.
+func pollOf(s snapshot.Snapshot, ws string) (int, error) {
+	for _, g := range s.Groups {
+		for _, a := range g.Agents {
+			if a.PaneID != ws+":p1" {
+				continue
+			}
+			var n int
+			if _, err := fmt.Sscanf(a.Name, "g%d-"+ws, &n); err != nil {
+				return 0, fmt.Errorf("pane %s named %q: %w", a.PaneID, a.Name, err)
+			}
+			return n, nil
+		}
+	}
+	return 0, fmt.Errorf("team %s was served for %s without its pane: %+v", s.Team, ws, s.Groups)
 }

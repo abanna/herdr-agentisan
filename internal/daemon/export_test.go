@@ -3,12 +3,14 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/rs/zerolog"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/store"
+	"github.com/abanna/herdr-agentisan/internal/team"
 )
 
 // Backoff is the wait before resubscribe attempt n, counted from 0.
@@ -50,12 +52,21 @@ func FocusDialGuard(socket string, ident Identity) func() error {
 	return c.Dialed
 }
 
-// CacheSnapshot caches s as the team poll does, and returns what the
-// snapshot op would then answer with.
+// CacheSnapshot encodes s as the team poll caches a team's snapshot, and
+// returns what the snapshot op would then answer with.
 func CacheSnapshot(s snapshot.Snapshot) (json.RawMessage, error) {
-	var c snapshotCache
-	if err := c.store(s); err != nil {
-		return nil, err
-	}
-	return c.load()
+	return encodeSnapshot(s)
 }
+
+// TeamCache is the snapshot op's cache, filled as the team poll fills it,
+// with no stage clock.
+type TeamCache struct{ c snapshotCache }
+
+// Store caches every team in m, built at at, with spaces the team an op
+// selecting nothing gets.
+func (t *TeamCache) Store(m team.Model, spaces string, at time.Time) error {
+	return t.c.store(m, spaces, at, nil)
+}
+
+// Load is what the snapshot op answers sel with.
+func (t *TeamCache) Load(sel Selector) (json.RawMessage, error) { return t.c.load(sel) }
