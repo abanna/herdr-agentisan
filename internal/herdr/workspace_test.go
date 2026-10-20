@@ -62,6 +62,48 @@ func TestListWorkspacesSendsTheSchemaShape(t *testing.T) {
 	}
 }
 
+// TestListTabsSendsTheSchemaShape: tab.list with no workspace_id lists every
+// tab (src/api/schema/tabs.rs:22-25) and answers tab_list, each tab a TabInfo
+// (tabs.rs:40-48). Labels come back exactly as herdr has them.
+func TestListTabsSendsTheSchemaShape(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		tabs []map[string]any
+		want []herdr.TabInfo
+	}{
+		"tabs with the fields herdr sends": {
+			tabs: []map[string]any{
+				{"tab_id": "w14:t1", "workspace_id": "w14", "number": 1, "label": "ha-boss", "focused": true, "pane_count": 2, "agent_status": "working"},
+				{"tab_id": "w14:t2", "workspace_id": "w14", "number": 2, "label": "ha-coder-1", "focused": false, "pane_count": 1, "agent_status": "idle"},
+			},
+			want: []herdr.TabInfo{{TabID: "w14:t1", WorkspaceID: "w14", Label: "ha-boss"}, {TabID: "w14:t2", WorkspaceID: "w14", Label: "ha-coder-1"}},
+		},
+		"no tabs": {tabs: []map[string]any{}, want: []herdr.TabInfo{}},
+		"labels are kept byte for byte": {
+			tabs: []map[string]any{{"tab_id": "w1:t1", "workspace_id": "w1", "label": " ha-qa-1\n"}, {"tab_id": "w1:t2", "workspace_id": "w1", "label": ""}},
+			want: []herdr.TabInfo{{TabID: "w1:t1", WorkspaceID: "w1", Label: " ha-qa-1\n"}, {TabID: "w1:t2", WorkspaceID: "w1"}},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
+				return herdrtest.Reply{Result: map[string]any{"type": "tab_list", "tabs": tc.tabs}}
+			})
+
+			got, err := herdr.Client{SocketPath: srv.Path}.ListTabs(t.Context())
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+
+			reqs := srv.Requests()
+			require.Len(t, reqs, 1)
+			assert.Equal(t, "tab.list", reqs[0].Method)
+			assert.JSONEq(t, `{}`, string(reqs[0].Params))
+		})
+	}
+}
+
 // TestReportWorkspaceMetadataSendsTheSchemaShape: workspace.report_metadata
 // takes WorkspaceReportMetadataParams (src/api/schema/workspaces.rs:48-59) and
 // answers ok (src/app/api/workspaces.rs:241-309).
@@ -117,6 +159,10 @@ func TestWorkspaceCallFailureClasses(t *testing.T) {
 	silent := func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Silent: true} }
 	list := func(c herdr.Client) error { _, err := c.ListWorkspaces(t.Context()); return err }
 	panes := func(c herdr.Client) error { _, err := c.ListPanes(t.Context()); return err }
+	tabs := func(c herdr.Client) error { _, err := c.ListTabs(t.Context()); return err }
+	tab := func(fields map[string]any) herdrtest.Handler {
+		return reply(map[string]any{"type": "tab_list", "tabs": []map[string]any{fields}})
+	}
 	pane := func(fields map[string]any) herdrtest.Handler {
 		fields["pane_id"] = "w1:p1"
 		return reply(map[string]any{"type": "pane_list", "panes": []map[string]any{fields}})
@@ -136,6 +182,14 @@ func TestWorkspaceCallFailureClasses(t *testing.T) {
 		"list: a workspace without an id":     {handler: reply(map[string]any{"type": "workspace_list", "workspaces": []map[string]any{{"label": "◆ qa"}}}), call: list, want: herdr.ErrProtocol},
 		"list: a label that is not a string":  {handler: reply(map[string]any{"type": "workspace_list", "workspaces": []map[string]any{{"workspace_id": "w1", "label": 7}}}), call: list, want: herdr.ErrProtocol},
 		"list: closed without a reply":        {handler: silent, call: list, want: herdr.ErrUnavailable},
+		"tabs: wrong result type":             {handler: reply(map[string]any{"type": "workspace_list", "workspaces": []any{}}), call: tabs, want: herdr.ErrProtocol},
+		"tabs: tabs missing":                  {handler: reply(map[string]any{"type": "tab_list"}), call: tabs, want: herdr.ErrProtocol},
+		"tabs: tabs is not an array":          {handler: reply(map[string]any{"type": "tab_list", "tabs": "w1:t1"}), call: tabs, want: herdr.ErrProtocol},
+		"tabs: a tab without an id":           {handler: tab(map[string]any{"workspace_id": "w1", "label": "ha-qa-1"}), call: tabs, want: herdr.ErrProtocol},
+		"tabs: a tab without a workspace":     {handler: tab(map[string]any{"tab_id": "w1:t1", "label": "ha-qa-1"}), call: tabs, want: herdr.ErrProtocol},
+		"tabs: a label that is not a string":  {handler: tab(map[string]any{"tab_id": "w1:t1", "workspace_id": "w1", "label": 7}), call: tabs, want: herdr.ErrProtocol},
+		"tabs: closed without a reply":        {handler: silent, call: tabs, want: herdr.ErrUnavailable},
+		"tabs: no socket":                     {call: tabs, want: herdr.ErrNoSocket},
 		"panes: agent_status is not a string": {handler: pane(map[string]any{"agent_status": 3}), call: panes, want: herdr.ErrProtocol},
 		"panes: a token that is not a string": {handler: pane(map[string]any{"tokens": map[string]any{"handoff": true}}), call: panes, want: herdr.ErrProtocol},
 		"panes: tokens is not a map":          {handler: pane(map[string]any{"tokens": []any{"handoff"}}), call: panes, want: herdr.ErrProtocol},
@@ -159,9 +213,9 @@ func TestWorkspaceCallFailureClasses(t *testing.T) {
 }
 
 // TestListPanesReadsAgentStatusAndTokens: pane.list carries what the team
-// model counts (src/api/schema/panes.rs:449-484): the agent, its status and
-// the pane's tokens. A plain shell has no agent and status unknown; a pane
-// with no tokens leaves the key out, which decodes to nil.
+// model counts (src/api/schema/panes.rs:449-484): the pane's tab, the agent,
+// its status and the pane's tokens. A plain shell has no agent and status
+// unknown; a pane with no tokens leaves the key out, which decodes to nil.
 func TestListPanesReadsAgentStatusAndTokens(t *testing.T) {
 	t.Parallel()
 
@@ -171,11 +225,11 @@ func TestListPanesReadsAgentStatusAndTokens(t *testing.T) {
 	}{
 		"an agent with tokens": {
 			pane: map[string]any{
-				"pane_id": "wN:p2", "workspace_id": "wN", "agent": "claude", "agent_status": "done", "revision": 4,
+				"pane_id": "wN:p2", "workspace_id": "wN", "tab_id": "wN:t1", "agent": "claude", "agent_status": "done", "revision": 4,
 				"tokens": map[string]any{"ctx": "16", "item": "GH-892", "handoff": "⟳ READY TO RESTART"},
 			},
 			want: herdr.PaneInfo{
-				PaneID: "wN:p2", WorkspaceID: "wN", Agent: "claude", AgentStatus: "done",
+				PaneID: "wN:p2", WorkspaceID: "wN", TabID: "wN:t1", Agent: "claude", AgentStatus: "done",
 				Tokens: map[string]string{"ctx": "16", "item": "GH-892", "handoff": "⟳ READY TO RESTART"},
 			},
 		},

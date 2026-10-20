@@ -19,7 +19,8 @@ import (
 // at is the instant every snapshot test builds at.
 var at = time.Date(2026, 10, 10, 9, 30, 0, 0, time.UTC)
 
-// spacesOrder is the ◆ spaces resolver's group order, as the daemon passes it.
+// spacesOrder is the ◆ spaces resolver's group order, as Build puts it on
+// the spaces team.
 var spacesOrder = team.Spaces{}.GroupOrder()
 
 // pane is a pane in ws carrying tokens: an agent of kind agent ("" for a
@@ -37,7 +38,7 @@ func oneRow(t *testing.T, p herdr.PaneInfo, name string) snapshot.Agent {
 	if name != "" {
 		l.Agents = []herdr.AgentInfo{{PaneID: p.PaneID, Name: name}}
 	}
-	s := team.Snapshot(team.Build(l, team.Spaces{}, nil), "", "", spacesOrder, at, nil)
+	s := team.Snapshot(team.Build(l, team.Spaces{}, nil), "", at, nil)
 	require.Len(t, s.Groups, 1)
 	require.Len(t, s.Groups[0].Agents, 1)
 	return s.Groups[0].Agents[0]
@@ -308,7 +309,11 @@ func TestSnapshotGroupOrder(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			s := team.Snapshot(team.Build(groupsLayout(tc.groups...), team.Spaces{}, nil), "", "", tc.order, at, nil)
+			m := team.Build(groupsLayout(tc.groups...), team.Spaces{}, nil)
+			for i := range m.Projects {
+				m.Projects[i].Order = tc.order
+			}
+			s := team.Snapshot(m, "", at, nil)
 			assert.Equal(t, tc.want, groupNames(s))
 			assert.NotNil(t, s.Groups, "groups is a list, never null")
 		})
@@ -366,7 +371,7 @@ func TestSnapshotBoss(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			l := team.Layout{Workspaces: tc.workspaces, Panes: tc.panes, Agents: tc.agents}
-			s := team.Snapshot(team.Build(l, team.Spaces{}, nil), "", "", spacesOrder, at, nil)
+			s := team.Snapshot(team.Build(l, team.Spaces{}, nil), "", at, nil)
 			assert.Equal(t, tc.want, s.Boss)
 			for _, g := range s.Groups {
 				for _, a := range g.Agents {
@@ -395,8 +400,8 @@ func TestSnapshotProject(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			m := team.Build(groupsLayout("coders"), team.Spaces{Project: tc.project}, nil)
-			s := team.Snapshot(m, tc.project, tc.color, spacesOrder, at, nil)
+			m := team.Build(groupsLayout("coders"), team.Spaces{Project: tc.project, Color: tc.color}, nil)
+			s := team.Snapshot(m, tc.project, at, nil)
 			assert.Equal(t, tc.project, s.Team)
 			assert.Equal(t, tc.want, s.Project)
 			assert.Equal(t, []string{"coders"}, groupNames(s))
@@ -404,11 +409,12 @@ func TestSnapshotProject(t *testing.T) {
 	}
 	t.Run("another project's panes are not the team's", func(t *testing.T) {
 		t.Parallel()
-		m := team.Build(groupsLayout("coders"), team.Spaces{Project: "a"}, nil)
-		s := team.Snapshot(m, "b", "", spacesOrder, at, nil)
+		m := team.Build(groupsLayout("coders"), team.Spaces{Project: "a", Color: "#7c3aed"}, nil)
+		s := team.Snapshot(m, "b", at, nil)
 		assert.Equal(t, "b", s.Team)
 		assert.Empty(t, s.Groups)
 		assert.Nil(t, s.Boss)
+		assert.Nil(t, s.Project, "nor its colour")
 	})
 }
 
@@ -436,14 +442,14 @@ func TestSnapshotDecodesStrictly(t *testing.T) {
 		Agents: []herdr.AgentInfo{{PaneID: "wJ:p1", Name: "boss"}, {PaneID: "wN:p1", Name: "pee01"}},
 	}
 	clock := &team.StageClock{}
-	m := team.Build(full, team.Spaces{Project: "agentisan"}, nil)
+	m := team.Build(full, team.Spaces{Project: "agentisan", Color: "#7c3aed"}, nil)
 	clock.Observe(m, at)
 
 	tests := map[string]snapshot.Snapshot{
-		"a full team":      team.Snapshot(m, "agentisan", "#7c3aed", spacesOrder, at, clock),
-		"no group spaces":  team.Snapshot(team.Model{}, "", "", spacesOrder, at, clock),
-		"a nil clock":      team.Snapshot(m, "agentisan", "", spacesOrder, at, nil),
-		"a local-time now": team.Snapshot(m, "agentisan", "", spacesOrder, at.In(time.FixedZone("x", -7*3600)), clock),
+		"a full team":      team.Snapshot(m, "agentisan", at, clock),
+		"no group spaces":  team.Snapshot(team.Model{}, "", at, clock),
+		"a nil clock":      team.Snapshot(m, "agentisan", at, nil),
+		"a local-time now": team.Snapshot(m, "agentisan", at.In(time.FixedZone("x", -7*3600)), clock),
 	}
 	for name, s := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -568,7 +574,7 @@ func TestStageClock(t *testing.T) {
 		m := l(map[string]string{"wN:p1": "build", "wJ:p1": "plan"})
 		c.Observe(m, local)
 		c.Observe(m, t2)
-		s := team.Snapshot(m, "", "", spacesOrder, t2, c)
+		s := team.Snapshot(m, "", t2, c)
 		require.NotNil(t, s.Boss)
 		require.NotNil(t, s.Boss.StageStartedAt)
 		assert.Equal(t, t0, *s.Boss.StageStartedAt)

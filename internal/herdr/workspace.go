@@ -66,3 +66,36 @@ func (c Client) ReportWorkspaceMetadata(ctx context.Context, m WorkspaceMetadata
 	}
 	return nil
 }
+
+// TabInfo is one tab in tab.list, limited to the fields this plugin reads
+// (src/api/schema/tabs.rs:40-48).
+type TabInfo struct {
+	TabID       string `json:"tab_id"`
+	WorkspaceID string `json:"workspace_id"`
+	// Label is the name the tab bar shows, exactly as herdr has it.
+	Label string `json:"label"`
+}
+
+// ListTabs returns every tab in every workspace: tab.list with no
+// workspace_id (src/api/schema/tabs.rs:22-25).
+func (c Client) ListTabs(ctx context.Context) ([]TabInfo, error) {
+	var out struct {
+		Type string    `json:"type"`
+		Tabs []TabInfo `json:"tabs"`
+	}
+	if err := c.Call(ctx, "tab.list", struct{}{}, &out); err != nil {
+		return nil, err
+	}
+	if out.Type != "tab_list" {
+		return nil, fmt.Errorf("%w: tab.list: result type %q, want \"tab_list\"", ErrProtocol, out.Type)
+	}
+	if out.Tabs == nil {
+		return nil, fmt.Errorf("%w: tab.list: result has no tabs", ErrProtocol)
+	}
+	for _, t := range out.Tabs {
+		if t.TabID == "" || t.WorkspaceID == "" {
+			return nil, fmt.Errorf("%w: tab.list: a tab has no tab_id or workspace_id", ErrProtocol)
+		}
+	}
+	return out.Tabs, nil
+}

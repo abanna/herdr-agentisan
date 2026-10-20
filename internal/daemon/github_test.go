@@ -22,14 +22,14 @@ import (
 )
 
 // ghConfig writes a config dir with project agentisan, coloured, on
-// abanna/herdr-agentisan, the ◆ spaces' project, and project other on
-// acme/other.
+// abanna/herdr-agentisan, the ◆ spaces' project, and project other, a tabs
+// team, on acme/other.
 func ghConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
 	body := "schema_version = 1\n[spaces]\nproject = \"agentisan\"\n" +
 		"[projects.agentisan]\nrepo = \"~/Development/agentisan\"\ncolor = \"#7c3aed\"\ngithub = \"abanna/herdr-agentisan\"\n" +
-		"[projects.other]\nrepo = \"/elsewhere\"\ngithub = \"acme/other\"\n"
+		"[projects.other]\nrepo = \"/elsewhere\"\nshort = \"o\"\ngithub = \"acme/other\"\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte(body), 0o600))
 	return dir
 }

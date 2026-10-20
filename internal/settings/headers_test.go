@@ -29,11 +29,11 @@ func TestHeadersForTheDaemon(t *testing.T) {
 		"no projects":        {file: "github = \"acme/app\"\n"},
 		"no project has one": {file: "[projects.app]\nrepo = \"/x\"\n"},
 		"by project name, those with one": {
-			file: "[projects.zed]\nrepo = \"/z\"\ngithub = \"acme/zed\"\n[projects.mid]\nrepo = \"/m\"\n[projects.app]\nrepo = \"~/Development/app\"\ngithub = \"acme/app.go\"\n",
+			file: "[projects.zed]\nrepo = \"/z\"\nshort = \"z\"\ngithub = \"acme/zed\"\n[projects.mid]\nrepo = \"/m\"\nshort = \"m\"\n[projects.app]\nrepo = \"~/Development/app\"\nshort = \"a\"\ngithub = \"acme/app.go\"\n",
 			want: []settings.Header{{Project: "app", GitHub: "acme/app.go"}, {Project: "zed", GitHub: "acme/zed"}},
 		},
 		"the shared repo is inherited": {
-			file: "github = \"acme/mono\"\n[projects.app]\nrepo = \"/x\"\n[projects.web]\nrepo = \"/y\"\ngithub = \"acme/web\"\n",
+			file: "github = \"acme/mono\"\n[projects.app]\nrepo = \"/x\"\nshort = \"a\"\n[projects.web]\nrepo = \"/y\"\nshort = \"w\"\ngithub = \"acme/web\"\n",
 			want: []settings.Header{{Project: "app", GitHub: "acme/mono"}, {Project: "web", GitHub: "acme/web"}},
 		},
 		"not owner/name":        {file: "[projects.app]\nrepo = \"/x\"\ngithub = \"app\"\n", wantErr: settings.ErrInvalid},
@@ -73,7 +73,7 @@ func TestHeadersIgnoreTheRepoFile(t *testing.T) {
 	t.Parallel()
 	repo, dir := newRepo(t), t.TempDir()
 	writeFile(t, repo, settings.RepoFileName, "schema_version = 1\ngithub = \"acme/fromrepo\"\n", repo)
-	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n[projects.web]\nrepo = \"REPO\"\ngithub = \"acme/web\"\n", repo)
+	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"a\"\n[projects.web]\nrepo = \"REPO\"\nshort = \"w\"\ngithub = \"acme/web\"\n", repo)
 
 	got, err := settings.Headers(dir)
 	require.NoError(t, err)

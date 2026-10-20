@@ -290,9 +290,11 @@ model = "opus"
 [projects.zeta]
 repo = "/nonexistent/zeta"
 color = "#000000"
+short = "z"
 
 [projects.alpha]
 repo = "/nonexistent/alpha"
+short = "a"
 `, "")
 
 	got, err := settings.Load(settings.LoadOptions{

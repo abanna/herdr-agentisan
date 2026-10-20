@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,18 +13,58 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/devctl"
 )
 
+// gitEnv is base with every GIT_ variable dropped, plus the two that stop git
+// reading global and system config. A throwaway repo then sees only its own
+// config: a developer's commit.gpgsign and signing program never reach it,
+// and neither does config an outer git process passes down in the
+// environment (GIT_CONFIG_PARAMETERS, GIT_CONFIG_COUNT).
+func gitEnv(base []string) []string {
+	env := make([]string, 0, len(base)+2)
+	for _, kv := range base {
+		if !strings.HasPrefix(kv, "GIT_") {
+			env = append(env, kv)
+		}
+	}
+	return append(env, "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
+}
+
+// gitIn runs git in dir with the test process's environment, isolated by
+// gitEnv, and returns what it printed.
+func gitIn(t *testing.T, dir string, args ...string) (string, error) {
+	t.Helper()
+	cmd := exec.CommandContext(t.Context(), "git", append([]string{"-C", dir}, args...)...)
+	cmd.Env = gitEnv(os.Environ())
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+// runGit is gitIn failing the test if git fails. Every git a test runs goes
+// through gitIn.
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	out, err := gitIn(t, dir, args...)
+	require.NoError(t, err, "git %v: %s", args, out)
+}
+
 // newGitRepo builds a throwaway repo so the check is exercised against real
-// `git ls-files` output rather than a stubbed file list.
+// `git ls-files` output rather than a stubbed file list. Its signing programs
+// exit 1, for every gpg.format. That does not turn signing off, which only
+// gitEnv does, and it is a backstop with limits: were the isolation ever
+// lost, a signing program this config picks fails at once, but one passed
+// down in the environment outranks it, and a global gpg.ssh.defaultKeyCommand
+// still runs before it.
 func newGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, args := range [][]string{
-		{"init", "-q"},
-		{"config", "user.email", "t@t"},
-		{"config", "user.name", "t"},
+	runGit(t, dir, "init", "-q")
+	for _, kv := range [][2]string{
+		{"user.email", "t@t"},
+		{"user.name", "t"},
+		{"gpg.program", "false"},
+		{"gpg.ssh.program", "false"},
+		{"gpg.x509.program", "false"},
 	} {
-		cmd := exec.Command("git", append([]string{"-C", dir}, args...)...)
-		require.NoError(t, cmd.Run(), "git %v", args)
+		runGit(t, dir, "config", kv[0], kv[1])
 	}
 	return dir
 }
@@ -33,7 +74,66 @@ func writeTracked(t *testing.T, dir, name string, size int) {
 	p := filepath.Join(dir, name)
 	require.NoError(t, os.MkdirAll(filepath.Dir(p), 0o750))
 	require.NoError(t, os.WriteFile(p, make([]byte, size), 0o600))
-	require.NoError(t, exec.Command("git", "-C", dir, "add", name).Run())
+	runGit(t, dir, "add", name)
+}
+
+// TestGitReposNeverSign: a throwaway repo reads no config but its own, so a
+// developer whose git signs every commit (here through 1Password's
+// op-ssh-sign) never has a test sign, prompt or wait on an agent. Each case
+// turns signing on in the test process's environment, as a developer's shell
+// does, and the repo's signing programs exit 1, so any attempt fails the
+// commit or the tag. The global config also names a hooks directory whose
+// pre-commit refuses every commit.
+//
+// It is not parallel: t.Setenv changes what every git child inherits, and
+// Go runs it before any parallel test starts.
+func TestGitReposNeverSign(t *testing.T) {
+	home := t.TempDir()
+	hooks := filepath.Join(home, "hooks")
+	require.NoError(t, os.Mkdir(hooks, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o700)) //nolint:gosec // a hook must be executable
+	global := filepath.Join(home, ".gitconfig")
+	require.NoError(t, os.WriteFile(global, []byte(
+		"[commit]\n\tgpgsign = true\n[tag]\n\tgpgsign = true\n[gpg]\n\tformat = ssh\n"+
+			"[user]\n\tsigningkey = key::ssh-ed25519 AAAAtest\n[core]\n\thooksPath = "+hooks+"\n",
+	), 0o600))
+	tests := map[string]map[string]string{
+		// The developer's global config: ~/.gitconfig, or the file
+		// GIT_CONFIG_GLOBAL names.
+		"signing in the global config": {"HOME": home, "GIT_CONFIG_GLOBAL": global},
+		// Config an outer git passes down, which outranks the repo's own:
+		// GIT_CONFIG_COUNT, and what `git -c` hands the git it runs.
+		"signing passed down in GIT_CONFIG_COUNT": {
+			"GIT_CONFIG_COUNT": "2",
+			"GIT_CONFIG_KEY_0": "commit.gpgsign", "GIT_CONFIG_VALUE_0": "true",
+			"GIT_CONFIG_KEY_1": "tag.gpgsign", "GIT_CONFIG_VALUE_1": "true",
+		},
+		"signing passed down by git -c": {
+			"GIT_CONFIG_PARAMETERS": "'commit.gpgsign'='true' 'tag.gpgsign'='true'",
+		},
+	}
+	for name, env := range tests {
+		t.Run(name, func(t *testing.T) {
+			for k, v := range env {
+				t.Setenv(k, v)
+			}
+			dir := newGitRepo(t)
+			writeTracked(t, dir, "a.txt", 1)
+
+			out, err := gitIn(t, dir, "commit", "-qm", "a")
+			require.NoError(t, err, "a test commit must never try to sign: %s", out)
+			out, err = gitIn(t, dir, "tag", "-a", "v1", "-m", "v1")
+			require.NoError(t, err, "a test tag must never try to sign: %s", out)
+			out, err = gitIn(t, dir, "cat-file", "commit", "HEAD")
+			require.NoError(t, err, out)
+			assert.NotContains(t, out, "gpgsig")
+
+			// The control: asked outright to sign, the commit fails, so the
+			// one above would have failed too had git tried to sign it.
+			out, err = gitIn(t, dir, "commit", "--allow-empty", "-S", "-qm", "signed")
+			require.Error(t, err, "the repo's signing program must refuse: %s", out)
+		})
+	}
 }
 
 func TestFindLargeFilesEmptyRepo(t *testing.T) {
@@ -160,12 +260,11 @@ func TestFindLargeFilesSeesIndexNotWorkingTree(t *testing.T) {
 
 	dir := newGitRepo(t)
 	writeTracked(t, dir, "hidden.bin", 700*1024)
-	require.NoError(t, exec.Command("git", "-C", dir, "commit", "-qm", "add").Run())
+	runGit(t, dir, "commit", "-qm", "add")
 
 	// skip-worktree plus removal from disk is exactly what a sparse checkout
 	// leaves behind: still in the index, not on the filesystem.
-	require.NoError(t, exec.Command("git", "-C", dir, "update-index",
-		"--skip-worktree", "hidden.bin").Run())
+	runGit(t, dir, "update-index", "--skip-worktree", "hidden.bin")
 	require.NoError(t, os.Remove(filepath.Join(dir, "hidden.bin")))
 
 	got, err := devctl.FindLargeFiles(t.Context(), dir, 512)
