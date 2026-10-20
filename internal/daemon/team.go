@@ -28,6 +28,9 @@ type TeamOptions struct {
 	// Events receive each status change between two polls (D10, A21); nil
 	// emits none. `daemon run` builds them with SetupEvents.
 	Events *telemetry.Events
+	// GitHub is the header's GitHub collection (A29), for every project
+	// the same file gives a github repo.
+	GitHub GitHubOptions
 }
 
 // teamConfig is what the poll reads of the configuration: the project the ◆
@@ -68,18 +71,24 @@ type teamPoll struct {
 	// stages times each pane's stage across polls (A18).
 	stages *team.StageClock
 	cache  *snapshotCache
+	// header is each project's GitHub state, which the collector keeps
+	// (A29).
+	header *headerCache
 }
 
-// startTeam starts the team poll when o.Team is set; it caches each poll's
-// snapshot in cache. The function it returns stops the poll and waits for
-// it, so once it returns nothing more is pushed.
+// startTeam starts the team poll when o.Team is set, and beside it the
+// header's GitHub collection; the poll caches each snapshot in cache. The
+// function it returns stops both and waits for them, so once it returns
+// nothing more is pushed and no gh is left running.
 func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache) (stop func()) {
 	if o.Team == nil {
 		return func() {}
 	}
 	ctx, cancel := context.WithCancel(ctx)
+	header := newHeaderCache(o.Team.GitHub)
 	var wg sync.WaitGroup
-	wg.Go(func() { o.pollTeam(ctx, st, ident, cache) })
+	wg.Go(func() { o.collectGitHub(ctx, header) })
+	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header) })
 	return func() {
 		cancel()
 		wg.Wait()
@@ -103,7 +112,7 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 // read answered by the replacement, or a push landing on it, would be the
 // next daemon's business. So the poll is a client of its own, whose Dialed
 // hook checks the identity; a failed check stops the poll (ErrHerdrGone).
-func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache) {
+func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, header *headerCache) {
 	teams, err := settings.Teams(o.Team.ConfigDir)
 	if err != nil {
 		o.Logger.Error().Err(err).Msg("herdr-agentisan.toml does not resolve; the ◆ spaces belong to the unnamed project, and no tabs team is found, until it is fixed and the daemon restarts")
@@ -115,7 +124,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 		tabs = append(tabs, t.Project)
 	}
 	o.Logger.Info().Str("project", cfg.spaces.Project).Str("color", cfg.spaces.Color).Strs("tabs_teams", tabs).Msg("team poll running")
-	tp := teamPoll{cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, cache: cache}
+	tp := teamPoll{cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, cache: cache, header: header}
 	onServer := func() error {
 		if !o.sameServer(ident) {
 			return fmt.Errorf("%w: the socket now names another server, or none", ErrHerdrGone)
@@ -160,12 +169,13 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 
 // pushTeam is one poll: it lists panes, workspaces, with a tabs team
 // configured tabs, and agents; builds the model with state.db's workers
-// rows; caches the snapshot of it; and pushes each group target and tabs
-// team its `$team`. A failed pane, workspace or tab list costs the poll; a
-// failed agent list costs only the snapshot, which `$team` does not need, so
-// the last one built with names stays served; a failed push is logged and
-// the others go on. It returns ErrHerdrGone, and pushes nothing more, once a
-// call finds the socket no longer names the daemon's server.
+// rows; caches the snapshot of it, with the project's GitHub header (A29);
+// and pushes each group target and tabs team its `$team`. A failed pane,
+// workspace or tab list costs the poll; a failed agent list costs only the
+// snapshot, which `$team` does not need, so the last one built with names
+// stays served; a failed push is logged and the others go on. It returns
+// ErrHerdrGone, and pushes nothing more, once a call finds the socket no
+// longer names the daemon's server.
 // The model it returns is nil when a pane, workspace or tab list failed and
 // no model was built; agent names change neither which panes it holds nor
 // their statuses, so a failed agent list still gives the status events their
@@ -203,6 +213,7 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 		now := o.Now()
 		tp.stages.Observe(m, now)
 		snap := team.Snapshot(m, tp.cfg.spaces.Project, now, tp.stages)
+		tp.header.fill(tp.cfg.spaces.Project, &snap, now)
 		if err := tp.cache.store(snap); err != nil {
 			o.Logger.Error().Err(err).Msg("team poll: cache the snapshot; the last one stays served")
 		}
