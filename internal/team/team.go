@@ -219,12 +219,7 @@ func Build(l Layout, r Resolver, workers []store.Worker) Model {
 			ids[w.PaneID] = w.LogicalID
 		}
 	}
-	names := map[string]string{}
-	for _, a := range l.Agents {
-		if n, taken := names[a.PaneID]; a.Name != "" && (!taken || a.Name < n) {
-			names[a.PaneID] = a.Name
-		}
-	}
+	names := agentNames(l.Agents)
 
 	projects := map[string]*Project{}
 	groups := map[string]map[string]*Group{}
@@ -278,6 +273,18 @@ func Build(l Layout, r Resolver, workers []store.Worker) Model {
 		m.Projects = append(m.Projects, *pr)
 	}
 	return m
+}
+
+// agentNames gives each pane agent.list's name for its agent: an empty name
+// names nothing, and when it lists one pane twice the lowest name takes it.
+func agentNames(agents []herdr.AgentInfo) map[string]string {
+	names := map[string]string{}
+	for _, a := range agents {
+		if n, taken := names[a.PaneID]; a.Name != "" && (!taken || a.Name < n) {
+			names[a.PaneID] = a.Name
+		}
+	}
+	return names
 }
 
 func worker(p herdr.PaneInfo, t Target, ids, names map[string]string) Worker {

@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A22, A24 to A27, A29 and A31 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A22, A24 to A29 and A31 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -762,6 +762,26 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
   - The opt-in memory consolidation (`features.memories`) shuts its internal thread down the same way (`memories/write/src/runtime.rs:398-456`). The same decision covers it.
 - **D7 and the dashboard are to count `ctx` only on a pane where Herdr detects an agent**, so the value a Codex left behind, after a clean exit or a crash, is ignored. The snapshot on main reads it from every pane (`internal/team/snapshot.go`); that change belongs to NERD-5255. An expired `ctx` is unknown, as before. A notice is to fire when `ctx` crosses a level, not when it reappears (NERD-5261).
 - This changes a token-contract cell by amendment, as A5 did. D4's one writer per key is unchanged.
+
+### A28. The sidebar: the ctx display and `$team` in words
+
+*Overrides:* A17's `$team` bullet, the `$team` rules row of Verified constraints, and the `team` row of the token contract. *Supersedes:* A5's "Group and project headers" row and A8: the sidebar gets no header rows. *Adds to:* D5 and the token contract. Recorded with item 2e (NERD-5252), checked against the herdr source at v0.9.3.
+
+- **No header rows.** The user turned the header-row design down after previews of their own setup; A8's header tokens never shipped. The agents panel is to show the focused team through herdr's agent view instead, which NERD-5309 adds and records.
+- **The ctx display.** Every poll, the daemon pushes every pane herdr's agents panel lists its context use: a pane with an agent herdr detected, or one `agent.list` names, in a team or not. The value is `ctx` and the whole percentage right-aligned in four cells, so seven characters: `ctx  9%`, `ctx 56%`, `ctx100%`, and `ctx  --` when `ctx` is absent, expired or not a percentage from 0 to 100.
+  - It goes into one of three keys by band: `ctx_ok` up to 55, `ctx_warn` above 55, `ctx_hot` above 65. Each push sets all three, the two not in use empty, which clears them, so a pane never shows two.
+  - The user's rows give each band its own colour. A rule cannot band the value itself: `gt` and `lt` match only a value that parses whole as a number (`src/config/sidebar/rules.rs:159-169`), which `ctx 56%` does not.
+  - The inner spaces survive: herdr trims only a value's ends (`src/app/api_helpers.rs:267-275`), and draws a token row unwrapped, cutting only its end (`src/client/shell/agent_sidebar.rs:356-372`, `src/ui/text.rs:7-20`).
+- **`$team` in words.** `N agents · W working · R ready`, then ` · B blocked` when B is not zero, and `1 agent` for one. N still counts every pane, shells and `unknown` included; R is ⟳'s count, the panes carrying a non-empty `handoff`; B is ⚠'s. The idle count goes. The daemon has been `$team`'s only writer since the v12 cutover, so nothing else depends on the glyphs. Rules that matched ⚠ and ⟳ stop matching; the documented rows match `blocked`, then ` 0 ready`, which with its space matches only a count of zero, then `ready`.
+- **The push.** The ctx display goes with `$team`'s source, `agentisan`, and its 9,000 ms TTL, renewed every poll, so it is gone within about 9 s of the daemon stopping. A refused push is logged and the others go on. A failed `agent.list` leaves a pane herdr knows only by name without a display that poll.
+- **The rows.** herdr plugins cannot ship config, so `docs/config/herdr-sidebar.example.toml` holds the user's `[ui.sidebar.agents]` and `[ui.sidebar.spaces]` rows. Agents, line 1: the state icon, the three bands, then the name; line 2: the workspace, `$item` and `$stage`. Spaces, line 2: `$team` alone. The workspace leaves line 2 when the agent view shows one team at a time (NERD-5309). `TestSidebarSnippet` keeps the rows in step with the keys and the `$team` format.
+
+| Key | Writer | Target | Format | TTL |
+| --- | --- | --- | --- | --- |
+| `ctx_ok`, `ctx_warn`, `ctx_hot` | Daemon | Every agent pane | `ctx` and the percentage in four cells, or `ctx  --`; one of the three set, the others empty | About 9,000 ms, 3 times the poll |
+| `team` | Daemon | Group target from the resolver, or a tabs team's workspace | `N agents · W working · R ready[ · B blocked]` | Unchanged |
+
+Budget: an agent pane carries `ctx`, `item`, `stage`, `handoff` and the three bands, 7 keys, and a push sets 3; still well inside 16 per report and 32 per target.
 
 ### A29. The header's GitHub collection
 
