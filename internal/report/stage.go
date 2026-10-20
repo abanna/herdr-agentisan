@@ -107,7 +107,7 @@ func Stage(ctx context.Context, rep Reporter, pane Pane, item, stage string) (St
 
 	ctx, cancel := context.WithTimeout(ctx, herdr.CallTimeout)
 	defer cancel()
-	target, err := resolvePane(ctx, rep, pane)
+	target, err := ResolvePane(ctx, rep, pane)
 	if err != nil {
 		return StageResult{}, err
 	}

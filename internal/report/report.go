@@ -106,6 +106,11 @@ func PaneFrom(lookup func(string) (string, bool)) Pane {
 // itself, and the queries that find the pane it belongs on.
 type Reporter interface {
 	ReportPaneMetadata(ctx context.Context, m herdr.PaneMetadata) error
+	PaneFinder
+}
+
+// PaneFinder is the slice of the herdr client ResolvePane asks.
+type PaneFinder interface {
 	PaneProcessInfo(ctx context.Context, paneID string) (herdr.ProcessInfo, error)
 	ListPanes(ctx context.Context) ([]herdr.PaneInfo, error)
 }
@@ -191,7 +196,7 @@ func Statusline(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (Resu
 func pushCtx(ctx context.Context, rep Reporter, pane Pane, pct int, ttl time.Duration) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, herdr.CallTimeout)
 	defer cancel()
-	target, err := resolvePane(ctx, rep, pane)
+	target, err := ResolvePane(ctx, rep, pane)
 	if err != nil {
 		return Result{}, err
 	}
@@ -208,7 +213,7 @@ func pushCtx(ctx context.Context, rep Reporter, pane Pane, pct int, ttl time.Dur
 	return Result{Ctx: pct, PaneID: target}, nil
 }
 
-// resolvePane returns the current id of the pane the reporting process runs
+// ResolvePane returns the current id of the pane the reporting process runs
 // in (NERD-5268). Without a lineage it can only trust pane.PaneID.
 //
 // It checks pane.PaneID first: a pane that never moved costs that one query.
@@ -217,7 +222,7 @@ func pushCtx(ctx context.Context, rep Reporter, pane Pane, pct int, ttl time.Dur
 // one of the pane's processes is in the lineage. Otherwise every pane is
 // asked, and the report goes to the one pane that runs the process, or
 // nowhere.
-func resolvePane(ctx context.Context, rep Reporter, pane Pane) (string, error) {
+func ResolvePane(ctx context.Context, rep PaneFinder, pane Pane) (string, error) {
 	if pane.Lineage == nil {
 		return pane.PaneID, nil
 	}
