@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -22,12 +23,25 @@ import (
 const probeKey = "probe-read-key-7f3a"
 
 // recorded is a real _query answer, the live check's worker trail for
-// w14:p8 (2026-10-20), saved as Elasticsearch returned it.
+// w14:p8 (2026-10-20), saved as Elasticsearch returned it, oldest first.
 func recorded(t *testing.T) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("testdata", "worker-trail.json"))
 	require.NoError(t, err)
 	return data
+}
+
+// newestFirst is answer with its rows reversed: what Elasticsearch returns
+// for WorkerQuery, which sorts newest first.
+func newestFirst(t *testing.T, answer []byte) []byte {
+	t.Helper()
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(answer, &doc))
+	values, _ := doc["values"].([]any)
+	slices.Reverse(values)
+	out, err := json.Marshal(doc)
+	require.NoError(t, err)
+	return out
 }
 
 // esStandIn answers every request with status and body, and records the
@@ -53,7 +67,7 @@ func esStandIn(t *testing.T, status int, body []byte) (*httptest.Server, *http.R
 // six changes, in order, exactly as the trail holds them.
 func TestQueryReadsTheRecordedTrail(t *testing.T) {
 	t.Parallel()
-	srv, req, sent := esStandIn(t, http.StatusOK, recorded(t))
+	srv, req, sent := esStandIn(t, http.StatusOK, newestFirst(t, recorded(t)))
 	c, err := trail.NewClient(srv.URL, probeKey, nil)
 	require.NoError(t, err)
 	q, err := trail.WorkerQuery("w14:p8", trail.MinSince*60)
@@ -73,8 +87,9 @@ func TestQueryReadsTheRecordedTrail(t *testing.T) {
 	require.Len(t, table.Columns, 8)
 	assert.Equal(t, trail.Column{Name: "attributes.agentisan.worker.bound", Type: "boolean"}, table.Columns[7])
 	assert.False(t, table.Partial)
-	changes, err := trail.Changes(table)
+	changes, cut, err := trail.WorkerChanges(table)
 	require.NoError(t, err)
+	assert.False(t, cut)
 	want := [][2]string{
 		{"2026-10-20T11:29:10.415Z", "done→working"},
 		{"2026-10-20T11:31:31.416Z", "working→done"},
@@ -174,6 +189,19 @@ func TestNewClient(t *testing.T) {
 	}
 	_, err := trail.NewClient("http://es:9200", "", nil)
 	require.ErrorIs(t, err, trail.ErrNotConfigured)
+}
+
+// TestNewClientNeverUsesAProxy: the key goes to the env file's URL and
+// nowhere else, so the client's transport has no proxy: HTTP_PROXY in the
+// environment would otherwise read it in clear over http.
+func TestNewClientNeverUsesAProxy(t *testing.T) {
+	t.Parallel()
+	c, err := trail.NewClient("http://172.25.0.2:32698", probeKey, nil)
+	require.NoError(t, err)
+	tr, ok := trail.TransportOf(c).(*http.Transport)
+	require.True(t, ok, "its own transport, not http.DefaultTransport")
+	assert.Nil(t, tr.Proxy)
+	assert.NotSame(t, http.DefaultTransport, tr)
 }
 
 // TestClientNeverPrintsTheKey: a client formatted by mistake, in any verb,

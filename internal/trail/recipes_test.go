@@ -24,7 +24,7 @@ func TestWorkerQuery(t *testing.T) {
 | WHERE event_name == "agentisan.worker.status_changed"
     AND (attributes.agentisan.worker.id == "coders-1" OR attributes.herdr.pane.id == "coders-1")
     AND @timestamp > NOW() - 60 minutes
-| SORT @timestamp
+| SORT @timestamp DESC
 | KEEP @timestamp, attributes.agentisan.worker.id, attributes.herdr.pane.id, attributes.agentisan.status.from, attributes.agentisan.status.to, attributes.agentisan.group, attributes.agentisan.worker.bound
 | LIMIT 1000`, q)
 	for _, attr := range []string{telemetry.AttrWorkerID, telemetry.AttrPaneID, telemetry.AttrFrom, telemetry.AttrTo, telemetry.AttrGroup, telemetry.AttrWorkerBound} {
@@ -79,6 +79,10 @@ func TestCheckQuery(t *testing.T) {
 		"FROM logs-agentisan.otel-*":                         true,
 		"FROM logs-* | LIMIT 5":                              false,
 		"FROM logs-agentisan.otel-*,.security | LIMIT 1":     false,
+		"FROM logs-agentisan.otel-* , logs-* | LIMIT 1":      false,
+		"FROM logs-agentisan.otel-*\t,.security":             false,
+		"FROM logs-agentisan.otel-* METADATA _index":         false,
+		"FROM logs-agentisan.otel-*|LIMIT 1":                 true,
 		"FROM logs-agentisan.otel-default | LIMIT 1":         false,
 		"ROW a = 1": false,
 		"SHOW INFO": false,
@@ -93,11 +97,47 @@ func TestCheckQuery(t *testing.T) {
 	}
 }
 
-// TestChangesNeedsTheRecipeColumns: an answer missing one of the recipe's
-// columns is refused by name, not read as empty values.
-func TestChangesNeedsTheRecipeColumns(t *testing.T) {
+// TestWorkerChangesNeedsTheRecipeColumns: an answer missing one of the
+// recipe's columns is refused by name, not read as empty values.
+func TestWorkerChangesNeedsTheRecipeColumns(t *testing.T) {
 	t.Parallel()
-	_, err := trail.Changes(trail.Table{Columns: []trail.Column{{Name: "@timestamp", Type: "date"}}})
+	_, _, err := trail.WorkerChanges(trail.Table{Columns: []trail.Column{{Name: "@timestamp", Type: "date"}}})
 	require.ErrorIs(t, err, trail.ErrUnavailable)
 	assert.Contains(t, err.Error(), "attributes.agentisan.worker.id")
+}
+
+// workerTable is a WorkerQuery answer of n changes, newest first, as
+// Elasticsearch returns it: change i is at second i.
+func workerTable(n int) trail.Table {
+	t := trail.Table{}
+	for _, name := range []string{
+		"@timestamp", "attributes.agentisan.worker.id", "attributes.herdr.pane.id",
+		"attributes.agentisan.status.from", "attributes.agentisan.status.to", "attributes.agentisan.group", "attributes.agentisan.worker.bound",
+	} {
+		t.Columns = append(t.Columns, trail.Column{Name: name})
+	}
+	for i := n - 1; i >= 0; i-- {
+		at := time.Date(2026, 10, 20, 0, 0, 0, 0, time.UTC).Add(time.Duration(i) * time.Second).Format(time.RFC3339)
+		t.Values = append(t.Values, []any{at, "w1:p1", "w1:p1", "idle", "working", "coder", false})
+	}
+	return t
+}
+
+// TestWorkerChangesSaysWhenCut: the answer comes newest first, so a cut at
+// RowLimit drops the oldest changes, never the newest; the changes come
+// back oldest first, and cut says whether the limit was reached.
+func TestWorkerChangesSaysWhenCut(t *testing.T) {
+	t.Parallel()
+	for n, wantCut := range map[int]bool{0: false, 1: false, trail.RowLimit - 1: false, trail.RowLimit: true} {
+		changes, cut, err := trail.WorkerChanges(workerTable(n))
+		require.NoError(t, err)
+		assert.Equal(t, wantCut, cut, n)
+		require.Len(t, changes, n)
+		if n > 1 {
+			assert.Less(t, changes[0].At, changes[n-1].At, "oldest first")
+		}
+	}
+	q, err := trail.WorkerQuery("w1:p1", time.Hour)
+	require.NoError(t, err)
+	assert.Less(t, strings.Index(q, "SORT @timestamp DESC"), strings.Index(q, "LIMIT"), "newest first, then cut")
 }

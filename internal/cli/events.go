@@ -45,7 +45,10 @@ type workerTrail struct {
 	ID      string         `json:"id"`
 	Since   string         `json:"since"`
 	Changes []trail.Change `json:"changes"`
-	Partial bool           `json:"partial,omitempty"`
+	// Cut is whether the answer stopped at trail.RowLimit: older changes in
+	// the window may be missing, never newer ones.
+	Cut     bool `json:"cut,omitempty"`
+	Partial bool `json:"partial,omitempty"`
 }
 
 func newEventsWorkerCmd() *cobra.Command {
@@ -68,11 +71,11 @@ func newEventsWorkerCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("events worker: %w", err)
 			}
-			changes, err := trail.Changes(table)
+			changes, cut, err := trail.WorkerChanges(table)
 			if err != nil {
 				return fmt.Errorf("events worker: %w", err)
 			}
-			out := workerTrail{ID: args[0], Since: window(since), Changes: changes, Partial: table.Partial}
+			out := workerTrail{ID: args[0], Since: window(since), Changes: changes, Cut: cut, Partial: table.Partial}
 			return render(cmd.OutOrStdout(), asJSON, out, func(w io.Writer) error { return printWorkerTrail(w, out) })
 		},
 	}
@@ -112,6 +115,9 @@ func printWorkerTrail(w io.Writer, t workerTrail) error {
 			bound = "bound"
 		}
 		fmt.Fprintf(&b, "%s  %s  %s → %s  %s  %s\n", c.At, who, c.From, c.To, group, bound)
+	}
+	if t.Cut {
+		fmt.Fprintf(&b, "cut: only the newest %d are shown; narrow --since for the older ones\n", trail.RowLimit)
 	}
 	if t.Partial {
 		b.WriteString("partial: Elasticsearch did not search everything it was asked to\n")

@@ -55,6 +55,7 @@ func readBounded(ctx context.Context, path string, timeout time.Duration) ([]byt
 	}
 	ch := make(chan result, 1)
 	go func() {
+		// #nosec G304 -- path is debugger.env_file, the user's own file in the shared config, opened read-only.
 		f, err := os.Open(path)
 		if err != nil {
 			ch <- result{err: err}

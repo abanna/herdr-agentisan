@@ -92,7 +92,7 @@ func (c *Client) GoString() string { return c.String() }
 
 // NewClient checks rawURL is http(s)://host[:port], with no user, path,
 // query or fragment, and key is not empty. hc nil uses a client with
-// QueryTimeout. Neither value is repeated in an error.
+// QueryTimeout and no proxy. Neither value is repeated in an error.
 func NewClient(rawURL, key string, hc *http.Client) (*Client, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
@@ -103,7 +103,12 @@ func NewClient(rawURL, key string, hc *http.Client) (*Client, error) {
 		return nil, fmt.Errorf("%w: %s is empty", ErrNotConfigured, KeyVar)
 	}
 	if hc == nil {
-		hc = &http.Client{Timeout: QueryTimeout}
+		// The key goes to the env file's URL and nowhere else: never through
+		// a proxy the environment names (HTTP_PROXY), which would read it in
+		// clear over http.
+		tr := http.DefaultTransport.(*http.Transport).Clone()
+		tr.Proxy = nil
+		hc = &http.Client{Timeout: QueryTimeout, Transport: tr}
 	}
 	return &Client{url: u.Scheme + "://" + u.Host, key: key, http: hc}, nil
 }

@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -73,11 +75,19 @@ func trailEnv(t *testing.T, status int, body []byte) (context.Context, func() []
 	}
 }
 
+// recordedTrail is the live check's recorded answer with its rows newest
+// first, as Elasticsearch returns them for the worker recipe.
 func recordedTrail(t *testing.T) []byte {
 	t.Helper()
 	data, err := os.ReadFile(filepath.Join("..", "trail", "testdata", "worker-trail.json"))
 	require.NoError(t, err)
-	return data
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(data, &doc))
+	values, _ := doc["values"].([]any)
+	slices.Reverse(values)
+	out, err := json.Marshal(doc)
+	require.NoError(t, err)
+	return out
 }
 
 // TestEventsWorkerTellsTheTrail: `events worker` answers the item-12
@@ -129,6 +139,28 @@ func TestEventsWorkerSaysWhenNothingChanged(t *testing.T) {
 	out, err := runIn(ctx, "events", "worker", "ha-coder-9", "--since", "2h")
 	require.NoError(t, err)
 	assert.Equal(t, "ha-coder-9, the last 2h: no status changes\n", out)
+}
+
+// TestEventsWorkerSaysWhenItCut: an answer that reached the row limit
+// ends with what was cut and what to do about it.
+func TestEventsWorkerSaysWhenItCut(t *testing.T) {
+	t.Parallel()
+	var rows []string
+	for i := trail.RowLimit - 1; i >= 0; i-- {
+		rows = append(rows, fmt.Sprintf(`["2026-10-20T00:%02d:%02dZ","w1:p1","w1:p1","idle","working","coder",false]`, i/60%60, i%60))
+	}
+	cols := `[{"name":"@timestamp","type":"date"},{"name":"attributes.agentisan.worker.id","type":"keyword"},` +
+		`{"name":"attributes.herdr.pane.id","type":"keyword"},{"name":"attributes.agentisan.status.from","type":"keyword"},` +
+		`{"name":"attributes.agentisan.status.to","type":"keyword"},{"name":"attributes.agentisan.group","type":"keyword"},` +
+		`{"name":"attributes.agentisan.worker.bound","type":"boolean"}]`
+	ctx, _ := trailEnv(t, http.StatusOK, []byte(`{"columns":`+cols+`,"values":[`+strings.Join(rows, ",")+`]}`))
+	out, err := runIn(ctx, "events", "worker", "w1:p1", "--since", "168h")
+	require.NoError(t, err)
+	assert.True(t, strings.HasSuffix(out, "cut: only the newest 1000 are shown; narrow --since for the older ones\n"), out[len(out)-120:])
+
+	out, err = runIn(ctx, "events", "worker", "w1:p1", "--json")
+	require.NoError(t, err)
+	assert.Contains(t, out, `"cut": true`)
 }
 
 // TestEventsQueryRendersTheAnswer: `events query` runs a trail query and

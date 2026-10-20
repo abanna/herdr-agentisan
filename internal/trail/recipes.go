@@ -3,6 +3,7 @@ package trail
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -24,12 +25,15 @@ const (
 // maxID bounds a worker or pane id, in bytes.
 const maxID = 128
 
-// RowLimit caps a worker trail's rows: a worker changing status every poll
-// for a day stays under it.
+// RowLimit caps a worker trail at its newest changes. The live check's
+// worker changed about 9 times an hour, so a busy day fits, and a longer
+// window says when it was cut.
 const RowLimit = 1000
 
-// fromTrail matches a query that reads the trail and nothing else.
-var fromTrail = regexp.MustCompile(`(?i)^\s*FROM\s+logs-agentisan\.otel-\*(\s|\||$)`)
+// fromTrail matches a query that reads the trail and nothing else: after
+// the pattern only a pipe or the end may follow, so neither a second
+// source (a comma, with or without spaces) nor METADATA can.
+var fromTrail = regexp.MustCompile(`(?i)^\s*FROM\s+logs-agentisan\.otel-\*\s*(\||$)`)
 
 // CheckQuery refuses an ES|QL query that does not start FROM the trail.
 // The read key bounds what any query can reach; this keeps the debugger's
@@ -51,10 +55,11 @@ var workerColumns = []string{
 }
 
 // WorkerQuery is the ES|QL for "what happened to worker X in the last
-// hour": every status change whose worker id or pane id is id, since
-// `since` ago, oldest first. Matching either id follows a worker across its
-// binding, since its events carry the pane id until a workers row binds it.
-// since is whole minutes from MinSince to MaxSince.
+// hour": the newest RowLimit status changes whose worker id or pane id is
+// id, since `since` ago, newest first, so a cut drops the oldest, never the
+// newest; WorkerChanges puts them back in order. Matching either id follows
+// a worker across its binding, since its events carry the pane id until a
+// workers row binds it. since is whole minutes from MinSince to MaxSince.
 func WorkerQuery(id string, since time.Duration) (string, error) {
 	lit, err := esqlString(id)
 	if err != nil {
@@ -67,7 +72,7 @@ func WorkerQuery(id string, since time.Duration) (string, error) {
 | WHERE event_name == %q
     AND (%s == %s OR %s == %s)
     AND @timestamp > NOW() - %d minutes
-| SORT @timestamp
+| SORT @timestamp DESC
 | KEEP %s
 | LIMIT %d`,
 		Source, telemetry.EventStatusChanged,
@@ -117,15 +122,17 @@ type Change struct {
 	Bound    bool   `json:"bound"`
 }
 
-// Changes reads a WorkerQuery answer, by column name, into its rows.
-func Changes(t Table) ([]Change, error) {
+// WorkerChanges reads a WorkerQuery answer, by column name, into its
+// changes, oldest first. cut is whether the answer reached RowLimit, so
+// older changes in the window may be missing.
+func WorkerChanges(t Table) (changes []Change, cut bool, err error) {
 	idx := map[string]int{}
 	for i, c := range t.Columns {
 		idx[c.Name] = i
 	}
 	for _, name := range workerColumns {
 		if _, ok := idx[name]; !ok {
-			return nil, fmt.Errorf("%w: the answer has no %s column", ErrUnavailable, name)
+			return nil, false, fmt.Errorf("%w: the answer has no %s column", ErrUnavailable, name)
 		}
 	}
 	str := func(row []any, name string) string {
@@ -141,5 +148,6 @@ func Changes(t Table) ([]Change, error) {
 			To: str(row, field(telemetry.AttrTo)), Group: str(row, field(telemetry.AttrGroup)), Bound: bound,
 		})
 	}
-	return out, nil
+	slices.Reverse(out)
+	return out, len(out) >= RowLimit, nil
 }

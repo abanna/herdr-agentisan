@@ -12,8 +12,8 @@ a person, the boss, or the debugger.
 
 | Command | What it answers |
 | --- | --- |
-| `events worker <id> [--since 1h] [--json]` | Every status change of one worker or pane in the window, oldest first. `<id>` is a logical id or a pane id: the id matches either, because a worker's events carry its pane id until a worker row binds it. `--since` takes whole minutes, from 1m to 168h |
-| `events query '<ES\|QL>' [--json]` | Any ES\|QL read of the trail. It must start `FROM logs-agentisan.otel-*` |
+| `events worker <id> [--since 1h] [--json]` | Every status change of one worker or pane in the window, oldest first: at most the newest 1,000, and it says when it cut older ones. `<id>` is a logical id or a pane id: the id matches either, because a worker's events carry its pane id until a worker row binds it. `--since` takes whole minutes, from 1m to 168h |
+| `events query '<ES\|QL>' [--json]` | Any ES\|QL read of the trail. It must start `FROM logs-agentisan.otel-*`, followed by a pipe or nothing: no second source |
 
 `events worker w14:p8` prints one line per change, such as
 `2026-10-20T11:29:10.415Z  w14:p8  done → working  coder  unbound`: the time,
