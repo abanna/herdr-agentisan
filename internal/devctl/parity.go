@@ -21,12 +21,17 @@ import (
 // needsHerdr is the reason the plugin link tasks are exempt from CI.
 const needsHerdr = "needs a running herdr; CI has none"
 
+// needsElastic is the reason the events' collector tasks are exempt from CI.
+const needsElastic = "runs a Docker collector into Elasticsearch; CI has no Elasticsearch"
+
 // localOnly lists documented commands that legitimately have no CI counterpart,
 // each with the reason. CI never runs the CLI or installs local hooks.
 var localOnly = map[string]string{
 	"task run:cli":           "CI never runs the interactive CLI",
 	"task plugin:link":       needsHerdr,
 	"task plugin:unlink":     needsHerdr,
+	"task otelcol:up":        needsElastic,
+	"task otelcol:down":      needsElastic,
 	"task install":           "installs into the developer's GOBIN",
 	"task tools":             "local toolchain bootstrap",
 	"uvx pre-commit install": "writes .git/hooks/pre-commit in the developer's clone",
@@ -51,6 +56,8 @@ var nonGateTasks = map[string]string{
 	"run:cli":        "CI never runs the interactive CLI",
 	"plugin:link":    needsHerdr,
 	"plugin:unlink":  needsHerdr,
+	"otelcol:up":     needsElastic,
+	"otelcol:down":   needsElastic,
 	"check":          "aggregate of the gates below it",
 	"clean":          "deletes build output",
 	"tools":          "prints pinned tool versions",

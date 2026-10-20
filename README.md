@@ -165,11 +165,13 @@ project. See ADR-001 A17.
 
 ## Workflow events
 
-With `[telemetry] endpoint = "localhost:4318"` in `herdr-agentisan.toml`, the
+With `[telemetry] endpoint = "127.0.0.1:4328"` in `herdr-agentisan.toml`, the
 daemon sends every agent status change it sees between two polls to that
 OTLP/HTTP collector as a log record, `agentisan.worker.status_changed`, for
 Elastic. Without it nothing is exported. Run the `daemon-restart` action after
-setting it. The schema is [`docs/telemetry.md`](docs/telemetry.md); see
+setting it. `task otelcol:up` runs that collector in Docker, writing to the
+`logs-agentisan.otel-default` data stream with an API key you give it. The
+schema and the setup are [`docs/telemetry.md`](docs/telemetry.md); see
 ADR-001 A21.
 
 ### Cutover from v12's `$team` push
