@@ -155,10 +155,9 @@ func TestOpenMigratesAndIsIdempotent(t *testing.T) {
 
 	s, err := store.Open(t.Context(), path)
 	require.NoError(t, err)
-	assert.Equal(t, 1, store.SchemaVersion(), "0001 is the only migration so far")
+	assert.Equal(t, 2, store.SchemaVersion(), "0001 and 0002, messaging's inbox")
 	assert.Equal(t, store.SchemaVersion(), s.UserVersion())
-	assert.Equal(t, []string{"table:focus", "table:handoffs", "table:workers", "trigger:focus_cap"}, objects(t, store.DB(s)),
-		"messages belongs to NERD-5256 and arrives in its own migration")
+	assert.Equal(t, []string{"table:focus", "table:handoffs", "table:messages", "table:workers", "trigger:focus_cap"}, objects(t, store.DB(s)))
 	at := time.Date(2026, 10, 9, 12, 0, 0, 123456789, time.UTC)
 	require.NoError(t, s.RecordFocus(t.Context(), "w1:p1", at))
 	require.NoError(t, s.Close())
@@ -860,7 +859,7 @@ func TestSchemaConstraints(t *testing.T) {
 		"a handoff updated before creation": {sql: handoff + "('w', 'w1:p1', 'w1:p2', 'pending', 5, 4)"},
 		"a focus without a pane":            {sql: "INSERT INTO focus (pane_id, focused_at) VALUES ('', 1)"},
 		"a focus without a time":            {sql: "INSERT INTO focus (pane_id, focused_at) VALUES ('w1:p1', NULL)"},
-		"a messages table":                  {sql: "INSERT INTO messages (body) VALUES ('hi')"},
+		"a message without its fields":      {sql: "INSERT INTO messages (body) VALUES ('hi')"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -895,6 +894,27 @@ func TestClosedStoreFails(t *testing.T) {
 		"FocusRows":     func() error { _, err := s.FocusRows(ctx); return err },
 		"PruneHandoffs": func() error { _, err := s.PruneHandoffs(ctx, time.Now()); return err },
 		"Pragmas":       func() error { _, err := s.Pragmas(ctx); return err },
+		"Send": func() error {
+			_, err := s.Send(ctx, store.Address{Kind: store.KindBoss, ID: "b"}, store.Daemon, "hi", time.Now())
+			return err
+		},
+		"Claim": func() error {
+			_, _, err := s.Claim(ctx, store.Address{Kind: store.KindBoss, ID: "b"}, time.Now())
+			return err
+		},
+		"Delivered":          func() error { return s.Delivered(ctx, "m", time.Now()) },
+		"Requeue":            func() error { return s.Requeue(ctx, "m", "", time.Now()) },
+		"Fail":               func() error { return s.Fail(ctx, "m", "", time.Now()) },
+		"RecoverDispatching": func() error { _, err := s.RecoverDispatching(ctx, "", time.Now()); return err },
+		"ReturnToBoss": func() error {
+			_, err := s.ReturnToBoss(ctx, "w", store.Address{Kind: store.KindBoss, ID: "b"}, time.Now())
+			return err
+		},
+		"Message":         func() error { _, err := s.Message(ctx, "m"); return err },
+		"PruneMessages":   func() error { _, err := s.PruneMessages(ctx, time.Now()); return err },
+		"BeginHandoff":    func() error { _, err := s.BeginHandoff(ctx, "w", "w1:p2", time.Now()); return err },
+		"CompleteHandoff": func() error { return s.CompleteHandoff(ctx, 1, time.Now()) },
+		"FailHandoff":     func() error { return s.FailHandoff(ctx, 1, time.Now()) },
 	} {
 		require.ErrorIs(t, op(), store.ErrStore, name)
 	}

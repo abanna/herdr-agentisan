@@ -140,12 +140,23 @@ exempts whatever is later added under that name.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
   embedded from `migrations/` and tracked by `user_version`. The daemon holds
-  the only write connection. Tests open a fresh database in a temp dir; the
-  store is never mocked.
+  the only write connection. `state.db` also holds messaging's inbox
+  (`messages.go`, migration 0002, D8 and I3): a recipient's messages are
+  claimed one at a time, oldest first, and a pending handoff (`handoffs.go`)
+  holds a worker's inbox until it completes, which rebinds the worker in the
+  same transaction. Tests open a fresh database in a temp dir; the store is
+  never mocked.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real
   socket set, and a test that reads it would toast a live session.
+- `internal/github/` — the dashboard header's GitHub reads (ADR-001 A29):
+  `gh pr list` and a GraphQL open-issue count, run through the gh CLI with an
+  explicit path, a timeout and a process group of its own, and mapped onto
+  the snapshot's PR states. `ghtest` is a checked-in stand-in gh: tests run
+  it with an environment they build, never the real gh or GitHub. The
+  daemon's collector (`internal/daemon/github.go`) runs it every 60 s beside
+  the team poll and caches each project's result for the snapshot.
 - `internal/snapshot/` — the versioned snapshot contract (ADR-001 D5/D6,
   A18): the groups and agents, the boss, and the project's PRs, issues and
   test slots. Decoding is strict: exact keys, closed enums, RFC 3339 times.
