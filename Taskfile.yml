@@ -90,11 +90,13 @@ tasks:
       - docker run --rm -e HERDR_AGENTISAN_ES_URL -e HERDR_AGENTISAN_ES_WRITE_KEY --mount "type=bind,src={{.ROOT_DIR}}/docs/config/otelcol-agentisan.yaml,dst=/etc/otelcol/agentisan.yaml,readonly" otel/opentelemetry-collector-contrib:0.159.0 validate --config=/etc/otelcol/agentisan.yaml
       - docker rm -f herdr-agentisan-otelcol >/dev/null 2>&1 || true
       - docker run -d --name herdr-agentisan-otelcol --network host --restart unless-stopped -e HERDR_AGENTISAN_ES_URL -e HERDR_AGENTISAN_ES_WRITE_KEY --mount "type=bind,src={{.ROOT_DIR}}/docs/config/otelcol-agentisan.yaml,dst=/etc/otelcol/agentisan.yaml,readonly" otel/opentelemetry-collector-contrib:0.159.0 --config=/etc/otelcol/agentisan.yaml
-      # A collector that cannot bind its port exits at once and, with a
-      # restart policy, keeps restarting: still running 3 s on is the check.
+      # A collector that cannot start, on a port already taken say, exits at
+      # once, and the restart policy keeps restarting it, so it is briefly
+      # running between attempts: 3 s on it must be running AND never have
+      # restarted. {{"{{"}} and {{"}}"}} are Task's escapes for docker's braces.
       - |
         sleep 3
-        if [ -z "$(docker ps -q --filter 'name=^herdr-agentisan-otelcol$' --filter status=running)" ]; then
+        if [ "$(docker inspect --format '{{"{{"}}.State.Running{{"}}"}} {{"{{"}}.RestartCount{{"}}"}}' herdr-agentisan-otelcol 2>/dev/null)" != "true 0" ]; then
           echo "the collector is not running: see docker logs herdr-agentisan-otelcol" >&2
           exit 1
         fi

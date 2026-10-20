@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"text/template"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -131,6 +132,17 @@ func TestCollectorTakesElasticsearchFromTheEnvironment(t *testing.T) {
 	assert.NotContains(t, cfg, "extensions", "no authenticator extension carries a credential either")
 }
 
+// render expands c as Task does before running it: its only actions are
+// {{.ROOT_DIR}} and the {{"{{"}} escapes for docker's own braces.
+func render(t *testing.T, c, root string) string {
+	t.Helper()
+	tmpl, err := template.New("cmd").Option("missingkey=error").Parse(c)
+	require.NoError(t, err)
+	var b strings.Builder
+	require.NoError(t, tmpl.Execute(&b, map[string]string{"ROOT_DIR": root}))
+	return b.String()
+}
+
 // dockerRuns returns task's commands that run a container.
 func dockerRuns(t *testing.T, task string) (runs []string, all []string) {
 	t.Helper()
@@ -166,7 +178,10 @@ func TestOtelcolTaskRunsTheShippedConfig(t *testing.T) {
 	assert.Equal(t, runs[0], all[1], "validate before anything is removed")
 	assert.True(t, strings.HasPrefix(all[2], "docker rm -f "+collectorName+" "), "then the old container goes")
 	assert.Equal(t, runs[1], all[3], "then the new one runs")
-	assert.Contains(t, all[4], "docker ps -q --filter 'name=^"+collectorName+"$' --filter status=running", "and must still be running")
+	check := render(t, all[4], t.TempDir())
+	assert.Contains(t, check, "docker inspect --format '{{.State.Running}} {{.RestartCount}}' "+collectorName,
+		"and must be running, never having restarted: a crash loop is briefly running between attempts")
+	assert.Contains(t, check, `!= "true 0"`)
 	assert.Contains(t, runs[0], " validate --config=/etc/otelcol/agentisan.yaml")
 	assert.Contains(t, runs[1], " -d --name "+collectorName+" --network host --restart unless-stopped ")
 
@@ -223,22 +238,23 @@ func TestTelemetryDocRunsTheTasksContainer(t *testing.T) {
 
 // fakeDocker is a stand-in docker for TestOtelcolUpStopsAtTheFirstFailure:
 // it appends its first two arguments to $DOCKER_LOG, fails when its
-// arguments contain $DOCKER_FAIL, and answers `ps` with $DOCKER_PS.
+// arguments contain $DOCKER_FAIL, and answers `inspect` with $DOCKER_INSPECT.
 const fakeDocker = `#!/bin/sh
 printf '%s %s\n' "$1" "$2" >> "$DOCKER_LOG"
 if [ -n "$DOCKER_FAIL" ]; then
   case "$*" in *"$DOCKER_FAIL"*) echo "docker: failed" >&2; exit 1 ;; esac
 fi
-if [ "$1" = ps ] && [ -n "$DOCKER_PS" ]; then echo "$DOCKER_PS"; fi
+if [ "$1" = inspect ] && [ -n "$DOCKER_INSPECT" ]; then echo "$DOCKER_INSPECT"; fi
 exit 0
 `
 
 // TestOtelcolUpStopsAtTheFirstFailure runs the commands `task otelcol:up`
-// runs, in order, each under sh (Task runs them with its own POSIX shell)
-// and stopping at the first that fails as Task does, against a stand-in
-// docker: a missing variable stops before any docker call, a failed
-// validate before the running collector is removed, and a collector that is
-// not running 3 s on fails the task. No case echoes a value.
+// runs, rendered as Task renders them, in order, each under sh (Task runs
+// them with its own POSIX shell) and stopping at the first that fails as
+// Task does, against a stand-in docker: a missing variable stops before any
+// docker call, a failed validate before the running collector is removed,
+// and a collector that is not running 3 s on, or has restarted, fails the
+// task. No case echoes a value.
 func TestOtelcolUpStopsAtTheFirstFailure(t *testing.T) {
 	t.Parallel()
 	_, cmds := dockerRuns(t, "otelcol:up")
@@ -247,25 +263,28 @@ func TestOtelcolUpStopsAtTheFirstFailure(t *testing.T) {
 		validate = "run --rm"
 		remove   = "rm -f"
 		start    = "run -d"
-		running  = "ps -q"
+		running  = "inspect --format"
 		all      = []string{validate, remove, start, running}
 	)
 	for name, tc := range map[string]struct {
 		env       map[string]string
-		fail, ps  string
+		fail      string
+		inspect   string // what docker inspect prints 3 s on
 		noDocker  bool
 		wantCalls []string
 		wantOut   string // "" for a clean start
 	}{
-		"a clean start":                {env: given, ps: "c0ffee", wantCalls: all},
-		"no container to remove":       {env: given, fail: "rm -f", ps: "c0ffee", wantCalls: all},
+		"a clean start":                {env: given, inspect: "true 0", wantCalls: all},
+		"no container to remove":       {env: given, fail: "rm -f", inspect: "true 0", wantCalls: all},
 		"no URL":                       {env: map[string]string{writeVar: given[writeVar]}, wantOut: urlVar},
 		"an empty URL":                 {env: map[string]string{urlVar: "", writeVar: given[writeVar]}, wantOut: urlVar},
 		"no key":                       {env: map[string]string{urlVar: given[urlVar]}, wantOut: writeVar},
 		"an empty key":                 {env: map[string]string{urlVar: given[urlVar], writeVar: ""}, wantOut: writeVar},
 		"a config that fails validate": {env: given, fail: "validate", wantCalls: []string{validate}, wantOut: "docker: failed"},
 		"a run that fails":             {env: given, fail: "--restart", wantCalls: []string{validate, remove, start}, wantOut: "docker: failed"},
-		"not running 3 s on":           {env: given, wantCalls: all, wantOut: "docker logs " + collectorName},
+		"exited by 3 s on":             {env: given, inspect: "false 1", wantCalls: all, wantOut: "docker logs " + collectorName},
+		"gone by 3 s on":               {env: given, wantCalls: all, wantOut: "docker logs " + collectorName},
+		"crash-looping, running again": {env: given, inspect: "true 3", wantCalls: all, wantOut: "docker logs " + collectorName},
 		"no docker at all":             {env: given, noDocker: true, wantOut: "docker"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -276,14 +295,15 @@ func TestOtelcolUpStopsAtTheFirstFailure(t *testing.T) {
 			}
 			// The check's `sleep 3`, made instant.
 			require.NoError(t, os.WriteFile(filepath.Join(bin, "sleep"), []byte("#!/bin/sh\nexit 0\n"), 0o700)) //nolint:gosec // an executable stand-in
-			env := []string{"PATH=" + bin, "DOCKER_LOG=" + dockerLog, "DOCKER_FAIL=" + tc.fail, "DOCKER_PS=" + tc.ps}
+			env := []string{"PATH=" + bin, "DOCKER_LOG=" + dockerLog, "DOCKER_FAIL=" + tc.fail, "DOCKER_INSPECT=" + tc.inspect}
 			for k, v := range tc.env {
 				env = append(env, k+"="+v)
 			}
 			var out []byte
 			var err error
+			root := t.TempDir()
 			for _, c := range cmds {
-				cmd := exec.CommandContext(t.Context(), "sh", "-c", c)
+				cmd := exec.CommandContext(t.Context(), "sh", "-c", render(t, c, root))
 				cmd.Env = env // only what the case sets, never the test's own
 				var o []byte
 				o, err = cmd.CombinedOutput()
