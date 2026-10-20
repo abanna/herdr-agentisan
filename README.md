@@ -154,22 +154,34 @@ description = "Agentisan: back to the previous pane"
 This takes prefix+b from herdr's default `toggle_sidebar`; see
 [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml).
 
-## `$team` on the ◆ spaces
+## `$team` and the ctx display in the sidebar
 
-The daemon pushes each `◆ <group>` workspace its `$team` token every 3 s:
-`N · ◐w ●i[ ⚠b][ ⟳r]`, with source `agentisan` and a 9 s TTL, so the
-tokens clear themselves within 9 s of the daemon stopping. `◆ boss` and
-`◆ herdr` get none. `[spaces] project` in `herdr-agentisan.toml` names the
-project the spaces belong to; with no config file they belong to one unnamed
-project. See ADR-001 A17.
+The daemon pushes each `◆ <group>` workspace, and each team's workspace, its
+`$team` token every 3 s: `4 agents · 0 working · 1 ready`, with
+` · 2 blocked` when any are, where `ready` counts the agents waiting for a
+handoff. It pushes every agent pane its context use as well, seven
+characters wide (`ctx  9%`, `ctx 56%`; `ctx  --` when the agent reports
+none), in one of three tokens by band: `$ctx_ok` up to 55%, `$ctx_warn` above
+55% and `$ctx_hot` above 65%. Both go with source `agentisan` and a 9 s TTL,
+so they clear themselves within 9 s of the daemon stopping. `◆ boss` and
+`◆ herdr` get no `$team`. `[spaces] project` in `herdr-agentisan.toml` names
+the project the spaces belong to; with no config file they belong to one
+unnamed project. See ADR-001 A17 and A28.
+
+herdr plugins cannot ship config: to show them, put the rows in
+[`docs/config/herdr-sidebar.example.toml`](docs/config/herdr-sidebar.example.toml)
+in herdr's `config.toml`. They replace rules that matched `$team`'s old ⚠ and
+⟳ glyphs.
 
 ## Workflow events
 
-With `[telemetry] endpoint = "localhost:4318"` in `herdr-agentisan.toml`, the
+With `[telemetry] endpoint = "127.0.0.1:4328"` in `herdr-agentisan.toml`, the
 daemon sends every agent status change it sees between two polls to that
 OTLP/HTTP collector as a log record, `agentisan.worker.status_changed`, for
 Elastic. Without it nothing is exported. Run the `daemon-restart` action after
-setting it. The schema is [`docs/telemetry.md`](docs/telemetry.md); see
+setting it. `task otelcol:up` runs that collector in Docker, writing to the
+`logs-agentisan.otel-default` data stream with an API key you give it. The
+schema and the setup are [`docs/telemetry.md`](docs/telemetry.md); see
 ADR-001 A21.
 
 ### Cutover from v12's `$team` push

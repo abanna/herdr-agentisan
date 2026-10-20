@@ -387,7 +387,7 @@ func TestDaemonRunPushesTeam(t *testing.T) {
 		}
 		return false
 	}, ready, 10*time.Millisecond, "daemon run pushed no $team")
-	assert.JSONEq(t, `{"workspace_id":"wN","source":"agentisan","tokens":{"team":"1 · ◐1 ●0"},"ttl_ms":9000}`, push)
+	assert.JSONEq(t, `{"workspace_id":"wN","source":"agentisan","tokens":{"team":"1 agent · 1 working · 0 ready"},"ttl_ms":9000}`, push)
 
 	cancel()
 	select {

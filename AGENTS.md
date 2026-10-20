@@ -43,6 +43,8 @@ everything.
 | Run the CLI | `task run:cli` |
 | Link the plugin into the running herdr | `task plugin:link` |
 | Unlink the plugin from herdr | `task plugin:unlink` |
+| Run the events' collector into Elasticsearch | `task otelcol:up` |
+| Stop the events' collector | `task otelcol:down` |
 | Install the binaries | `task install` |
 | Show pinned tool versions | `task tools` |
 | Rebuild the tdaddy graph | `task tdaddy:index` |
@@ -64,9 +66,9 @@ must be one CI runs unless it is declared local-only in
 next agent to "fix" a gate that was never broken.
 
 The last rows are local-only: CI never installs the git hook, runs the
-interactive CLI, links into a herdr (it has none), or installs into a
-developer's `GOBIN` — and the tdaddy rows need a binary CI cannot install
-(see below).
+interactive CLI, links into a herdr (it has none), runs the events'
+collector (it has no Elasticsearch), or installs into a developer's `GOBIN`
+— and the tdaddy rows need a binary CI cannot install (see below).
 
 Two maps in `internal/devctl/parity.go` are escape hatches from this check:
 `localOnly` (documented commands CI need not run) and `nonGateTasks` (tasks not
@@ -117,21 +119,26 @@ exempts whatever is later added under that name.
   the plugin socket (D6) that answers `health`, `back` (A16: walk the
   focus history, un-zoom the pane left, then focus the target), `snapshot`
   and the workforce ops (A23, `workforce.go`), each with a budget of its
-  own. Every poll it also rebuilds the team model, pushes `$team`
-  (`team.go`) and caches the snapshot the `snapshot` op serves, so the op
-  never calls herdr (A18, `snapshot.go`, with `SnapshotSource`, the
-  dashboard's client), and sends each status change since the last poll as
-  a workflow event (`events.go`). `daemon start` spawns a detached `daemon
-  run`; herdr's `[[startup]]` hook runs it, and the `daemon-restart` action
-  covers linking. Tests run daemons in process against herdrtest and a
-  scratch state dir, never the real ones.
+  own. Every poll it also rebuilds the team model, pushes `$team` and every
+  agent pane's ctx display (`team.go`, A28) and caches every team's
+  snapshot, with the workspaces each holds, which the `snapshot` op serves
+  by project or workspace, so the op never calls herdr (A18, A24,
+  `snapshot.go`, with `SnapshotSource`, the dashboard's client), and sends
+  each status change since the last poll as a workflow event
+  (`events.go`). `daemon start` spawns a detached `daemon run`; herdr's
+  `[[startup]]` hook runs it, and the `daemon-restart` action covers
+  linking. Tests run daemons in process against herdrtest and a scratch
+  state dir, never the real ones.
 - `internal/team/` — the team domain model (ADR-001 D5, A17): project → group
   → logical worker → current pane, built from `pane.list`, `workspace.list`,
   `tab.list`, `agent.list` and `state.db`'s `workers` rows. A `Resolver` maps
   the layout onto it: `Spaces` for the ◆ spaces, with v12's group order, and
   `Tabs` for a team's one workspace and one tab per worker (A19). Also the
-  frozen `$team` format, and the model as a snapshot v1 in the resolver's
-  group order, with the in-memory stage clock (A18) and idle clock (A23).
+  `$team` format and the ctx display's band tokens (A28), with the sidebar
+  rows that show them, `docs/config/herdr-sidebar.example.toml`, for herdr's
+  own config (`TestSidebarSnippet`), and the model as a snapshot v1 in the
+  resolver's group order, with the in-memory stage clock (A18) and idle
+  clock (A23).
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
   `team status` so far: each group's counts and members on a tabs team or
   the ◆ spaces, with idle times from the daemon's clock. The daemon runs
@@ -184,7 +191,10 @@ exempts whatever is later added under that name.
   daemon's workflow events (ADR-001 D10, A21) as OTLP log records, schema in
   `docs/telemetry.md`. With no endpoint configured it installs propagation
   only and exports nothing. `telemetrytest` records events in memory: tests
-  assert on it and never on a real collector.
+  assert on it and never on a real collector. The collector that carries the
+  events into Elasticsearch is `docs/config/otelcol-agentisan.yaml`, run by
+  `task otelcol:up`; `collector_test.go` pins its keys and the task's
+  `docker run`.
 - `.devcontainer/` — the reproducible dev environment: Go 1.26.9 plus the
   two tools `go tool` does not resolve (Task, uv).
 - `docs/architecture.md` — why the pieces are shaped this way, and the

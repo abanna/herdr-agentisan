@@ -1,0 +1,37 @@
+# herdr sidebar rows for Agentisan (ADR-001 A28). herdr plugins cannot ship
+# config: put these in herdr's own config (~/.config/herdr/config.toml) in
+# place of the [ui.sidebar.agents] and [ui.sidebar.spaces] rows you have, and
+# reload herdr's config. Keep your own workspace colour rules: the one here
+# only colours the ◆ spaces.
+#
+# Agents, line 1: the state icon, the agent's context use, then its name. The
+# daemon writes the context use every poll, seven characters wide ("ctx  9%",
+# "ctx 56%", "ctx100%"; "ctx  --" when the agent reports none), into one of
+# three tokens by band: $ctx_ok up to 55%, $ctx_warn above 55%, $ctx_hot
+# above 65%. A pane holds only one of them, so one shows, in its band's
+# colour. A colour rule cannot do this: gt and lt only match a value that is
+# all number, which "ctx 56%" is not.
+#
+# Agents, line 2: the workspace, the work item and the agentisan stage.
+#
+# Spaces, line 2: $team, the daemon's count of the space's team,
+# "4 agents · 0 working · 1 ready", with " · 2 blocked" when any are. ready
+# counts the agents waiting for a handoff. The rules match in order: red when
+# any agent is blocked, else pink when any is ready (" 0 ready", with its
+# space, matches a count of zero and nothing else, and keeps the base colour).
+#
+# The daemon renews its tokens every 3 s with a 9 s TTL, so they are gone
+# within about 9 s of it stopping. TestSidebarSnippet (internal/team) keeps
+# this in step with the daemon's keys and the $team format.
+
+[ui.sidebar.agents]
+rows = [
+  ["state_icon", { token = "$ctx_ok", fg = "#6c7086" }, { token = "$ctx_warn", fg = "#fab387", bold = true }, { token = "$ctx_hot", fg = "#f38ba8", bold = true }, { token = "agent", bold = true }],
+  [{ token = "workspace", rules = [{ starts_with = "◆", fg = "#89dceb", bold = true }] }, { token = "$item", fg = "#89b4fa" }, { token = "$stage", fg = "#a6adc8", rules = [{ contains = "READY", fg = "#a6e3a1", bold = true }, { contains = "RED", fg = "#f38ba8", bold = true }, { contains = "blocked", ignore_case = true, fg = "#f38ba8", bold = true }, { contains = "waiting", ignore_case = true, fg = "#f9e2af" }, { contains = "queued", ignore_case = true, fg = "#f9e2af" }] }],
+]
+
+[ui.sidebar.spaces]
+rows = [
+  ["state_icon", { token = "workspace", bold = true, rules = [{ starts_with = "◆", fg = "#89dceb", bold = true }] }],
+  [{ token = "$team", fg = "#94e2d5", rules = [{ contains = "blocked", fg = "#f38ba8", bold = true }, { contains = " 0 ready" }, { contains = "ready", fg = "#f5c2e7", bold = true }] }],
+]

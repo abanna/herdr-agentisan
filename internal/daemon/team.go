@@ -11,6 +11,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/settings"
+	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
 	"github.com/abanna/herdr-agentisan/internal/telemetry"
@@ -18,8 +19,9 @@ import (
 
 // TeamOptions turn on the team poll (D3, D4, D5): on start and every poll
 // after, the daemon rebuilds the team model from herdr and state.db, pushes
-// `$team` to every group target and tabs team, and caches the snapshot the
-// snapshot op serves (A18). `daemon run` always sets them.
+// `$team` to every group target and tabs team and the ctx display to every
+// agent pane (A28), and caches every team's snapshot, which the snapshot op
+// serves (A18, A24). `daemon run` always sets them.
 type TeamOptions struct {
 	// ConfigDir holds herdr-agentisan.toml (HERDR_PLUGIN_CONFIG_DIR). The
 	// poll reads every project's team from it once, when it starts (A19): a
@@ -99,10 +101,10 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 	}
 }
 
-// pollTeam pushes `$team` now and every poll until ctx ends or the daemon's
-// herdr server goes. Nothing clears the tokens when it stops: every push
-// carries team.TTL, so they expire within about 9 s, after a crash just as
-// after a clean stop.
+// pollTeam pushes `$team` and the ctx displays now and every poll until ctx
+// ends or the daemon's herdr server goes. Nothing clears the tokens when it
+// stops: every push carries team.TTL, so they expire within about 9 s, after
+// a crash just as after a clean stop.
 //
 // The teams, with the ◆ spaces' project and its colour, are read once, here.
 // A configuration that does not resolve is logged, the spaces fall back to
@@ -168,13 +170,15 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 
 // pushTeam is one poll: it lists panes, workspaces, with a tabs team
 // configured tabs, and agents; builds the model with state.db's workers
-// rows; caches the snapshot of it, with the project's GitHub header (A29);
-// and pushes each group target and tabs team its `$team`. A failed pane,
-// workspace or tab list costs the poll; a failed agent list costs only the
-// snapshot, which `$team` does not need, so the last one built with names
-// stays served; a failed push is logged and the others go on. It returns
-// ErrHerdrGone, and pushes nothing more, once a call finds the socket no
-// longer names the daemon's server.
+// rows; caches every team's snapshot, each with its project's GitHub header
+// (A29), and the workspaces each team holds (A24); pushes each group target
+// and tabs team its `$team`; and pushes every agent pane its ctx display. A
+// failed pane, workspace or tab list costs the poll; a failed agent list
+// costs only the snapshots, which `$team` does not need, so the last ones
+// built with names stay served, teams and index alike, and the ctx display
+// of a pane herdr knows only by name; a failed push is logged and the
+// others go on. It returns ErrHerdrGone, and pushes nothing more, once a
+// call finds the socket no longer names the daemon's server.
 // The model it returns is nil when a pane, workspace or tab list failed and
 // no model was built; agent names change neither which panes it holds nor
 // their statuses, so a failed agent list still gives the status events their
@@ -207,17 +211,17 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 		o.warnUnlessStopping(ctx, err, "team poll: read workers")
 		rows = nil
 	}
-	m := team.Build(team.Layout{Workspaces: workspaces, Panes: panes, Agents: agents, Tabs: tabs}, tp.cfg.resolver(), rows)
+	l := team.Layout{Workspaces: workspaces, Panes: panes, Agents: agents, Tabs: tabs}
+	m := team.Build(l, tp.cfg.resolver(), rows)
 	now := o.Now()
 	// A pane's rest is pane.list's status, so a failed agent list does not
 	// stop the idle clock.
 	tp.idle.Observe(m, now)
 	if agentsErr == nil {
 		tp.stages.Observe(m, now)
-		snap := team.Snapshot(m, tp.cfg.spaces.Project, now, tp.stages)
-		tp.header.fill(tp.cfg.spaces.Project, &snap, now)
-		if err := tp.cache.store(snap); err != nil {
-			o.Logger.Error().Err(err).Msg("team poll: cache the snapshot; the last one stays served")
+		header := func(project string, s *snapshot.Snapshot) { tp.header.fill(project, s, now) }
+		if err := tp.cache.store(m, tp.cfg.spaces.Project, now, tp.stages, header); err != nil {
+			o.Logger.Error().Err(err).Msg("team poll: cache the snapshots; a team too large to serve keeps its last one")
 		}
 	}
 	for _, t := range team.Tokens(m) {
@@ -235,7 +239,33 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 			o.Logger.Warn().Err(err).Str("workspace", t.Target.WorkspaceID).Msg("push $team")
 		}
 	}
+	if err := o.pushCtx(ctx, c, l); err != nil {
+		return nil, err
+	}
 	return &m, nil
+}
+
+// pushCtx pushes every agent pane in l its ctx display (A28), with `$team`'s
+// source and TTL. A refused push, such as to a pane closed since the list, is
+// logged and the others go on; it returns ErrHerdrGone, and pushes nothing
+// more, once a call finds the socket no longer names the daemon's server.
+func (o Options) pushCtx(ctx context.Context, c herdr.Client, l team.Layout) error {
+	for _, pt := range team.CtxTokens(l) {
+		// Once ctx ends, each push fails before it dials.
+		err := c.ReportPaneMetadata(ctx, herdr.PaneMetadata{
+			PaneID:    pt.PaneID,
+			Source:    report.Source,
+			Tokens:    pt.Tokens,
+			TTLMillis: uint64(team.TTL / time.Millisecond),
+		})
+		if errors.Is(err, ErrHerdrGone) {
+			return fmt.Errorf("push the ctx display to %s: %w", pt.PaneID, err)
+		}
+		if err != nil && ctx.Err() == nil {
+			o.Logger.Warn().Err(err).Str("pane", pt.PaneID).Msg("push the ctx display")
+		}
+	}
+	return nil
 }
 
 // warnIgnored logs a tabs team's other workspaces labelled with its name,

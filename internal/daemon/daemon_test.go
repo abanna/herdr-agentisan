@@ -971,23 +971,32 @@ func TestSocketProtocolClasses(t *testing.T) {
 		line string
 		code string // "" means ok
 	}{
-		"health":                    {line: `{"v":1,"op":"health","args":{}}` + "\n"},
-		"health without args":       {line: `{"v":1,"op":"health"}` + "\n"},
-		"no trailing newline":       {line: `{"v":1,"op":"health"}`},
-		"CRLF line ending":          {line: `{"v":1,"op":"health"}` + "\r\n"},
-		"unknown op":                {line: `{"v":1,"op":"teleport"}` + "\n", code: "unknown_op"},
-		"snapshot, no team poll":    {line: `{"v":1,"op":"snapshot"}` + "\n", code: "not_ready"},
-		"snapshot in another case":  {line: `{"v":1,"op":"Snapshot"}` + "\n", code: "unknown_op"},
-		"op in another case":        {line: `{"v":1,"op":"HEALTH"}` + "\n", code: "unknown_op"},
-		"missing version":           {line: `{"op":"health"}` + "\n", code: "unsupported_version"},
-		"newer version":             {line: `{"v":2,"op":"health"}` + "\n", code: "unsupported_version"},
-		"not JSON":                  {line: "health\n", code: "bad_request"},
-		"empty line":                {line: "\n", code: "bad_request"},
-		"two objects":               {line: `{"v":1,"op":"health"}{"v":1,"op":"health"}` + "\n", code: "bad_request"},
-		"invalid UTF-8 in the op":   {line: "{\"v\":1,\"op\":\"he\xffalth\"}\n", code: "unknown_op"},
-		"over the request size cap": {line: `{"v":1,"op":"health","args":"` + strings.Repeat("x", 1<<20) + `"}` + "\n", code: "bad_request"},
-		"op is not a string":        {line: `{"v":1,"op":7}` + "\n", code: "bad_request"},
-		"back with no history":      {line: `{"v":1,"op":"back","args":{}}` + "\n", code: "no_history"},
+		"health":                 {line: `{"v":1,"op":"health","args":{}}` + "\n"},
+		"health without args":    {line: `{"v":1,"op":"health"}` + "\n"},
+		"no trailing newline":    {line: `{"v":1,"op":"health"}`},
+		"CRLF line ending":       {line: `{"v":1,"op":"health"}` + "\r\n"},
+		"unknown op":             {line: `{"v":1,"op":"teleport"}` + "\n", code: "unknown_op"},
+		"snapshot, no team poll": {line: `{"v":1,"op":"snapshot"}` + "\n", code: "not_ready"},
+		// The args are checked before the cache is: a malformed selector is
+		// the client's mistake, whatever the daemon holds (A24).
+		"snapshot args not an object":   {line: `{"v":1,"op":"snapshot","args":[1]}` + "\n", code: "bad_request"},
+		"snapshot project not a string": {line: `{"v":1,"op":"snapshot","args":{"project":7}}` + "\n", code: "bad_request"},
+		"snapshot workspace not a string": {
+			line: `{"v":1,"op":"snapshot","args":{"workspace_id":true}}` + "\n", code: "bad_request",
+		},
+		"snapshot args null":             {line: `{"v":1,"op":"snapshot","args":null}` + "\n", code: "not_ready"},
+		"snapshot args it does not know": {line: `{"v":1,"op":"snapshot","args":{"team":"x"}}` + "\n", code: "not_ready"},
+		"snapshot in another case":       {line: `{"v":1,"op":"Snapshot"}` + "\n", code: "unknown_op"},
+		"op in another case":             {line: `{"v":1,"op":"HEALTH"}` + "\n", code: "unknown_op"},
+		"missing version":                {line: `{"op":"health"}` + "\n", code: "unsupported_version"},
+		"newer version":                  {line: `{"v":2,"op":"health"}` + "\n", code: "unsupported_version"},
+		"not JSON":                       {line: "health\n", code: "bad_request"},
+		"empty line":                     {line: "\n", code: "bad_request"},
+		"two objects":                    {line: `{"v":1,"op":"health"}{"v":1,"op":"health"}` + "\n", code: "bad_request"},
+		"invalid UTF-8 in the op":        {line: "{\"v\":1,\"op\":\"he\xffalth\"}\n", code: "unknown_op"},
+		"over the request size cap":      {line: `{"v":1,"op":"health","args":"` + strings.Repeat("x", 1<<20) + `"}` + "\n", code: "bad_request"},
+		"op is not a string":             {line: `{"v":1,"op":7}` + "\n", code: "bad_request"},
+		"back with no history":           {line: `{"v":1,"op":"back","args":{}}` + "\n", code: "no_history"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -1180,6 +1189,27 @@ func TestRunStartupPingNeverReachesAReplacement(t *testing.T) {
 	assert.Empty(t, h.srv.Requests(), "nor is the original, whose socket is gone")
 }
 
+// TestRunRecordsItsStartTimeInTheLock: a running daemon writes its own start
+// time, read through the StartTime hook (77 for this process in opts), into
+// daemon.lock, so a later stop or start can tell it from a process that
+// reused its pid. The record is decoded by the lock file's field names.
+func TestRunRecordsItsStartTimeInTheLock(t *testing.T) {
+	t.Parallel()
+	h := newHerdr(t, 22)
+	dir := shortDir(t)
+	run(t, opts(t, dir, h))
+	healthy(t, dir, h)
+	raw, err := os.ReadFile(paths(t, dir, h).Lock)
+	require.NoError(t, err)
+	var rec struct {
+		PID   int    `json:"pid"`
+		Start uint64 `json:"start"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &rec))
+	assert.Equal(t, os.Getpid(), rec.PID)
+	assert.Equal(t, uint64(77), rec.Start, "the record carries the hook's start time")
+}
+
 // TestStillServedClasses is Run's poll check (A3), through the daemon's own
 // guarded client: it pings first and checks the server's identity after
 // every ping. A replaced, removed or dead socket, or a protocol change, is
@@ -1272,4 +1302,41 @@ func TestStillServedClasses(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestStillServedChecksTheServerAfterThePing: the socket is replaced while
+// the original answers the poll's ping. The identity check after the ping
+// must end the daemon at this poll, not the next one.
+func TestStillServedChecksTheServerAfterThePing(t *testing.T) {
+	t.Parallel()
+	sock := filepath.Join(shortDir(t), "h.sock")
+	swapped := make(chan net.Listener, 1)
+	var once sync.Once
+	srv := herdrtest.StartAt(t, sock, func(r herdrtest.Request) herdrtest.Reply {
+		if r.Method == "ping" {
+			once.Do(func() {
+				if err := os.Remove(sock); err != nil {
+					t.Error(err)
+				}
+				l, err := net.Listen("unix", sock)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				swapped <- l
+			})
+		}
+		return pong(22)(r)
+	})
+	ident := mustIdentity(t, sock)
+	err := daemon.StillServedOver(t.Context(), sock, ident, 22)
+	var replacement net.Listener
+	select {
+	case replacement = <-swapped:
+	default:
+		t.Fatal("no swap happened during the ping")
+	}
+	t.Cleanup(func() { _ = replacement.Close() })
+	assert.Len(t, srv.Requests(), 1, "the ping reached the original")
+	require.ErrorIs(t, err, daemon.ErrHerdrGone, "a swap during the ping ends the daemon at this poll")
 }

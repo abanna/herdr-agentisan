@@ -27,7 +27,7 @@ var endpointHost = regexp.MustCompile(`^[A-Za-z0-9._%:-]+$`)
 
 // endpointHint is what an invalid endpoint's error says instead of echoing
 // the value, which may carry credentials (user:password@host).
-const endpointHint = "not host:port, such as localhost:4318"
+const endpointHint = "not host:port, such as 127.0.0.1:4328"
 
 // checkTelemetry checks telemetry.endpoint is host:port, as
 // HERDR_AGENTISAN_OTLP_ENDPOINT is: the exporter prefixes http:// and

@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A23, A25 to A27 and A29 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A29 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -710,6 +710,13 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
 - **Status.** One record per group, configured or found: its workers, slots, occupied and open counts, targets and members. A slot is occupied by every agent pane of the type, recorded or not, and by every pane a live `workers` row binds there, whose agent may still be starting; open is slots less occupied, never below 0. Each member has its id (its row's, else its tab's label), whether a row binds it, its pane, agent, status, `ctx` (null unless a percentage), `item`, `stage` and `idle_s`, how long the daemon has seen it idle or done. The boss's panes are listed apart, by pane id. `idle_s` comes from an in-memory clock the team poll feeds from `pane.list`'s statuses, so a failed `agent.list` does not stop it; after a restart it starts again, and a team the poll does not know, one added since the daemon started, has none until it restarts.
 - **The output.** On every path stdout is exactly one JSON object, `{"ok":true,"data":…}` or `{"ok":false,"error":{"code","message"}}`, and the exit is 1 when refused. That includes flag errors (`bad_request`) and a daemon that cannot be reached (`daemon_unavailable`). A command not built yet is absent, so the skill's wrapper reports it unavailable: until their parts, `worker retire`, `worker spawn` and `team up`, and `worker spawn --replaces` (item 5b) and `boss handoff` (item 6) after them.
 
+### A24. One snapshot per team
+
+*Amends:* the op and project bullets of A18. *Adds to:* D3 and D6. Recorded with NERD-5285, whose dashboard half, each dashboard finding its own team, follows. The snapshot contract v1 is unchanged.
+
+- **Every team, every poll.** Each poll with agent names snapshots every project in the model, its order and colour read from its project there (A19) and its GitHub header from its own project's collection (A29), and indexes the workspaces each team holds: a tabs team's one, every ◆ space, ◆ boss and ◆ herdr included. The snapshots and the index are swapped in as one value, so an op never pairs one poll's index with another poll's snapshots, except for a team over the size cap, whose workspaces follow the poll while it keeps its last snapshot. A team gone from the model is dropped from the next poll on. A team whose snapshot would not fit one answer line keeps its own last one, and the others are unaffected. A18's "the last snapshot stays" is now a failed `agent.list`'s alone, and it keeps every team and the index as they were.
+- **The op.** `{"v":1,"op":"snapshot","args":{"project"?,"workspace_id"?}}`. `project` names a team, and wins when both are given; `workspace_id` is looked up in the index; neither is the `[spaces] project`, as before. A team the model does not hold refuses with `no_team` (`daemon.ErrNoTeam`). With no ◆ space at all, asking for neither is now `no_team` too, where it was a team with no groups. Before the first poll every selector is `not_ready`, and so is a team whose snapshot has never fit. Args of the wrong type are `bad_request`; keys the op does not know are ignored.
+
 ### A25. Item and stage from a Codex pane
 
 *Settles:* A22's "Item 3 under Codex" bullet. *Clarifies:* item 3's acceptance, "work from a Codex pane", and Report commands. Verified against the codex-rs source at `rust-v0.161.0` (NERD-5279).
@@ -765,6 +772,26 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
   - The opt-in memory consolidation (`features.memories`) shuts its internal thread down the same way (`memories/write/src/runtime.rs:398-456`). The same decision covers it.
 - **D7 and the dashboard are to count `ctx` only on a pane where Herdr detects an agent**, so the value a Codex left behind, after a clean exit or a crash, is ignored. The snapshot on main reads it from every pane (`internal/team/snapshot.go`); that change belongs to NERD-5255. An expired `ctx` is unknown, as before. A notice is to fire when `ctx` crosses a level, not when it reappears (NERD-5261).
 - This changes a token-contract cell by amendment, as A5 did. D4's one writer per key is unchanged.
+
+### A28. The sidebar: the ctx display and `$team` in words
+
+*Overrides:* A17's `$team` bullet, the `$team` rules row of Verified constraints, and the `team` row of the token contract. *Supersedes:* A5's "Group and project headers" row and A8: the sidebar gets no header rows. *Adds to:* D5 and the token contract. Recorded with item 2e (NERD-5252), checked against the herdr source at v0.9.3.
+
+- **No header rows.** The user turned the header-row design down after previews of their own setup; A8's header tokens never shipped. The agents panel is to show the focused team through herdr's agent view instead, which NERD-5309 adds and records.
+- **The ctx display.** Every poll, the daemon pushes every pane herdr's agents panel lists its context use: a pane with an agent herdr detected, or one `agent.list` names, in a team or not. The value is `ctx` and the whole percentage right-aligned in four cells, so seven characters: `ctx  9%`, `ctx 56%`, `ctx100%`, and `ctx  --` when `ctx` is absent, expired or not a percentage from 0 to 100.
+  - It goes into one of three keys by band: `ctx_ok` up to 55, `ctx_warn` above 55, `ctx_hot` above 65. Each push sets all three, the two not in use empty, which clears them, so a pane never shows two.
+  - The user's rows give each band its own colour. A rule cannot band the value itself: `gt` and `lt` match only a value that parses whole as a number (`src/config/sidebar/rules.rs:159-169`), which `ctx 56%` does not.
+  - The inner spaces survive: herdr trims only a value's ends (`src/app/api_helpers.rs:267-275`), and draws a token row unwrapped, cutting only its end (`src/client/shell/agent_sidebar.rs:356-372`, `src/ui/text.rs:7-20`).
+- **`$team` in words.** `N agents · W working · R ready`, then ` · B blocked` when B is not zero, and `1 agent` for one. N still counts every pane, shells and `unknown` included; R is ⟳'s count, the panes carrying a non-empty `handoff`; B is ⚠'s. The idle count goes. The daemon has been `$team`'s only writer since the v12 cutover, so nothing else depends on the glyphs. Rules that matched ⚠ and ⟳ stop matching; the documented rows match `blocked`, then ` 0 ready`, which with its space matches only a count of zero, then `ready`.
+- **The push.** The ctx display goes with `$team`'s source, `agentisan`, and its 9,000 ms TTL, renewed every poll, so it is gone within about 9 s of the daemon stopping. A refused push is logged and the others go on. A failed `agent.list` leaves a pane herdr knows only by name without a display that poll.
+- **The rows.** herdr plugins cannot ship config, so `docs/config/herdr-sidebar.example.toml` holds the user's `[ui.sidebar.agents]` and `[ui.sidebar.spaces]` rows. Agents, line 1: the state icon, the three bands, then the name; line 2: the workspace, `$item` and `$stage`. Spaces, line 2: `$team` alone. The workspace leaves line 2 when the agent view shows one team at a time (NERD-5309). `TestSidebarSnippet` keeps the rows in step with the keys and the `$team` format.
+
+| Key | Writer | Target | Format | TTL |
+| --- | --- | --- | --- | --- |
+| `ctx_ok`, `ctx_warn`, `ctx_hot` | Daemon | Every agent pane | `ctx` and the percentage in four cells, or `ctx  --`; one of the three set, the others empty | About 9,000 ms, 3 times the poll |
+| `team` | Daemon | Group target from the resolver, or a tabs team's workspace | `N agents · W working · R ready[ · B blocked]` | Unchanged |
+
+Budget: an agent pane carries `ctx`, `item`, `stage`, `handoff` and the three bands, 7 keys, and a push sets 3; still well inside 16 per report and 32 per target.
 
 ### A29. The header's GitHub collection
 

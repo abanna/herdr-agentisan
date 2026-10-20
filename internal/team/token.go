@@ -23,26 +23,25 @@ type Counts struct {
 	// Panes counts every pane, plain shells and unknown statuses included.
 	Panes   int
 	Working int
-	// Idle counts idle and done.
-	Idle    int
 	Blocked int
 	// Ready counts the panes carrying a handoff token, whatever their
 	// status.
 	Ready int
 }
 
-// String is the frozen format, byte for byte what herdr-dashboard-v12.py
-// writes (v12:142-143): "N · ◐w ●i", then " ⚠b" and " ⟳r" when not zero.
+// String is the format ADR-001 A28 gives `$team`, in place of A17's frozen
+// v12 glyphs: "N agents · W working · R ready", then " · B blocked" when
+// any are, and "1 agent" for one. Idle and done are not counted.
 func (c Counts) String() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "%d · ◐%d ●%d", c.Panes, c.Working, c.Idle)
+	noun := "agents"
+	if c.Panes == 1 {
+		noun = "agent"
+	}
+	s := fmt.Sprintf("%d %s · %d working · %d ready", c.Panes, noun, c.Working, c.Ready)
 	if c.Blocked > 0 {
-		fmt.Fprintf(&b, " ⚠%d", c.Blocked)
+		s += fmt.Sprintf(" · %d blocked", c.Blocked)
 	}
-	if c.Ready > 0 {
-		fmt.Fprintf(&b, " ⟳%d", c.Ready)
-	}
-	return b.String()
+	return s
 }
 
 // Count counts workers for `$team`.
@@ -52,11 +51,9 @@ func Count(workers []Worker) Counts {
 		switch w.Pane.Status {
 		case StatusWorking:
 			c.Working++
-		case StatusIdle, StatusDone:
-			c.Idle++
 		case StatusBlocked:
 			c.Blocked++
-		case StatusUnknown:
+		case StatusIdle, StatusDone, StatusUnknown:
 		}
 		if w.Pane.Handoff {
 			c.Ready++
