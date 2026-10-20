@@ -27,6 +27,11 @@ const ID = "nerdsrun.agentisan"
 // BtopPane is the [[panes]] entrypoint that runs btop in a herdr popup.
 const BtopPane = "btop"
 
+// DashboardPane is the [[panes]] entrypoint that runs the team dashboard in
+// a herdr split (ADR-001 D5). `herdr plugin pane open --plugin` ID
+// `--entrypoint` DashboardPane opens it; the README's prefix+d snippet does.
+const DashboardPane = "dashboard"
+
 // Manifest is the subset of herdr-plugin.toml this plugin declares. Decoding
 // is strict: a key this struct does not know is a typo until proven
 // otherwise, so adding a section (events, panes, ...) means adding it here.
@@ -65,7 +70,12 @@ type Action struct {
 
 // Pane is a [[panes]] entry: an argv herdr runs as a terminal pane. Popup
 // sizes (width, height) are not declared here: the plugin sends them with each
-// plugin.pane.open, which overrides the manifest's.
+// plugin.pane.open, which overrides the manifest's. A split has no manifest
+// fields of its own in herdr 0.9.3: its side is the open request's
+// direction, right by default, and its size is not configurable
+// (src/app/api/plugins/manifest.rs:71-86, src/app/api/plugins/panes.rs:111-117).
+// herdr ignores a key it does not know, so strict decoding here is what
+// refuses a direction or a size that would silently do nothing.
 type Pane struct {
 	ID          string `toml:"id"`
 	Title       string `toml:"title"`

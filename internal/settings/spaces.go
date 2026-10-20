@@ -64,18 +64,43 @@ func (r Resolved) SpacesProject() string {
 	return name
 }
 
-// SpacesProject reads the project the ◆ spaces belong to from the shared
-// file in configDir, as the daemon does once when it starts. No configDir, or
-// no file in it, is the unnamed project and not an error: the daemon runs
+// SpacesColor is the colour of the project the ◆ spaces belong to, as the
+// defaults, the shared tables, the project's own table and the overrides
+// resolve it; its repo file is not read. "" when that project has no colour,
+// when the spaces belong to the unnamed project, or when Load selected a
+// project (its Profile carries the colour then).
+func (r Resolved) SpacesColor() string {
+	return r.colors[r.SpacesProject()]
+}
+
+// Spaces is what the daemon reads of the configuration once, when it
+// starts: the project the ◆ spaces belong to, and that project's colour for
+// the snapshot's header (ADR-001 A17, A18). Both are "" for the unnamed
+// project.
+type Spaces struct {
+	Project string
+	Color   string
+}
+
+// ReadSpaces reads Spaces from the shared file in configDir. No configDir,
+// or no file in it, is the unnamed project and not an error: the daemon runs
 // with no configuration at all. The read selects no project, so it touches
-// no repo and reads no environment variable.
-func SpacesProject(configDir string) (string, error) {
+// no repo, runs no D12 check and reads no environment variable; a colour set
+// only in the project's repo file is therefore not seen.
+func ReadSpaces(configDir string) (Spaces, error) {
 	if configDir == "" {
-		return "", nil
+		return Spaces{}, nil
 	}
 	res, err := Load(LoadOptions{ConfigDir: configDir, LookupEnv: func(string) (string, bool) { return "", false }})
 	if err != nil {
-		return "", err
+		return Spaces{}, err
 	}
-	return res.SpacesProject(), nil
+	return Spaces{Project: res.SpacesProject(), Color: res.SpacesColor()}, nil
+}
+
+// SpacesProject reads the project the ◆ spaces belong to, as ReadSpaces
+// does.
+func SpacesProject(configDir string) (string, error) {
+	s, err := ReadSpaces(configDir)
+	return s.Project, err
 }

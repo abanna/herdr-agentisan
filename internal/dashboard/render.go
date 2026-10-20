@@ -82,8 +82,9 @@ func (o Options) thresholds() Thresholds {
 	return o.Thresholds
 }
 
-// Selection addresses one agent: its group's index in display order (see
-// Order) and the agent's index within the group.
+// Selection addresses one agent: its group's index in the snapshot, whose
+// order the dashboard keeps (the daemon orders the groups), and the agent's
+// index within the group.
 type Selection struct {
 	Group int
 	Agent int
@@ -210,7 +211,7 @@ type span struct {
 // through it, so drawing and hit-testing can never disagree.
 type layout struct {
 	w, h   int
-	groups []snapshot.Group // display order
+	groups []snapshot.Group // the snapshot's, in its order
 	// boxed is the header in a box with a blank line under it; otherwise
 	// its lines are bare. line1 and line2 are where they are drawn, -1 for
 	// a line that is not.
@@ -255,7 +256,7 @@ func plan(f Frame, w, h int) layout {
 		return l
 	}
 
-	l.groups = Order(f.Snapshot.Groups)
+	l.groups = f.Snapshot.Groups
 	l.sel, l.selOK = f.Selection, validSelection(l.groups, f.Selection)
 	l.cols = planColumns(l.groups, f.Now, rowWidth(w))
 	selRow, groupTop, groupBottom := -1, 0, 0

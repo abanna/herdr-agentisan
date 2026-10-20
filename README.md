@@ -152,6 +152,36 @@ the last write wins; after, the daemon's next push, within 3 s, replaces the
 value v12 left on each group space. The daemon never writes `◆ herdr`, so
 v12's last value there clears itself when its 30 s TTL runs out.
 
+## The dashboard
+
+`herdr-agentisan dashboard` draws the team from the daemon (ADR-001 D5,
+A18). Once a second it asks the daemon socket for a snapshot, which the
+daemon answers from the team model its 3 s poll already builds, so drawing
+never calls herdr. Enter or a click jumps to an agent, or to a shell by its
+pane. With no daemon, the footer says `daemon not running` and the dashboard
+keeps asking.
+
+herdr runs it as the plugin's `dashboard` pane, a split beside the focused
+pane. Plugins cannot ship key bindings, so replace the `dashboard-tab.sh`
+binding on prefix+d in herdr's config (`~/.config/herdr/config.toml`) with
+this, then reload herdr's config:
+
+```toml
+[[keys.command]]
+key = "prefix+d"
+type = "shell"
+command = "herdr plugin pane open --plugin nerdsrun.agentisan --entrypoint dashboard --focus"
+description = "Agentisan: open the team dashboard"
+```
+
+prefix+d is not one of herdr's default keys. Each press opens a new split,
+where `dashboard-tab.sh` jumped to the one it had made, so close a dashboard
+with `q`. Add `--direction down` to split below the focused pane instead.
+See [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml).
+
+`herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json`
+draws a snapshot file instead, outside herdr too.
+
 ## Gates
 
 `task check` runs most of what CI runs: lint, format, vet, gosec, gitleaks,

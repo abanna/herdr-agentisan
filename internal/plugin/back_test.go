@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -93,8 +94,9 @@ func TestBackTellsTheUserWhyNothingMoved(t *testing.T) {
 func TestKeySnippetBindsBack(t *testing.T) {
 	t.Parallel()
 	sample, cfg := readKeySnippet(t)
-	require.Len(t, cfg.Keys.Command, 1)
-	bind := cfg.Keys.Command[0]
+	i := slices.IndexFunc(cfg.Keys.Command, func(k keyBinding) bool { return k.Key == "prefix+b" })
+	require.GreaterOrEqual(t, i, 0, "the sample binds no prefix+b")
+	bind := cfg.Keys.Command[i]
 
 	m, err := plugin.LoadManifest(filepath.Join("..", "..", plugin.ManifestFile))
 	require.NoError(t, err)
