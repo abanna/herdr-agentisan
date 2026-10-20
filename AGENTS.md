@@ -115,8 +115,9 @@ exempts whatever is later added under that name.
   server's `state.db`, which it holds open while it runs and records every
   `pane.focused` event in (resubscribing and resyncing on `events_lost`); and
   the plugin socket (D6) that answers `health`, `back` (A16: walk the
-  focus history, un-zoom the pane left, then focus the target) and
-  `snapshot`. Every poll it also rebuilds the team model, pushes `$team`
+  focus history, un-zoom the pane left, then focus the target), `snapshot`
+  and the workforce ops (A23, `workforce.go`), each with a budget of its
+  own. Every poll it also rebuilds the team model, pushes `$team`
   (`team.go`) and caches the snapshot the `snapshot` op serves, so the op
   never calls herdr (A18, `snapshot.go`, with `SnapshotSource`, the
   dashboard's client), and sends each status change since the last poll as
@@ -130,7 +131,12 @@ exempts whatever is later added under that name.
   the layout onto it: `Spaces` for the ◆ spaces, with v12's group order, and
   `Tabs` for a team's one workspace and one tab per worker (A19). Also the
   frozen `$team` format, and the model as a snapshot v1 in the resolver's
-  group order, with the in-memory stage clock (A18).
+  group order, with the in-memory stage clock (A18) and idle clock (A23).
+- `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
+  `team status` so far: each group's counts and members on a tabs team or
+  the ◆ spaces, with idle times from the daemon's clock. The daemon runs
+  them; `internal/cli` only asks it. Tests drive a fake herdr
+  (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
   references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check.

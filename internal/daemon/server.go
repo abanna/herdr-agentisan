@@ -118,13 +118,27 @@ type server struct {
 	back func() (BackResult, error)
 	// snapshot is the last snapshot the team poll built, encoded.
 	snapshot func() (json.RawMessage, error)
-	log      zerolog.Logger
-	wg       sync.WaitGroup
+	// ops are the ops that take args and a budget of their own: the
+	// workforce's (A23). They run under opsCtx, the daemon's own context,
+	// never under the connection: an op whose client went still finishes.
+	ops    map[string]op
+	opsCtx context.Context
+	log    zerolog.Logger
+	wg     sync.WaitGroup
+}
+
+// op is a socket op with args and a budget of its own.
+type op struct {
+	// budget bounds the op, given its args.
+	budget func(args json.RawMessage) time.Duration
+	run    func(ctx context.Context, args json.RawMessage) (any, error)
+	// code is the refusal code for one of run's errors.
+	code func(error) string
 }
 
 // listen binds the daemon socket, replacing a stale one: only the lock holder
 // calls it. The socket is the owner's only.
-func listen(path string, health func() HealthInfo, back func() (BackResult, error), snapshot func() (json.RawMessage, error), log zerolog.Logger) (*server, error) {
+func listen(opsCtx context.Context, path string, health func() HealthInfo, back func() (BackResult, error), snapshot func() (json.RawMessage, error), ops map[string]op, log zerolog.Logger) (*server, error) {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("remove stale socket %s: %w", path, err)
 	}
@@ -136,7 +150,7 @@ func listen(path string, health func() HealthInfo, back func() (BackResult, erro
 		_ = ln.Close()
 		return nil, fmt.Errorf("chmod %s: %w", path, err)
 	}
-	s := &server{ln: ln, path: path, health: health, back: back, snapshot: snapshot, log: log}
+	s := &server{ln: ln, path: path, health: health, back: back, snapshot: snapshot, ops: ops, opsCtx: opsCtx, log: log}
 	s.wg.Go(s.accept)
 	return s, nil
 }
@@ -162,14 +176,16 @@ func (s *server) handle(conn net.Conn) {
 	defer conn.Close() //nolint:errcheck // one-shot connection; the answer is written or the client is gone
 	_ = conn.SetDeadline(time.Now().Add(ioTimeout))
 	line, err := readMessage(conn)
-	resp := s.dispatch(line, err)
+	// An op with a budget of its own gets it, and an exchange more to
+	// answer in; reading the request keeps the 5 s.
+	resp := s.dispatch(line, err, func(budget time.Duration) { _ = conn.SetDeadline(time.Now().Add(budget + ioTimeout)) })
 	raw, _ := json.Marshal(resp)
 	if _, err := conn.Write(append(raw, '\n')); err != nil {
 		s.log.Debug().Err(err).Msg("daemon socket: write answer")
 	}
 }
 
-func (s *server) dispatch(line []byte, readErr error) response {
+func (s *server) dispatch(line []byte, readErr error, extend func(time.Duration)) response {
 	if readErr != nil {
 		return refuse(codeBadRequest, readErr.Error())
 	}
@@ -186,6 +202,9 @@ func (s *server) dispatch(line []byte, readErr error) response {
 	}
 	if req.V != protocolVersion {
 		return refuse(codeUnsupportedVersion, fmt.Sprintf("request version %d, this daemon speaks %d", req.V, protocolVersion))
+	}
+	if o, ok := s.ops[req.Op]; ok {
+		return s.run(req.Op, o, req.Args, extend)
 	}
 	switch req.Op {
 	case "health":
@@ -212,6 +231,25 @@ func (s *server) dispatch(line []byte, readErr error) response {
 	default:
 		return refuse(codeUnknownOp, fmt.Sprintf("unknown op %q", req.Op))
 	}
+}
+
+// run runs one op with a budget of its own.
+func (s *server) run(name string, o op, args json.RawMessage, extend func(time.Duration)) response {
+	budget := o.budget(args)
+	extend(budget)
+	ctx, cancel := context.WithTimeout(s.opsCtx, budget)
+	defer cancel()
+	res, err := o.run(ctx, args)
+	if err != nil {
+		s.log.Info().Err(err).Str("op", name).Msg("op refused")
+		return refuse(o.code(err), err.Error())
+	}
+	data, err := json.Marshal(res)
+	if err != nil {
+		return refuse("failed", fmt.Sprintf("encode the %s answer: %v", name, err))
+	}
+	s.log.Info().Str("op", name).Msg("op done")
+	return response{OK: true, Data: data}
 }
 
 func refuse(code, message string) response {
@@ -260,9 +298,16 @@ func exchangeFailed(ctx context.Context, op string, err error) error {
 	return fmt.Errorf("%w: %s: %w", ErrUnavailable, op, err)
 }
 
-// call sends one request and returns the data of an ok answer.
+// call sends one request with no args and returns the data of an ok answer,
+// within one exchange.
 func call(ctx context.Context, socket, op string) (json.RawMessage, error) {
-	ctx, cancel := context.WithTimeout(ctx, ioTimeout)
+	return callWith(ctx, socket, op, json.RawMessage(`{}`), ioTimeout)
+}
+
+// callWith sends one request with args and returns the data of an ok
+// answer, within timeout.
+func callWith(ctx context.Context, socket, op string, args json.RawMessage, timeout time.Duration) (json.RawMessage, error) {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", socket)
@@ -277,7 +322,7 @@ func call(ctx context.Context, socket, op string) (json.RawMessage, error) {
 	// dashboard quitting never waits out a wedged daemon.
 	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
 	defer stop()
-	raw, _ := json.Marshal(request{V: protocolVersion, Op: op, Args: json.RawMessage(`{}`)})
+	raw, _ := json.Marshal(request{V: protocolVersion, Op: op, Args: args})
 	if _, err := conn.Write(append(raw, '\n')); err != nil {
 		return nil, exchangeFailed(ctx, op, err)
 	}

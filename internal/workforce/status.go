@@ -1,0 +1,175 @@
+package workforce
+
+import (
+	"context"
+	"fmt"
+	"slices"
+
+	"github.com/abanna/herdr-agentisan/internal/settings"
+	"github.com/abanna/herdr-agentisan/internal/team"
+)
+
+// StatusRequest is team status.
+type StatusRequest struct {
+	Selector
+}
+
+// Member is one pane of a team: a worker, or one of the boss's panes.
+type Member struct {
+	// ID is the worker's logical id: its row's, else its tab's label (a
+	// tabs team), else its pane id.
+	ID string `json:"id"`
+	// Recorded is true when a live workers row binds the pane.
+	Recorded bool   `json:"recorded"`
+	PaneID   string `json:"pane_id"`
+	// Agent is the agent herdr detects, such as "claude"; "" for a shell.
+	Agent  string `json:"agent"`
+	Status string `json:"status"`
+	// Ctx is the context used, from the ctx token; null when absent or not
+	// a percentage, never 0 for unknown.
+	Ctx   *int   `json:"ctx"`
+	Item  string `json:"item"`
+	Stage string `json:"stage"`
+	// IdleS is how long the pane has been idle or done, in seconds, as
+	// far as this daemon has seen; null when it is not at rest.
+	IdleS *int64 `json:"idle_s"`
+}
+
+// GroupStatus is one group of a team.
+type GroupStatus struct {
+	Name string `json:"name"`
+	// Workers and Slots are the group's configured default and cap; 0 for
+	// a type found in herdr but not configured.
+	Workers int `json:"workers"`
+	Slots   int `json:"slots"`
+	// Occupied counts the panes taking a slot (see occupied); Open is
+	// Slots-Occupied, never below 0.
+	Occupied   int      `json:"occupied"`
+	Open       int      `json:"open"`
+	Configured bool     `json:"configured"`
+	Targets    []string `json:"targets"`
+	Members    []Member `json:"members"`
+}
+
+// StatusResult is team status's answer.
+type StatusResult struct {
+	Project string `json:"project"`
+	Layout  string `json:"layout"`
+	// Workspaces are the team's workspaces in herdr.
+	Workspaces []string      `json:"workspaces"`
+	Groups     []GroupStatus `json:"groups"`
+	Boss       []Member      `json:"boss"`
+}
+
+// Status reports a team: every group, configured or found, with its counts
+// and members, and the boss's panes. Unlike the ops that change a team, it
+// reports the ◆ spaces project too, when --project names it.
+func (s *Service) Status(ctx context.Context, req StatusRequest) (StatusResult, error) {
+	teams, err := s.teams()
+	if err != nil {
+		return StatusResult{}, err
+	}
+	l, err := s.readLayout(ctx)
+	if err != nil {
+		return StatusResult{}, err
+	}
+	t, err := s.selectTeam(ctx, req.Selector, teams, l)
+	if err != nil {
+		return StatusResult{}, err
+	}
+	p, err := s.profile(t.Project)
+	if err != nil {
+		return StatusResult{}, err
+	}
+	rows, err := s.Store.Workers(ctx)
+	if err != nil {
+		return StatusResult{}, fmt.Errorf("read workers: %w", err)
+	}
+	var r team.Resolver = tabsOf(t)
+	if t.Layout == settings.LayoutSpaces {
+		r = team.Spaces{Project: t.Project, Color: t.Color}
+	}
+	m := team.Build(l.Layout, r, rows)
+	var pr team.Project
+	if i := slices.IndexFunc(m.Projects, func(p team.Project) bool { return p.Name == t.Project }); i >= 0 {
+		pr = m.Projects[i]
+	}
+	out := StatusResult{Project: t.Project, Layout: t.Layout, Workspaces: slices.Clone(pr.Workspaces), Groups: []GroupStatus{}, Boss: []Member{}}
+	if out.Workspaces == nil {
+		out.Workspaces = []string{}
+	}
+	for _, w := range pr.Boss {
+		out.Boss = append(out.Boss, s.member(w, layout{}))
+	}
+	// A tabs team's worker is named by its tab's label when no row binds it.
+	labels := l
+	if t.Layout != settings.LayoutTabs {
+		labels = layout{}
+	}
+	found := map[string]team.Group{}
+	for _, g := range pr.Groups {
+		found[g.Name] = g
+	}
+	all := configured(p)
+	for name := range found {
+		if !slices.Contains(all, name) {
+			all = append(all, name)
+		}
+	}
+	for _, name := range groupOrder(all) {
+		cfg, ok := p.Groups[name]
+		g := GroupStatus{Name: name, Workers: cfg.Workers, Slots: cfg.Slots, Configured: ok, Occupied: occupied(pr, name), Targets: []string{}, Members: []Member{}}
+		g.Open = max(g.Slots-g.Occupied, 0)
+		for _, tg := range found[name].Targets {
+			g.Targets = append(g.Targets, tg.WorkspaceID)
+		}
+		for _, w := range found[name].Workers {
+			g.Members = append(g.Members, s.member(w, labels))
+		}
+		out.Groups = append(out.Groups, g)
+	}
+	return out, nil
+}
+
+// member reports one worker of the model, named by its tab's label in l
+// when no row binds it.
+func (s *Service) member(w team.Worker, l layout) Member {
+	m := Member{
+		ID: w.ID, Recorded: w.Bound, PaneID: w.Pane.ID, Agent: w.Pane.Agent, Status: string(w.Pane.Status),
+		Item: w.Pane.Item, Stage: w.Pane.Stage,
+	}
+	if !w.Bound {
+		if p, ok := l.pane(w.Pane.ID); ok {
+			if label := l.tabLabel(p.TabID); label != "" {
+				m.ID = label
+			}
+		}
+	}
+	if n, ok := team.ParseCtx(w.Pane.Ctx); ok {
+		m.Ctx = &n
+	}
+	if since, ok := s.Idle.Since(w.Pane.ID); ok {
+		idle := max(int64(s.now().Sub(since).Seconds()), 0)
+		m.IdleS = &idle
+	}
+	return m
+}
+
+// occupied is how many of a type's slots are taken in a team: every pane of
+// the type's group running an agent, recorded or not (a worker started by
+// hand counts), and every pane a live row binds there, whose agent may still
+// be starting.
+func occupied(pr team.Project, typ string) int {
+	n := 0
+	for _, g := range pr.Groups {
+		if g.Name != typ {
+			continue
+		}
+		for _, w := range g.Workers {
+			if w.Bound || w.Pane.IsAgent() {
+				n++
+			}
+		}
+	}
+	return n
+}
