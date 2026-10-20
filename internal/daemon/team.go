@@ -125,12 +125,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 	}
 	o.Logger.Info().Str("project", cfg.spaces.Project).Str("color", cfg.spaces.Color).Strs("tabs_teams", tabs).Msg("team poll running")
 	tp := teamPoll{cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, cache: cache, header: header}
-	onServer := func() error {
-		if !o.sameServer(ident) {
-			return fmt.Errorf("%w: the socket now names another server, or none", ErrHerdrGone)
-		}
-		return nil
-	}
+	onServer := o.onServer(ident)
 	c := herdr.Client{SocketPath: o.HerdrSocket, Dialed: onServer}
 	tick := time.NewTicker(o.Poll)
 	defer tick.Stop()

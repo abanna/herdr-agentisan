@@ -156,7 +156,10 @@ func (w *walker) went(p plan, i int) {
 // back is the back op: from the focus history and herdr's panes, it goes to
 // the newest older pane the walk has not passed, un-zooming the user's pane
 // and then focusing the target. With nowhere to go it is ErrNoHistory; a
-// herdr call that fails stops it there with ErrHerdrCall.
+// herdr call that fails stops it there with ErrHerdrCall. So does one the
+// daemon's guarded client refuses because the socket names another server
+// now (A3, ErrHerdrGone): it sends nothing, so after a live handoff Back
+// moves nothing on either server.
 func (o Options) back(ctx context.Context, st *store.Store, w *walker) (BackResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, o.BackBudget)
 	defer cancel()
