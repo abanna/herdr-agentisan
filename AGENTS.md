@@ -154,6 +154,11 @@ exempts whatever is later added under that name.
   it with an environment they build, never the real gh or GitHub. The
   daemon's collector (`internal/daemon/github.go`) runs it every 60 s beside
   the team poll and caches each project's result for the snapshot.
+- `internal/testslots/` — the dashboard header's test slots (ADR-001 A31):
+  which of `[tests] locks` some process holds a lock on, read from the
+  kernel's `/proc/locks` every team poll without opening or locking a lock
+  file. Tests hold real locks on temp files and read them back; the parser
+  is tested on its own against written lines.
 - `internal/snapshot/` — the versioned snapshot contract (ADR-001 D5/D6,
   A18): the groups and agents, the boss, and the project's PRs, issues and
   test slots. Decoding is strict: exact keys, closed enums, RFC 3339 times.

@@ -20,7 +20,8 @@ import (
 //     (Spaces.GroupOrder for the ◆ spaces); the dashboard keeps it;
 //   - the boss: the first agent pane, by pane id, in the boss's place, or
 //     none when no agent runs there. The contract has one boss, and a shell
-//     there (this dashboard's own pane, say) is not one;
+//     there (this dashboard's own pane, say) is not one. Its started_at is
+//     when clock first saw that pane run an agent there (A31);
 //   - the project's Color, when it has one, as its only reported state.
 //
 // A project with no entry in m, one herdr shows no workspace of, is its name
@@ -46,6 +47,10 @@ func Snapshot(m Model, project string, at time.Time, clock *StageClock) snapshot
 	for _, w := range pr.Boss {
 		if w.Pane.IsAgent() {
 			s.Boss = &snapshot.Boss{Agent: row(w.Pane, clock)}
+			if since, ok := clock.BossSince(w.Pane.ID); ok {
+				since = since.UTC()
+				s.Boss.StartedAt = &since
+			}
 			break
 		}
 	}
@@ -128,12 +133,15 @@ func ParseCtx(s string) (int, bool) {
 }
 
 // StageClock remembers, for each pane, the stage it holds and when the
-// daemon first saw it there: stage_started_at (ADR-001 A18). It is held in
+// daemon first saw it there: stage_started_at (ADR-001 A18). For each agent
+// pane in a boss's place it also remembers when the daemon first saw it
+// there: the boss's started_at, its runtime's start (A31). It is held in
 // memory only, so a restarted daemon starts it fresh. The zero value is
 // ready to use; a nil clock knows no start. It is not safe for concurrent
 // use: the team poll alone observes it.
 type StageClock struct {
 	seen map[string]stageSeen
+	boss map[string]time.Time
 }
 
 type stageSeen struct {
@@ -144,12 +152,16 @@ type stageSeen struct {
 // Observe records the stages of every pane in m at now: a pane whose stage
 // is new, or changed, starts at now; one whose stage is unchanged keeps its
 // start. A pane that is not in m, or holds no stage, is forgotten, so the
-// same stage seen again later starts again.
+// same stage seen again later starts again. Likewise an agent pane in a
+// boss's place starts at now when it is new there, and keeps its start
+// while it stays; one that leaves that place, or stops running an agent, is
+// forgotten.
 func (c *StageClock) Observe(m Model, now time.Time) {
 	if c == nil {
 		return
 	}
 	next := map[string]stageSeen{}
+	boss := map[string]time.Time{}
 	note := func(p Pane) {
 		if p.Stage == "" {
 			return
@@ -163,6 +175,14 @@ func (c *StageClock) Observe(m Model, now time.Time) {
 	for _, pr := range m.Projects {
 		for _, w := range pr.Boss {
 			note(w.Pane)
+			if !w.Pane.IsAgent() {
+				continue
+			}
+			if since, ok := c.boss[w.Pane.ID]; ok {
+				boss[w.Pane.ID] = since
+			} else {
+				boss[w.Pane.ID] = now
+			}
 		}
 		for _, g := range pr.Groups {
 			for _, w := range g.Workers {
@@ -170,7 +190,17 @@ func (c *StageClock) Observe(m Model, now time.Time) {
 			}
 		}
 	}
-	c.seen = next
+	c.seen, c.boss = next, boss
+}
+
+// BossSince is when the pane paneID was first seen running an agent in a
+// boss's place, and false when the clock does not know it there.
+func (c *StageClock) BossSince(paneID string) (time.Time, bool) {
+	if c == nil {
+		return time.Time{}, false
+	}
+	since, ok := c.boss[paneID]
+	return since, ok
 }
 
 // Since is when the pane paneID was first seen at stage, and false when the

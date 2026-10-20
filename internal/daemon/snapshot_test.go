@@ -101,14 +101,14 @@ func fullTeam() ([]herdr.WorkspaceInfo, []map[string]any, []map[string]any) {
 //go:fix inline
 
 // wantFullTeam is fullTeam's snapshot at t0, by hand: the groups in v12's
-// order, then the rest by name; the rows by pane id; every stage first seen
-// at t0.
+// order, then the rest by name; the rows by pane id; every stage, and the
+// boss, first seen at t0.
 func wantFullTeam() snapshot.Snapshot {
 	return snapshot.Snapshot{
 		V: 1, At: t0, Team: "agentisan", Project: &snapshot.Project{Color: "#7c3aed"},
 		Boss: &snapshot.Boss{Agent: snapshot.Agent{
 			Name: "boss", PaneID: "wJ:p1", Status: "working", Ctx: new(23), Item: "#867", Stage: "review", StageStartedAt: new(t0),
-		}},
+		}, StartedAt: new(t0)},
 		Groups: []snapshot.Group{
 			{Name: "coders", Agents: []snapshot.Agent{
 				{Name: "pee01", PaneID: "wN:p1", Status: "working", Ctx: new(40), Item: "NERD-5255", Stage: "build_test", StageStartedAt: new(t0)},

@@ -67,3 +67,10 @@ func WithGitHubTicks(g GitHubOptions, ticks <-chan time.Time) GitHubOptions {
 	g.ticks = ticks
 	return g
 }
+
+// WithProcLocks returns t with procLocks standing in for /proc/locks when
+// the team poll counts the test slots.
+func WithProcLocks(t TeamOptions, procLocks string) TeamOptions {
+	t.procLocks = procLocks
+	return t
+}
