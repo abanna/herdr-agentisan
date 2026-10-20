@@ -1,0 +1,52 @@
+# The workflow events' collector (docs/telemetry.md): the daemon's OTLP/HTTP
+# log records into Elasticsearch, in the data stream logs-agentisan.otel-default.
+# `task otelcol:up` runs it in Docker; any otelcol-contrib runs it with
+# `otelcol-contrib --config docs/config/otelcol-agentisan.yaml`.
+#
+# Nothing secret or machine-specific lives here. The collector reads
+# Elasticsearch's URL and an API key that can only write that stream from its
+# environment, HERDR_AGENTISAN_ES_URL and HERDR_AGENTISAN_ES_WRITE_KEY.
+# internal/telemetry/collector_test.go pins every key below.
+
+receivers:
+  otlp:
+    protocols:
+      # Plaintext and unauthenticated, so loopback only. The port is the
+      # sample's [telemetry] endpoint: 4318 is the usual one, and is often
+      # another collector's already.
+      http:
+        endpoint: 127.0.0.1:4328
+
+processors:
+  # The exporter routes each record to logs-<dataset>.otel-<namespace>.
+  # Upsert, so nothing a sender puts on its resource picks another stream; a
+  # record-level data_stream.* would still win, and the key's privileges
+  # refuse that write.
+  resource/agentisan:
+    attributes:
+      - key: data_stream.dataset
+        value: agentisan
+        action: upsert
+      - key: data_stream.namespace
+        value: default
+        action: upsert
+
+exporters:
+  elasticsearch:
+    endpoint: ${env:HERDR_AGENTISAN_ES_URL}
+    api_key: ${env:HERDR_AGENTISAN_ES_WRITE_KEY}
+    # otel is the default mode; this refuses a batch asking for another.
+    mapping:
+      allowed_modes: [otel]
+
+service:
+  telemetry:
+    metrics:
+      # The collector's own metrics listen on :8888 by default, which a
+      # second collector on the host network finds taken.
+      level: none
+  pipelines:
+    logs:
+      receivers: [otlp]
+      processors: [resource/agentisan]
+      exporters: [elasticsearch]
