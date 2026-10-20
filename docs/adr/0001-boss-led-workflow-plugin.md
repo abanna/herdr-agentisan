@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A22, A24 and A25 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A22, A24, A25 and A29 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -704,7 +704,7 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
 
 *Amends:* the op and project bullets of A18. *Adds to:* D3 and D6. Recorded with NERD-5285, whose dashboard half, each dashboard finding its own team, follows. The snapshot contract v1 is unchanged.
 
-- **Every team, every poll.** Each poll with agent names snapshots every project in the model, its order and colour read from its project there (A19), and indexes the workspaces each team holds: a tabs team's one, every ◆ space, ◆ boss and ◆ herdr included. The snapshots and the index are swapped in as one value, so an op never pairs one poll's index with another poll's snapshots. A team gone from the model is dropped from the next poll on. A team whose snapshot would not fit one answer line keeps its own last one, and the others are unaffected. A18's "the last snapshot stays" is now a failed `agent.list`'s alone, and it keeps every team and the index as they were.
+- **Every team, every poll.** Each poll with agent names snapshots every project in the model, its order and colour read from its project there (A19) and its GitHub header from its own project's collection (A29), and indexes the workspaces each team holds: a tabs team's one, every ◆ space, ◆ boss and ◆ herdr included. The snapshots and the index are swapped in as one value, so an op never pairs one poll's index with another poll's snapshots. A team gone from the model is dropped from the next poll on. A team whose snapshot would not fit one answer line keeps its own last one, and the others are unaffected. A18's "the last snapshot stays" is now a failed `agent.list`'s alone, and it keeps every team and the index as they were.
 - **The op.** `{"v":1,"op":"snapshot","args":{"project"?,"workspace_id"?}}`. `project` names a team, and wins when both are given; `workspace_id` is looked up in the index; neither is the `[spaces] project`, as before. A team the model does not hold refuses with `no_team` (`daemon.ErrNoTeam`). With no ◆ space at all, asking for neither is now `no_team` too, where it was a team with no groups. Before the first poll every selector is `not_ready`, and so is a team whose snapshot has never fit. Args of the wrong type are `bad_request`; keys the op does not know are ignored.
 
 ### A25. Item and stage from a Codex pane
@@ -725,3 +725,28 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
   - A Codex `allow` rule for `herdr-agentisan report stage` would not change that. A rule bypasses the sandbox only when every part of the top-level tool command matches (`core/src/exec_policy.rs:440-455`), and Agentisan runs the report from inside its own step scripts.
   - The worker launch settings belong to NERD-5278.
   - Binding a Codex thread to its pane from the `report codex` hook, so that a stage could find its pane by `CODEX_THREAD_ID`, is deferred. It would add a key to the token contract, and the default sandbox would still deny the connect.
+
+### A29. The header's GitHub collection
+
+*Adds to:* D3, D5 and A18. *Overrides:* A18's "PRs, issues and slots stay unreported until item 9", for the PRs and the issue count. Recorded with item 9, part a (NERD-5257). The test slots and the boss's runtime are part b.
+
+- **The collector.** Beside the team poll, the daemon collects every project in the shared file that has a `github` repo, read once at start. For each it runs `gh pr list --repo=<repo> --state=open --limit=100 --json=number,headRefName,mergeStateStatus,reactionGroups,statusCheckRollup`, then a GraphQL count of open issues. The count is exact; herdr-status.sh's `gh issue list` stopped at 300. The collector runs at start and every 60 s on its own ticker, so GitHub is asked once an interval per repo however many dashboards read. Each team poll copies its project's last result into the snapshot; the snapshot op still runs nothing.
+- **gh, not a token.** gh's own login (the keyring, or `GH_TOKEN` and `GITHUB_TOKEN`) is the only credential. No secret passes through the daemon, and it never runs `op`.
+  - `daemon run` finds gh on the PATH herdr gave it. With a repo to collect and no gh there, the daemon logs it once and reports no PRs or issues.
+  - Each call has a 15 s timeout and runs as the leader of its own process group, killed whole on a timeout, on a cancel, or once it prints more than 4 MiB.
+  - gh gets the daemon's environment plus `GH_PROMPT_DISABLED=1`, `NO_COLOR=1` and `GH_NO_UPDATE_NOTIFIER=1`.
+  - The repo must be owner/name. It is passed as `--repo=<repo>`, and the owner and name as `-f` raw fields, so no value reads as a flag or a file.
+- **Failures.** A call that fails keeps its project's last good PRs, or count, reported for 5 intervals; then they are not reported at all, never shown as none and never staler. The daemon logs a repo's call when it starts failing or fails differently, and when it recovers, not every interval. A hanging gh holds up neither `$team` nor the snapshot.
+- **The mapping.** It follows herdr-status.sh, with three departures.
+  - PRs on a `release-please--` branch are skipped. The rest come by number, each once.
+  - **CI** is `failure` if any check is FAILURE, CANCELLED, TIMED_OUT or ERROR. Departure 1: STARTUP_FAILURE and ACTION_REQUIRED count as failures too.
+  - CI is `pending` when there are no checks, as the script had it, or when any check is QUEUED, IN_PROGRESS, WAITING, PENDING, REQUESTED, EXPECTED, STALE, or COMPLETED with no conclusion yet. It is `success` when every check is SUCCESS, SKIPPED or NEUTRAL.
+  - Departure 2: a commit status counts by its `state`. The script read only check runs, so a commit status kept it ⏳ forever.
+  - Departure 3: a value GitHub does not document is `unknown`, where the script showed ⏳. A new value is never read as a pass.
+  - **Codex** is `approved` on a 👍 from anyone, as the script counted it, and otherwise `pending`. A 👍 is not tied to the PR's head commit. `findings` needs Codex's own review data, which gh's reactions do not carry; that is a follow-up.
+  - **Merge** is `mergeStateStatus` lower-cased, or `unknown` for a value the contract does not know. So every state the daemon reports decodes under the strict contract.
+- **One mark per PR.** The dashboard draws herdr-status.sh's mark from the three states. CI decides first: ✗ a check failed, ⏳ pending, ? a CI state it cannot read. Once every check passed: ✓ with a 👍 and a clean merge, 💬 for Codex's findings, ? for a Codex state it cannot read, and otherwise …. In full it shows `#886 ✓ clean`, compact `#886✓`, then a count.
+- **What … means without Codex.** It means waiting for a 👍, or for a clean merge. On a repo with no Codex reviewer, this one included, the 👍 is the user's, since the user is the final reviewer. So a green, clean PR shows … until the user gives it a 👍 or merges it.
+- **No contract change.** `project.prs` and `project.issues` have been in snapshot v1 since item 8; no key is added.
+- **Per-team snapshots (A24).** The collected state is held per project name and copied into a snapshot at one place, so a per-project snapshot takes it the same way. Two teams of one project share a header.
+- **Cutover.** herdr-status.sh, run as herdr's `tab_bar_right`, also shows the test slots, which come in part b. Retire it, and the `tab_bar_right` command, once part b ships.

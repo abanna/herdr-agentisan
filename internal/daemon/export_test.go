@@ -59,14 +59,21 @@ func CacheSnapshot(s snapshot.Snapshot) (json.RawMessage, error) {
 }
 
 // TeamCache is the snapshot op's cache, filled as the team poll fills it,
-// with no stage clock.
+// with no stage clock and no GitHub header.
 type TeamCache struct{ c snapshotCache }
 
 // Store caches every team in m, built at at, with spaces the team an op
 // selecting nothing gets.
 func (t *TeamCache) Store(m team.Model, spaces string, at time.Time) error {
-	return t.c.store(m, spaces, at, nil)
+	return t.c.store(m, spaces, at, nil, nil)
 }
 
 // Load is what the snapshot op answers sel with.
 func (t *TeamCache) Load(sel Selector) (json.RawMessage, error) { return t.c.load(sel) }
+
+// WithGitHubTicks returns g with ticks standing in for its interval's
+// ticker, so a test says when each round after the first runs.
+func WithGitHubTicks(g GitHubOptions, ticks <-chan time.Time) GitHubOptions {
+	g.ticks = ticks
+	return g
+}
