@@ -135,8 +135,12 @@ exempts whatever is later added under that name.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
   embedded from `migrations/` and tracked by `user_version`. The daemon holds
-  the only write connection. Tests open a fresh database in a temp dir; the
-  store is never mocked.
+  the only write connection. `state.db` also holds messaging's inbox
+  (`messages.go`, migration 0002, D8 and I3): a recipient's messages are
+  claimed one at a time, oldest first, and a pending handoff (`handoffs.go`)
+  holds a worker's inbox until it completes, which rebinds the worker in the
+  same transaction. Tests open a fresh database in a temp dir; the store is
+  never mocked.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real
