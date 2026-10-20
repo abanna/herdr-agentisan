@@ -24,8 +24,9 @@ import (
 )
 
 // teamHerdr is a fakeHerdr that also answers what the team poll asks: a
-// layout of workspaces, tabs, panes and agents, and
-// workspace.report_metadata, which it refuses for the workspaces in refuse.
+// layout of workspaces, tabs, panes and agents, workspace.report_metadata and
+// pane.report_metadata, which it refuses for the workspaces and panes in
+// refuse.
 type teamHerdr struct {
 	*fakeHerdr
 	mu         sync.Mutex
@@ -82,6 +83,17 @@ func (th *teamHerdr) serveTeam(normal herdrtest.Handler) herdrtest.Handler {
 				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "server_unavailable", Message: "busy"}}
 			}
 			return herdrtest.Reply{Result: map[string]any{"type": "agent_list", "agents": append([]map[string]any{}, th.agents...)}}
+		case "pane.report_metadata":
+			var params struct {
+				PaneID string `json:"pane_id"`
+			}
+			_ = json.Unmarshal(r.Params, &params)
+			th.mu.Lock()
+			defer th.mu.Unlock()
+			if th.refuse[params.PaneID] {
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "pane_not_found", Message: "pane " + params.PaneID + " not found"}}
+			}
+			return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
 		case "workspace.report_metadata":
 			var params struct {
 				WorkspaceID string `json:"workspace_id"`
@@ -126,6 +138,24 @@ func pushes(t *testing.T, srv *herdrtest.Server) map[string][]string {
 	return out
 }
 
+// panePushes returns the params of every pane.report_metadata srv got, by
+// pane id, in order.
+func panePushes(t *testing.T, srv *herdrtest.Server) map[string][]string {
+	t.Helper()
+	out := map[string][]string{}
+	for _, r := range srv.Requests() {
+		if r.Method != "pane.report_metadata" {
+			continue
+		}
+		var params struct {
+			PaneID string `json:"pane_id"`
+		}
+		require.NoError(t, json.Unmarshal(r.Params, &params))
+		out[params.PaneID] = append(out[params.PaneID], string(r.Params))
+	}
+	return out
+}
+
 // lists counts the workspace.list requests srv got: one per poll.
 func lists(srv *herdrtest.Server) int {
 	n := 0
@@ -138,18 +168,18 @@ func lists(srv *herdrtest.Server) int {
 }
 
 // teamCalls returns the requests srv got that only the team poll makes:
-// workspace.list, tab.list and the pushes. The daemon's own client (HerdrClient) has
-// neither. pane.list is left out because focus lists the panes too: focus,
-// like Run's ping, has no Dialed hook and finds a replaced socket by its own
-// identity check, so a call of theirs dialled just after a swap can still
-// reach the replacement (focus.go; stillServed in daemon.go). Every team
-// pane.list that a replacement answers is followed, on the same client, by a
-// workspace.list, so a team poll that reached the replacement shows here all
-// the same.
+// workspace.list, tab.list, agent.list and the pushes. The daemon's own
+// client (HerdrClient) makes none of them. pane.list is left out because
+// focus lists the panes too: focus, like Run's ping, has no Dialed hook and
+// finds a replaced socket by its own identity check, so a call of theirs
+// dialled just after a swap can still reach the replacement (focus.go;
+// stillServed in daemon.go). Every team pane.list that a replacement answers
+// is followed, on the same client, by a workspace.list, so a team poll that
+// reached the replacement shows here all the same.
 func teamCalls(srv *herdrtest.Server) []string {
 	var out []string
 	for _, r := range srv.Requests() {
-		if r.Method == "workspace.list" || r.Method == "tab.list" || r.Method == "agent.list" || r.Method == "workspace.report_metadata" {
+		if r.Method == "workspace.list" || r.Method == "tab.list" || r.Method == "agent.list" || r.Method == "workspace.report_metadata" || r.Method == "pane.report_metadata" {
 			out = append(out, r.Method)
 		}
 	}
@@ -210,13 +240,12 @@ func liveSpaces() ([]herdr.WorkspaceInfo, []map[string]any) {
 // wantPushes are the exact params each group space of liveSpaces receives,
 // every poll: its own $team, source agentisan, TTL 9000 ms, and no other
 // token. Written out by hand rather than from the package's constants, with
-// the glyphs as JSON escapes so the test cannot share a mistyped glyph with
-// the code: \u00b7 ·, \u25d0 ◐, \u25cf ●, \u26a0 ⚠, \u27f3 ⟳. An escape
-// takes exactly four hex digits, so \u25d01 is ◐ then 1.
+// the middle dot as the JSON escape \u00b7 so the test cannot share a
+// mistyped glyph with the code.
 var wantPushes = map[string]string{
-	"wN": `{"workspace_id":"wN","source":"agentisan","tokens":{"team":"4 \u00b7 \u25d01 \u25cf1 \u26a01 \u27f31"},"ttl_ms":9000}`,
-	"wY": `{"workspace_id":"wY","source":"agentisan","tokens":{"team":"1 \u00b7 \u25d00 \u25cf1"},"ttl_ms":9000}`,
-	"w0": `{"workspace_id":"w0","source":"agentisan","tokens":{"team":"0 \u00b7 \u25d00 \u25cf0"},"ttl_ms":9000}`,
+	"wN": `{"workspace_id":"wN","source":"agentisan","tokens":{"team":"4 agents \u00b7 1 working \u00b7 1 ready \u00b7 1 blocked"},"ttl_ms":9000}`,
+	"wY": `{"workspace_id":"wY","source":"agentisan","tokens":{"team":"1 agent \u00b7 0 working \u00b7 0 ready"},"ttl_ms":9000}`,
+	"w0": `{"workspace_id":"w0","source":"agentisan","tokens":{"team":"0 agents \u00b7 0 working \u00b7 0 ready"},"ttl_ms":9000}`,
 }
 
 // TestRunPushesTeamToEachGroupSpace is D4's $team on the spaces layout: on
@@ -240,10 +269,111 @@ func TestRunPushesTeamToEachGroupSpace(t *testing.T) {
 	}
 }
 
+// ctxPush is the exact params of the ctx display push to pane: value in the
+// band key, the other two bands cleared, source agentisan, TTL 9000 ms.
+// Written out by hand rather than from the package's constants.
+func ctxPush(pane, key, value string) string {
+	bands := map[string]string{"ctx_ok": "", "ctx_warn": "", "ctx_hot": ""}
+	bands[key] = value
+	return fmt.Sprintf(`{"pane_id":%q,"source":"agentisan","tokens":{"ctx_ok":%q,"ctx_warn":%q,"ctx_hot":%q},"ttl_ms":9000}`,
+		pane, bands["ctx_ok"], bands["ctx_warn"], bands["ctx_hot"])
+}
+
+// wantCtx are the ctx display pushes liveSpaces' agent panes receive, every
+// poll: every pane with an agent, the boss's and one outside every team
+// included, and no shell.
+var wantCtx = map[string]string{
+	"wJ:p1": ctxPush("wJ:p1", "ctx_ok", "ctx  --"),
+	"wN:p1": ctxPush("wN:p1", "ctx_ok", "ctx 40%"),
+	"wN:p2": ctxPush("wN:p2", "ctx_ok", "ctx  --"),
+	"wN:p3": ctxPush("wN:p3", "ctx_ok", "ctx  --"),
+	"wY:p1": ctxPush("wY:p1", "ctx_ok", "ctx  --"),
+	"w2:p1": ctxPush("w2:p1", "ctx_ok", "ctx  --"),
+}
+
+// setToken sets a token on the pane th lists as id, or removes it when value
+// is empty. It copies what it changes: the server encodes a reply after the
+// lock is released.
+func (th *teamHerdr) setToken(id, key, value string) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	panes := make([]map[string]any, 0, len(th.panes))
+	for _, p := range th.panes {
+		if p["pane_id"] == id {
+			p = maps.Clone(p)
+			tokens := map[string]string{}
+			if old, ok := p["tokens"].(map[string]string); ok {
+				maps.Copy(tokens, old)
+			}
+			tokens[key] = value
+			if value == "" {
+				delete(tokens, key)
+			}
+			p["tokens"] = tokens
+		}
+		panes = append(panes, p)
+	}
+	th.panes = panes
+}
+
+// TestRunPushesTheCtxDisplayToEveryAgentPane is A28's ctx display: on every
+// poll, every pane herdr's agents panel lists gets its ctx as a seven-character
+// display in its band's token, the other two cleared, source agentisan, TTL
+// 9000 ms. That is every pane with an agent herdr detected or agent.list
+// names, in a team or not; a shell gets none, and the display follows the
+// pane's ctx from one poll to the next.
+func TestRunPushesTheCtxDisplayToEveryAgentPane(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	th.setToken("wN:p3", "ctx", "70")
+	th.setToken("wY:p1", "ctx", "58")
+	th.agents = []map[string]any{{"pane_id": "w12:p1", "name": "hooked"}}
+	run(t, teamOpts(t, shortDir(t), th, ""))
+
+	polled(t, th.srv, 2)
+	want := maps.Clone(wantCtx)
+	want["wN:p3"] = ctxPush("wN:p3", "ctx_hot", "ctx 70%")
+	want["wY:p1"] = ctxPush("wY:p1", "ctx_warn", "ctx 58%")
+	want["w12:p1"] = ctxPush("w12:p1", "ctx_ok", "ctx  --")
+	got := panePushes(t, th.srv)
+	assert.ElementsMatch(t, slices.Collect(maps.Keys(want)), slices.Collect(maps.Keys(got)), "every agent pane, and no shell")
+	for pane, params := range got {
+		assert.GreaterOrEqual(t, len(params), 2, "%s is pushed on every poll, renewing its TTL", pane)
+		for _, p := range params {
+			assert.JSONEq(t, want[pane], p)
+		}
+	}
+
+	th.setToken("wN:p3", "ctx", "")
+	polled(t, th.srv, 1) // a poll in flight may have listed the old ctx
+	before := len(panePushes(t, th.srv)["wN:p3"])
+	polled(t, th.srv, 1)
+	for _, p := range panePushes(t, th.srv)["wN:p3"][before:] {
+		assert.JSONEq(t, ctxPush("wN:p3", "ctx_ok", "ctx  --"), p, "an expired ctx moves the pane back to the ok band")
+	}
+}
+
+// TestNoCtxDisplayWithoutAnAgent: a layout of plain shells gets `$team` and
+// no ctx display: there is no agent pane to push one to.
+func TestNoCtxDisplayWithoutAnAgent(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	ws, _ := liveSpaces()
+	th.layout(ws, []map[string]any{
+		{"pane_id": "wN:p1", "workspace_id": "wN", "agent": nil, "agent_status": "unknown", "focused": false, "tokens": map[string]string{"ctx": "40"}},
+	}, nil)
+	run(t, teamOpts(t, shortDir(t), th, ""))
+
+	polled(t, th.srv, 2)
+	assert.NotEmpty(t, pushes(t, th.srv)["wN"], "the space still gets $team")
+	assert.Empty(t, panePushes(t, th.srv), "a shell gets no ctx display, its ctx token notwithstanding")
+}
+
 // TestTeamPushStopsWithTheDaemon: once the daemon has stopped, cancelled or
-// because its herdr went away, nothing more is pushed, and nothing was
-// cleared on the way out: every push carried a value and the 9 s TTL, so the
-// tokens left behind are gone within about 9 s, after a crash just the same.
+// because its herdr went away, nothing more is pushed, $team or ctx display,
+// and nothing was cleared on the way out: every push carried a value and the
+// 9 s TTL, so the tokens left behind are gone within about 9 s, after a crash
+// just the same.
 func TestTeamPushStopsWithTheDaemon(t *testing.T) {
 	t.Parallel()
 
@@ -278,13 +408,19 @@ func TestTeamPushStopsWithTheDaemon(t *testing.T) {
 			// the stop, and before the second look, so that holds every push
 			// sent since.
 			original.Settle(t)
-			after := pushes(t, original)
+			after, afterCtx := pushes(t, original), panePushes(t, original)
 			time.Sleep(10 * 20 * time.Millisecond) // ten polls' worth
 			original.Settle(t)
 			assert.Equal(t, after, pushes(t, original), "no push after the daemon stopped")
+			assert.Equal(t, afterCtx, panePushes(t, original), "no ctx display after the daemon stopped")
 			for ws, params := range after {
 				for _, p := range params {
 					assert.JSONEq(t, wantPushes[ws], p, "never an empty or cleared token, always the 9 s TTL")
+				}
+			}
+			for pane, params := range afterCtx {
+				for _, p := range params {
+					assert.JSONEq(t, wantCtx[pane], p, "a display in its band, always the 9 s TTL")
 				}
 			}
 			if th.srv != original {
@@ -351,6 +487,7 @@ func TestTeamPushIgnoresAServerReplacedMidPoll(t *testing.T) {
 
 			time.Sleep(time.Second)
 			assert.Empty(t, pushes(t, original), "nothing is pushed across the swap")
+			assert.Empty(t, panePushes(t, original), "no ctx display is pushed across the swap")
 			if during == "pane.list" {
 				assert.Zero(t, lists(original), "workspace.list, dialled after the swap, never reaches the original")
 			}
@@ -361,13 +498,59 @@ func TestTeamPushIgnoresAServerReplacedMidPoll(t *testing.T) {
 	}
 }
 
-// TestTeamPushSurvivesAFailingPush: herdr refusing one push (a workspace
-// closed between the list and the push) is logged with the workspace, and
-// does not stop the others, in that poll or the next.
+// TestCtxPushStopsWhenTheServerIsReplaced is the same race on the ctx
+// display: herdr's socket is replaced while the first pane push is being
+// answered. That push lands on the original, which it was connected to;
+// the next one dials the replacement and finds so once connected, before it
+// sends anything, and the poll stops: the replacement never sees a team call.
+func TestCtxPushStopsWhenTheServerIsReplaced(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	original := th.srv
+	swap, swapped := make(chan struct{}), make(chan struct{})
+	var first sync.Once
+	th.onCall = func(method string) {
+		if method == "pane.report_metadata" {
+			first.Do(func() { close(swap) })
+			<-swapped
+		}
+	}
+	var logs lockedLog
+	o := teamOpts(t, shortDir(t), th, "")
+	o.Poll = time.Hour // only the poll at start runs
+	o.Logger = zerolog.New(&logs)
+	r := run(t, o)
+
+	select {
+	case <-swap:
+	case <-time.After(ready):
+		t.Fatal("the daemon pushed no ctx display")
+	}
+	require.NoError(t, os.Remove(th.path))
+	replacement := herdrtest.StartAt(t, th.path, th.serveTeam(th.serve(22)))
+	close(swapped)
+
+	time.Sleep(time.Second)
+	n := 0
+	for _, params := range panePushes(t, original) {
+		n += len(params)
+	}
+	assert.Equal(t, 1, n, "only the push in flight at the swap reaches the original")
+	replacement.Settle(t)
+	assert.Empty(t, teamCalls(replacement), "the team poll pushes the replacement nothing")
+	assert.Contains(t, logs.String(), "team poll stops", "the first push to find the replacement stops the poll")
+	assert.NotContains(t, logs.String(), `"push the ctx display"`, "rather than trying every pane after it")
+	assert.True(t, r.alive(), "the poll stops; Run's own check ends the daemon")
+}
+
+// TestTeamPushSurvivesAFailingPush: herdr refusing one push (a workspace or
+// pane closed between the list and the push) is logged with the workspace or
+// pane, and does not stop the others, in that poll or the next.
 func TestTeamPushSurvivesAFailingPush(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
 	th.refuse["wN"] = true
+	th.refuse["wN:p1"] = true
 	var logs lockedLog
 	o := teamOpts(t, shortDir(t), th, "")
 	o.Logger = zerolog.New(&logs)
@@ -380,6 +563,11 @@ func TestTeamPushSurvivesAFailingPush(t *testing.T) {
 	assert.GreaterOrEqual(t, len(got["w0"]), 2)
 	assert.Contains(t, logs.String(), `"workspace":"wN"`)
 	assert.Contains(t, logs.String(), "workspace_not_found")
+	ctx := panePushes(t, th.srv)
+	assert.GreaterOrEqual(t, len(ctx["wN:p1"]), 2, "the refused ctx display is tried every poll")
+	assert.GreaterOrEqual(t, len(ctx["wN:p2"]), 2, "and the panes after it are still pushed")
+	assert.Contains(t, logs.String(), `"pane":"wN:p1"`)
+	assert.Contains(t, logs.String(), "pane_not_found")
 	assert.True(t, r.alive())
 }
 
@@ -402,7 +590,7 @@ func TestTeamPushFollowsARelabel(t *testing.T) {
 	assert.Equal(t, before["wN"], after["wN"], "a space renamed away from ◆ is no longer pushed")
 	assert.Greater(t, len(after["w2"]), len(before["w2"]), "a workspace renamed into a group space is pushed")
 	for _, p := range after["w2"] {
-		assert.JSONEq(t, `{"workspace_id":"w2","source":"agentisan","tokens":{"team":"1 · ◐1 ●0"},"ttl_ms":9000}`, p)
+		assert.JSONEq(t, `{"workspace_id":"w2","source":"agentisan","tokens":{"team":"1 agent · 1 working · 0 ready"},"ttl_ms":9000}`, p)
 	}
 }
 
@@ -538,8 +726,8 @@ short = "as"
 	got := pushes(t, th.srv)
 	assert.ElementsMatch(t, []string{"wN", "wY", "w0", "w14", "w20"}, slices.Collect(maps.Keys(got)), "the group spaces and each team's workspace")
 	want := map[string]string{
-		"w14": `{"workspace_id":"w14","source":"agentisan","tokens":{"team":"2 \u00b7 \u25d01 \u25cf0 \u26a01"},"ttl_ms":9000}`,
-		"w20": `{"workspace_id":"w20","source":"agentisan","tokens":{"team":"0 \u00b7 \u25d00 \u25cf0"},"ttl_ms":9000}`,
+		"w14": `{"workspace_id":"w14","source":"agentisan","tokens":{"team":"2 agents \u00b7 1 working \u00b7 0 ready \u00b7 1 blocked"},"ttl_ms":9000}`,
+		"w20": `{"workspace_id":"w20","source":"agentisan","tokens":{"team":"0 agents \u00b7 0 working \u00b7 0 ready"},"ttl_ms":9000}`,
 	}
 	maps.Copy(want, wantPushes)
 	for ws, params := range got {

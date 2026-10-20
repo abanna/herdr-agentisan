@@ -119,25 +119,25 @@ func TestSpacesResolverLayouts(t *testing.T) {
 		"duplicate labels": {
 			workspaces: []herdr.WorkspaceInfo{ws("w1", "◆ coders"), ws("w2", "◆ coders")},
 			panes:      []herdr.PaneInfo{p("w1:p1", "w1", "working"), p("w2:p1", "w2", "idle"), p("w2:p2", "w2", "idle")},
-			want:       []team.Token{{Target: team.Target{WorkspaceID: "w1"}, Value: "1 · ◐1 ●0"}, {Target: team.Target{WorkspaceID: "w2"}, Value: "2 · ◐0 ●2"}},
+			want:       []team.Token{{Target: team.Target{WorkspaceID: "w1"}, Value: "1 agent · 1 working · 0 ready"}, {Target: team.Target{WorkspaceID: "w2"}, Value: "2 agents · 0 working · 0 ready"}},
 		},
 		"a ◆ space with zero panes": {
 			workspaces: []herdr.WorkspaceInfo{ws("w1", "◆ qa")},
-			want:       []team.Token{{Target: team.Target{WorkspaceID: "w1"}, Value: "0 · ◐0 ●0"}},
+			want:       []team.Token{{Target: team.Target{WorkspaceID: "w1"}, Value: "0 agents · 0 working · 0 ready"}},
 		},
 		// herdr never repeats an id; if an answer did, the space is still
 		// counted once.
 		"a workspace listed twice": {
 			workspaces: []herdr.WorkspaceInfo{ws("w1", "◆ qa"), ws("w1", "◆ qa")},
 			panes:      []herdr.PaneInfo{p("w1:p1", "w1", "working")},
-			want:       []team.Token{{Target: team.Target{WorkspaceID: "w1"}, Value: "1 · ◐1 ●0"}},
+			want:       []team.Token{{Target: team.Target{WorkspaceID: "w1"}, Value: "1 agent · 1 working · 0 ready"}},
 		},
 		// pane.list and workspace.list are two calls: a pane can name a
 		// workspace the other answer does not have yet.
 		"a pane in a workspace not listed": {
 			workspaces: []herdr.WorkspaceInfo{ws("w1", "◆ qa")},
 			panes:      []herdr.PaneInfo{p("w1:p1", "w1", "working"), p("w9:p1", "w9", "working")},
-			want:       []team.Token{{Target: team.Target{WorkspaceID: "w1"}, Value: "1 · ◐1 ●0"}},
+			want:       []team.Token{{Target: team.Target{WorkspaceID: "w1"}, Value: "1 agent · 1 working · 0 ready"}},
 		},
 		"no workspaces": {panes: []herdr.PaneInfo{p("w1:p1", "w1", "working")}},
 	}
