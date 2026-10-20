@@ -17,9 +17,10 @@ const (
 const (
 	// BossGroup is the boss space, ◆ boss: its panes are the boss's.
 	BossGroup = "boss"
-	// EditShellGroup is ◆ herdr, the user's edit shell: not part of the
-	// model at all (ADR-001 A13, item 2c). v12 counted it; the port does
-	// not (A17).
+	// EditShellGroup is ◆ herdr, the user's edit shell: one of the team's
+	// workspaces (Project.Workspaces, A19), but no group's and not the
+	// boss's, so none of its panes is in the model (ADR-001 A13, item 2c).
+	// v12 counted it; the port does not (A17).
 	EditShellGroup = "herdr"
 )
 
@@ -38,6 +39,15 @@ type Spaces struct {
 	Color string
 }
 
+// GroupOrder is the order the spaces' groups are shown in: v12's working
+// order (herdr-dashboard-v12.py:21, without its herdr, which is not in the
+// model), then debugger, the seventh group (ADR-001 Context), where the
+// dashboard ranked it before A18. Groups it does not name follow by name
+// (Snapshot). Another resolver orders its own groups.
+func (Spaces) GroupOrder() []string {
+	return []string{"coders", "precheck", "qa", "codex", "research", "clerk", "debugger"}
+}
+
 // Resolve places each group space's panes in its group, and the boss
 // space's panes with the boss. A workspace herdr lists twice is placed once.
 // The team's site is every space, ◆ boss and ◆ herdr included; with no space
@@ -48,7 +58,7 @@ func (s Spaces) Resolve(l Layout) Resolution {
 		byWorkspace[p.WorkspaceID] = append(byWorkspace[p.WorkspaceID], p)
 	}
 	seen := map[string]bool{}
-	site := Site{Project: s.Project, Color: s.Color}
+	site := Site{Project: s.Project, Color: s.Color, Order: s.GroupOrder()}
 	var out []Place
 	for _, ws := range l.Workspaces {
 		group, ok := spaceGroup(ws.Label)

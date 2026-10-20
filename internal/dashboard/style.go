@@ -1,9 +1,7 @@
 package dashboard
 
 import (
-	"cmp"
 	"image/color"
-	"slices"
 	"strings"
 	"unicode"
 
@@ -174,37 +172,6 @@ func ShortModel(model string) string {
 		return ""
 	}
 	return ansi.Truncate(words[0], modelCells, "")
-}
-
-// groupRank is the team's working order. Groups not named here follow,
-// alphabetically.
-var groupRank = map[string]int{
-	"coders": 0, "precheck": 1, "qa": 2, "codex": 3, "research": 4, "clerk": 5, "debugger": 6,
-}
-
-// Order returns the groups in display order, leaving groups untouched: the
-// known groups in the team's working order, then the rest alphabetically
-// (case-insensitive). Groups that compare equal keep their snapshot order.
-func Order(groups []snapshot.Group) []snapshot.Group {
-	out := slices.Clone(groups)
-	slices.SortStableFunc(out, func(a, b snapshot.Group) int {
-		ra, aKnown := groupRank[strings.ToLower(a.Name)]
-		rb, bKnown := groupRank[strings.ToLower(b.Name)]
-		switch {
-		case aKnown && bKnown:
-			return cmp.Compare(ra, rb)
-		case aKnown:
-			return -1
-		case bKnown:
-			return 1
-		default:
-			return cmp.Or(
-				cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name)),
-				cmp.Compare(a.Name, b.Name),
-			)
-		}
-	})
-	return out
 }
 
 // clean makes snapshot text safe to draw: control characters, escape

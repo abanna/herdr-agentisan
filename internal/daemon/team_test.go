@@ -24,15 +24,18 @@ import (
 )
 
 // teamHerdr is a fakeHerdr that also answers what the team poll asks: a
-// layout of workspaces, tabs and panes, and workspace.report_metadata, which
-// it refuses for the workspaces in refuse.
+// layout of workspaces, tabs, panes and agents, and
+// workspace.report_metadata, which it refuses for the workspaces in refuse.
 type teamHerdr struct {
 	*fakeHerdr
 	mu         sync.Mutex
 	workspaces []herdr.WorkspaceInfo
 	tabs       []map[string]any
 	panes      []map[string]any
-	refuse     map[string]bool
+	// agents is agent.list's answer; agentsErr makes it fail instead.
+	agents    []map[string]any
+	agentsErr bool
+	refuse    map[string]bool
 	// onCall, when set, runs before each request is answered.
 	onCall func(method string)
 }
@@ -72,6 +75,13 @@ func (th *teamHerdr) serveTeam(normal herdrtest.Handler) herdrtest.Handler {
 			th.mu.Lock()
 			defer th.mu.Unlock()
 			return herdrtest.Reply{Result: map[string]any{"type": "tab_list", "tabs": slices.Clone(th.tabs)}}
+		case "agent.list":
+			th.mu.Lock()
+			defer th.mu.Unlock()
+			if th.agentsErr {
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "server_unavailable", Message: "busy"}}
+			}
+			return herdrtest.Reply{Result: map[string]any{"type": "agent_list", "agents": append([]map[string]any{}, th.agents...)}}
 		case "workspace.report_metadata":
 			var params struct {
 				WorkspaceID string `json:"workspace_id"`
@@ -139,7 +149,7 @@ func lists(srv *herdrtest.Server) int {
 func teamCalls(srv *herdrtest.Server) []string {
 	var out []string
 	for _, r := range srv.Requests() {
-		if r.Method == "workspace.list" || r.Method == "tab.list" || r.Method == "workspace.report_metadata" {
+		if r.Method == "workspace.list" || r.Method == "tab.list" || r.Method == "agent.list" || r.Method == "workspace.report_metadata" {
 			out = append(out, r.Method)
 		}
 	}
@@ -311,6 +321,7 @@ func TestTeamPushIgnoresAServerReplacedMidPoll(t *testing.T) {
 		"while the panes are listed":      {during: "pane.list"},
 		"while the workspaces are listed": {during: "workspace.list"},
 		"while the tabs are listed":       {during: "tab.list", config: tabsTeam},
+		"while the agents are listed":     {during: "agent.list"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

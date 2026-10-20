@@ -242,11 +242,15 @@ func TestTabsTeamsResolveExactly(t *testing.T) {
 	worker := func(id, tab string, st team.Status, agent string, handoff bool) team.Worker {
 		return team.Worker{ID: id, Target: team.Target{WorkspaceID: tab}, Pane: team.Pane{ID: id, Agent: agent, Status: st, Handoff: handoff}}
 	}
+	withCtx := func(w team.Worker, ctx string) team.Worker {
+		w.Pane.Ctx = ctx
+		return w
+	}
 	w14, wN := team.Target{WorkspaceID: "w14"}, team.Target{WorkspaceID: "wN"}
 	order := []string{"coder", "precheck", "qa", "review", "research", "librarian", "debugger"}
 	assert.Equal(t, team.Model{Projects: []team.Project{
 		{
-			Name: "agentisan", Color: "#0ea5e9", Workspaces: []string{"wN"},
+			Name: "agentisan", Color: "#0ea5e9", Workspaces: []string{"wN"}, Order: team.Spaces{}.GroupOrder(),
 			Groups: []team.Group{{Name: "coders", Targets: []team.Target{wN}, Workers: []team.Worker{worker("wN:p1", "wN", team.StatusWorking, "claude", false)}}},
 		},
 		{
@@ -261,7 +265,7 @@ func TestTabsTeamsResolveExactly(t *testing.T) {
 			},
 			Groups: []team.Group{
 				{Name: "coder", Targets: []team.Target{w14}, Workers: []team.Worker{
-					worker("w14:p2", "w14", team.StatusWorking, "claude", false), worker("w14:p3", "w14", team.StatusIdle, "claude", true),
+					worker("w14:p2", "w14", team.StatusWorking, "claude", false), withCtx(worker("w14:p3", "w14", team.StatusIdle, "claude", true), "40"),
 				}},
 				{Name: "designer", Targets: []team.Target{w14}, Workers: []team.Worker{worker("w14:p6", "w14", team.StatusUnknown, "", false)}},
 				{Name: "qa", Targets: []team.Target{w14}, Workers: []team.Worker{worker("w14:p4", "w14", team.StatusBlocked, "claude", false)}},

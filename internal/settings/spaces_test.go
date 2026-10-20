@@ -164,3 +164,68 @@ func TestSpacesProjectForTheDaemon(t *testing.T) {
 		})
 	}
 }
+
+// TestReadSpacesForTheDaemon: the daemon reads, once at start, the project
+// the ◆ spaces belong to and that project's colour, for the snapshot's header
+// (ADR-001 A18). The colour is the shared file's and the project table's,
+// merged as for the profile; the repo's own file is not read, and no repo or
+// bundle check runs, so a "~" repo the daemon cannot expand and a repo
+// without the Agentisan bundle still give the colour. No configuration at all
+// is the unnamed project, with no colour.
+func TestReadSpacesForTheDaemon(t *testing.T) {
+	t.Parallel()
+
+	const other = "[projects.zed]\nrepo = \"/elsewhere\"\ncolor = \"#000000\"\nshort = \"zed\"\n"
+	tests := map[string]struct {
+		file    string // "" for no file; "nodir" for no config dir
+		want    settings.Spaces
+		wantErr error
+	}{
+		"no config dir":                     {file: "nodir"},
+		"no file":                           {},
+		"the sole project and its colour":   {file: "[projects.app]\nrepo = \"/nonexistent\"\ncolor = \"#7c3aed\"\n", want: settings.Spaces{Project: "app", Color: "#7c3aed"}},
+		"the key picks the project":         {file: "[spaces]\nproject = \"app\"\n[projects.app]\nrepo = \"/x\"\ncolor = \"#0ea5e9\"\n" + other, want: settings.Spaces{Project: "app", Color: "#0ea5e9"}},
+		"a repo under ~, no HOME read":      {file: "[projects.app]\nrepo = \"~/Development/app\"\ncolor = \"#7c3aed\"\n", want: settings.Spaces{Project: "app", Color: "#7c3aed"}},
+		"a project without a colour":        {file: "[spaces]\nproject = \"app\"\n[projects.app]\nrepo = \"/x\"\n" + other, want: settings.Spaces{Project: "app"}},
+		"the shared colour is inherited":    {file: "color = \"#111111\"\n[projects.app]\nrepo = \"/x\"\n", want: settings.Spaces{Project: "app", Color: "#111111"}},
+		"the project's colour beats it":     {file: "color = \"#111111\"\n[projects.app]\nrepo = \"/x\"\ncolor = \"#222222\"\n", want: settings.Spaces{Project: "app", Color: "#222222"}},
+		"an upper-case colour is kept":      {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"#BD93F9\"\n", want: settings.Spaces{Project: "app", Color: "#BD93F9"}},
+		"several projects, no key":          {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"#7c3aed\"\nshort = \"app\"\n" + other},
+		"a colour but no projects":          {file: "color = \"#111111\"\n"},
+		"a sole tabs project is not theirs": {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"#7c3aed\"\nshort = \"app\"\nlayout = \"tabs\"\n"},
+		"an unknown project":                {file: "[spaces]\nproject = \"x\"\n" + other, wantErr: settings.ErrNoProject},
+		"a colour that is not #rrggbb":      {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"purple\"\n", wantErr: settings.ErrInvalid},
+		"a non-ASCII colour":                {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"#7c3aéd\"\n", wantErr: settings.ErrInvalid},
+		"a colour with a trailing newline":  {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"#7c3aed\\n\"\n", wantErr: settings.ErrInvalid},
+		"an empty colour":                   {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"\"\n", wantErr: settings.ErrInvalid},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			if tc.file == "nodir" {
+				dir = ""
+			} else if tc.file != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte("schema_version = 1\n"+tc.file), 0o600))
+			}
+
+			got, err := settings.ReadSpaces(dir)
+			require.ErrorIs(t, err, tc.wantErr)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestReadSpacesIgnoresTheRepoFile: a colour set only in the project's
+// repo file is not the daemon's: reading it would mean resolving the repo,
+// which the daemon does not do at start.
+func TestReadSpacesIgnoresTheRepoFile(t *testing.T) {
+	t.Parallel()
+	repo, dir := newRepo(t), t.TempDir()
+	writeFile(t, repo, settings.RepoFileName, "schema_version = 1\ncolor = \"#abcdef\"\n", repo)
+	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n", repo)
+
+	got, err := settings.ReadSpaces(dir)
+	require.NoError(t, err)
+	assert.Equal(t, settings.Spaces{Project: "app"}, got)
+}

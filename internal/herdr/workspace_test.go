@@ -237,6 +237,12 @@ func TestListPanesReadsAgentStatusAndTokens(t *testing.T) {
 			pane: map[string]any{"pane_id": "wN:p3", "workspace_id": "wN", "agent": nil, "agent_status": "unknown"},
 			want: herdr.PaneInfo{PaneID: "wN:p3", WorkspaceID: "wN", AgentStatus: "unknown"},
 		},
+		// The label the user gave the pane, which names it on the dashboard
+		// when no agent name does (src/api/schema/panes.rs:462).
+		"a labelled pane": {
+			pane: map[string]any{"pane_id": "wN:p4", "workspace_id": "wN", "label": "notes", "agent_status": "unknown"},
+			want: herdr.PaneInfo{PaneID: "wN:p4", WorkspaceID: "wN", Label: "notes", AgentStatus: "unknown"},
+		},
 		// A status this build does not know is kept as herdr sent it; the
 		// model decides what it counts as.
 		"a status from a newer herdr": {

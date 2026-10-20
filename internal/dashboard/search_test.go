@@ -117,7 +117,7 @@ func TestFilter(t *testing.T) {
 			names = append(names, g.Name+"/"+a.Name)
 		}
 	}
-	assert.Equal(t, []string{"qa/qa", "coders/pee02"}, names, "qa's queue is empty, pee02 is re-queued; the snapshot's order")
+	assert.Equal(t, []string{"coders/pee02", "qa/qa"}, names, "pee02 is re-queued, qa's queue is empty; the snapshot's order")
 	assert.Same(t, full.Boss, got.Boss)
 	assert.Same(t, full.Project, got.Project)
 	assert.Equal(t, full.Team, got.Team)

@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/store"
 )
 
@@ -49,8 +50,8 @@ func statusOf(s string) Status {
 	}
 }
 
-// Model is the team: every project the resolver places panes in, sorted by
-// name.
+// Model is the teams: every project the resolver finds a site for or places
+// panes in, sorted by name.
 type Model struct {
 	Projects []Project
 }
@@ -116,18 +117,36 @@ type Worker struct {
 // Pane is what the model reads of a herdr pane.
 type Pane struct {
 	ID string
+	// Name is the name herdr knows the pane's agent by (agent.list), the
+	// name agent.focus takes; "" for a shell or an agent nobody named.
+	Name string
+	// Label is the label the user gave the pane; "" when it has none.
+	Label string
 	// Agent is the agent herdr detected, such as "claude"; "" for a shell.
 	Agent  string
 	Status Status
 	// Handoff is true when the pane carries a non-empty handoff token.
 	Handoff bool
+	// Ctx, Item and Stage are the pane's ctx, item and stage tokens as
+	// their writers left them (ADR-001 token contract); "" when absent.
+	Ctx, Item, Stage string
+}
+
+// IsAgent reports whether an agent runs in the pane: herdr detected one, or
+// knows one by name. Anything else is a plain shell.
+func (p Pane) IsAgent() bool {
+	return p.Agent != "" || p.Name != ""
 }
 
 // Layout is herdr's answers the model is built from: one pane.list, one
-// workspace.list and, when a tabs team is configured, one tab.list.
+// workspace.list, one agent.list and, when a tabs team is configured, one
+// tab.list.
 type Layout struct {
 	Workspaces []herdr.WorkspaceInfo
 	Panes      []herdr.PaneInfo
+	// Agents gives the panes' agents their names. `$team` needs none, so
+	// nil, as when agent.list failed, only leaves every pane unnamed.
+	Agents []herdr.AgentInfo
 	// Tabs gives panes their tab labels. Only Tabs reads it.
 	Tabs []herdr.TabInfo
 }
@@ -190,11 +209,20 @@ func (rs Resolvers) Resolve(l Layout) Resolution {
 // moved into another group's space is counted where it is. A row whose pane
 // herdr no longer lists has no current pane and is not in the model. When
 // two rows bind one pane, the lowest logical id takes it.
+//
+// agent.list's names join by pane id the same way: an empty name names
+// nothing, and when it lists one pane twice the lowest name takes it.
 func Build(l Layout, r Resolver, workers []store.Worker) Model {
 	ids := map[string]string{}
 	for _, w := range workers {
 		if id, taken := ids[w.PaneID]; !taken || w.LogicalID < id {
 			ids[w.PaneID] = w.LogicalID
+		}
+	}
+	names := map[string]string{}
+	for _, a := range l.Agents {
+		if n, taken := names[a.PaneID]; a.Name != "" && (!taken || a.Name < n) {
+			names[a.PaneID] = a.Name
 		}
 	}
 
@@ -218,7 +246,7 @@ func Build(l Layout, r Resolver, workers []store.Worker) Model {
 		pr := project(pl.Project)
 		ws := make([]Worker, 0, len(pl.Panes))
 		for _, p := range pl.Panes {
-			ws = append(ws, worker(p, pl.Target, ids))
+			ws = append(ws, worker(p, pl.Target, ids, names))
 		}
 		if pl.Boss {
 			pr.Boss = append(pr.Boss, ws...)
@@ -252,9 +280,11 @@ func Build(l Layout, r Resolver, workers []store.Worker) Model {
 	return m
 }
 
-func worker(p herdr.PaneInfo, t Target, ids map[string]string) Worker {
+func worker(p herdr.PaneInfo, t Target, ids, names map[string]string) Worker {
 	w := Worker{ID: p.PaneID, Target: t, Pane: Pane{
-		ID: p.PaneID, Agent: p.Agent, Status: statusOf(p.AgentStatus), Handoff: p.Tokens[HandoffKey] != "",
+		ID: p.PaneID, Name: names[p.PaneID], Label: p.Label, Agent: p.Agent,
+		Status: statusOf(p.AgentStatus), Handoff: p.Tokens[HandoffKey] != "",
+		Ctx: p.Tokens[report.CtxKey], Item: p.Tokens[report.ItemKey], Stage: p.Tokens[report.StageKey],
 	}}
 	if id, ok := ids[p.PaneID]; ok {
 		w.ID, w.Bound = id, true
