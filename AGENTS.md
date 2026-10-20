@@ -82,13 +82,15 @@ exempts whatever is later added under that name.
 - `herdr-plugin.toml` — the plugin manifest herdr reads. Every action execs
   `bin/herdr-agentisan <subcommand>`; `TestManifestMatchesTheBinary` in
   `internal/cli` fails the build if an action stops naming a real command or
-  the build output path drifts from the Taskfile's. Its one `[[panes]]`
-  entry, `btop`, is the popup the dashboard's `[ btop ]` button asks herdr to
-  open (`plugin.pane.open`); herdr runs it, the plugin starts no process, and
-  `TestManifestDeclaresTheBtopPopup` pins it to `plugin.ID`/`plugin.BtopPane`.
-  The `back` action's prefix+b binding and Go To's prefix+/ (ADR-001 A20),
-  for herdr's own config, are `docs/config/herdr-keys.example.toml`
-  (`TestKeySnippetBindsBack`, `TestKeySnippetBindsGoTo`).
+  the build output path drifts from the Taskfile's. Its `[[panes]]`: `btop`,
+  the popup the dashboard's `[ btop ]` button asks herdr to open
+  (`plugin.pane.open`; herdr runs it, the plugin starts no process,
+  `TestManifestDeclaresTheBtopPopup`), and `dashboard`, the split that runs
+  the dashboard against the daemon (`TestManifestDeclaresTheDashboardSplit`).
+  The `back` action's prefix+b binding, Go To's prefix+/ (ADR-001 A20) and
+  the dashboard's prefix+d (A18), for herdr's own config, are
+  `docs/config/herdr-keys.example.toml` (`TestKeySnippetBindsBack`,
+  `TestKeySnippetBindsGoTo`, `TestKeySnippetOpensTheDashboard`).
 - `cmd/herdr-agentisan/` — the plugin binary's entrypoint. Wires config,
   logging (stderr only — stdout is the command's output) and tracing; no logic.
 - `cmd/devctl/` — development operations CLI entrypoint. A thin shim.
@@ -111,17 +113,22 @@ exempts whatever is later added under that name.
   server's socket inode; the protocol pin; `daemon.log` capped at 10 MB; the
   server's `state.db`, which it holds open while it runs and records every
   `pane.focused` event in (resubscribing and resyncing on `events_lost`); and
-  the plugin socket (D6) that answers `health` and `back` (A16: walk the
-  focus history, un-zoom the pane left, then focus the target). Every poll
-  it also rebuilds the team model and pushes `$team` (`team.go`), and sends
-  each status change since the last poll as a workflow event (`events.go`).
-  `daemon start` spawns a detached `daemon run`; herdr's `[[startup]]` hook
-  runs it, and the `daemon-restart` action covers linking. Tests run daemons
-  in process against herdrtest and a scratch state dir, never the real ones.
+  the plugin socket (D6) that answers `health`, `back` (A16: walk the
+  focus history, un-zoom the pane left, then focus the target) and
+  `snapshot`. Every poll it also rebuilds the team model, pushes `$team`
+  (`team.go`) and caches the snapshot the `snapshot` op serves, so the op
+  never calls herdr (A18, `snapshot.go`, with `SnapshotSource`, the
+  dashboard's client), and sends each status change since the last poll as
+  a workflow event (`events.go`). `daemon start` spawns a detached `daemon
+  run`; herdr's `[[startup]]` hook runs it, and the `daemon-restart` action
+  covers linking. Tests run daemons in process against herdrtest and a
+  scratch state dir, never the real ones.
 - `internal/team/` — the team domain model (ADR-001 D5, A17): project → group
-  → logical worker → current pane, built from `pane.list`, `workspace.list`
-  and `state.db`'s `workers` rows. A `Resolver` maps the layout onto it;
-  `Spaces` is today's ◆ spaces. Also the frozen `$team` format.
+  → logical worker → current pane, built from `pane.list`, `workspace.list`,
+  `agent.list` and `state.db`'s `workers` rows. A `Resolver` maps the layout
+  onto it; `Spaces` is today's ◆ spaces, with v12's group order. Also the
+  frozen `$team` format, and the model as a snapshot v1 in the resolver's
+  group order, with the in-memory stage clock (A18).
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
   references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check.
@@ -135,13 +142,16 @@ exempts whatever is later added under that name.
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real
   socket set, and a test that reads it would toast a live session.
-- `internal/snapshot/` — the versioned snapshot contract (ADR-001 D5/D6):
-  the groups and agents, the boss, and the project's PRs, issues and test
-  slots. Decoding is strict: exact keys, closed enums, RFC 3339 times.
+- `internal/snapshot/` — the versioned snapshot contract (ADR-001 D5/D6,
+  A18): the groups and agents, the boss, and the project's PRs, issues and
+  test slots. Decoding is strict: exact keys, closed enums, RFC 3339 times.
+  The daemon's `snapshot` op serves it; `FileSource` reads a fixture.
 - `internal/dashboard/` — the bubbletea team dashboard and its pure renderer:
   a header box, then the groups stacked as boxes with one dense line per
-  agent, scrolling to keep the selection in view. `/` narrows the agents to a
-  search query in place (`search.go`, ADR-001 A20). Goldens in `testdata/`
+  agent, in the snapshot's group order, scrolling to keep the selection in
+  view. It reads the daemon (`DaemonConfig`) or a fixture, and Jump focuses
+  an unnamed row by its pane id. `/` narrows the agents to a search query in
+  place (`search.go`, ADR-001 A20). Goldens in `testdata/`
   (`go test ./internal/dashboard/ -update`, then read every one).
 - `internal/devctl/` — the `devctl` cobra tree: the coverage floor, the
   docs-parity check and the large-file ceiling, none of which the Go toolchain

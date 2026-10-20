@@ -1,6 +1,7 @@
-# herdr key bindings for Agentisan: search (ADR-001 D5, A20) and Back (D5,
-# A9, A16). herdr plugins cannot ship key bindings: add these to herdr's own
-# config (~/.config/herdr/config.toml) and reload herdr's config.
+# herdr key bindings for Agentisan: search (ADR-001 D5, A20), Back (D5, A9,
+# A16) and the team dashboard (D5, A18). herdr plugins cannot ship key
+# bindings: add these to herdr's own config (~/.config/herdr/config.toml) and
+# reload herdr's config.
 #
 # Search: prefix+/ opens herdr's own Go To, the session navigator, beside its
 # default prefix+g. Put the goto line in the [keys] table your config already
@@ -21,11 +22,23 @@ goto = ["prefix+g", "prefix+/"]
 # binding, with a "kept keys.toggle_sidebar, disabled keys.command[N].key"
 # diagnostic.
 #
-# TestKeySnippetBindsBack and TestKeySnippetBindsGoTo (internal/plugin) keep
-# this and the README in step.
+# TestKeySnippetBindsBack, TestKeySnippetBindsGoTo and
+# TestKeySnippetOpensTheDashboard (internal/plugin) keep this, the manifest
+# and the README in step.
 
 [[keys.command]]
 key = "prefix+b"
 type = "plugin_action"
 command = "nerdsrun.agentisan.back"
 description = "Agentisan: back to the previous pane"
+
+# The team dashboard (ADR-001 D5, A18): in place of dashboard-tab.sh on
+# prefix+d, which is not one of herdr's default keys. Each press opens a new
+# split beside the focused pane; close a dashboard with q. Add
+# `--direction down` to split below instead.
+
+[[keys.command]]
+key = "prefix+d"
+type = "shell"
+command = "herdr plugin pane open --plugin nerdsrun.agentisan --entrypoint dashboard --focus"
+description = "Agentisan: open the team dashboard"

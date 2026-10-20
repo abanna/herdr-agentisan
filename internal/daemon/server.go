@@ -67,6 +67,8 @@ func (e *RequestError) Is(target error) bool {
 		return target == ErrNoHistory
 	case codeHerdrFailed:
 		return target == ErrHerdrCall
+	case codeNotReady:
+		return target == ErrNotReady
 	}
 	return false
 }
@@ -114,13 +116,15 @@ type server struct {
 	health func() HealthInfo
 	// back runs the back op.
 	back func() (BackResult, error)
-	log  zerolog.Logger
-	wg   sync.WaitGroup
+	// snapshot is the last snapshot the team poll built, encoded.
+	snapshot func() (json.RawMessage, error)
+	log      zerolog.Logger
+	wg       sync.WaitGroup
 }
 
 // listen binds the daemon socket, replacing a stale one: only the lock holder
 // calls it. The socket is the owner's only.
-func listen(path string, health func() HealthInfo, back func() (BackResult, error), log zerolog.Logger) (*server, error) {
+func listen(path string, health func() HealthInfo, back func() (BackResult, error), snapshot func() (json.RawMessage, error), log zerolog.Logger) (*server, error) {
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("remove stale socket %s: %w", path, err)
 	}
@@ -132,7 +136,7 @@ func listen(path string, health func() HealthInfo, back func() (BackResult, erro
 		_ = ln.Close()
 		return nil, fmt.Errorf("chmod %s: %w", path, err)
 	}
-	s := &server{ln: ln, path: path, health: health, back: back, log: log}
+	s := &server{ln: ln, path: path, health: health, back: back, snapshot: snapshot, log: log}
 	s.wg.Go(s.accept)
 	return s, nil
 }
@@ -197,6 +201,14 @@ func (s *server) dispatch(line []byte, readErr error) response {
 		}
 		data, _ := json.Marshal(res)
 		return response{OK: true, Data: data}
+	case "snapshot":
+		// The cached bytes: the op never calls herdr, so it is cheap however
+		// often a dashboard asks (D3).
+		data, err := s.snapshot()
+		if err != nil {
+			return refuse(codeNotReady, err.Error())
+		}
+		return response{OK: true, Data: data}
 	default:
 		return refuse(codeUnknownOp, fmt.Sprintf("unknown op %q", req.Op))
 	}
@@ -232,6 +244,22 @@ func Health(ctx context.Context, socket string) (HealthInfo, error) {
 	return info, nil
 }
 
+// exchangeFailed is ErrUnavailable for a failed exchange, naming the
+// context's own error when the context is what ended it, so a caller can
+// tell a deadline or a cancel from a daemon that went. The connection's only
+// deadlines are the context's, so a socket timeout is the context's deadline
+// even when the read notices it a moment before the context does.
+func exchangeFailed(ctx context.Context, op string, err error) error {
+	ctxErr := ctx.Err()
+	if _, ok := ctx.Deadline(); ok && ctxErr == nil && errors.Is(err, os.ErrDeadlineExceeded) {
+		ctxErr = context.DeadlineExceeded
+	}
+	if ctxErr != nil {
+		return fmt.Errorf("%w: %s: %w", ErrUnavailable, op, ctxErr)
+	}
+	return fmt.Errorf("%w: %s: %w", ErrUnavailable, op, err)
+}
+
 // call sends one request and returns the data of an ok answer.
 func call(ctx context.Context, socket, op string) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, ioTimeout)
@@ -239,19 +267,23 @@ func call(ctx context.Context, socket, op string) (json.RawMessage, error) {
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", socket)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
+		return nil, exchangeFailed(ctx, op, err)
 	}
 	defer conn.Close() //nolint:errcheck // one-shot connection
 	if deadline, ok := ctx.Deadline(); ok {
 		_ = conn.SetDeadline(deadline)
 	}
+	// A cancel, which has no deadline, must end the exchange too: a
+	// dashboard quitting never waits out a wedged daemon.
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
+	defer stop()
 	raw, _ := json.Marshal(request{V: protocolVersion, Op: op, Args: json.RawMessage(`{}`)})
 	if _, err := conn.Write(append(raw, '\n')); err != nil {
-		return nil, fmt.Errorf("%w: %s: %w", ErrUnavailable, op, err)
+		return nil, exchangeFailed(ctx, op, err)
 	}
 	line, err := readMessage(conn)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %s: %w", ErrUnavailable, op, err)
+		return nil, exchangeFailed(ctx, op, err)
 	}
 	var resp response
 	if err := json.Unmarshal(line, &resp); err != nil {

@@ -163,8 +163,8 @@ func selected(t *testing.T, m dashboard.Model) string {
 	return a.Name
 }
 
-// TestArrowKeysMoveTheSelection: up and down walk the agents in display
-// order (coders, precheck, qa, codex, research, clerk), across groups,
+// TestArrowKeysMoveTheSelection: up and down walk the agents in the
+// snapshot's order (coders, precheck, qa, codex, research, clerk), across groups,
 // stopping at both ends. Left and right do nothing: the groups stack.
 func TestArrowKeysMoveTheSelection(t *testing.T) {
 	t.Parallel()
@@ -472,6 +472,13 @@ func focusHerdr(failFocus bool) herdrtest.Handler {
 			return herdrtest.Reply{Result: map[string]any{"type": "agent_info", "agent": map[string]any{"pane_id": "w9:p9", "name": p.Target}}}
 		case "pane.zoom":
 			return herdrtest.Reply{Result: map[string]any{"type": "pane_zoom", "zoom": map[string]any{"pane_id": p.PaneID, "zoomed": true, "changed": true}}}
+		case "pane.focus":
+			// herdr answers with the pane under its current id, w8:p8 here,
+			// to show the zoom goes to herdr's answer.
+			if p.PaneID == "gone" {
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "pane_not_found", Message: "pane " + p.PaneID + " not found"}}
+			}
+			return herdrtest.Reply{Result: map[string]any{"type": "pane_info", "pane": map[string]any{"pane_id": "w8:p8", "agent_status": "unknown"}}}
 		default:
 			return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "unknown_method", Message: r.Method}}
 		}
@@ -545,6 +552,35 @@ func TestHerdrFocuser(t *testing.T) {
 			noSocket: true,
 			agent:    snapshot.Agent{Name: "qa", PaneID: "w5:p1"},
 			err:      herdr.ErrNoSocket,
+		},
+		// agent.focus takes an agent name or an agent's pane id, never a
+		// label, and no shell at all (herdr 0.9.3
+		// src/app/terminal_targets.rs:74-104); pane.focus takes any pane
+		// (src/app/api/panes.rs:484-500). An unnamed row goes by its pane
+		// id, then zooms the pane herdr answered with.
+		"an unnamed row focuses its own pane": {
+			agent: snapshot.Agent{Name: "notes", Unnamed: true, PaneID: "w2:p3"},
+			want:  []sent{{"pane.focus", `{"pane_id":"w2:p3"}`}, {"pane.zoom", `{"pane_id":"w8:p8","mode":"on"}`}},
+		},
+		// The case the unnamed key exists for: a label that is also a live
+		// agent's name must not focus that agent.
+		"an unnamed row named like another agent": {
+			agent: snapshot.Agent{Name: "qa", Unnamed: true, PaneID: "w2:p3"},
+			want:  []sent{{"pane.focus", `{"pane_id":"w2:p3"}`}, {"pane.zoom", `{"pane_id":"w8:p8","mode":"on"}`}},
+		},
+		"an unnamed row named by its pane id": {
+			agent: snapshot.Agent{Name: "w2:p4", Unnamed: true, PaneID: "w2:p4"},
+			want:  []sent{{"pane.focus", `{"pane_id":"w2:p4"}`}, {"pane.zoom", `{"pane_id":"w8:p8","mode":"on"}`}},
+		},
+		"an unnamed row whose pane is gone does not zoom": {
+			agent: snapshot.Agent{Name: "notes", Unnamed: true, PaneID: "gone"},
+			want:  []sent{{"pane.focus", `{"pane_id":"gone"}`}},
+			err:   herdr.ErrPaneNotFound,
+		},
+		// Only a pane id can reach such a row: without one, nothing is sent.
+		"an unnamed row without a pane id": {
+			agent: snapshot.Agent{Name: "notes", Unnamed: true},
+			err:   dashboard.ErrFocus,
 		},
 	}
 	for name, tc := range tests {
@@ -850,6 +886,144 @@ func TestViewAsksForTheWholeScreenAndTheMouse(t *testing.T) {
 	assert.True(t, v.AltScreen)
 	assert.Equal(t, tea.MouseModeCellMotion, v.MouseMode, "herdr forwards clicks only to a pane that asks")
 	assert.Contains(t, v.Content, "17:19", "the header shows the injected clock")
+}
+
+// TestEnterAndClickReachUnnamedRows: Enter or a click on a row named by a
+// label or a pane id focuses that row's own pane through herdr, even when a
+// live agent elsewhere answers to the same name.
+func TestEnterAndClickReachUnnamedRows(t *testing.T) {
+	t.Parallel()
+
+	snap := &snapshot.Snapshot{V: 1, At: at, Team: "agentisan", Groups: []snapshot.Group{
+		{Name: "coders", Agents: []snapshot.Agent{
+			{Name: "pee01", PaneID: "w2:p1", Status: snapshot.StatusWorking},
+			{Name: "notes", Unnamed: true, PaneID: "w2:p3", Status: snapshot.StatusUnknown},
+			{Name: "w2:p4", Unnamed: true, PaneID: "w2:p4", Status: snapshot.StatusIdle},
+		}},
+		{Name: "qa", Agents: []snapshot.Agent{{Name: "notes", PaneID: "w5:p1", Status: snapshot.StatusIdle}}},
+	}}
+	tests := map[string]struct {
+		act  func(t *testing.T, m dashboard.Model) (dashboard.Model, tea.Cmd)
+		want []sent
+	}{
+		"Enter on a label": {
+			act: func(t *testing.T, m dashboard.Model) (dashboard.Model, tea.Cmd) {
+				m, _ = update(t, m, keyDown)
+				return update(t, m, keyEnter)
+			},
+			want: []sent{{"pane.focus", `{"pane_id":"w2:p3"}`}, {"pane.zoom", `{"pane_id":"w8:p8","mode":"on"}`}},
+		},
+		"a click on a pane id": {
+			act: func(t *testing.T, m dashboard.Model) (dashboard.Model, tea.Cmd) {
+				x, y := locate(t, m.View().Content, "w2:p4")
+				return update(t, m, tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+			},
+			want: []sent{{"pane.focus", `{"pane_id":"w2:p4"}`}, {"pane.zoom", `{"pane_id":"w8:p8","mode":"on"}`}},
+		},
+		"Enter on the agent the label echoes": {
+			act: func(t *testing.T, m dashboard.Model) (dashboard.Model, tea.Cmd) {
+				for range 3 {
+					m, _ = update(t, m, keyDown)
+				}
+				return update(t, m, keyEnter)
+			},
+			want: []sent{{"agent.focus", `{"target":"notes"}`}, {"pane.zoom", `{"pane_id":"w9:p9","mode":"on"}`}},
+		},
+		"Enter on the agent the label echoes, after a refresh": {
+			act: func(t *testing.T, m dashboard.Model) (dashboard.Model, tea.Cmd) {
+				for range 3 {
+					m, _ = update(t, m, keyDown)
+				}
+				m = run(t, m, m.Init())
+				return update(t, m, keyEnter)
+			},
+			want: []sent{{"agent.focus", `{"target":"notes"}`}, {"pane.zoom", `{"pane_id":"w9:p9","mode":"on"}`}},
+		},
+		"Enter on a label, after a refresh": {
+			act: func(t *testing.T, m dashboard.Model) (dashboard.Model, tea.Cmd) {
+				m, _ = update(t, m, keyDown)
+				m = run(t, m, m.Init())
+				return update(t, m, keyEnter)
+			},
+			want: []sent{{"pane.focus", `{"pane_id":"w2:p3"}`}, {"pane.zoom", `{"pane_id":"w8:p8","mode":"on"}`}},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, focusHerdr(false))
+			src := &script{steps: []func() (snapshot.Snapshot, error){serve(snap)}}
+			m := started(t, config(src, dashboard.HerdrFocuser{Client: herdr.Client{SocketPath: srv.Path}}), 120, 40)
+
+			m, cmd := tc.act(t, m)
+			m = run(t, m, cmd)
+			assert.Equal(t, tc.want, requests(srv))
+			assert.NotContains(t, m.View().Content, "✖", "the focus succeeded")
+		})
+	}
+}
+
+// TestSelectionFollowsTheRow: across a refresh the selection follows a
+// named agent by its name and an unnamed row by its pane id. Labels repeat
+// (every dashboard split carries the manifest's title) and a label can echo
+// an agent's name, so following the name alone would move the selection,
+// and Jump with it, to another row (ADR-001 A18).
+func TestSelectionFollowsTheRow(t *testing.T) {
+	t.Parallel()
+
+	team := func(coders ...snapshot.Agent) *snapshot.Snapshot {
+		return &snapshot.Snapshot{V: 1, At: at, Team: "agentisan", Groups: []snapshot.Group{
+			{Name: "coders", Agents: coders},
+			{Name: "qa", Agents: []snapshot.Agent{{Name: "notes", PaneID: "w5:p1", Status: snapshot.StatusIdle}}},
+		}}
+	}
+	pee01 := snapshot.Agent{Name: "pee01", PaneID: "w2:p1", Status: snapshot.StatusWorking}
+	moved := pee01
+	moved.PaneID = "w2:p9"
+	notes := snapshot.Agent{Name: "notes", Unnamed: true, PaneID: "w2:p3", Status: snapshot.StatusUnknown}
+	reissued := notes
+	reissued.PaneID = "w2:p7"
+	dash1 := snapshot.Agent{Name: "Agentisan dashboard", Unnamed: true, PaneID: "w2:p5", Status: snapshot.StatusUnknown}
+	dash2 := snapshot.Agent{Name: "Agentisan dashboard", Unnamed: true, PaneID: "w2:p6", Status: snapshot.StatusUnknown}
+	base := team(pee01, notes, dash1, dash2)
+
+	tests := map[string]struct {
+		next *snapshot.Snapshot
+		keys []tea.KeyPressMsg
+		pick string // the pane selected before the refresh
+		want string // and after it
+	}{
+		"the agent a label echoes":                   {next: base, keys: repeat(keyDown, 4), pick: "w5:p1", want: "w5:p1"},
+		"the label that echoes an agent":             {next: base, keys: repeat(keyDown, 1), pick: "w2:p3", want: "w2:p3"},
+		"the second of two rows sharing a label":     {next: base, keys: repeat(keyDown, 3), pick: "w2:p6", want: "w2:p6"},
+		"a shared label after the rows before leave": {next: team(dash1, dash2), keys: repeat(keyDown, 3), pick: "w2:p6", want: "w2:p6"},
+		"a named agent in a new pane":                {next: team(notes, dash1, dash2, moved), pick: "w2:p1", want: "w2:p9"},
+		"an unnamed row whose pane id is reissued keeps its place": {
+			next: team(pee01, reissued, dash1, dash2), keys: repeat(keyDown, 1), pick: "w2:p3", want: "w2:p7",
+		},
+		"while searching, the agent a label echoes": {
+			next: base, keys: keys([]tea.KeyPressMsg{keySlash}, typing("notes"), repeat(keyDown, 1)), pick: "w5:p1", want: "w5:p1",
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			src := &script{steps: []func() (snapshot.Snapshot, error){serve(base), serve(tc.next)}}
+			m := started(t, config(src, &recorder{}), 120, 40)
+			m, _ = press(t, m, tc.keys...)
+			require.Equal(t, tc.pick, selectedPane(t, m))
+
+			m = run(t, m, m.Init())
+			assert.Equal(t, tc.want, selectedPane(t, m))
+		})
+	}
+}
+
+func selectedPane(t *testing.T, m dashboard.Model) string {
+	t.Helper()
+	a, ok := m.Selected()
+	require.True(t, ok, "nothing is selected")
+	return a.PaneID
 }
 
 func TestHerdrConfig(t *testing.T) {
