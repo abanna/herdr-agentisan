@@ -225,8 +225,8 @@ func okReply(herdrtest.Request) herdrtest.Reply {
 
 // TestStatuslinePushesTheTokenContract is the token contract for ctx: key,
 // bare rounded integer, source agentisan and a 180 s TTL, on the reporting
-// pane only. The pane has no lineage, as on an OS without /proc, so the
-// report trusts HERDR_PANE_ID and costs one call.
+// pane only. The pane has no lineage, as on an OS with no process table
+// reader, so the report trusts HERDR_PANE_ID and costs one call.
 func TestStatuslinePushesTheTokenContract(t *testing.T) {
 	t.Parallel()
 	srv := herdrtest.Start(t, okReply)
@@ -639,7 +639,8 @@ func TestStatuslineResolvesTheReportingPane(t *testing.T) {
 			panes:   []fakePane{{id: "wN:p2", shell: 600}, {id: "wM:p3", fg: []uint32{900}}},
 			err:     report.ErrAmbiguousPane, calls: []string{process, list, process, process},
 		},
-		// No lineage, as on an OS without /proc: trust the env id, one call.
+		// No lineage, as on an OS with no process table reader: trust the env
+		// id, one call.
 		"no lineage trusts HERDR_PANE_ID": {
 			envPane: "w14:p1", noLineage: true, panes: []fakePane{mine, other},
 			want: "w14:p1", calls: []string{reportM},

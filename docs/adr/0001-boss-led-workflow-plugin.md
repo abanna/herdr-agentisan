@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A22, A25 and A29 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A22, A25, A26 and A29 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -718,6 +718,22 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
   - A Codex `allow` rule for `herdr-agentisan report stage` would not change that. A rule bypasses the sandbox only when every part of the top-level tool command matches (`core/src/exec_policy.rs:440-455`), and Agentisan runs the report from inside its own step scripts.
   - The worker launch settings belong to NERD-5278.
   - Binding a Codex thread to its pane from the `report codex` hook, so that a stage could find its pane by `CODEX_THREAD_ID`, is deferred. It would add a key to the token contract, and the default sandbox would still deny the connect.
+
+### A26. The lineage on darwin
+
+*Corrects:* A22's "Off Linux there is no lineage, so a Codex `ctx` is Linux-only for now" and A25's "That includes every lineage off Linux, so off Linux, under Codex, nothing is reported". Both now hold off Linux and darwin only. Their text is kept as written. Verified against the XNU source (`apple-oss-distributions/xnu`, main) for NERD-5281 and NERD-5269.
+
+- **Readers.** On darwin a lineage reads each process's `kinfo_proc` (`sysctl kern.proc.pid.<pid>`) for its parent (`e_ppid`) and start time (`p_starttime`), and its `kern.procargs2` for its arguments. Both are parsed with no build tag, so the parsing is tested on Linux. Only the two sysctl calls are darwin-only.
+- **Codex is matched by argv[0].** `CheckCodexHost` compares argv[0] from the argv section of `kern.procargs2`. That is the vector `/proc/<pid>/cmdline` gives on Linux, so both answer alike. It is not `p_comm`, which the kernel cuts at 16 bytes (`MAXCOMLEN`), and not the exec path, which a Codex helper that the codex binary runs under another name shares with Codex.
+- **Reading the arguments.**
+  - The sysctl sizes its answer in one call and fills it in a second. An exec in between can leave the buffer shorter than the new arguments. The kernel then writes the new argc followed by only the tail of the arguments, which does not start at the exec path (`sysctl_procargsx`, its `buflen < argslen` branch). So the report reads twice and uses the arguments only when both reads agree byte for byte.
+  - The exec path is followed by its NUL and up to 7 NULs of alignment (`exec_extract_strings`), which the kernel itself skips. The report skips them the same way. 8 or more NULs after the exec path's terminator can only hide an empty argument, and are refused.
+  - The one gap: an empty argv[0] behind 0 to 6 alignment NULs cannot be told from the alignment, and reads as the next argument.
+  - Any other layout the kernel never writes (too short for argc, no exec path, an argument without its NUL, an argc the bytes cannot hold) is refused.
+- **Another user's process is unverified.** The kernel refuses `kern.procargs2` for another user's process with EINVAL, unless the caller is root. An ancestor of another user therefore makes the host unverified, and nothing is reported. A pane's lineage stays with one user because the herdr server runs detached and launchd adopts it. A shell that Terminal.app starts usually runs under a root-owned `login`, so a report run outside herdr from Terminal.app is then unverified.
+- **Start times are wall-clock.** On darwin `Stat.Start` is the microsecond the process forked (`p_start`, kept across exec), not clock ticks since boot. A clock step backwards breaks the rule that a reissued pid starts later: a pid reissued after the step can pass for the parent the lineage expects. A step otherwise makes a child look older than its parent, which only cuts the lineage short.
+- **Compile-checked only.** There is no macOS CI job, and `.github/workflows/` is not this change's to edit. The darwin readers are checked with `GOOS=darwin` vet, build, test compile, golangci-lint and gosec, for arm64 and amd64. A live check on a Mac follows the merge.
+- **Not changed.** `daemon.lock` liveness on darwin is NERD-5307.
 
 ### A28. The sidebar: the ctx display and `$team` in words
 
