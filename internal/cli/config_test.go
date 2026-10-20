@@ -65,12 +65,14 @@ token = { env = "GITHUB_TOKEN" }
 [projects.app]
 repo = "` + repo + `"
 color = "#123456"
+short = "app"
 
 [projects.app.integrations.linear]
 token = { op = "` + linearRef + `" }
 
 [projects.alpha]
 repo = "/nonexistent"
+short = "al"
 `
 	require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte(shared), 0o600))
 	return dir, repo
@@ -88,6 +90,7 @@ integrations.github.token = { env = "GITHUB_TOKEN" }  # shared
 integrations.linear.token = { op = "`+linearRef+`" }  # project
 repo = "`+repo+`"  # project
 rotation.thresholds = [55, 65, 75]  # default
+short = "app"  # project
 `, out)
 }
 
@@ -151,6 +154,7 @@ func TestConfigResolveJSON(t *testing.T) {
 					"integrations.linear.token": settings.LayerProject,
 					"repo":                      settings.LayerProject,
 					"rotation.thresholds":       settings.LayerDefault,
+					"short":                     settings.LayerProject,
 				}, got["sources"])
 				assert.Equal(t, []any{"alpha", "app"}, got["projects"])
 				assert.NotContains(t, got, "secrets", "secrets appear only with --check-secrets")
@@ -399,7 +403,7 @@ func TestConfigResolveRendersAnyValue(t *testing.T) {
 			out, err := runCtx(configCtx(t, nil, nil), args...)
 			require.NoError(t, err)
 			assert.Contains(t, out, tc.wantText+"\n")
-			assert.Len(t, strings.Split(strings.TrimSuffix(out, "\n"), "\n"), 7, "one line per leaf: %q", out)
+			assert.Len(t, strings.Split(strings.TrimSuffix(out, "\n"), "\n"), 8, "one line per leaf: %q", out)
 
 			out, err = runCtx(configCtx(t, nil, nil), append(args, "--json")...)
 			require.NoError(t, err)

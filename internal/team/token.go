@@ -71,23 +71,33 @@ type Token struct {
 	Value  string
 }
 
-// Tokens derives `$team` for every group target in m, each from the workers
-// sitting at that target, an empty one included. The boss's place gets none.
-// They are sorted by target.
+// Tokens derives `$team` for every group target in m, from the workers of
+// every group sitting at that target, an empty target included, and for a
+// team's own target, which a tabs team's groups share. The boss's place gets
+// none. They are sorted by target.
 func Tokens(m Model) []Token {
-	var out []Token
+	at := map[Target][]Worker{}
 	for _, pr := range m.Projects {
+		if pr.Target != (Target{}) && at[pr.Target] == nil {
+			at[pr.Target] = []Worker{}
+		}
 		for _, g := range pr.Groups {
 			for _, t := range g.Targets {
-				var at []Worker
-				for _, w := range g.Workers {
-					if w.Target == t {
-						at = append(at, w)
-					}
+				if at[t] == nil {
+					at[t] = []Worker{}
 				}
-				out = append(out, Token{Target: t, Value: Count(at).String()})
+			}
+			for _, w := range g.Workers {
+				at[w.Target] = append(at[w.Target], w)
 			}
 		}
+	}
+	if len(at) == 0 {
+		return nil
+	}
+	out := make([]Token, 0, len(at))
+	for t, workers := range at {
+		out = append(out, Token{Target: t, Value: Count(workers).String()})
 	}
 	slices.SortFunc(out, func(a, b Token) int { return strings.Compare(a.Target.WorkspaceID, b.Target.WorkspaceID) })
 	return out

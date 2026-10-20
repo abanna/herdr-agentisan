@@ -161,6 +161,15 @@ the last write wins; after, the daemon's next push, within 3 s, replaces the
 value v12 left on each group space. The daemon never writes `◆ herdr`, so
 v12's last value there clears itself when its 30 s TTL runs out.
 
+## Teams: one workspace, one tab per worker
+
+Every configured project but the `[spaces] project` is a team: one herdr
+workspace labelled with the project's name, the boss's tab `<short>-boss`,
+and one tab per worker, `<short>-<type>-<n>`, such as `ha-coder-2`. Give each
+such project a `short` code in `herdr-agentisan.toml`. The daemon pushes the
+team's workspace one `$team` for the whole team, the boss left out, and reads
+the teams when it starts: run the `daemon-restart` action after adding one.
+See ADR-001 A19.
 ## The dashboard
 
 `herdr-agentisan dashboard` draws the team from the daemon (ADR-001 D5,

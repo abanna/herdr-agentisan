@@ -29,12 +29,13 @@ var sharedSchema = func() *node {
 
 // spaces checks that spaces.project names a configured project, exactly.
 // When no layer sets it and exactly one project is configured, that project
-// is its default, reported from the default layer; with none or several, the
-// spaces belong to the unnamed project and nothing is reported.
-func (m merged) spaces(names []string) error {
+// is its default, reported from the default layer, unless its own table sets
+// layout = "tabs" (A19); otherwise the spaces belong to the unnamed project
+// and nothing is reported. views are the projects' own merges (projectViews).
+func (m merged) spaces(names []string, views map[string]merged) error {
 	v, set := m.get(spacesProjectPath)
 	if !set {
-		if len(names) == 1 {
+		if len(names) == 1 && views[names[0]].str("layout") != LayoutTabs {
 			table, _ := m.values["spaces"].(map[string]any)
 			if table == nil {
 				table = map[string]any{}
@@ -65,13 +66,17 @@ func (r Resolved) SpacesProject() string {
 	return name
 }
 
-// SpacesColor is the colour of the project the ◆ spaces belong to, as the
-// defaults, the shared tables, the project's own table and the overrides
-// resolve it; its repo file is not read. "" when that project has no colour,
-// when the spaces belong to the unnamed project, or when Load selected a
-// project (its Profile carries the colour then).
+// SpacesColor is the colour of the project the ◆ spaces belong to: its
+// team's Color, as the defaults, the shared tables, the project's own table
+// and the overrides resolve it; its repo file is not read. "" when that
+// project has no colour, or when the spaces belong to the unnamed project.
 func (r Resolved) SpacesColor() string {
-	return r.colors[r.SpacesProject()]
+	for _, t := range r.Teams {
+		if t.Layout == LayoutSpaces {
+			return t.Color
+		}
+	}
+	return ""
 }
 
 // Spaces is what the daemon reads of the configuration once, when it

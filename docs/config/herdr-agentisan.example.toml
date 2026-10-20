@@ -12,11 +12,11 @@
 #   1. built-in defaults: agent.command = ["claude"],
 #      rotation.thresholds = [55, 65, 75]
 #   2. the shared tables below: every top-level table except [projects]
-#   3. [projects.<name>]
+#   3. [projects.<name>], the only place short and layout can be set
 #   4. <repo>/.herdr-agentisan.toml: a profile body with its own
 #      schema_version = 1; it cannot set repo
 #   5. --set key.path=value on the command line, e.g.
-#      --set groups.coders.workers=4  --set 'rotation.thresholds=[50,60,70]'
+#      --set groups.coder.workers=4  --set 'rotation.thresholds=[50,60,70]'
 #
 # Tables deep-merge, key by key. Strings, numbers and lists (including
 # verify and agent.command) replace whole. So do secret references.
@@ -45,13 +45,15 @@ model = "opus"
 [rotation]
 thresholds = [55, 65, 75]
 
-# Each group: workers is how many `team up` starts, slots is the cap the boss
-# can scale to (slots >= workers >= 0).
+# Each group is a worker type: coder, precheck, qa, review (Codex), research,
+# librarian or debugger. workers is how many `team up` starts, slots is the
+# cap the boss can scale to (slots >= workers >= 0). boss is not a type: the
+# boss has its own tab.
 [groups.precheck]
 workers = 1
 slots = 1
 
-[groups.clerk]
+[groups.librarian]
 workers = 1
 slots = 1
 
@@ -65,9 +67,10 @@ token = { env = "GITHUB_TOKEN" }
 # The project today's ◆ group spaces belong to (ADR-001 A17): the daemon
 # pushes $team to each "◆ <group>" workspace and files its panes under this
 # project. It must name a project below. Only this file and --set may set
-# it. Left out, the one project configured is used; with none or several,
-# the spaces belong to one unnamed project. The daemon reads it when it
-# starts: run the daemon-restart action after changing it.
+# it. Left out, the one project configured is used, unless it sets
+# layout = "tabs"; with none or several, the spaces belong to one unnamed
+# project. The daemon reads it when it starts: run the daemon-restart action
+# after changing it.
 [spaces]
 project = "agentisan"
 
@@ -80,6 +83,16 @@ endpoint = "localhost:4318"
 
 # ---------------------------------------------------------------------------
 # Projects. The key is the project's name: lower case, digits and dashes.
+#
+# Every project but the [spaces] project is a tabs team (ADR-001 A19): one
+# herdr workspace labelled with the project's name, holding the boss's tab,
+# <short>-boss, and one full-size tab per worker, <short>-<type>-<n>, which
+# is also the worker's herdr agent name. short is required there: a
+# lower-case letter, then up to 7 more lower-case letters or digits, unique
+# across projects.
+# layout is "tabs" by default, and "spaces" only for the [spaces] project.
+# The daemon reads the teams when it starts: after adding a team, run the
+# daemon-restart action.
 # ---------------------------------------------------------------------------
 
 [projects.agentisan]
@@ -88,7 +101,7 @@ color = "#7c3aed"
 github = "nerds-run/agentisan-skills"
 verify = [["task", "check"]]
 
-[projects.agentisan.groups.coders]
+[projects.agentisan.groups.coder]
 workers = 3
 slots = 5
 
@@ -96,7 +109,7 @@ slots = 5
 workers = 1
 slots = 2
 
-[projects.agentisan.groups.codex]
+[projects.agentisan.groups.review]
 workers = 1
 slots = 1
 
@@ -105,7 +118,7 @@ workers = 0
 slots = 1
 
 # Overrides one key of the shared group; its slots still come from above.
-[projects.agentisan.groups.clerk]
+[projects.agentisan.groups.librarian]
 workers = 0
 
 [projects.agentisan.integrations.linear]
@@ -113,6 +126,8 @@ url = "https://linear.app/nerds-run"
 token = { op = "op://Engineering/Linear API/credential" }
 
 [projects.assay]
+short = "as"
+layout = "tabs"
 repo = "~/Development/nerdsrun/assay"
 color = "#0ea5e9"
 github = "nerds-run/assay"
@@ -121,7 +136,7 @@ verify = [["task", "check"], ["task", "test:unit"]]
 [projects.assay.agent]
 model = "sonnet"
 
-[projects.assay.groups.coders]
+[projects.assay.groups.coder]
 workers = 2
 slots = 4
 
@@ -129,7 +144,7 @@ slots = 4
 workers = 1
 slots = 2
 
-[projects.assay.groups.codex]
+[projects.assay.groups.review]
 workers = 1
 slots = 2
 

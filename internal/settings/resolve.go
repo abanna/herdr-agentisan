@@ -139,6 +139,9 @@ func (m merged) checkGroups() error {
 	for _, name := range slices.Sorted(maps.Keys(groups)) {
 		g, _ := groups[name].(map[string]any)
 		workersPath, slotsPath := "groups."+name+".workers", "groups."+name+".slots"
+		if name == BossType {
+			return m.invalidf(workersPath, "%s is the boss's tab, <short>-%s, not a worker type", name, name)
+		}
 		workers, ok := g["workers"].(int)
 		if !ok {
 			return m.invalidf(workersPath, "every group needs workers")
