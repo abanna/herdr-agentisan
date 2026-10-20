@@ -15,6 +15,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/store"
+	"github.com/abanna/herdr-agentisan/internal/team"
 )
 
 // VerifiedProtocols are the herdr API protocol versions this build has been
@@ -255,10 +256,15 @@ func Run(ctx context.Context, o Options) error {
 
 	w := newWalker() // shared: the collector tells it where focus goes
 	snapshots := &snapshotCache{}
-	srv, err := listen(paths.Socket, o.health(ctx, st, HealthInfo{
+	idle := &team.IdleClock{} // shared: the poll times rests, team status reads them
+	var ops map[string]op
+	if svc := o.newWorkforce(st, ident, idle); svc != nil {
+		ops = workforceOps(svc)
+	}
+	srv, err := listen(ctx, paths.Socket, o.health(ctx, st, HealthInfo{
 		PID: os.Getpid(), Version: o.Version, Commit: o.Commit, StartedAt: startedAt,
 		HerdrProtocol: pong.Protocol, HerdrSocket: o.HerdrSocket, Herdr: ident,
-	}), func() (BackResult, error) { return o.back(ctx, st, w) }, snapshots.load, o.Logger)
+	}), func() (BackResult, error) { return o.back(ctx, st, w) }, snapshots.load, ops, o.Logger)
 	if err != nil {
 		return err
 	}
@@ -272,7 +278,7 @@ func Run(ctx context.Context, o Options) error {
 		stopFocus()
 		focus.Wait()
 	}()
-	stopTeam := o.startTeam(ctx, st, ident, snapshots, views)
+	stopTeam := o.startTeam(ctx, st, ident, snapshots, idle, views)
 	defer stopTeam()
 	o.Logger.Info().Int("pid", os.Getpid()).Uint32("protocol", pong.Protocol).Str("socket", paths.Socket).
 		Int("store_version", st.UserVersion()).Msg("daemon running")

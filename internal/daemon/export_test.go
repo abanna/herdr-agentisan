@@ -11,6 +11,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
+	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
 // Backoff is the wait before resubscribe attempt n, counted from 0.
@@ -100,4 +101,32 @@ var StartTimeFrom = startTimeFrom
 // DefaultStartTime is the StartTime hook a daemon has when none is injected.
 func DefaultStartTime() func(pid int) (uint64, error) {
 	return Options{}.withDefaults().Hooks.StartTime
+}
+
+// WorkforceCode is the refusal code a workforce op answers err with.
+var WorkforceCode = workforceCode
+
+// ServeOp serves the daemon socket at path with one op, name, of budget,
+// running run under ctx. It returns the function that closes the socket.
+func ServeOp(ctx context.Context, path, name string, budget time.Duration, run func(context.Context) (any, error)) (func(), error) {
+	ops := map[string]op{name: {
+		budget: func(json.RawMessage) time.Duration { return budget },
+		run:    func(ctx context.Context, _ json.RawMessage) (any, error) { return run(ctx) },
+		code:   func(error) string { return "failed" },
+	}}
+	srv, err := listen(ctx, path, func() HealthInfo { return HealthInfo{} }, func() (BackResult, error) { return BackResult{}, nil },
+		func(Selector) (json.RawMessage, error) { return nil, ErrNotReady }, ops, zerolog.Nop())
+	if err != nil {
+		return nil, err
+	}
+	return srv.close, nil
+}
+
+// CallWith is one request with args, waited for up to timeout.
+var CallWith = callWith
+
+// WorkforceOf is the workforce service a daemon run with o builds, for the
+// herdr server ident names.
+func WorkforceOf(o Options, ident Identity) *workforce.Service {
+	return o.newWorkforce(nil, ident, &team.IdleClock{})
 }

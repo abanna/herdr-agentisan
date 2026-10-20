@@ -117,11 +117,12 @@ exempts whatever is later added under that name.
   server's `state.db`, which it holds open while it runs and records every
   `pane.focused` event in (resubscribing and resyncing on `events_lost`); and
   the plugin socket (D6) that answers `health`, `back` (A16: walk the
-  focus history, un-zoom the pane left, then focus the target) and
-  `snapshot`. Every poll it also rebuilds the team model, pushes `$team`
-  and every agent pane's ctx display (`team.go`, A28) and caches every
-  team's snapshot, with the workspaces each holds, which the `snapshot` op
-  serves by project or workspace, so the op never calls herdr (A18, A24,
+  focus history, un-zoom the pane left, then focus the target), `snapshot`
+  and the workforce ops (A23, `workforce.go`), each with a budget of its
+  own. Every poll it also rebuilds the team model, pushes `$team` and every
+  agent pane's ctx display (`team.go`, A28) and caches every team's
+  snapshot, with the workspaces each holds, which the `snapshot` op serves
+  by project or workspace, so the op never calls herdr (A18, A24,
   `snapshot.go`, with `SnapshotSource`, the dashboard's client), and sends
   each status change since the last poll as a workflow event
   (`events.go`). It keeps herdr's agent view on the focused team, which
@@ -138,7 +139,13 @@ exempts whatever is later added under that name.
   `$team` format and the ctx display's band tokens (A28), with the sidebar
   rows that show them, `docs/config/herdr-sidebar.example.toml`, for herdr's
   own config (`TestSidebarSnippet`), and the model as a snapshot v1 in the
-  resolver's group order, with the in-memory stage clock (A18).
+  resolver's group order, with the in-memory stage clock (A18) and idle
+  clock (A23).
+- `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
+  `team status` so far: each group's counts and members on a tabs team or
+  the ◆ spaces, with idle times from the daemon's clock. The daemon runs
+  them; `internal/cli` only asks it. Tests drive a fake herdr
+  (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
   references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check.
