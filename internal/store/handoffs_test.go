@@ -126,6 +126,25 @@ func TestFailHandoffKeepsTheOldSession(t *testing.T) {
 	assert.NotEqual(t, h, h2)
 }
 
+// TestCompleteHandoffIsOneTransaction: a handoff that cannot be ended leaves
+// the worker on its old pane with its inbox held (A2, I3).
+func TestCompleteHandoffIsOneTransaction(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	seedWorker(t, s, "w", "w14:p2", 0)
+	h, err := s.BeginHandoff(t.Context(), "w", "w14:p7", t1)
+	require.NoError(t, err)
+	send(t, s, worker("w"), boss, "held")
+	_, err = store.DB(s).ExecContext(t.Context(),
+		"CREATE TEMP TRIGGER refuse_ack BEFORE UPDATE OF state ON handoffs WHEN NEW.state = 'acknowledged' BEGIN SELECT RAISE(ABORT, 'ack refused'); END")
+	require.NoError(t, err)
+	require.ErrorIs(t, s.CompleteHandoff(t.Context(), h, t1), store.ErrStore)
+	pane, _ := bound(t, s, "w")
+	assert.Equal(t, "w14:p2", pane, "not rebound")
+	assert.Equal(t, "pending", handoffState(t, s, h))
+	noClaim(t, s, worker("w"), "still held")
+}
+
 // TestHandoffRefusals: a handoff needs a live worker and a new pane, one at a
 // time; completing or failing needs a pending handoff, and completing needs
 // the worker still on the old pane. A refused complete leaves the handoff

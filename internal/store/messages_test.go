@@ -401,6 +401,48 @@ func TestRecoverDispatchingAfterACrash(t *testing.T) {
 	noClaim(t, s, boss, "no notice of a notice")
 }
 
+// refuseNotices makes the schema refuse every notice, so the notice a failure
+// queues fails after the failed row was written in the same call. A TEMP
+// trigger lives on one connection, and the store holds exactly one.
+func refuseNotices(t *testing.T, s *store.Store) {
+	t.Helper()
+	_, err := store.DB(s).ExecContext(t.Context(),
+		"CREATE TEMP TRIGGER refuse_notices BEFORE INSERT ON messages WHEN NEW.notice_of <> '' BEGIN SELECT RAISE(ABORT, 'notice refused'); END")
+	require.NoError(t, err)
+}
+
+// TestFailIsOneTransaction: a notice that cannot be queued leaves the message
+// dispatching, not failed with no notice.
+func TestFailIsOneTransaction(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	m := send(t, s, boss, pane, "the private body")
+	claim(t, s, boss)
+	refuseNotices(t, s)
+	err := s.Fail(t.Context(), m.ID, "timeout", t1)
+	require.ErrorIs(t, err, store.ErrStore)
+	assert.NotContains(t, err.Error(), "the private body")
+	assert.Equal(t, store.MessageDispatching, message(t, s, m.ID).State, "rolled back whole")
+	noClaim(t, s, pane, "no notice")
+}
+
+// TestRecoverDispatchingIsOneTransaction: the same for the crash rule.
+func TestRecoverDispatchingIsOneTransaction(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	p1 := store.Address{Kind: store.KindPane, ID: "w14:p1"}
+	a := send(t, s, boss, pane, "the private body")
+	b := send(t, s, p1, pane, "another")
+	claim(t, s, boss)
+	claim(t, s, p1)
+	refuseNotices(t, s)
+	_, err := s.RecoverDispatching(t.Context(), "crash", t1)
+	require.ErrorIs(t, err, store.ErrStore)
+	assert.Equal(t, store.MessageDispatching, message(t, s, a.ID).State, "rolled back whole")
+	assert.Equal(t, store.MessageDispatching, message(t, s, b.ID).State, "rolled back whole")
+	noClaim(t, s, pane, "no notice")
+}
+
 // TestReturnToBoss: a worker's queued messages go to the boss once the
 // binding they were sent to has ended, when the row is retired or the id
 // was reused at a later generation, and keep their ids and order. A reused
