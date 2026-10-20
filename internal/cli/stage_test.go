@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -337,8 +336,8 @@ func TestReportStageReadsTheLineageOnce(t *testing.T) {
 // TestReportStageFromACodexPane runs the command against the real process
 // table with no CLAUDE_PID, as in a Codex pane. The fake pane's shell is this
 // test binary's parent, so the report reaches its pane only by walking up
-// through its parents: no anchor helps it. Off Linux there is no lineage and
-// the report trusts HERDR_PANE_ID.
+// through its parents: no anchor helps it. On an OS with no process table
+// reader there is no lineage, and the report trusts HERDR_PANE_ID.
 func TestReportStageFromACodexPane(t *testing.T) {
 	t.Parallel()
 	parent := os.Getppid()
@@ -358,7 +357,7 @@ func TestReportStageFromACodexPane(t *testing.T) {
 	require.NoError(t, err)
 
 	want := []string{"pane.process_info", "pane.report_metadata"}
-	if runtime.GOOS != "linux" {
+	if report.SystemStat() == nil {
 		want = []string{"pane.report_metadata"}
 	}
 	var got []string

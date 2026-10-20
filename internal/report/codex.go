@@ -42,8 +42,9 @@ var (
 	// HERDR_PANE_ID and the lineage can both lead to another pane.
 	ErrCodexDaemon = errors.New("codex session runs in a shared app-server, not in the pane's codex")
 	// ErrHostUnverified means the process hosting the Codex session cannot
-	// be checked: no lineage (no /proc), no cmdline reader, an ancestor
-	// whose cmdline is unreadable, or one whose pid was reissued mid-check.
+	// be checked: no lineage (an OS with no process table reader), no
+	// cmdline reader, an ancestor whose cmdline is unreadable (on darwin, one
+	// of another user), or one whose pid was reissued mid-check.
 	ErrHostUnverified = errors.New("cannot verify which process hosts the codex session")
 	// ErrNoCodexHost means no Codex process is among the reporting process's
 	// ancestors, as inside Codex's sandbox, whose pid namespace hides them,
