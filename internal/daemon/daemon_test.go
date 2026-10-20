@@ -551,7 +551,9 @@ func TestTwoRunsLeaveOneDaemon(t *testing.T) {
 }
 
 // holdLock takes daemon.lock the way a daemon does and writes info into it,
-// standing in for a daemon of some other herdr server.
+// standing in for a daemon of some other herdr server, or for a child forked
+// while a daemon ran. A lock that a child forked while an earlier daemon ran
+// still holds for a moment (see restarted) is waited for, up to ready.
 func holdLock(t *testing.T, stateDir string, h *fakeHerdr, info string) (release func()) {
 	t.Helper()
 	p, err := daemon.PathsFor(stateDir, h.path)
@@ -559,17 +561,25 @@ func holdLock(t *testing.T, stateDir string, h *fakeHerdr, info string) (release
 	require.NoError(t, os.MkdirAll(p.Dir, 0o700))
 	f, err := os.OpenFile(p.Lock, os.O_RDWR|os.O_CREATE, 0o600)
 	require.NoError(t, err)
-	require.NoError(t, syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB))
-	require.NoError(t, f.Truncate(0))
-	_, err = f.WriteAt([]byte(info), 0)
-	require.NoError(t, err)
 	var once sync.Once
 	release = func() { once.Do(func() { _ = f.Close() }) }
 	t.Cleanup(release)
+	deadline := time.Now().Add(ready)
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		require.ErrorIs(t, err, syscall.EWOULDBLOCK)
+		require.True(t, time.Now().Before(deadline), "daemon.lock was still held after %v", ready)
+		time.Sleep(5 * time.Millisecond)
+	}
+	require.NoError(t, f.Truncate(0))
+	_, err = f.WriteAt([]byte(info), 0)
+	require.NoError(t, err)
 	return release
 }
 
-// staleHolder is a lock held by a daemon bound to some earlier herdr socket.
 // TestRunAfterADaemonExits: a daemon's lock can outlive it for a moment,
 // held by a child forked while it ran, which keeps a copy of the lock's
 // descriptor until it execs, with the daemon's record still in the file. A
@@ -605,16 +615,21 @@ func TestRunAfterADaemonExits(t *testing.T) {
 
 		time.Sleep(150 * time.Millisecond)
 		require.True(t, r.alive(), "it waits while the lock outlives its holder")
+		_, err := daemon.Health(t.Context(), socketPath(t, dir, h.path))
+		require.Error(t, err, "and serves nothing until it has the lock")
 		release()
 		assert.Equal(t, os.Getpid(), r.healthy(t, dir, h).PID)
 	})
 	t.Run("the predecessor's start time reads as a live daemon", func(t *testing.T) {
 		t.Parallel()
 		dir, h, _ := lingering(t)
-		require.ErrorIs(t, daemon.Run(t.Context(), opts(t, dir, h)), daemon.ErrAlreadyRunning)
+		ctx, cancel := context.WithTimeout(t.Context(), ready)
+		defer cancel()
+		require.ErrorIs(t, daemon.Run(ctx, opts(t, dir, h)), daemon.ErrAlreadyRunning)
 	})
 }
 
+// staleHolder is a lock held by a daemon bound to some earlier herdr socket.
 const staleHolder = `{"v":1,"pid":1234567,"start":5,"herdr":{"dev":1,"ino":1},"started_at":"2026-10-09T00:00:00Z"}`
 
 // TestRunWaitsForAStaleHolder is ADR-001 A3: during a live handoff the new
