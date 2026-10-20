@@ -7,6 +7,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/store"
 )
@@ -29,6 +30,25 @@ var BackCode = backCode
 // BackOver runs one back op on st through h, as a fresh daemon would.
 func BackOver(ctx context.Context, h HerdrClient, st *store.Store) (BackResult, error) {
 	return Options{Herdr: h, Logger: zerolog.Nop()}.withDefaults().back(ctx, st, newWalker())
+}
+
+// FocusSnapshotOver takes one focus snapshot into st as the focus collector
+// of a daemon on socket, bound to the server ident names, takes it: through
+// the collector's own client.
+func FocusSnapshotOver(ctx context.Context, socket string, ident Identity, st *store.Store) error {
+	o := Options{HerdrSocket: socket, Logger: zerolog.Nop()}.withDefaults().forFocus(ident)
+	return o.snapshotFocus(ctx, st, newWalker(), ident)
+}
+
+// FocusDialGuard is the check the focus collector's client runs on every
+// connection, for a daemon on socket bound to the server ident names; nil if
+// the collector's client is not a herdr.Client.
+func FocusDialGuard(socket string, ident Identity) func() error {
+	c, ok := Options{HerdrSocket: socket}.forFocus(ident).Herdr.(herdr.Client)
+	if !ok || c.SocketPath != socket {
+		return nil
+	}
+	return c.Dialed
 }
 
 // CacheSnapshot caches s as the team poll does, and returns what the
