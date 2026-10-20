@@ -30,14 +30,13 @@ func shell(id, ws string) herdr.PaneInfo {
 	return herdr.PaneInfo{PaneID: id, WorkspaceID: ws, AgentStatus: "unknown"}
 }
 
-// TestTeamTokenGoldens is the frozen `$team` format, byte for byte as v12
-// writes it (herdr-dashboard-v12.py:142-143): N · ◐w ●i[ ⚠b][ ⟳r]. N counts
-// every pane in the space, shells and unknown included; ◐ counts working; ●
-// counts idle plus done; ⚠ counts blocked and ⟳ the panes carrying a handoff
-// token, each left out at zero. The wants are spelled with escapes so the
-// test cannot share a mistyped glyph with the code: U+00B7 MIDDLE DOT, U+25D0
-// ◐, U+25CF ●, U+26A0 ⚠ with no U+FE0F, U+27F3 ⟳. An escape takes exactly
-// four hex digits, so "\u25d03" is ◐ then 3.
+// TestTeamTokenGoldens is the `$team` format (ADR-001 A28, amending A17's
+// frozen v12 one): "N agents · W working · R ready", then " · B blocked" when
+// any are, and "1 agent" for one. N counts every pane in the space, shells
+// and unknown included; W counts working; R counts the panes carrying a
+// handoff token, whatever their status; B counts blocked. Idle and done are
+// not counted. The middle dots are spelled U+00B7 escapes so the test cannot
+// share a mistyped glyph with the code.
 func TestTeamTokenGoldens(t *testing.T) {
 	t.Parallel()
 
@@ -45,27 +44,27 @@ func TestTeamTokenGoldens(t *testing.T) {
 		panes []herdr.PaneInfo
 		want  string
 	}{
-		"3 working, 1 idle, 1 done": {
+		"3 working, 1 idle, 1 done, nothing ready": {
 			panes: []herdr.PaneInfo{p("w1:p1", "w1", "working"), p("w1:p2", "w1", "working"), p("w1:p3", "w1", "working"), p("w1:p4", "w1", "idle"), p("w1:p5", "w1", "done")},
-			want:  "5 \u00b7 \u25d03 \u25cf2",
+			want:  "5 agents \u00b7 3 working \u00b7 0 ready",
 		},
 		"2 working, 1 idle, 1 done, 1 blocked, 2 ready": {
 			panes: []herdr.PaneInfo{
 				p("w1:p1", "w1", "working", "⟳ READY TO RESTART"), p("w1:p2", "w1", "working"), p("w1:p3", "w1", "idle"),
 				p("w1:p4", "w1", "done", "⟳ READY TO RESTART"), p("w1:p5", "w1", "blocked"),
 			},
-			want: "5 \u00b7 \u25d02 \u25cf2 \u26a01 \u27f32",
+			want: "5 agents \u00b7 2 working \u00b7 2 ready \u00b7 1 blocked",
 		},
-		"one plain shell":       {panes: []herdr.PaneInfo{shell("w1:p1", "w1")}, want: "1 \u00b7 \u25d00 \u25cf0"},
-		"an empty space":        {want: "0 \u00b7 \u25d00 \u25cf0"},
-		"shells counted in N":   {panes: []herdr.PaneInfo{shell("w1:p1", "w1"), shell("w1:p2", "w1"), p("w1:p3", "w1", "working")}, want: "3 \u00b7 \u25d01 \u25cf0"},
-		"blocked only":          {panes: []herdr.PaneInfo{p("w1:p1", "w1", "blocked")}, want: "1 \u00b7 \u25d00 \u25cf0 \u26a01"},
-		"ready only, on idle":   {panes: []herdr.PaneInfo{p("w1:p1", "w1", "idle", "x")}, want: "1 \u00b7 \u25d00 \u25cf1 \u27f31"},
-		"done counts in idle":   {panes: []herdr.PaneInfo{p("w1:p1", "w1", "done"), p("w1:p2", "w1", "done")}, want: "2 \u00b7 \u25d00 \u25cf2"},
-		"ready on a shell":      {panes: []herdr.PaneInfo{{PaneID: "w1:p1", WorkspaceID: "w1", AgentStatus: "unknown", Tokens: map[string]string{"handoff": "on"}}}, want: "1 \u00b7 \u25d00 \u25cf0 \u27f31"},
-		"an empty handoff":      {panes: []herdr.PaneInfo{{PaneID: "w1:p1", WorkspaceID: "w1", AgentStatus: "idle", Tokens: map[string]string{"handoff": ""}}}, want: "1 \u00b7 \u25d00 \u25cf1"},
-		"a status herdr adds":   {panes: []herdr.PaneInfo{p("w1:p1", "w1", "napping"), p("w1:p2", "w1", "WORKING")}, want: "2 \u00b7 \u25d00 \u25cf0"},
-		"a pane with no status": {panes: []herdr.PaneInfo{{PaneID: "w1:p1", WorkspaceID: "w1"}}, want: "1 \u00b7 \u25d00 \u25cf0"},
+		"one plain shell":         {panes: []herdr.PaneInfo{shell("w1:p1", "w1")}, want: "1 agent \u00b7 0 working \u00b7 0 ready"},
+		"an empty space":          {want: "0 agents \u00b7 0 working \u00b7 0 ready"},
+		"shells counted in N":     {panes: []herdr.PaneInfo{shell("w1:p1", "w1"), shell("w1:p2", "w1"), p("w1:p3", "w1", "working")}, want: "3 agents \u00b7 1 working \u00b7 0 ready"},
+		"blocked only":            {panes: []herdr.PaneInfo{p("w1:p1", "w1", "blocked")}, want: "1 agent \u00b7 0 working \u00b7 0 ready \u00b7 1 blocked"},
+		"ready only, on idle":     {panes: []herdr.PaneInfo{p("w1:p1", "w1", "idle", "x")}, want: "1 agent \u00b7 0 working \u00b7 1 ready"},
+		"idle and done uncounted": {panes: []herdr.PaneInfo{p("w1:p1", "w1", "done"), p("w1:p2", "w1", "done")}, want: "2 agents \u00b7 0 working \u00b7 0 ready"},
+		"ready on a shell":        {panes: []herdr.PaneInfo{{PaneID: "w1:p1", WorkspaceID: "w1", AgentStatus: "unknown", Tokens: map[string]string{"handoff": "on"}}}, want: "1 agent \u00b7 0 working \u00b7 1 ready"},
+		"an empty handoff":        {panes: []herdr.PaneInfo{{PaneID: "w1:p1", WorkspaceID: "w1", AgentStatus: "idle", Tokens: map[string]string{"handoff": ""}}}, want: "1 agent \u00b7 0 working \u00b7 0 ready"},
+		"a status herdr adds":     {panes: []herdr.PaneInfo{p("w1:p1", "w1", "napping"), p("w1:p2", "w1", "WORKING")}, want: "2 agents \u00b7 0 working \u00b7 0 ready"},
+		"a pane with no status":   {panes: []herdr.PaneInfo{{PaneID: "w1:p1", WorkspaceID: "w1"}}, want: "1 agent \u00b7 0 working \u00b7 0 ready"},
 		"two-digit counts": {
 			panes: func() []herdr.PaneInfo {
 				var out []herdr.PaneInfo
@@ -74,7 +73,7 @@ func TestTeamTokenGoldens(t *testing.T) {
 				}
 				return append(out, p("w1:pz", "w1", "blocked"))
 			}(),
-			want: "13 \u00b7 \u25d012 \u25cf0 \u26a01 \u27f312",
+			want: "13 agents \u00b7 12 working \u00b7 12 ready \u00b7 1 blocked",
 		},
 	}
 	for name, tc := range tests {
@@ -85,7 +84,6 @@ func TestTeamTokenGoldens(t *testing.T) {
 			got := team.Tokens(team.Build(l, team.Spaces{}, nil))
 			require.Len(t, got, 1)
 			assert.Equal(t, team.Token{Target: team.Target{WorkspaceID: "w1"}, Value: tc.want}, got[0])
-			assert.NotContains(t, got[0].Value, "\ufe0f", "⚠ is the text glyph, never the emoji presentation")
 		})
 	}
 }
@@ -111,9 +109,9 @@ func TestTokensForEveryGroupTarget(t *testing.T) {
 	}
 
 	assert.Equal(t, []team.Token{
-		{Target: team.Target{WorkspaceID: "w13"}, Value: "0 · ◐0 ●0"},
-		{Target: team.Target{WorkspaceID: "wN"}, Value: "3 · ◐1 ●0 ⚠1"},
-		{Target: team.Target{WorkspaceID: "wY"}, Value: "1 · ◐0 ●1"},
+		{Target: team.Target{WorkspaceID: "w13"}, Value: "0 agents · 0 working · 0 ready"},
+		{Target: team.Target{WorkspaceID: "wN"}, Value: "3 agents · 1 working · 0 ready · 1 blocked"},
+		{Target: team.Target{WorkspaceID: "wY"}, Value: "1 agent · 0 working · 0 ready"},
 	}, team.Tokens(team.Build(l, team.Spaces{Project: "agentisan"}, nil)))
 	assert.Empty(t, team.Tokens(team.Model{}), "no model, no tokens")
 }
