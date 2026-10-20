@@ -202,9 +202,13 @@ func TestPaneFromReadsTheShellEnvironment(t *testing.T) {
 		"set but empty":   {env: map[string]string{"HERDR_SOCKET_PATH": "", "HERDR_PANE_ID": ""}, want: report.Pane{}},
 		"only the socket": {env: map[string]string{"HERDR_SOCKET_PATH": "/run/h.sock"}, want: report.Pane{SocketPath: "/run/h.sock"}},
 		"other variables are not read": {
-			env:  map[string]string{"HERDR_PANE": "w1:p1", "herdr_pane_id": "w1:p1", "HERDR_ENV": "1"},
+			env:  map[string]string{"HERDR_PANE": "w1:p1", "herdr_pane_id": "w1:p1", "HERDR_ENV": "1", "CODEX_SESSION_ID": "s", "CODEX_SANDBOX": "seatbelt"},
 			want: report.Pane{},
 		},
+		"a Codex tool command":          {env: map[string]string{"CODEX_THREAD_ID": "019a"}, want: report.Pane{CodexThread: "019a"}},
+		"Codex's network sandbox":       {env: map[string]string{"CODEX_THREAD_ID": "019a", "CODEX_SANDBOX_NETWORK_DISABLED": "1"}, want: report.Pane{CodexThread: "019a", CodexNetworkSandboxed: true}},
+		"any non-empty sandbox value":   {env: map[string]string{"CODEX_SANDBOX_NETWORK_DISABLED": "true"}, want: report.Pane{CodexNetworkSandboxed: true}},
+		"Codex variables set but empty": {env: map[string]string{"CODEX_THREAD_ID": "", "CODEX_SANDBOX_NETWORK_DISABLED": ""}, want: report.Pane{}},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

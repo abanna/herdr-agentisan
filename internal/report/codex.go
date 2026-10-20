@@ -45,6 +45,14 @@ var (
 	// be checked: no lineage (no /proc), no cmdline reader, an ancestor
 	// whose cmdline is unreadable, or one whose pid was reissued mid-check.
 	ErrHostUnverified = errors.New("cannot verify which process hosts the codex session")
+	// ErrNoCodexHost means no Codex process is among the reporting process's
+	// ancestors, as inside Codex's sandbox, whose pid namespace hides them,
+	// or for a process that is not Codex's at all.
+	ErrNoCodexHost = errors.New("no codex process among the reporting process's ancestors")
+	// ErrCodexSandboxed means Codex ran the command in its network sandbox
+	// (CODEX_SANDBOX_NETWORK_DISABLED), whose seccomp filter denies every
+	// connect, herdr's socket included (A25).
+	ErrCodexSandboxed = errors.New("codex ran the command in its network sandbox")
 )
 
 // CodexHook is the part of a Codex hook's stdin JSON a report needs.
@@ -95,14 +103,17 @@ func ParseCodexHook(r io.Reader) (CodexHook, error) {
 }
 
 // CheckCodexHost returns nil only when every process of the lineage was
-// read again and none is a Codex app-server, which is what a hook run by the
-// pane's own Codex (codex --no-daemon) looks like. A lineage through an
-// app-server is ErrCodexDaemon; one that cannot be checked, including a nil
-// lineage, is ErrHostUnverified. Either way a report must go nowhere.
+// read again, none is a Codex app-server and one is Codex itself: what a
+// process run by the pane's own Codex (codex --no-daemon) looks like. A
+// lineage through an app-server is ErrCodexDaemon; one with no Codex in it,
+// as in Codex's sandbox, is ErrNoCodexHost; one that cannot be checked,
+// including a nil lineage, is ErrHostUnverified. Any of them, a report must
+// go nowhere.
 func (l *Lineage) CheckCodexHost() error {
 	if l == nil || l.stat == nil || l.cmdline == nil || len(l.Procs) == 0 {
 		return fmt.Errorf("%w: no lineage with a cmdline reader", ErrHostUnverified)
 	}
+	hosted := false
 	for _, p := range l.Procs {
 		argv, err := l.cmdline(p.PID)
 		if err != nil {
@@ -118,8 +129,38 @@ func (l *Lineage) CheckCodexHost() error {
 		if len(argv) > 1 && slices.Contains(argv[1:], "app-server") {
 			return fmt.Errorf("%w: pid %d runs %q", ErrCodexDaemon, p.PID, strings.Join(argv, " "))
 		}
+		hosted = hosted || isCodex(argv)
+	}
+	if !hosted {
+		return fmt.Errorf("%w: lineage %v", ErrNoCodexHost, l.PIDs())
 	}
 	return nil
+}
+
+// isCodex reports whether argv runs Codex: its native binary, named codex,
+// or the node launcher running bin/codex (codex.js in some installs).
+func isCodex(argv []string) bool {
+	if len(argv) > 0 && filepath.Base(argv[0]) == "codex" {
+		return true
+	}
+	if len(argv) > 1 && filepath.Base(argv[0]) == "node" {
+		b := filepath.Base(argv[1])
+		return b == "codex" || b == "codex.js"
+	}
+	return false
+}
+
+// checkCodex is the check a report run by a Codex tool command must pass
+// (A25): none without CODEX_THREAD_ID; under Codex, ErrCodexSandboxed in its
+// network sandbox, otherwise CheckCodexHost.
+func (p Pane) checkCodex() error {
+	if p.CodexThread == "" {
+		return nil
+	}
+	if p.CodexNetworkSandboxed {
+		return fmt.Errorf("%w: thread %s", ErrCodexSandboxed, p.CodexThread)
+	}
+	return p.Lineage.CheckCodexHost()
 }
 
 // TranscriptContext returns the context use Codex's TUI shows as "Context
