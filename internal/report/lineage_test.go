@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
+	"syscall"
 	"testing"
 	"testing/fstest"
 
@@ -242,7 +243,9 @@ func TestAnchorsFromTheEnvironment(t *testing.T) {
 
 // olderStranger finds a live process that is not in lineage and started no
 // later than its first entry: what CLAUDE_PID names for a re-parented report.
-// It returns 0 when the process table holds none, as in a minimal container.
+// It lists /proc where there is one and otherwise tries every pid darwin can
+// issue, reading each through report.SystemStat. It returns 0 when the
+// process table holds none, as in a minimal container.
 func olderStranger(t *testing.T, lineage *report.Lineage) int {
 	t.Helper()
 	require.NotEmpty(t, lineage.Procs)
@@ -250,12 +253,22 @@ func olderStranger(t *testing.T, lineage *report.Lineage) int {
 	for _, p := range lineage.Procs {
 		in[p.PID] = true
 	}
-	entries, err := os.ReadDir("/proc")
-	require.NoError(t, err)
-	stat := report.ProcStat(os.DirFS("/proc"))
-	for _, e := range entries {
-		pid, err := strconv.Atoi(e.Name())
-		if err != nil || pid <= 1 || in[pid] {
+	var pids []int
+	if entries, err := os.ReadDir("/proc"); err == nil {
+		for _, e := range entries {
+			if pid, err := strconv.Atoi(e.Name()); err == nil {
+				pids = append(pids, pid)
+			}
+		}
+	} else {
+		for pid := 2; pid < 100_000; pid++ { // darwin's PID_MAX is 99999
+			pids = append(pids, pid)
+		}
+	}
+	stat := report.SystemStat()
+	require.NotNil(t, stat)
+	for _, pid := range pids {
+		if pid <= 1 || in[pid] {
 			continue
 		}
 		if s, err := stat(pid); err == nil && s.Start <= lineage.Procs[0].Start {
@@ -377,15 +390,39 @@ func TestProcStatUnreadableFile(t *testing.T) {
 	require.ErrorIs(t, err, report.ErrProcStat)
 }
 
-// TestSelfLineageReadsTheRealProcessTable runs against the real /proc: the
-// lineage is this test binary, then its parent, and start times never
-// increase towards init. Off Linux there is no /proc and the lineage is nil,
-// which makes a report trust HERDR_PANE_ID as it did before lineage existed.
+// TestSystemReadersCoverLinuxAndDarwin: Linux reads its process table from
+// /proc and darwin through sysctl (A26). Anywhere else there is no reader and
+// no lineage, which makes a report trust HERDR_PANE_ID as it did before
+// lineage existed, and a report under Codex go nowhere.
+func TestSystemReadersCoverLinuxAndDarwin(t *testing.T) {
+	t.Parallel()
+	got := report.SelfLineage(func(string) (string, bool) { return "", false })
+	switch runtime.GOOS {
+	case "linux", "darwin":
+		require.NotNil(t, report.SystemStat())
+		require.NotNil(t, got)
+		// This process is never another user's, so the real reader must
+		// return its arguments exactly as the runtime got them.
+		cmdline := report.SystemCmdline()
+		require.NotNil(t, cmdline)
+		argv, err := cmdline(os.Getpid())
+		require.NoError(t, err)
+		assert.Equal(t, os.Args, argv)
+	default:
+		assert.Nil(t, report.SystemStat())
+		assert.Nil(t, report.SystemCmdline())
+		assert.Nil(t, got)
+	}
+}
+
+// TestSelfLineageReadsTheRealProcessTable runs against the real process
+// table: the lineage is this test binary, then its parent, and start times
+// never increase towards init. With no reader for the OS the lineage is nil.
 func TestSelfLineageReadsTheRealProcessTable(t *testing.T) {
 	t.Parallel()
 
 	got := report.SelfLineage(func(string) (string, bool) { return "", false })
-	if runtime.GOOS != "linux" {
+	if report.SystemStat() == nil {
 		assert.Nil(t, got)
 		return
 	}
@@ -405,8 +442,8 @@ func TestSelfLineageReadsTheRealProcessTable(t *testing.T) {
 // environment names joins the lineage when it is an older process outside it.
 func TestSelfLineageAdmitsCLAUDE_PID(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS != "linux" {
-		t.Skip("no /proc to read a lineage from")
+	if report.SystemStat() == nil {
+		t.Skip("no process table to read a lineage from")
 	}
 	none := func(string) (string, bool) { return "", false }
 	stranger := olderStranger(t, report.SelfLineage(none))
@@ -464,13 +501,19 @@ func TestProcCmdlineClasses(t *testing.T) {
 // TestSelfLineageChecksTheRealCodexHost: the real lineage carries a cmdline
 // reader, so the Codex host check reads every ancestor rather than refusing
 // unverified. Whether a Codex TUI or app-server is among them depends on who
-// runs the tests, so any answer but "unverified" passes.
+// runs the tests, so any answer but "unverified" passes. On darwin the one
+// unverified answer allowed is an ancestor of another user, such as the
+// root-owned login Terminal.app starts a shell under, which the kernel will
+// not show (A26).
 func TestSelfLineageChecksTheRealCodexHost(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS != "linux" {
-		t.Skip("no /proc to read a lineage from")
+	if report.SystemStat() == nil {
+		t.Skip("no process table to read a lineage from")
 	}
 	err := report.SelfLineage(func(string) (string, bool) { return "", false }).CheckCodexHost()
+	if runtime.GOOS == "darwin" && errors.Is(err, report.ErrHostUnverified) && errors.Is(err, syscall.EINVAL) {
+		return
+	}
 	if err != nil && !errors.Is(err, report.ErrNoCodexHost) {
 		require.ErrorIs(t, err, report.ErrCodexDaemon)
 	}
