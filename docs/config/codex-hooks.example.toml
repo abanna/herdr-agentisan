@@ -15,8 +15,6 @@
 # - PostCompact reports again after a compaction, such as /compact. Codex may
 #   not have written the new count yet when the hook reads it; the next turn
 #   corrects it.
-# - SessionEnd clears `ctx` as Codex exits. Codex runs it synchronously
-#   whatever `async` says, so it has none, and exit waits for it.
 
 [[hooks.PostToolUse]]
 matcher = "*"
@@ -42,10 +40,3 @@ type = "command"
 command = "herdr-agentisan report codex"
 timeout = 10
 async = true
-
-[[hooks.SessionEnd]]
-
-[[hooks.SessionEnd.hooks]]
-type = "command"
-command = "herdr-agentisan report codex"
-timeout = 10

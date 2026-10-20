@@ -72,24 +72,6 @@ func TestReportCodexPushesCtx(t *testing.T) {
 	assert.Contains(t, logs.String(), `"ctx":5`)
 }
 
-// TestReportCodexClearsCtxOnSessionEnd: Codex's SessionEnd hook clears ctx,
-// prints nothing, and the debug log says it cleared rather than set 0.
-func TestReportCodexClearsCtxOnSessionEnd(t *testing.T) {
-	t.Parallel()
-	srv := herdrtest.Start(t, paneHerdr("w15:p4"))
-	var logs bytes.Buffer
-	stdin := `{"session_id":"s","transcript_path":null,"cwd":"/w","hook_event_name":"SessionEnd","reason":"other"}`
-
-	out, err := runCodex(cli.WithLineage(reportCtx(t, srv.Path, "w15:p4", &logs), codexLineage(false)), stdin)
-	require.NoError(t, err)
-	assert.Empty(t, out)
-
-	reqs := srv.Requests()
-	require.Len(t, reqs, 2)
-	assert.JSONEq(t, `{"pane_id":"w15:p4","source":"agentisan","tokens":{"ctx":""}}`, string(reqs[1].Params))
-	assert.Contains(t, logs.String(), `"cleared":true`)
-}
-
 // TestReportCodexDoesNothing: every refusal exits 0, prints nothing, calls
 // no herdr and leaves its reason in the debug log.
 func TestReportCodexDoesNothing(t *testing.T) {
@@ -134,9 +116,8 @@ func TestReportCodexDoesNothing(t *testing.T) {
 }
 
 // TestCodexHookSnippetRunsReportCodex keeps the documented Codex hooks
-// (sample and README) runnable: all four events run the real `report codex`
-// command under a timeout, asynchronously but for SessionEnd, which Codex
-// runs synchronously whatever the config says (A27).
+// (sample and README) runnable: all three events run the real `report codex`
+// command, asynchronously, under a timeout.
 func TestCodexHookSnippetRunsReportCodex(t *testing.T) {
 	t.Parallel()
 	sample, err := os.ReadFile(filepath.Join("..", "..", "docs", "config", "codex-hooks.example.toml"))
@@ -157,7 +138,6 @@ func TestCodexHookSnippetRunsReportCodex(t *testing.T) {
 			PostToolUse []group `toml:"PostToolUse"`
 			Stop        []group `toml:"Stop"`
 			PostCompact []group `toml:"PostCompact"`
-			SessionEnd  []group `toml:"SessionEnd"`
 		} `toml:"hooks"`
 	}
 	dec := toml.NewDecoder(bytes.NewReader(sample))
@@ -167,15 +147,13 @@ func TestCodexHookSnippetRunsReportCodex(t *testing.T) {
 	require.Len(t, cfg.Hooks.PostToolUse, 1)
 	require.NotNil(t, cfg.Hooks.PostToolUse[0].Matcher)
 	assert.Equal(t, "*", *cfg.Hooks.PostToolUse[0].Matcher, "every tool, not just the shell")
-	for event, groups := range map[string][]group{
-		"PostToolUse": cfg.Hooks.PostToolUse, "Stop": cfg.Hooks.Stop, "PostCompact": cfg.Hooks.PostCompact, "SessionEnd": cfg.Hooks.SessionEnd,
-	} {
+	for event, groups := range map[string][]group{"PostToolUse": cfg.Hooks.PostToolUse, "Stop": cfg.Hooks.Stop, "PostCompact": cfg.Hooks.PostCompact} {
 		require.Len(t, groups, 1, event)
 		g := groups[0].Hooks
 		require.Len(t, g, 1, event)
 		assert.Equal(t, "command", g[0].Type, event)
 		assert.Equal(t, "herdr-agentisan report codex", g[0].Command, event)
-		assert.Equal(t, event != "SessionEnd", g[0].Async, "%s: a Stop hook that is not async fails on any stray stdout; SessionEnd runs synchronously anyway", event)
+		assert.True(t, g[0].Async, "%s: a Stop hook that is not async fails on any stray stdout", event)
 		assert.Positive(t, g[0].Timeout, event)
 	}
 

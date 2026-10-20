@@ -105,7 +105,7 @@ exempts whatever is later added under that name.
   `report statusline` turns Claude's statusline JSON into `ctx`,
   `report codex` does the same from a Codex hook and its session's rollout
   (A22, hooks sampled in `docs/config/codex-hooks.example.toml`), with a
-  24 h TTL and a clear on Codex's SessionEnd (A27), and
+  24 h TTL (A27), and
   `report stage` pushes `item` and `stage` on each agentisan step
   transition. They read `HERDR_PANE_ID`, a pane-shell variable, which is why
   it is not in `plugin.Env`.

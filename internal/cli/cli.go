@@ -225,11 +225,10 @@ func newReportCodexCmd() *cobra.Command {
 		Short: "Push ctx from a Codex hook's payload on stdin",
 		Long: "Reads the JSON a Codex hook passes on stdin and sets this pane's ctx\n" +
 			"token to what Codex shows as \"Context N% used\", from the latest token\n" +
-			"count in the session's transcript, for 24 h. Run it as an async\n" +
-			"PostToolUse, Stop and PostCompact hook, and as the SessionEnd hook, which\n" +
-			"clears ctx (docs/config/codex-hooks.example.toml). Start Codex with\n" +
-			"--no-daemon: a hook run by the shared app-server daemon cannot tell which\n" +
-			"pane it belongs to, and reports nothing.\n\n" +
+			"count in the session's transcript, for 24 h. Run it as an async PostToolUse,\n" +
+			"Stop and PostCompact hook (docs/config/codex-hooks.example.toml), and start\n" +
+			"Codex with --no-daemon: a hook run by the shared app-server daemon cannot\n" +
+			"tell which pane it belongs to, and reports nothing.\n\n" +
 			"It prints nothing and always exits 0; why it reported nothing goes to\n" +
 			"the debug log (HERDR_AGENTISAN_LOG_LEVEL=debug).",
 		Args: cobra.NoArgs,
@@ -248,7 +247,7 @@ func newReportCodexCmd() *cobra.Command {
 				logger.Debug().Err(err).Str("pane", pane.PaneID).Ints("lineage", lineage.PIDs()).Msg("report codex: nothing reported")
 				return nil
 			}
-			logger.Debug().Str("pane", pane.PaneID).Str("reported_to", res.PaneID).Int(report.CtxKey, res.Ctx).Bool("cleared", res.Cleared).Msg("report codex")
+			logger.Debug().Str("pane", pane.PaneID).Str("reported_to", res.PaneID).Int(report.CtxKey, res.Ctx).Msg("report codex")
 			return nil
 		},
 	}

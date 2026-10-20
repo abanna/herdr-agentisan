@@ -47,7 +47,7 @@ statusline has no context percentage yet, it reports nothing. Set
 
 ## Report `$ctx` from Codex
 
-Each Codex agent pushes the same `ctx` token through four Codex hooks, with
+Each Codex agent pushes the same `ctx` token through three Codex hooks, with
 the number Codex itself shows as "Context N% used". Add them to
 `~/.codex/config.toml`, or to a trusted project's `.codex/config.toml`
 ([sample](docs/config/codex-hooks.example.toml)), and trust them once when
@@ -78,13 +78,6 @@ type = "command"
 command = "herdr-agentisan report codex"
 timeout = 10
 async = true
-
-[[hooks.SessionEnd]]
-
-[[hooks.SessionEnd.hooks]]
-type = "command"
-command = "herdr-agentisan report codex"
-timeout = 10
 ```
 
 Start Codex with `codex --no-daemon`. By default Codex runs its sessions in a
@@ -96,15 +89,10 @@ nothing. Like `report statusline`, it prints nothing and always exits 0.
 Codex's context changes only in a turn or a compaction, and those are when
 its hooks run, so the token lasts 24 h, set again by every report: an idle
 Codex agent keeps its `ctx`. PostCompact reports after a compaction, but may
-still read the count from before it; the next turn corrects it. SessionEnd
-clears `ctx` as Codex exits. Two cases leave a value behind until the TTL
-runs out or the next Codex in the pane reports:
-
-- a Codex that crashes or is killed while its shell keeps the pane;
-- a PostToolUse or Stop report still running when Codex exits, which can
-  land after the clear.
-
-ADR-001 A22 and A27 have the details.
+still read the count from before it; the next turn corrects it. Nothing
+clears `ctx` when Codex exits, cleanly or not: the last value stays until the
+TTL runs out or the next Codex in the pane reports. ADR-001 A22 and A27 have
+the details.
 
 ## Report `$item` and `$stage` from agentisan
 

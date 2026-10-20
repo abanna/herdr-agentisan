@@ -14,9 +14,9 @@ import (
 )
 
 // The Codex ctx adapter (ADR-001 A22, A27). Codex runs `report codex` as an
-// async PostToolUse, Stop and PostCompact hook, and as its SessionEnd hook,
-// and passes the hook's JSON on stdin; ctx keeps the token contract
-// Statusline writes but for its TTL, CodexCtxTTL.
+// async PostToolUse, Stop and PostCompact hook and passes the hook's JSON on
+// stdin; ctx keeps the token contract Statusline writes but for its TTL,
+// CodexCtxTTL.
 const (
 	// MaxCodexHookBytes bounds the hook payload kept from stdin. A PostToolUse
 	// payload carries the tool's input and output, so it can be large; one
@@ -30,9 +30,6 @@ const (
 	// codexBaselineTokens is Codex's BASELINE_TOKENS: context the TUI counts
 	// as always in use, taken off both the window and the usage.
 	codexBaselineTokens = 12000
-	// codexSessionEnd is the hook_event_name of the hook Codex runs as it
-	// exits.
-	codexSessionEnd = "SessionEnd"
 )
 
 var (
@@ -66,17 +63,13 @@ type CodexHook struct {
 	TranscriptPath string
 	// AgentID is set only when the hook fired inside a subagent.
 	AgentID string
-	// Event is hook_event_name, such as PostToolUse or SessionEnd; empty
-	// when the payload names none.
-	Event string
 }
 
 // ParseCodexHook reads a Codex hook payload from r, and reads r to its end
 // whatever it finds, so Codex's write of the payload always completes rather
 // than meeting a closed pipe. (Codex 0.161 tolerates a closed pipe too: a
 // broken pipe on a hook's stdin counts as written.) Fields other than
-// transcript_path, agent_id and hook_event_name are Codex's to add or
-// change, and ignored.
+// transcript_path and agent_id are Codex's to add or change, and ignored.
 func ParseCodexHook(r io.Reader) (CodexHook, error) {
 	// Run by hand in a pane, stdin is the terminal: reading it would wait
 	// for Ctrl-D with nothing on screen to say so.
@@ -96,7 +89,6 @@ func ParseCodexHook(r io.Reader) (CodexHook, error) {
 	var in struct {
 		TranscriptPath *string `json:"transcript_path"`
 		AgentID        *string `json:"agent_id"`
-		Event          *string `json:"hook_event_name"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return CodexHook{}, fmt.Errorf("%w: %w", ErrMalformed, err)
@@ -107,9 +99,6 @@ func ParseCodexHook(r io.Reader) (CodexHook, error) {
 	}
 	if in.AgentID != nil {
 		h.AgentID = *in.AgentID
-	}
-	if in.Event != nil {
-		h.Event = *in.Event
 	}
 	return h, nil
 }
@@ -348,10 +337,10 @@ func (i codexTokenInfo) percent() (int, error) {
 
 // Codex pushes the ctx token from a Codex hook's payload in r: the latest
 // token count in the session's transcript, as the TUI's "Context N% used"
-// shows it, set on the pane the session's Codex runs in for CodexCtxTTL. A
-// SessionEnd hook clears ctx instead, reading no transcript. It reads r to
-// its end first, then reports nothing outside a pane, from a subagent, from a
-// session it cannot place (CheckCodexHost), or with no count to report.
+// shows it, set on the pane the session's Codex runs in for CodexCtxTTL. It
+// reads r to its end first, then reports nothing outside a pane, from a
+// subagent, from a session it cannot place (CheckCodexHost), or with no count
+// to report.
 //
 // One herdr.CallTimeout bounds the herdr calls, finding the pane included.
 func Codex(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (Result, error) {
@@ -367,9 +356,6 @@ func Codex(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (Result, e
 	}
 	if err := pane.Lineage.CheckCodexHost(); err != nil {
 		return Result{}, err
-	}
-	if hook.Event == codexSessionEnd {
-		return clearCtx(ctx, rep, pane)
 	}
 	if hook.TranscriptPath == "" {
 		return Result{}, fmt.Errorf("%w: the codex session keeps no transcript", ErrNoContext)
