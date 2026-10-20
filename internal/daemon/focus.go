@@ -35,10 +35,9 @@ func backoff(n int) time.Duration {
 // after a bounded backoff and resyncs the same way: focus may have moved
 // while it was not listening (A3). It only ever follows the server ident
 // names: once the socket is another server's, or gone, it stops, and Run's
-// poll ends the daemon. Every herdr call it makes goes through a client of its
-// own (forFocus), so none of them reaches a replacement.
+// poll ends the daemon. Every herdr call it makes goes through Run's guarded
+// client (forServer), so none of them reaches a replacement.
 func (o Options) followFocus(ctx context.Context, st *store.Store, w *walker, ident Identity) {
-	o = o.forFocus(ident)
 	failures := 0
 	for {
 		err := o.streamFocus(ctx, st, w, ident, &failures)
@@ -68,7 +67,7 @@ func (o Options) followFocus(ctx context.Context, st *store.Store, w *walker, id
 // ended. An event resets failures: the subscription is working.
 //
 // Every connection proves, once made and before anything is sent on it, that
-// the socket still names the daemon's own server (forFocus), so none reaches
+// the socket still names the daemon's own server (forServer), so none reaches
 // the replacement. The identity is checked again once the subscription is
 // acknowledged, and snapshotFocus checks it once more after pane.list
 // answers: a check that fails then means the socket was replaced while the
@@ -154,12 +153,14 @@ func (o Options) onServer(ident Identity) func() error {
 	}
 }
 
-// forFocus is o for the focus collector: its Herdr is a client of its own on
-// o.HerdrSocket, as the team poll's is, whose every connection checks onServer
-// before anything is sent. Only the collector's copy changes; Back and Run's
-// poll keep o.Herdr.
-func (o Options) forFocus(ident Identity) Options {
-	o.Herdr = herdr.Client{SocketPath: o.HerdrSocket, Dialed: o.onServer(ident)}
+// forServer is o for a daemon of the server ident names (A3): its Herdr is
+// a client of its own on o.HerdrSocket, keeping only the injected client's
+// Timeout, whose every connection checks onServer before anything is sent.
+// Run builds it once, so its pings, Back and the focus collector all dial
+// through it, and none of them reaches a replacement.
+func (o Options) forServer(ident Identity) Options {
+	c, _ := o.Herdr.(herdr.Client)
+	o.Herdr = herdr.Client{SocketPath: o.HerdrSocket, Timeout: c.Timeout, Dialed: o.onServer(ident)}
 	return o
 }
 

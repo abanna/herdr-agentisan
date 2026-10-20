@@ -47,8 +47,8 @@ statusline has no context percentage yet, it reports nothing. Set
 
 ## Report `$ctx` from Codex
 
-Each Codex agent pushes the same `ctx` token through two Codex hooks, with the
-number Codex itself shows as "Context N% used". Add them to
+Each Codex agent pushes the same `ctx` token through three Codex hooks, with
+the number Codex itself shows as "Context N% used". Add them to
 `~/.codex/config.toml`, or to a trusted project's `.codex/config.toml`
 ([sample](docs/config/codex-hooks.example.toml)), and trust them once when
 Codex asks:
@@ -70,15 +70,29 @@ type = "command"
 command = "herdr-agentisan report codex"
 timeout = 10
 async = true
+
+[[hooks.PostCompact]]
+
+[[hooks.PostCompact.hooks]]
+type = "command"
+command = "herdr-agentisan report codex"
+timeout = 10
+async = true
 ```
 
 Start Codex with `codex --no-daemon`. By default Codex runs its sessions in a
 shared background server whose hooks carry the environment of whichever pane
 started it, so the report cannot tell which pane it belongs to and reports
-nothing. Like `report statusline`, it prints nothing and always exits 0; the
-token expires 180 s after the last tool call or turn, so an idle Codex agent's
-`ctx` goes blank. `HERDR_AGENTISAN_LOG_LEVEL=debug` logs why nothing was
-reported. ADR-001 A22 has the details.
+nothing. Like `report statusline`, it prints nothing and always exits 0.
+`HERDR_AGENTISAN_LOG_LEVEL=debug` logs why nothing was reported.
+
+Codex's context changes only in a turn or a compaction, and those are when
+its hooks run, so the token lasts 24 h, set again by every report: an idle
+Codex agent keeps its `ctx`. PostCompact reports after a compaction, but may
+still read the count from before it; the next turn corrects it. Nothing
+clears `ctx` when Codex exits, cleanly or not: the last value stays until the
+TTL runs out or the next Codex in the pane reports. ADR-001 A22 and A27 have
+the details.
 
 ## Report `$item` and `$stage` from agentisan
 
@@ -161,11 +175,13 @@ in herdr's `config.toml`. They replace rules that matched `$team`'s old ⚠ and
 
 ## Workflow events
 
-With `[telemetry] endpoint = "localhost:4318"` in `herdr-agentisan.toml`, the
+With `[telemetry] endpoint = "127.0.0.1:4328"` in `herdr-agentisan.toml`, the
 daemon sends every agent status change it sees between two polls to that
 OTLP/HTTP collector as a log record, `agentisan.worker.status_changed`, for
 Elastic. Without it nothing is exported. Run the `daemon-restart` action after
-setting it. The schema is [`docs/telemetry.md`](docs/telemetry.md); see
+setting it. `task otelcol:up` runs that collector in Docker, writing to the
+`logs-agentisan.otel-default` data stream with an API key you give it. The
+schema and the setup are [`docs/telemetry.md`](docs/telemetry.md); see
 ADR-001 A21.
 
 ### Cutover from v12's `$team` push

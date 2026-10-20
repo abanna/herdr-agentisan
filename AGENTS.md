@@ -43,6 +43,8 @@ everything.
 | Run the CLI | `task run:cli` |
 | Link the plugin into the running herdr | `task plugin:link` |
 | Unlink the plugin from herdr | `task plugin:unlink` |
+| Run the events' collector into Elasticsearch | `task otelcol:up` |
+| Stop the events' collector | `task otelcol:down` |
 | Install the binaries | `task install` |
 | Show pinned tool versions | `task tools` |
 | Rebuild the tdaddy graph | `task tdaddy:index` |
@@ -64,9 +66,9 @@ must be one CI runs unless it is declared local-only in
 next agent to "fix" a gate that was never broken.
 
 The last rows are local-only: CI never installs the git hook, runs the
-interactive CLI, links into a herdr (it has none), or installs into a
-developer's `GOBIN` — and the tdaddy rows need a binary CI cannot install
-(see below).
+interactive CLI, links into a herdr (it has none), runs the events'
+collector (it has no Elasticsearch), or installs into a developer's `GOBIN`
+— and the tdaddy rows need a binary CI cannot install (see below).
 
 Two maps in `internal/devctl/parity.go` are escape hatches from this check:
 `localOnly` (documented commands CI need not run) and `nonGateTasks` (tasks not
@@ -104,7 +106,8 @@ exempts whatever is later added under that name.
   tokens (ADR-001 D4), and the token contract for the keys it writes.
   `report statusline` turns Claude's statusline JSON into `ctx`,
   `report codex` does the same from a Codex hook and its session's rollout
-  (A22, hooks sampled in `docs/config/codex-hooks.example.toml`), and
+  (A22, hooks sampled in `docs/config/codex-hooks.example.toml`), with a
+  24 h TTL (A27), and
   `report stage` pushes `item` and `stage` on each agentisan step
   transition. They read `HERDR_PANE_ID`, a pane-shell variable, which is why
   it is not in `plugin.Env`.
@@ -116,8 +119,9 @@ exempts whatever is later added under that name.
   the plugin socket (D6) that answers `health`, `back` (A16: walk the
   focus history, un-zoom the pane left, then focus the target) and
   `snapshot`. Every poll it also rebuilds the team model, pushes `$team`
-  and every agent pane's ctx display (`team.go`, A28) and caches the
-  snapshot the `snapshot` op serves, so the op never calls herdr (A18,
+  and every agent pane's ctx display (`team.go`, A28) and caches every
+  team's snapshot, with the workspaces each holds, which the `snapshot` op
+  serves by project or workspace, so the op never calls herdr (A18, A24,
   `snapshot.go`, with `SnapshotSource`, the dashboard's client), and sends
   each status change since the last poll as a workflow event
   (`events.go`). `daemon start` spawns a detached `daemon run`; herdr's
@@ -180,7 +184,10 @@ exempts whatever is later added under that name.
   daemon's workflow events (ADR-001 D10, A21) as OTLP log records, schema in
   `docs/telemetry.md`. With no endpoint configured it installs propagation
   only and exports nothing. `telemetrytest` records events in memory: tests
-  assert on it and never on a real collector.
+  assert on it and never on a real collector. The collector that carries the
+  events into Elasticsearch is `docs/config/otelcol-agentisan.yaml`, run by
+  `task otelcol:up`; `collector_test.go` pins its keys and the task's
+  `docker run`.
 - `.devcontainer/` — the reproducible dev environment: Go 1.26.9 plus the
   two tools `go tool` does not resolve (Task, uv).
 - `docs/architecture.md` — why the pieces are shaped this way, and the

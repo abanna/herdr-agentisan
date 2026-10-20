@@ -21,6 +21,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
+	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/store"
 )
 
@@ -75,6 +76,8 @@ type fakeHerdr struct {
 	fail   map[string]string // method -> the error code it answers
 	hang   chan struct{}     // pane.zoom waits for it to close
 	live   *stream           // the newest subscription
+	// before, when set, runs before each request is answered.
+	before func(method string)
 }
 
 // stream is one events.subscribe connection the fake herdr is serving.
@@ -93,6 +96,12 @@ func newHerdr(t *testing.T, protocol uint32) *fakeHerdr {
 
 func (f *fakeHerdr) serve(protocol uint32) herdrtest.Handler {
 	return func(r herdrtest.Request) herdrtest.Reply {
+		f.mu.Lock()
+		before := f.before
+		f.mu.Unlock()
+		if before != nil {
+			before(r.Method)
+		}
 		switch r.Method {
 		case "ping":
 			return pong(protocol)(r)
@@ -843,6 +852,92 @@ func TestStopClasses(t *testing.T) {
 	})
 }
 
+// TestStopChecksTheHolderThroughTheLineageReader: a holder's start time comes
+// from the reader the lineage uses, so on darwin, as on Linux, a lock record
+// whose pid now belongs to another process names no holder (NERD-5307). Such
+// a record is what a daemon that has just taken the lock still shows before
+// it writes its own. The reader here is darwin's, over a fixture kinfo_proc:
+// pid 4242, forked at 1760000000.123456.
+func TestStopChecksTheHolderThroughTheLineageReader(t *testing.T) {
+	t.Parallel()
+	start := daemon.StartTimeFrom(report.KinfoStat(func(pid int) (report.Kinfo, error) {
+		if pid != 4242 {
+			return report.Kinfo{}, errors.New("no such process")
+		}
+		return report.Kinfo{PID: 4242, PPID: 1, StartSec: 1_760_000_000, StartUsec: 123_456}, nil
+	}))
+	require.NotNil(t, start)
+	got, err := start(4242)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1_760_000_000_123_456), got)
+	_, err = start(4243)
+	require.ErrorIs(t, err, report.ErrProcStat)
+
+	t.Run("a pid another process now has is never signalled", func(t *testing.T) {
+		t.Parallel()
+		h := newHerdr(t, 22)
+		dir := shortDir(t)
+		// The holder that wrote this forked a microsecond before pid 4242's
+		// present owner.
+		holdLock(t, dir, h, `{"v":1,"pid":4242,"start":1760000000123455,"herdr":{"dev":1,"ino":1},"started_at":"2026-10-09T00:00:00Z"}`)
+		o := opts(t, dir, h)
+		o.StopWait = 200 * time.Millisecond
+		o.Hooks.StartTime = start
+		o.Hooks.Signal = func(int) error {
+			t.Error("signalled a pid that is no longer the holder")
+			return nil
+		}
+		require.ErrorIs(t, daemon.Stop(t.Context(), o), daemon.ErrHolderChanged)
+	})
+	t.Run("the holder itself is signalled", func(t *testing.T) {
+		t.Parallel()
+		h := newHerdr(t, 22)
+		dir := shortDir(t)
+		release := holdLock(t, dir, h, `{"v":1,"pid":4242,"start":1760000000123456,"herdr":{"dev":1,"ino":1},"started_at":"2026-10-09T00:00:00Z"}`)
+		o := opts(t, dir, h)
+		o.Hooks.StartTime = start
+		signalled := 0
+		o.Hooks.Signal = func(pid int) error { signalled = pid; release(); return nil }
+		require.NoError(t, daemon.Stop(t.Context(), o))
+		assert.Equal(t, 4242, signalled)
+	})
+	// A darwin build before NERD-5307 had no start time to record, so its
+	// record has 0, and its pid alone names the holder until it restarts.
+	t.Run("a record without a start time is checked by pid alone", func(t *testing.T) {
+		t.Parallel()
+		h := newHerdr(t, 22)
+		dir := shortDir(t)
+		release := holdLock(t, dir, h, `{"v":1,"pid":4242,"start":0,"herdr":{"dev":1,"ino":1},"started_at":"2026-10-09T00:00:00Z"}`)
+		o := opts(t, dir, h)
+		o.Hooks.StartTime = start
+		signalled := 0
+		o.Hooks.Signal = func(pid int) error { signalled = pid; release(); return nil }
+		require.NoError(t, daemon.Stop(t.Context(), o))
+		assert.Equal(t, 4242, signalled)
+	})
+}
+
+// TestStartTimeComesFromTheLineageReader: with no hook injected, a daemon
+// reads start times through report.SystemStat, the lineage's reader (/proc
+// on Linux, sysctl on darwin). Only where the OS has none is a holder
+// checked by pid alone.
+func TestStartTimeComesFromTheLineageReader(t *testing.T) {
+	t.Parallel()
+	assert.Nil(t, daemon.StartTimeFrom(nil), "with no reader there is no start time")
+	stat := report.SystemStat()
+	def := daemon.DefaultStartTime()
+	if stat == nil {
+		assert.Nil(t, def)
+		return
+	}
+	require.NotNil(t, def)
+	want, err := stat(os.Getpid())
+	require.NoError(t, err)
+	got, err := def(os.Getpid())
+	require.NoError(t, err)
+	assert.Equal(t, want.Start, got)
+}
+
 // request sends one raw line to the daemon socket and returns the raw reply.
 func request(t *testing.T, sock string, line []byte) map[string]any {
 	t.Helper()
@@ -876,23 +971,32 @@ func TestSocketProtocolClasses(t *testing.T) {
 		line string
 		code string // "" means ok
 	}{
-		"health":                    {line: `{"v":1,"op":"health","args":{}}` + "\n"},
-		"health without args":       {line: `{"v":1,"op":"health"}` + "\n"},
-		"no trailing newline":       {line: `{"v":1,"op":"health"}`},
-		"CRLF line ending":          {line: `{"v":1,"op":"health"}` + "\r\n"},
-		"unknown op":                {line: `{"v":1,"op":"teleport"}` + "\n", code: "unknown_op"},
-		"snapshot, no team poll":    {line: `{"v":1,"op":"snapshot"}` + "\n", code: "not_ready"},
-		"snapshot in another case":  {line: `{"v":1,"op":"Snapshot"}` + "\n", code: "unknown_op"},
-		"op in another case":        {line: `{"v":1,"op":"HEALTH"}` + "\n", code: "unknown_op"},
-		"missing version":           {line: `{"op":"health"}` + "\n", code: "unsupported_version"},
-		"newer version":             {line: `{"v":2,"op":"health"}` + "\n", code: "unsupported_version"},
-		"not JSON":                  {line: "health\n", code: "bad_request"},
-		"empty line":                {line: "\n", code: "bad_request"},
-		"two objects":               {line: `{"v":1,"op":"health"}{"v":1,"op":"health"}` + "\n", code: "bad_request"},
-		"invalid UTF-8 in the op":   {line: "{\"v\":1,\"op\":\"he\xffalth\"}\n", code: "unknown_op"},
-		"over the request size cap": {line: `{"v":1,"op":"health","args":"` + strings.Repeat("x", 1<<20) + `"}` + "\n", code: "bad_request"},
-		"op is not a string":        {line: `{"v":1,"op":7}` + "\n", code: "bad_request"},
-		"back with no history":      {line: `{"v":1,"op":"back","args":{}}` + "\n", code: "no_history"},
+		"health":                 {line: `{"v":1,"op":"health","args":{}}` + "\n"},
+		"health without args":    {line: `{"v":1,"op":"health"}` + "\n"},
+		"no trailing newline":    {line: `{"v":1,"op":"health"}`},
+		"CRLF line ending":       {line: `{"v":1,"op":"health"}` + "\r\n"},
+		"unknown op":             {line: `{"v":1,"op":"teleport"}` + "\n", code: "unknown_op"},
+		"snapshot, no team poll": {line: `{"v":1,"op":"snapshot"}` + "\n", code: "not_ready"},
+		// The args are checked before the cache is: a malformed selector is
+		// the client's mistake, whatever the daemon holds (A24).
+		"snapshot args not an object":   {line: `{"v":1,"op":"snapshot","args":[1]}` + "\n", code: "bad_request"},
+		"snapshot project not a string": {line: `{"v":1,"op":"snapshot","args":{"project":7}}` + "\n", code: "bad_request"},
+		"snapshot workspace not a string": {
+			line: `{"v":1,"op":"snapshot","args":{"workspace_id":true}}` + "\n", code: "bad_request",
+		},
+		"snapshot args null":             {line: `{"v":1,"op":"snapshot","args":null}` + "\n", code: "not_ready"},
+		"snapshot args it does not know": {line: `{"v":1,"op":"snapshot","args":{"team":"x"}}` + "\n", code: "not_ready"},
+		"snapshot in another case":       {line: `{"v":1,"op":"Snapshot"}` + "\n", code: "unknown_op"},
+		"op in another case":             {line: `{"v":1,"op":"HEALTH"}` + "\n", code: "unknown_op"},
+		"missing version":                {line: `{"op":"health"}` + "\n", code: "unsupported_version"},
+		"newer version":                  {line: `{"v":2,"op":"health"}` + "\n", code: "unsupported_version"},
+		"not JSON":                       {line: "health\n", code: "bad_request"},
+		"empty line":                     {line: "\n", code: "bad_request"},
+		"two objects":                    {line: `{"v":1,"op":"health"}{"v":1,"op":"health"}` + "\n", code: "bad_request"},
+		"invalid UTF-8 in the op":        {line: "{\"v\":1,\"op\":\"he\xffalth\"}\n", code: "unknown_op"},
+		"over the request size cap":      {line: `{"v":1,"op":"health","args":"` + strings.Repeat("x", 1<<20) + `"}` + "\n", code: "bad_request"},
+		"op is not a string":             {line: `{"v":1,"op":7}` + "\n", code: "bad_request"},
+		"back with no history":           {line: `{"v":1,"op":"back","args":{}}` + "\n", code: "no_history"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -1035,4 +1139,204 @@ func TestUnwritableStateDir(t *testing.T) {
 	require.ErrorIs(t, daemon.Run(t.Context(), o), os.ErrPermission)
 	_, err := daemon.Start(t.Context(), o)
 	require.ErrorIs(t, err, os.ErrPermission)
+}
+
+// swapIn removes h's socket, keeping its server serving the connections it
+// has, and starts a replacement at the same path answering the same layout:
+// herdr's live handoff, with the old server not yet gone.
+func swapIn(t *testing.T, h *fakeHerdr) *herdrtest.Server {
+	t.Helper()
+	require.NoError(t, os.Remove(h.path))
+	return herdrtest.StartAt(t, h.path, h.serve(22))
+}
+
+// TestRunPollPingNeverReachesAReplacement is A3 for Run's poll: the ping that
+// checks the server goes through the daemon's guarded client, so once the
+// socket names a replacement the ping is refused before anything is sent, and
+// the daemon ends at that poll.
+func TestRunPollPingNeverReachesAReplacement(t *testing.T) {
+	t.Parallel()
+	h := newHerdr(t, 22)
+	dir := shortDir(t)
+	r := run(t, opts(t, dir, h))
+	healthy(t, dir, h)
+
+	replacement := swapIn(t, h)
+	require.ErrorIs(t, r.wait(t, ready), daemon.ErrHerdrGone)
+	replacement.Settle(t)
+	assert.Empty(t, replacement.Requests(), "the replacement, which the next daemon belongs to, is asked nothing")
+}
+
+// TestRunStartupPingNeverReachesAReplacement: a daemon that waited for the
+// lock through a live handoff finds its server replaced when it gets the
+// lock: its first ping is refused before it is sent, and it never runs.
+func TestRunStartupPingNeverReachesAReplacement(t *testing.T) {
+	t.Parallel()
+	h := newHerdr(t, 22)
+	dir := shortDir(t)
+	release := holdLock(t, dir, h, staleHolder)
+	o := opts(t, dir, h)
+	o.LockWait = ready
+	r := run(t, o)
+	time.Sleep(150 * time.Millisecond)
+	require.True(t, r.alive(), "the daemon waits for the stale holder")
+
+	replacement := swapIn(t, h)
+	release()
+	require.ErrorIs(t, r.wait(t, ready), daemon.ErrHerdrGone)
+	replacement.Settle(t)
+	assert.Empty(t, replacement.Requests())
+	assert.Empty(t, h.srv.Requests(), "nor is the original, whose socket is gone")
+}
+
+// TestRunRecordsItsStartTimeInTheLock: a running daemon writes its own start
+// time, read through the StartTime hook (77 for this process in opts), into
+// daemon.lock, so a later stop or start can tell it from a process that
+// reused its pid. The record is decoded by the lock file's field names.
+func TestRunRecordsItsStartTimeInTheLock(t *testing.T) {
+	t.Parallel()
+	h := newHerdr(t, 22)
+	dir := shortDir(t)
+	run(t, opts(t, dir, h))
+	healthy(t, dir, h)
+	raw, err := os.ReadFile(paths(t, dir, h).Lock)
+	require.NoError(t, err)
+	var rec struct {
+		PID   int    `json:"pid"`
+		Start uint64 `json:"start"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &rec))
+	assert.Equal(t, os.Getpid(), rec.PID)
+	assert.Equal(t, uint64(77), rec.Start, "the record carries the hook's start time")
+}
+
+// TestStillServedClasses is Run's poll check (A3), through the daemon's own
+// guarded client: it pings first and checks the server's identity after
+// every ping. A replaced, removed or dead socket, or a protocol change, is
+// ErrHerdrGone; a ping that fails any other way, such as a busy herdr, is not.
+func TestStillServedClasses(t *testing.T) {
+	t.Parallel()
+	answer := func(protocol uint32, busy bool) herdrtest.Handler {
+		return func(r herdrtest.Request) herdrtest.Reply {
+			if busy {
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "server_unavailable", Message: "busy"}}
+			}
+			return pong(protocol)(r)
+		}
+	}
+	tests := map[string]struct {
+		// setup returns the socket; ident is the socket's identity first.
+		setup func(t *testing.T, sock string) *herdrtest.Server
+		gone  bool
+		quiet bool // the ping times out
+	}{
+		"its own server": {setup: func(t *testing.T, sock string) *herdrtest.Server {
+			return herdrtest.StartAt(t, sock, answer(22, false))
+		}},
+		"its own server, busy": {setup: func(t *testing.T, sock string) *herdrtest.Server {
+			return herdrtest.StartAt(t, sock, answer(22, true))
+		}},
+		"its own server, not answering in time": {quiet: true, setup: func(t *testing.T, sock string) *herdrtest.Server {
+			return herdrtest.StartAt(t, sock, func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Silent: true} })
+		}},
+		"its own server, now on another protocol": {gone: true, setup: func(t *testing.T, sock string) *herdrtest.Server {
+			return herdrtest.StartAt(t, sock, answer(23, false))
+		}},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			sock := filepath.Join(shortDir(t), "h.sock")
+			srv := tc.setup(t, sock)
+			ctx := t.Context()
+			if tc.quiet {
+				c, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
+				defer cancel()
+				ctx = c
+			}
+			err := daemon.StillServedOver(ctx, sock, mustIdentity(t, sock), 22)
+			if tc.gone {
+				require.ErrorIs(t, err, daemon.ErrHerdrGone)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Len(t, srv.Requests(), 1, "one ping")
+		})
+	}
+
+	// The socket is no longer the server the daemon belongs to.
+	for name, swap := range map[string]func(t *testing.T, sock string, srv *herdrtest.Server) *herdrtest.Server{
+		"replaced": func(t *testing.T, sock string, _ *herdrtest.Server) *herdrtest.Server {
+			require.NoError(t, os.Remove(sock))
+			return herdrtest.StartAt(t, sock, answer(22, false))
+		},
+		"removed": func(t *testing.T, sock string, _ *herdrtest.Server) *herdrtest.Server {
+			require.NoError(t, os.Remove(sock))
+			return nil
+		},
+		"crashed, its socket file left behind": func(_ *testing.T, _ string, srv *herdrtest.Server) *herdrtest.Server {
+			srv.Crash()
+			return nil
+		},
+		"behind a parent it cannot search": func(t *testing.T, sock string, _ *herdrtest.Server) *herdrtest.Server {
+			dir := filepath.Dir(sock)
+			require.NoError(t, os.Chmod(dir, 0o600))
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+			return nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if strings.Contains(name, "search") && os.Geteuid() == 0 {
+				t.Skip("root searches any directory")
+			}
+			sock := filepath.Join(shortDir(t), "h.sock")
+			srv := herdrtest.StartAt(t, sock, answer(22, false))
+			ident := mustIdentity(t, sock)
+			replacement := swap(t, sock, srv)
+			err := daemon.StillServedOver(t.Context(), sock, ident, 22)
+			require.ErrorIs(t, err, daemon.ErrHerdrGone)
+			if replacement != nil {
+				replacement.Settle(t)
+				assert.Empty(t, replacement.Requests(), "the replacement is asked nothing")
+			}
+		})
+	}
+}
+
+// TestStillServedChecksTheServerAfterThePing: the socket is replaced while
+// the original answers the poll's ping. The identity check after the ping
+// must end the daemon at this poll, not the next one.
+func TestStillServedChecksTheServerAfterThePing(t *testing.T) {
+	t.Parallel()
+	sock := filepath.Join(shortDir(t), "h.sock")
+	swapped := make(chan net.Listener, 1)
+	var once sync.Once
+	srv := herdrtest.StartAt(t, sock, func(r herdrtest.Request) herdrtest.Reply {
+		if r.Method == "ping" {
+			once.Do(func() {
+				if err := os.Remove(sock); err != nil {
+					t.Error(err)
+				}
+				l, err := net.Listen("unix", sock)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				swapped <- l
+			})
+		}
+		return pong(22)(r)
+	})
+	ident := mustIdentity(t, sock)
+	err := daemon.StillServedOver(t.Context(), sock, ident, 22)
+	var replacement net.Listener
+	select {
+	case replacement = <-swapped:
+	default:
+		t.Fatal("no swap happened during the ping")
+	}
+	t.Cleanup(func() { _ = replacement.Close() })
+	assert.Len(t, srv.Requests(), 1, "the ping reached the original")
+	require.ErrorIs(t, err, daemon.ErrHerdrGone, "a swap during the ping ends the daemon at this poll")
 }

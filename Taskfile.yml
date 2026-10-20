@@ -75,6 +75,40 @@ tasks:
     cmds:
       - herdr plugin unlink nerdsrun.agentisan
 
+  otelcol:up:
+    desc: Run the workflow events' collector into Elasticsearch in Docker, replacing a running one
+    # docs/telemetry.md. The URL and the write key reach the container by NAME
+    # (-e VAR), so no value is ever on a command line, and never through
+    # --env-file, which would hand the container every other variable in that
+    # file too. --mount, not -v: for a missing source -v creates a root-owned
+    # directory in the checkout, --mount refuses. validate runs first, in a
+    # throwaway container, so a broken or missing config never replaces a
+    # running collector. docs/telemetry.md shows the same `docker run -d`,
+    # and collector_test.go keeps the two identical.
+    cmds:
+      - ': "${HERDR_AGENTISAN_ES_URL:?must be set}" "${HERDR_AGENTISAN_ES_WRITE_KEY:?must be set}"'
+      - docker run --rm -e HERDR_AGENTISAN_ES_URL -e HERDR_AGENTISAN_ES_WRITE_KEY --mount "type=bind,src={{.ROOT_DIR}}/docs/config/otelcol-agentisan.yaml,dst=/etc/otelcol/agentisan.yaml,readonly" otel/opentelemetry-collector-contrib:0.159.0 validate --config=/etc/otelcol/agentisan.yaml
+      # stop, then rm: SIGTERM lets the old collector shut down and flush what
+      # it holds, where rm -f alone kills it. Neither minds no container.
+      - docker stop herdr-agentisan-otelcol >/dev/null 2>&1 || true
+      - docker rm -f herdr-agentisan-otelcol >/dev/null 2>&1 || true
+      - docker run -d --name herdr-agentisan-otelcol --network host --restart unless-stopped -e HERDR_AGENTISAN_ES_URL -e HERDR_AGENTISAN_ES_WRITE_KEY --mount "type=bind,src={{.ROOT_DIR}}/docs/config/otelcol-agentisan.yaml,dst=/etc/otelcol/agentisan.yaml,readonly" otel/opentelemetry-collector-contrib:0.159.0 --config=/etc/otelcol/agentisan.yaml
+      # A collector that cannot start, on a port already taken say, exits at
+      # once, and the restart policy keeps restarting it, so it is briefly
+      # running between attempts: 3 s on it must be running AND never have
+      # restarted. {{"{{"}} and {{"}}"}} are Task's escapes for docker's braces.
+      - |
+        sleep 3
+        if [ "$(docker inspect --format '{{"{{"}}.State.Running{{"}}"}} {{"{{"}}.RestartCount{{"}}"}}' herdr-agentisan-otelcol 2>/dev/null)" != "true 0" ]; then
+          echo "the collector is not running: see docker logs herdr-agentisan-otelcol" >&2
+          exit 1
+        fi
+
+  otelcol:down:
+    desc: Stop and remove the workflow events' collector
+    cmds:
+      - docker rm -f herdr-agentisan-otelcol
+
   lint:
     desc: Lint the code
     cmds:

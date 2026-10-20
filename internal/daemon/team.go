@@ -11,6 +11,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/settings"
+	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
 	"github.com/abanna/herdr-agentisan/internal/telemetry"
@@ -19,8 +20,8 @@ import (
 // TeamOptions turn on the team poll (D3, D4, D5): on start and every poll
 // after, the daemon rebuilds the team model from herdr and state.db, pushes
 // `$team` to every group target and tabs team and the ctx display to every
-// agent pane (A28), and caches the snapshot the snapshot op serves (A18).
-// `daemon run` always sets them.
+// agent pane (A28), and caches every team's snapshot, which the snapshot op
+// serves (A18, A24). `daemon run` always sets them.
 type TeamOptions struct {
 	// ConfigDir holds herdr-agentisan.toml (HERDR_PLUGIN_CONFIG_DIR). The
 	// poll reads every project's team from it once, when it starts (A19): a
@@ -126,12 +127,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 	}
 	o.Logger.Info().Str("project", cfg.spaces.Project).Str("color", cfg.spaces.Color).Strs("tabs_teams", tabs).Msg("team poll running")
 	tp := teamPoll{cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, cache: cache, header: header}
-	onServer := func() error {
-		if !o.sameServer(ident) {
-			return fmt.Errorf("%w: the socket now names another server, or none", ErrHerdrGone)
-		}
-		return nil
-	}
+	onServer := o.onServer(ident)
 	c := herdr.Client{SocketPath: o.HerdrSocket, Dialed: onServer}
 	tick := time.NewTicker(o.Poll)
 	defer tick.Stop()
@@ -170,14 +166,15 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 
 // pushTeam is one poll: it lists panes, workspaces, with a tabs team
 // configured tabs, and agents; builds the model with state.db's workers
-// rows; caches the snapshot of it, with the project's GitHub header (A29);
-// pushes each group target and tabs team its `$team`; and pushes every agent
-// pane its ctx display. A failed pane, workspace or tab list costs the poll;
-// a failed agent list costs only the snapshot, which `$team` does not need,
-// so the last one built with names stays served, and the ctx display of a
-// pane herdr knows only by name; a failed push is logged and the others go
-// on. It returns ErrHerdrGone, and pushes nothing more, once a call finds
-// the socket no longer names the daemon's server.
+// rows; caches every team's snapshot, each with its project's GitHub header
+// (A29), and the workspaces each team holds (A24); pushes each group target
+// and tabs team its `$team`; and pushes every agent pane its ctx display. A
+// failed pane, workspace or tab list costs the poll; a failed agent list
+// costs only the snapshots, which `$team` does not need, so the last ones
+// built with names stay served, teams and index alike, and the ctx display
+// of a pane herdr knows only by name; a failed push is logged and the
+// others go on. It returns ErrHerdrGone, and pushes nothing more, once a
+// call finds the socket no longer names the daemon's server.
 // The model it returns is nil when a pane, workspace or tab list failed and
 // no model was built; agent names change neither which panes it holds nor
 // their statuses, so a failed agent list still gives the status events their
@@ -215,10 +212,9 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	if agentsErr == nil {
 		now := o.Now()
 		tp.stages.Observe(m, now)
-		snap := team.Snapshot(m, tp.cfg.spaces.Project, now, tp.stages)
-		tp.header.fill(tp.cfg.spaces.Project, &snap, now)
-		if err := tp.cache.store(snap); err != nil {
-			o.Logger.Error().Err(err).Msg("team poll: cache the snapshot; the last one stays served")
+		header := func(project string, s *snapshot.Snapshot) { tp.header.fill(project, s, now) }
+		if err := tp.cache.store(m, tp.cfg.spaces.Project, now, tp.stages, header); err != nil {
+			o.Logger.Error().Err(err).Msg("team poll: cache the snapshots; a team too large to serve keeps its last one")
 		}
 	}
 	for _, t := range team.Tokens(m) {
