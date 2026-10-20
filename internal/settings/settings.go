@@ -96,6 +96,8 @@ type Profile struct {
 	Integrations map[string]Integration
 	// Rotation holds the context thresholds that drive rotation notices.
 	Rotation Rotation
+	// Spawn is how a new worker's shell is waited for (A23).
+	Spawn Spawn
 }
 
 // Agent is the command every session starts with, and its model.
@@ -104,11 +106,13 @@ type Agent struct {
 	Model   string
 }
 
-// Group is a worker group: how many workers team up starts, and the cap the
-// boss can scale to.
+// Group is a worker group: how many workers team up starts, the cap the
+// boss can scale to, and the group's own agent, when it sets one (see
+// Profile.AgentFor).
 type Group struct {
 	Workers int
 	Slots   int
+	Agent   Agent
 }
 
 // Integration is an external service. Token is nil when unset.
