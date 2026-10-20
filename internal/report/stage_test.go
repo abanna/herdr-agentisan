@@ -29,8 +29,8 @@ type stageParams struct {
 // TestStagePushesTheTokenContract is the token contract for item and stage
 // (ADR-001 A5): both keys in one report, source agentisan, herdr's maximum
 // TTL of 86,400,000 ms, on the reporting pane only. The pane has no lineage,
-// as on an OS without /proc, so the report trusts HERDR_PANE_ID and costs
-// one call.
+// as on an OS with no process table reader, so the report trusts
+// HERDR_PANE_ID and costs one call.
 func TestStagePushesTheTokenContract(t *testing.T) {
 	t.Parallel()
 	srv := herdrtest.Start(t, okReply)
@@ -570,7 +570,7 @@ func TestStageUnderCodexRefuses(t *testing.T) {
 		"the shared app-server daemon":    {pane: report.Pane{PaneID: "w9:p1", Lineage: lineage(5000, daemon, daemonArgv), CodexThread: "019a"}, want: report.ErrCodexDaemon},
 		"Codex's network sandbox":         {pane: report.Pane{PaneID: "w3:p2", Lineage: lineage(5000, codexProcs(), codexArgv), CodexThread: "019a", CodexNetworkSandboxed: true}, want: report.ErrCodexSandboxed},
 		"Codex's pid namespace":           {pane: report.Pane{PaneID: "w3:p2", Lineage: lineage(3, sandboxed, sandboxedArgv), CodexThread: "019a"}, want: report.ErrNoCodexHost},
-		"no lineage (off Linux)":          {pane: report.Pane{PaneID: "w9:p1", CodexThread: "019a"}, want: report.ErrHostUnverified},
+		"no lineage (no process table)":   {pane: report.Pane{PaneID: "w9:p1", CodexThread: "019a"}, want: report.ErrHostUnverified},
 		"an unreadable ancestor":          {pane: report.Pane{PaneID: "w3:p2", Lineage: lineage(5000, codexProcs(), map[int][]string{5000: codexArgv[5000]}), CodexThread: "019a"}, want: report.ErrHostUnverified},
 		"not Codex, no lineage (as ever)": {pane: report.Pane{PaneID: "w9:p1"}},
 	}

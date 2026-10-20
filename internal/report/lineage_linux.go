@@ -1,4 +1,9 @@
 package report
 
-// procfs says /proc carries every process's stat, so SelfLineage can read it.
-const procfs = true
+import "os"
+
+// systemReaders reads the process table from /proc.
+func systemReaders() (StatFunc, CmdlineFunc) {
+	proc := os.DirFS("/proc")
+	return ProcStat(proc), ProcCmdline(proc)
+}
