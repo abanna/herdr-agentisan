@@ -118,10 +118,11 @@ exempts whatever is later added under that name.
   `snapshot`. Every poll it also rebuilds the team model, pushes `$team`
   (`team.go`) and caches the snapshot the `snapshot` op serves, so the op
   never calls herdr (A18, `snapshot.go`, with `SnapshotSource`, the
-  dashboard's client). `daemon start` spawns a detached `daemon run`;
-  herdr's `[[startup]]` hook runs it, and the `daemon-restart` action covers
-  linking. Tests run daemons in process against herdrtest and a scratch
-  state dir, never the real ones.
+  dashboard's client), and sends each status change since the last poll as
+  a workflow event (`events.go`). `daemon start` spawns a detached `daemon
+  run`; herdr's `[[startup]]` hook runs it, and the `daemon-restart` action
+  covers linking. Tests run daemons in process against herdrtest and a
+  scratch state dir, never the real ones.
 - `internal/team/` — the team domain model (ADR-001 D5, A17): project → group
   → logical worker → current pane, built from `pane.list`, `workspace.list`,
   `tab.list`, `agent.list` and `state.db`'s `workers` rows. A `Resolver` maps
@@ -136,12 +137,23 @@ exempts whatever is later added under that name.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
   embedded from `migrations/` and tracked by `user_version`. The daemon holds
-  the only write connection. Tests open a fresh database in a temp dir; the
-  store is never mocked.
+  the only write connection. `state.db` also holds messaging's inbox
+  (`messages.go`, migration 0002, D8 and I3): a recipient's messages are
+  claimed one at a time, oldest first, and a pending handoff (`handoffs.go`)
+  holds a worker's inbox until it completes, which rebinds the worker in the
+  same transaction. Tests open a fresh database in a temp dir; the store is
+  never mocked.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real
   socket set, and a test that reads it would toast a live session.
+- `internal/github/` — the dashboard header's GitHub reads (ADR-001 A29):
+  `gh pr list` and a GraphQL open-issue count, run through the gh CLI with an
+  explicit path, a timeout and a process group of its own, and mapped onto
+  the snapshot's PR states. `ghtest` is a checked-in stand-in gh: tests run
+  it with an environment they build, never the real gh or GitHub. The
+  daemon's collector (`internal/daemon/github.go`) runs it every 60 s beside
+  the team poll and caches each project's result for the snapshot.
 - `internal/snapshot/` — the versioned snapshot contract (ADR-001 D5/D6,
   A18): the groups and agents, the boss, and the project's PRs, issues and
   test slots. Decoding is strict: exact keys, closed enums, RFC 3339 times.
@@ -161,8 +173,11 @@ exempts whatever is later added under that name.
   it is configuration resolved from the environment the binary was BUILT in,
   and keeping it in a package of its own made every caller import two.
 - `internal/logging/` — zerolog construction and context plumbing.
-- `internal/telemetry/` — OpenTelemetry tracing over OTLP/HTTP. With no
-  endpoint configured it installs propagation only and exports nothing.
+- `internal/telemetry/` — OpenTelemetry tracing over OTLP/HTTP, and the
+  daemon's workflow events (ADR-001 D10, A21) as OTLP log records, schema in
+  `docs/telemetry.md`. With no endpoint configured it installs propagation
+  only and exports nothing. `telemetrytest` records events in memory: tests
+  assert on it and never on a real collector.
 - `.devcontainer/` — the reproducible dev environment: Go 1.26.9 plus the
   two tools `go tool` does not resolve (Task, uv).
 - `docs/architecture.md` — why the pieces are shaped this way, and the

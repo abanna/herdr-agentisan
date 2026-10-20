@@ -428,13 +428,13 @@ func projectColour(p *snapshot.Project) color.Color {
 type prDetail int
 
 const (
-	prFull    prDetail = iota // "#886 ✓👍 clean": CI, Codex and merge state
-	prCompact                 // "#886✓👍": CI and Codex
+	prFull    prDetail = iota // "#886 ✓ clean": the mark and the merge state
+	prCompact                 // "#886✓": the mark
 	prCount                   // "PRs 5"
 )
 
-// projectLine is "agentisan · PRs #878 ⏳… blocked  #886 ✓👍 clean · issues
-// 14 · slots 2/2", at most width cells. The PRs give way first: to their
+// projectLine is "agentisan · PRs #878 ⏳ blocked  #886 ✓ clean · issues 14
+// · slots 2/2", at most width cells. The PRs give way first: to their
 // compact form, then to a count. What the snapshot does not report is not
 // shown, never shown as zero.
 func projectLine(s *snapshot.Snapshot, width int) line {
@@ -498,7 +498,7 @@ func prsLine(prs []snapshot.PR, d prDetail) line {
 		if d == prFull {
 			num += " "
 		}
-		out = append(out, seg{num, plainStyle}, ciGlyph(pr.CI), codexGlyph(pr.Codex))
+		out = append(out, seg{num, plainStyle}, prMark(pr))
 		if d == prFull {
 			out = append(out, seg{" ", plainStyle}, mergeWord(pr.Merge))
 		}

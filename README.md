@@ -149,6 +149,15 @@ tokens clear themselves within 9 s of the daemon stopping. `◆ boss` and
 project the spaces belong to; with no config file they belong to one unnamed
 project. See ADR-001 A17.
 
+## Workflow events
+
+With `[telemetry] endpoint = "localhost:4318"` in `herdr-agentisan.toml`, the
+daemon sends every agent status change it sees between two polls to that
+OTLP/HTTP collector as a log record, `agentisan.worker.status_changed`, for
+Elastic. Without it nothing is exported. Run the `daemon-restart` action after
+setting it. The schema is [`docs/telemetry.md`](docs/telemetry.md); see
+ADR-001 A21.
+
 ### Cutover from v12's `$team` push
 
 Each key has one writer (ADR-001 D4). Once a daemon with this push is
@@ -196,6 +205,23 @@ See [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml)
 
 `herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json`
 draws a snapshot file instead, outside herdr too.
+
+### PRs and issues in the header
+
+For every project with a `github` repo in `herdr-agentisan.toml`, the daemon
+asks GitHub for its open PRs and open-issue count every 60 s, through the gh
+CLI and its own login (`gh auth status`), and the header shows them (ADR-001
+A29). Each PR gets herdr-status.sh's one mark: `✗` a check failed, `⏳`
+checks pending, `✓` every check passed with a 👍 and a clean merge, `…`
+waiting for the 👍 or a clean merge, `💬` Codex's findings, `?` a state it
+cannot read. With no Codex reviewer on a repo, the 👍 is yours.
+release-please's PRs are skipped. gh must be on the PATH herdr starts the
+daemon with; without it, `daemon.log` says so and the header shows no PRs.
+The daemon reads the repos when it starts, so run the `daemon-restart`
+action after changing them.
+
+herdr-status.sh, herdr's `tab_bar_right`, also shows the test slots, which
+the header gains in a later change. Keep it until then.
 
 ## Gates
 
