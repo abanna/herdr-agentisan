@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A20, A22, A25 and A27 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A22, A25, A27 and A29 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -654,6 +654,16 @@ Go To was evaluated first, as D5 asks, against the herdr source at v0.9.3 (read,
 - **prefix+/ anywhere is Go To.** `keys.goto` takes one key or a list (`BindingConfig`, `src/config/keybinds.rs:47`), and prefix+/ is unbound by default; help is prefix+?, shift+/ (`keybinds.rs:1853-1858`). The snippet adds prefix+/ and keeps prefix+g: `goto = ["prefix+g", "prefix+/"]` in `[keys]`, sampled in `docs/config/herdr-keys.example.toml`. No popup pane is built: it would rebuild Go To, and its data would need the daemon's snapshot op or a second resolver.
 - **`/` in the dashboard filters in place.** Printable keys, q and ? included, are query text; the arrows move among the matches; Backspace edits; Enter jumps (agent.focus, then zoom, as D5's Jump) and ends the search, as a click does; Esc ends it, keeping the selection. Each word of the query must appear, letters in order with gaps allowed and case folded, in the agent's name, group, item and stage joined, so "cod 5255" finds the coder on NERD-5255. Groups keep their order, a group with no match is hidden, and every snapshot is filtered as it arrives. The boss is not searched: it sits in the header and is not selectable, and Go To finds it.
 
+### A21. Workflow events are OTLP log records, configured in the shared file
+
+*Adds to:* D9 and D10. Recorded with item 2d (NERD-5251). The schema is `docs/telemetry.md`.
+
+- **Transport.** Events are OTLP/HTTP log records with an event name, exported by `internal/telemetry` to the OTLP collector `[telemetry] endpoint` names, which stores them in Elastic's logs data streams. Spans were rejected because they pass the trace sampler, so a ratio below 1 would silently drop events. Writing to Elastic directly was rejected because D10 names the existing OTLP exporter, and the collector already holds Elastic's credentials.
+- **Endpoint.** `[telemetry] endpoint`, `host:port`, in the shared file or `--set` only, like `[spaces] project`: one daemon serves one herdr server, not one project. `HERDR_AGENTISAN_OTLP_ENDPOINT` overrides it, held to the same rule, and neither is ever echoed in an error. `OTEL_EXPORTER_OTLP_*` is ignored for events. The daemon inherits herdr's environment through the `[[startup]]` hook or `daemon-restart`, so an environment variable set later never reaches it without a herdr restart, which I7 forbids; the file does. The daemon reads it once at start.
+- **No credentials yet.** The connection is plaintext to a collector on localhost. A collector across the network gets a `[telemetry] token` secret reference (D9), sent as `Authorization` over TLS, when one is needed.
+- **Status events.** `agentisan.worker.status_changed` comes from the team poll (A17): every pane whose agent status changed between two polls, or that appeared in or left the model, with its logical id, project, group, role, agent, pane, and the statuses before and after (`absent` on the side it was missing). The diff is by pane id; the logical id rides along. The first poll after a start is the baseline and emits nothing, and a poll that fails a list emits nothing and keeps the baseline, so neither a restart nor a herdr hiccup reads as every pane appearing. Stage changes, threshold crossings, handoff steps and rotations use the same helper when their items land.
+- **Never in the way.** No endpoint builds nothing. A file that does not resolve, or a collector that is down, is logged and the daemon carries on. The pending events are flushed for at most 2 s on exit, after the lock is released (A3). Only the daemon emits: the `report` commands, which must finish quickly, never build an exporter.
+
 ### A22. Codex context: findings from item 7
 
 *Overrides:* the "Codex context" row of Verified constraints, the writer of `ctx` in the token contract, and the last row of A12. *Adds to:* D4, D7 and Report commands. A17 to A21 are reserved for work in flight, so the gap in the numbering is deliberate.
@@ -729,3 +739,28 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
   - The opt-in memory consolidation (`features.memories`) shuts its internal thread down the same way (`memories/write/src/runtime.rs:398-456`). The same decision covers it.
 - **D7 and the dashboard are to count `ctx` only on a pane where Herdr detects an agent**, so the value a Codex left behind, after a clean exit or a crash, is ignored. The snapshot on main reads it from every pane (`internal/team/snapshot.go`); that change belongs to NERD-5255. An expired `ctx` is unknown, as before. A notice is to fire when `ctx` crosses a level, not when it reappears (NERD-5261).
 - This changes a token-contract cell by amendment, as A5 did. D4's one writer per key is unchanged.
+
+### A29. The header's GitHub collection
+
+*Adds to:* D3, D5 and A18. *Overrides:* A18's "PRs, issues and slots stay unreported until item 9", for the PRs and the issue count. Recorded with item 9, part a (NERD-5257). The test slots and the boss's runtime are part b.
+
+- **The collector.** Beside the team poll, the daemon collects every project in the shared file that has a `github` repo, read once at start. For each it runs `gh pr list --repo=<repo> --state=open --limit=100 --json=number,headRefName,mergeStateStatus,reactionGroups,statusCheckRollup`, then a GraphQL count of open issues. The count is exact; herdr-status.sh's `gh issue list` stopped at 300. The collector runs at start and every 60 s on its own ticker, so GitHub is asked once an interval per repo however many dashboards read. Each team poll copies its project's last result into the snapshot; the snapshot op still runs nothing.
+- **gh, not a token.** gh's own login (the keyring, or `GH_TOKEN` and `GITHUB_TOKEN`) is the only credential. No secret passes through the daemon, and it never runs `op`.
+  - `daemon run` finds gh on the PATH herdr gave it. With a repo to collect and no gh there, the daemon logs it once and reports no PRs or issues.
+  - Each call has a 15 s timeout and runs as the leader of its own process group, killed whole on a timeout, on a cancel, or once it prints more than 4 MiB.
+  - gh gets the daemon's environment plus `GH_PROMPT_DISABLED=1`, `NO_COLOR=1` and `GH_NO_UPDATE_NOTIFIER=1`.
+  - The repo must be owner/name. It is passed as `--repo=<repo>`, and the owner and name as `-f` raw fields, so no value reads as a flag or a file.
+- **Failures.** A call that fails keeps its project's last good PRs, or count, reported for 5 intervals; then they are not reported at all, never shown as none and never staler. The daemon logs a repo's call when it starts failing or fails differently, and when it recovers, not every interval. A hanging gh holds up neither `$team` nor the snapshot.
+- **The mapping.** It follows herdr-status.sh, with three departures.
+  - PRs on a `release-please--` branch are skipped. The rest come by number, each once.
+  - **CI** is `failure` if any check is FAILURE, CANCELLED, TIMED_OUT or ERROR. Departure 1: STARTUP_FAILURE and ACTION_REQUIRED count as failures too.
+  - CI is `pending` when there are no checks, as the script had it, or when any check is QUEUED, IN_PROGRESS, WAITING, PENDING, REQUESTED, EXPECTED, STALE, or COMPLETED with no conclusion yet. It is `success` when every check is SUCCESS, SKIPPED or NEUTRAL.
+  - Departure 2: a commit status counts by its `state`. The script read only check runs, so a commit status kept it ⏳ forever.
+  - Departure 3: a value GitHub does not document is `unknown`, where the script showed ⏳. A new value is never read as a pass.
+  - **Codex** is `approved` on a 👍 from anyone, as the script counted it, and otherwise `pending`. A 👍 is not tied to the PR's head commit. `findings` needs Codex's own review data, which gh's reactions do not carry; that is a follow-up.
+  - **Merge** is `mergeStateStatus` lower-cased, or `unknown` for a value the contract does not know. So every state the daemon reports decodes under the strict contract.
+- **One mark per PR.** The dashboard draws herdr-status.sh's mark from the three states. CI decides first: ✗ a check failed, ⏳ pending, ? a CI state it cannot read. Once every check passed: ✓ with a 👍 and a clean merge, 💬 for Codex's findings, ? for a Codex state it cannot read, and otherwise …. In full it shows `#886 ✓ clean`, compact `#886✓`, then a count.
+- **What … means without Codex.** It means waiting for a 👍, or for a clean merge. On a repo with no Codex reviewer, this one included, the 👍 is the user's, since the user is the final reviewer. So a green, clean PR shows … until the user gives it a 👍 or merges it.
+- **No contract change.** `project.prs` and `project.issues` have been in snapshot v1 since item 8; no key is added.
+- **Per-team snapshots (A24).** The collected state is held per project name and copied into a snapshot at one place, so a per-project snapshot takes it the same way. Two teams of one project share a header.
+- **Cutover.** herdr-status.sh, run as herdr's `tab_bar_right`, also shows the test slots, which come in part b. Retire it, and the `tab_bar_right` command, once part b ships.

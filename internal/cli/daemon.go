@@ -11,9 +11,11 @@ import (
 
 	"github.com/abanna/herdr-agentisan/internal/config"
 	"github.com/abanna/herdr-agentisan/internal/daemon"
+	"github.com/abanna/herdr-agentisan/internal/github"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/logging"
 	"github.com/abanna/herdr-agentisan/internal/plugin"
+	"github.com/abanna/herdr-agentisan/internal/telemetry"
 )
 
 // daemonHooksKey addresses the daemon process hooks stashed in the command
@@ -54,7 +56,8 @@ func newDaemonCmd() *cobra.Command {
 // environment, the loaded configuration and the --state-dir flag.
 func daemonOptions(cmd *cobra.Command, stateDirFlag string) (daemon.Options, error) {
 	ctx := cmd.Context()
-	env, err := plugin.EnvFrom(lookupEnvFrom(ctx))
+	lookup := lookupEnvFrom(ctx)
+	env, err := plugin.EnvFrom(lookup)
 	if err != nil {
 		return daemon.Options{}, fmt.Errorf("read plugin environment: %w", err)
 	}
@@ -89,8 +92,14 @@ func daemonOptions(cmd *cobra.Command, stateDirFlag string) (daemon.Options, err
 		Commit:          config.Commit,
 		Logger:          logging.From(ctx),
 		Hooks:           hooks,
-		Team:            &daemon.TeamOptions{ConfigDir: env.ConfigDir},
+		Team:            &daemon.TeamOptions{ConfigDir: env.ConfigDir, GitHub: daemon.GitHubOptions{Gh: findGh(lookup)}},
 	}, nil
+}
+
+// findGh is gh on the PATH the command was given, or "" (A29).
+func findGh(lookup func(string) (string, bool)) string {
+	path, _ := lookup("PATH")
+	return github.Find(path)
 }
 
 // noHerdr explains a missing herdr socket in the terms a user can act on.
@@ -171,6 +180,14 @@ func newDaemonRunCmd(opts func(*cobra.Command) (daemon.Options, error)) *cobra.C
 				return fmt.Errorf("daemon run: %w", err)
 			}
 			o.Logger = logger
+			// Deferred after the log's Close, so it runs first: the flush can
+			// still log, and runs once Run has released the lock (A21).
+			events, flush := daemon.SetupEvents(cmd.Context(), o.Team.ConfigDir, telemetry.Config{
+				ServiceName: cfg.ServiceName, Version: config.Version, Commit: config.Commit,
+				Env: cfg.Env, OTLPEndpoint: cfg.OTLPEndpoint,
+			}, logger)
+			defer flush()
+			o.Team.Events = events
 
 			err = daemon.Run(cmd.Context(), o)
 			switch {

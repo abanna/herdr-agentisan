@@ -74,6 +74,13 @@ token = { env = "GITHUB_TOKEN" }
 [spaces]
 project = "agentisan"
 
+# Where the daemon sends its workflow events (docs/telemetry.md): an OTLP/HTTP
+# collector as host:port, plaintext, on localhost. Shared file and --set
+# only; HERDR_AGENTISAN_OTLP_ENDPOINT overrides it. Leave it out, or set "",
+# and nothing is exported.
+[telemetry]
+endpoint = "localhost:4318"
+
 # ---------------------------------------------------------------------------
 # Projects. The key is the project's name: lower case, digits and dashes.
 #
@@ -91,6 +98,9 @@ project = "agentisan"
 [projects.agentisan]
 repo = "~/Development/nerdsrun/agentisan-skills"
 color = "#7c3aed"
+# The repo as owner/name. The daemon shows its open PRs and open-issue count
+# in the dashboard header, through gh's own login (ADR-001 A29); it reads
+# this when it starts.
 github = "nerds-run/agentisan-skills"
 verify = [["task", "check"]]
 
