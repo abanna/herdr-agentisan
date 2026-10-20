@@ -67,3 +67,12 @@ func WithGitHubTicks(g GitHubOptions, ticks <-chan time.Time) GitHubOptions {
 	g.ticks = ticks
 	return g
 }
+
+// StartTimeFrom is the StartTime hook a daemon builds from a process table
+// reader: nil when stat is nil.
+var StartTimeFrom = startTimeFrom
+
+// DefaultStartTime is the StartTime hook a daemon has when none is injected.
+func DefaultStartTime() func(pid int) (uint64, error) {
+	return Options{}.withDefaults().Hooks.StartTime
+}

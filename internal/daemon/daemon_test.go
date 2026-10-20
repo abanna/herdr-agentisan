@@ -21,6 +21,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
+	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/store"
 )
 
@@ -841,6 +842,92 @@ func TestStopClasses(t *testing.T) {
 
 		require.ErrorIs(t, daemon.Stop(t.Context(), o), syscall.EPERM)
 	})
+}
+
+// TestStopChecksTheHolderThroughTheLineageReader: a holder's start time comes
+// from the reader the lineage uses, so on darwin, as on Linux, a lock record
+// whose pid now belongs to another process names no holder (NERD-5307). Such
+// a record is what a daemon that has just taken the lock still shows before
+// it writes its own. The reader here is darwin's, over a fixture kinfo_proc:
+// pid 4242, forked at 1760000000.123456.
+func TestStopChecksTheHolderThroughTheLineageReader(t *testing.T) {
+	t.Parallel()
+	start := daemon.StartTimeFrom(report.KinfoStat(func(pid int) (report.Kinfo, error) {
+		if pid != 4242 {
+			return report.Kinfo{}, errors.New("no such process")
+		}
+		return report.Kinfo{PID: 4242, PPID: 1, StartSec: 1_760_000_000, StartUsec: 123_456}, nil
+	}))
+	require.NotNil(t, start)
+	got, err := start(4242)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(1_760_000_000_123_456), got)
+	_, err = start(4243)
+	require.ErrorIs(t, err, report.ErrProcStat)
+
+	t.Run("a pid another process now has is never signalled", func(t *testing.T) {
+		t.Parallel()
+		h := newHerdr(t, 22)
+		dir := shortDir(t)
+		// The holder that wrote this forked a microsecond before pid 4242's
+		// present owner.
+		holdLock(t, dir, h, `{"v":1,"pid":4242,"start":1760000000123455,"herdr":{"dev":1,"ino":1},"started_at":"2026-10-09T00:00:00Z"}`)
+		o := opts(t, dir, h)
+		o.StopWait = 200 * time.Millisecond
+		o.Hooks.StartTime = start
+		o.Hooks.Signal = func(int) error {
+			t.Error("signalled a pid that is no longer the holder")
+			return nil
+		}
+		require.ErrorIs(t, daemon.Stop(t.Context(), o), daemon.ErrHolderChanged)
+	})
+	t.Run("the holder itself is signalled", func(t *testing.T) {
+		t.Parallel()
+		h := newHerdr(t, 22)
+		dir := shortDir(t)
+		release := holdLock(t, dir, h, `{"v":1,"pid":4242,"start":1760000000123456,"herdr":{"dev":1,"ino":1},"started_at":"2026-10-09T00:00:00Z"}`)
+		o := opts(t, dir, h)
+		o.Hooks.StartTime = start
+		signalled := 0
+		o.Hooks.Signal = func(pid int) error { signalled = pid; release(); return nil }
+		require.NoError(t, daemon.Stop(t.Context(), o))
+		assert.Equal(t, 4242, signalled)
+	})
+	// A darwin build before NERD-5307 had no start time to record, so its
+	// record has 0, and its pid alone names the holder until it restarts.
+	t.Run("a record without a start time is checked by pid alone", func(t *testing.T) {
+		t.Parallel()
+		h := newHerdr(t, 22)
+		dir := shortDir(t)
+		release := holdLock(t, dir, h, `{"v":1,"pid":4242,"start":0,"herdr":{"dev":1,"ino":1},"started_at":"2026-10-09T00:00:00Z"}`)
+		o := opts(t, dir, h)
+		o.Hooks.StartTime = start
+		signalled := 0
+		o.Hooks.Signal = func(pid int) error { signalled = pid; release(); return nil }
+		require.NoError(t, daemon.Stop(t.Context(), o))
+		assert.Equal(t, 4242, signalled)
+	})
+}
+
+// TestStartTimeComesFromTheLineageReader: with no hook injected, a daemon
+// reads start times through report.SystemStat, the lineage's reader (/proc
+// on Linux, sysctl on darwin). Only where the OS has none is a holder
+// checked by pid alone.
+func TestStartTimeComesFromTheLineageReader(t *testing.T) {
+	t.Parallel()
+	assert.Nil(t, daemon.StartTimeFrom(nil), "with no reader there is no start time")
+	stat := report.SystemStat()
+	def := daemon.DefaultStartTime()
+	if stat == nil {
+		assert.Nil(t, def)
+		return
+	}
+	require.NotNil(t, def)
+	want, err := stat(os.Getpid())
+	require.NoError(t, err)
+	got, err := def(os.Getpid())
+	require.NoError(t, err)
+	assert.Equal(t, want.Start, got)
 }
 
 // request sends one raw line to the daemon socket and returns the raw reply.

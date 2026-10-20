@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"runtime"
 	"slices"
 	"sync"
 	"syscall"
@@ -83,8 +82,9 @@ type Hooks struct {
 	Spawn func(ctx context.Context) (int, error)
 	// Signal asks the daemon with pid to stop (SIGTERM).
 	Signal func(pid int) error
-	// StartTime returns a process's start time (/proc on Linux). With none,
-	// a holder is checked by pid alone.
+	// StartTime returns a process's start time, by default through
+	// report.SystemStat (/proc on Linux, sysctl on darwin). With none, a
+	// holder is checked by pid alone.
 	StartTime func(pid int) (uint64, error)
 }
 
@@ -140,14 +140,23 @@ func (o Options) withDefaults() Options {
 	if o.Hooks.Signal == nil {
 		o.Hooks.Signal = func(pid int) error { return syscall.Kill(pid, syscall.SIGTERM) }
 	}
-	if o.Hooks.StartTime == nil && runtime.GOOS == "linux" {
-		stat := report.ProcStat(os.DirFS("/proc"))
-		o.Hooks.StartTime = func(pid int) (uint64, error) {
-			s, err := stat(pid)
-			return s.Start, err
-		}
+	if o.Hooks.StartTime == nil {
+		o.Hooks.StartTime = startTimeFrom(report.SystemStat())
 	}
 	return o
+}
+
+// startTimeFrom is the StartTime hook over stat, the reader the lineage uses,
+// so a holder is checked as a lineage checks its processes. It is nil when
+// stat is, on an OS with no reader.
+func startTimeFrom(stat report.StatFunc) func(pid int) (uint64, error) {
+	if stat == nil {
+		return nil
+	}
+	return func(pid int) (uint64, error) {
+		s, err := stat(pid)
+		return s.Start, err
+	}
 }
 
 // selfStart is this process's start time, or 0 where it cannot be read.
