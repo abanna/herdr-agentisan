@@ -84,13 +84,17 @@ type Place struct {
 // costs herdr two calls; any other is believed only when no second pane
 // claims the pid. With no such pane there is no place, and no fallback:
 // the footer says so. When herdr cannot be asked, the place is
-// WorkspaceID, with a note, and without it there is none.
+// WorkspaceID, with a note, and without it there is none. A herdr that
+// answers the list with an error was asked: there is no place then either.
 func (l *Locator) Locate(ctx context.Context) (Place, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	panes, err := l.Herdr.ListPanes(ctx)
-	if err != nil {
+	switch {
+	case errors.Is(err, herdr.ErrUnavailable) || errors.Is(err, context.DeadlineExceeded):
 		return l.unasked(err)
+	case err != nil:
+		return Place{}, &placeError{msg: fmt.Sprintf("herdr cannot say where this dashboard runs (%v); pass --project", err), err: err}
 	}
 	first := l.found
 	if first == "" {
