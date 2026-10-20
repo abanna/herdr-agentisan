@@ -83,10 +83,11 @@ POST /_security/api_key
 
 With both variables exported, `task otelcol:up` in the plugin's checkout runs
 the collector in Docker as `herdr-agentisan-otelcol`, after validating the
-file in a throwaway container, and replaces one already running; `task
-otelcol:down` removes it. The container reads the file from that checkout,
-so run it from one you keep: once the file is gone, the container cannot
-start again. Without Task, the same container is:
+file in a throwaway container. It replaces one already running, stopping it
+first so it can flush what it holds; `task otelcol:down` removes it. The
+container reads the file from that checkout, so run it from one you keep:
+once the file is gone, the container cannot start again. Without Task, the
+same container is:
 
 ```
 docker run -d --name herdr-agentisan-otelcol --network host --restart unless-stopped \
@@ -95,7 +96,10 @@ docker run -d --name herdr-agentisan-otelcol --network host --restart unless-sto
   otel/opentelemetry-collector-contrib:0.159.0 --config=/etc/otelcol/agentisan.yaml
 ```
 
-and without Docker, `otelcol-contrib --config
+Export both variables first: the task refuses to start without them, but
+this command does not, and `validate` accepts a missing key, so a collector
+with no key starts and Elasticsearch refuses its every write with 401.
+Without Docker, the same applies to `otelcol-contrib --config
 docs/config/otelcol-agentisan.yaml`. Then set `[telemetry] endpoint =
 "127.0.0.1:4328"` and run the `daemon-restart` action. An event reaches
 Elasticsearch about 11 s after the change: the daemon batches for 1 s and the
@@ -104,10 +108,12 @@ exporter for 10 s.
 Where a failure shows:
 
 - **The collector is down:** a `telemetry export` warning in `daemon.log`.
-- **Elasticsearch is down or refuses the key:** the collector's log, `docker
-  logs herdr-agentisan-otelcol`. The exporter retries, then drops the batch.
-  The daemon sees a collector that accepted its records and logs nothing,
-  until the collector's queue fills and it refuses them too.
+- **Elasticsearch is down, throttling, or refuses the key:** the collector's
+  log, `docker logs herdr-agentisan-otelcol`. The exporter retries while
+  Elasticsearch cannot be reached or answers 429, then drops the batch; a
+  batch it refuses, with 401 or 403, is dropped at once. The daemon sees a
+  collector that accepted its records and logs nothing, until the
+  collector's queue fills and it refuses them too.
 
 Mind three things:
 

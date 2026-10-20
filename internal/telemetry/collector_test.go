@@ -174,11 +174,12 @@ func TestOtelcolTaskRunsTheShippedConfig(t *testing.T) {
 	// Task stops at the first command that fails, so this order is what
 	// keeps a missing variable or a broken config from removing a running
 	// collector, and a collector that cannot start from passing.
-	require.Len(t, all, 5, "guard, validate, remove, run, check")
-	assert.Equal(t, runs[0], all[1], "validate before anything is removed")
-	assert.True(t, strings.HasPrefix(all[2], "docker rm -f "+collectorName+" "), "then the old container goes")
-	assert.Equal(t, runs[1], all[3], "then the new one runs")
-	check := render(t, all[4], t.TempDir())
+	require.Len(t, all, 6, "guard, validate, stop, remove, run, check")
+	assert.Equal(t, runs[0], all[1], "validate before anything is stopped")
+	assert.True(t, strings.HasPrefix(all[2], "docker stop "+collectorName+" "), "then the old container stops, flushing what it holds")
+	assert.True(t, strings.HasPrefix(all[3], "docker rm -f "+collectorName+" "), "then it goes")
+	assert.Equal(t, runs[1], all[4], "then the new one runs")
+	check := render(t, all[5], t.TempDir())
 	assert.Contains(t, check, "docker inspect --format '{{.State.Running}} {{.RestartCount}}' "+collectorName,
 		"and must be running, never having restarted: a crash loop is briefly running between attempts")
 	assert.Contains(t, check, `!= "true 0"`)
@@ -238,9 +239,13 @@ func TestTelemetryDocRunsTheTasksContainer(t *testing.T) {
 
 // fakeDocker is a stand-in docker for TestOtelcolUpStopsAtTheFirstFailure:
 // it appends its first two arguments to $DOCKER_LOG, fails when its
-// arguments contain $DOCKER_FAIL, and answers `inspect` with $DOCKER_INSPECT.
+// arguments contain $DOCKER_FAIL, has no container to stop or remove when
+// $DOCKER_ABSENT is set, and answers `inspect` with $DOCKER_INSPECT.
 const fakeDocker = `#!/bin/sh
 printf '%s %s\n' "$1" "$2" >> "$DOCKER_LOG"
+if [ -n "$DOCKER_ABSENT" ] && { [ "$1" = stop ] || [ "$1" = rm ]; }; then
+  echo "Error: No such container" >&2; exit 1
+fi
 if [ -n "$DOCKER_FAIL" ]; then
   case "$*" in *"$DOCKER_FAIL"*) echo "docker: failed" >&2; exit 1 ;; esac
 fi
@@ -252,7 +257,7 @@ exit 0
 // runs, rendered as Task renders them, in order, each under sh (Task runs
 // them with its own POSIX shell) and stopping at the first that fails as
 // Task does, against a stand-in docker: a missing variable stops before any
-// docker call, a failed validate before the running collector is removed,
+// docker call, a failed validate before the running collector is stopped,
 // and a collector that is not running 3 s on, or has restarted, fails the
 // task. No case echoes a value.
 func TestOtelcolUpStopsAtTheFirstFailure(t *testing.T) {
@@ -261,27 +266,38 @@ func TestOtelcolUpStopsAtTheFirstFailure(t *testing.T) {
 	given := map[string]string{urlVar: "http://127.0.0.1:1", writeVar: "guard-probe-value"}
 	var (
 		validate = "run --rm"
+		stop     = "stop " + collectorName
 		remove   = "rm -f"
 		start    = "run -d"
 		running  = "inspect --format"
-		all      = []string{validate, remove, start, running}
+		all      = []string{validate, stop, remove, start, running}
 	)
+	// The stand-ins are written once, before any subtest runs: an executable
+	// written while a parallel subtest forks can be held open for writing by
+	// that child, and running it then fails with ETXTBSY (golang/go#22315).
+	withDocker, noDocker := t.TempDir(), t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(withDocker, "docker"), []byte(fakeDocker), 0o700)) //nolint:gosec // an executable stand-in
+	for _, bin := range []string{withDocker, noDocker} {
+		// The check's `sleep 3`, made instant.
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "sleep"), []byte("#!/bin/sh\nexit 0\n"), 0o700)) //nolint:gosec // an executable stand-in
+	}
 	for name, tc := range map[string]struct {
 		env       map[string]string
 		fail      string
+		absent    bool   // no container to stop or remove
 		inspect   string // what docker inspect prints 3 s on
 		noDocker  bool
 		wantCalls []string
 		wantOut   string // "" for a clean start
 	}{
 		"a clean start":                {env: given, inspect: "true 0", wantCalls: all},
-		"no container to remove":       {env: given, fail: "rm -f", inspect: "true 0", wantCalls: all},
+		"no container to replace":      {env: given, absent: true, inspect: "true 0", wantCalls: all},
 		"no URL":                       {env: map[string]string{writeVar: given[writeVar]}, wantOut: urlVar},
 		"an empty URL":                 {env: map[string]string{urlVar: "", writeVar: given[writeVar]}, wantOut: urlVar},
 		"no key":                       {env: map[string]string{urlVar: given[urlVar]}, wantOut: writeVar},
 		"an empty key":                 {env: map[string]string{urlVar: given[urlVar], writeVar: ""}, wantOut: writeVar},
 		"a config that fails validate": {env: given, fail: "validate", wantCalls: []string{validate}, wantOut: "docker: failed"},
-		"a run that fails":             {env: given, fail: "--restart", wantCalls: []string{validate, remove, start}, wantOut: "docker: failed"},
+		"a run that fails":             {env: given, fail: "--restart", wantCalls: []string{validate, stop, remove, start}, wantOut: "docker: failed"},
 		"exited by 3 s on":             {env: given, inspect: "false 1", wantCalls: all, wantOut: "docker logs " + collectorName},
 		"gone by 3 s on":               {env: given, wantCalls: all, wantOut: "docker logs " + collectorName},
 		"crash-looping, running again": {env: given, inspect: "true 3", wantCalls: all, wantOut: "docker logs " + collectorName},
@@ -289,13 +305,15 @@ func TestOtelcolUpStopsAtTheFirstFailure(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			bin, dockerLog := t.TempDir(), filepath.Join(t.TempDir(), "calls")
-			if !tc.noDocker {
-				require.NoError(t, os.WriteFile(filepath.Join(bin, "docker"), []byte(fakeDocker), 0o700)) //nolint:gosec // an executable stand-in
+			bin, dockerLog := withDocker, filepath.Join(t.TempDir(), "calls")
+			if tc.noDocker {
+				bin = noDocker
 			}
-			// The check's `sleep 3`, made instant.
-			require.NoError(t, os.WriteFile(filepath.Join(bin, "sleep"), []byte("#!/bin/sh\nexit 0\n"), 0o700)) //nolint:gosec // an executable stand-in
-			env := []string{"PATH=" + bin, "DOCKER_LOG=" + dockerLog, "DOCKER_FAIL=" + tc.fail, "DOCKER_INSPECT=" + tc.inspect}
+			absent := ""
+			if tc.absent {
+				absent = "1"
+			}
+			env := []string{"PATH=" + bin, "DOCKER_LOG=" + dockerLog, "DOCKER_FAIL=" + tc.fail, "DOCKER_ABSENT=" + absent, "DOCKER_INSPECT=" + tc.inspect}
 			for k, v := range tc.env {
 				env = append(env, k+"="+v)
 			}

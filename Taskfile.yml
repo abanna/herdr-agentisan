@@ -88,6 +88,9 @@ tasks:
     cmds:
       - ': "${HERDR_AGENTISAN_ES_URL:?must be set}" "${HERDR_AGENTISAN_ES_WRITE_KEY:?must be set}"'
       - docker run --rm -e HERDR_AGENTISAN_ES_URL -e HERDR_AGENTISAN_ES_WRITE_KEY --mount "type=bind,src={{.ROOT_DIR}}/docs/config/otelcol-agentisan.yaml,dst=/etc/otelcol/agentisan.yaml,readonly" otel/opentelemetry-collector-contrib:0.159.0 validate --config=/etc/otelcol/agentisan.yaml
+      # stop, then rm: SIGTERM lets the old collector shut down and flush what
+      # it holds, where rm -f alone kills it. Neither minds no container.
+      - docker stop herdr-agentisan-otelcol >/dev/null 2>&1 || true
       - docker rm -f herdr-agentisan-otelcol >/dev/null 2>&1 || true
       - docker run -d --name herdr-agentisan-otelcol --network host --restart unless-stopped -e HERDR_AGENTISAN_ES_URL -e HERDR_AGENTISAN_ES_WRITE_KEY --mount "type=bind,src={{.ROOT_DIR}}/docs/config/otelcol-agentisan.yaml,dst=/etc/otelcol/agentisan.yaml,readonly" otel/opentelemetry-collector-contrib:0.159.0 --config=/etc/otelcol/agentisan.yaml
       # A collector that cannot start, on a port already taken say, exits at
