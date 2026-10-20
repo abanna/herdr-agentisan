@@ -14,6 +14,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/logging"
 	"github.com/abanna/herdr-agentisan/internal/plugin"
+	"github.com/abanna/herdr-agentisan/internal/telemetry"
 )
 
 // daemonHooksKey addresses the daemon process hooks stashed in the command
@@ -171,6 +172,14 @@ func newDaemonRunCmd(opts func(*cobra.Command) (daemon.Options, error)) *cobra.C
 				return fmt.Errorf("daemon run: %w", err)
 			}
 			o.Logger = logger
+			// Deferred after the log's Close, so it runs first: the flush can
+			// still log, and runs once Run has released the lock (A21).
+			events, flush := daemon.SetupEvents(cmd.Context(), o.Team.ConfigDir, telemetry.Config{
+				ServiceName: cfg.ServiceName, Version: config.Version, Commit: config.Commit,
+				Env: cfg.Env, OTLPEndpoint: cfg.OTLPEndpoint,
+			}, logger)
+			defer flush()
+			o.Team.Events = events
 
 			err = daemon.Run(cmd.Context(), o)
 			switch {

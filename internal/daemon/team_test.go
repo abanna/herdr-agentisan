@@ -169,12 +169,12 @@ func lists(srv *herdrtest.Server) int {
 
 // teamCalls returns the requests srv got that only the team poll makes:
 // workspace.list, tab.list, agent.list and the pushes. The daemon's own
-// client (HerdrClient) makes none of them. pane.list is left out because
-// focus lists the panes too: focus, like Run's ping, has no Dialed hook and
-// finds a replaced socket by its own identity check, so a call of theirs
-// dialled just after a swap can still reach the replacement (focus.go;
-// stillServed in daemon.go). Every team pane.list that a replacement answers
-// is followed, on the same client, by a workspace.list, so a team poll that
+// client (HerdrClient) makes none of them. It is what a replacement is held
+// to while Run's poll runs: Run's ping has no Dialed hook and finds a
+// replaced socket by stillServed's own identity check, so a ping dialled just
+// after a swap can still reach the replacement (daemon.go). The poll's calls
+// and focus's never do. Every team pane.list that a replacement answers is
+// followed, on the same client, by a workspace.list, so a team poll that
 // reached the replacement shows here all the same.
 func teamCalls(srv *herdrtest.Server) []string {
 	var out []string
@@ -446,8 +446,8 @@ func (th *teamHerdr) replace() {
 // being answered, after the poll's identity check. Every call after that
 // dials the replacement, which the next daemon belongs to, and finds so once
 // connected, before it sends anything: nothing more is asked of the original,
-// nothing is pushed to either server, and the replacement never sees a team
-// call (teamCalls: focus finds the swap its own way).
+// nothing is pushed to either server, and the replacement is asked nothing at
+// all, by the poll or by focus, whose every dial checks the same way.
 func TestTeamPushIgnoresAServerReplacedMidPoll(t *testing.T) {
 	t.Parallel()
 
@@ -492,7 +492,7 @@ func TestTeamPushIgnoresAServerReplacedMidPoll(t *testing.T) {
 				assert.Zero(t, lists(original), "workspace.list, dialled after the swap, never reaches the original")
 			}
 			replacement.Settle(t)
-			assert.Empty(t, teamCalls(replacement), "the team poll never asks the replacement anything, above all no push")
+			assert.Empty(t, replacement.Requests(), "the replacement is never asked anything, above all no push")
 			assert.True(t, r.alive(), "the poll stops; Run's own check ends the daemon")
 		})
 	}

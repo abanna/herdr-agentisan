@@ -4,13 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite" // the driver the store registers, for read-only looks at state.db
@@ -313,6 +317,210 @@ func TestFocusIgnoresAPaneListAnsweredAcrossASwap(t *testing.T) {
 				"nothing answered across the swap, or after it, is recorded")
 			assert.Empty(t, replacement.srv.Requests(), "the replacement is never asked anything")
 			assert.True(t, r.alive(), "the collector stops; Run's poll ends the daemon")
+		})
+	}
+}
+
+// TestFocusNeverDialsAReplacement is A3 on the collector's own dials: herdr's
+// socket is replaced while the daemon's startup ping is answered, before the
+// collector has dialled anything, so its first subscribe dials the
+// replacement. It finds so once connected and before it sends anything, and
+// stops as it does for any replaced server: the replacement, which the next
+// daemon belongs to, receives no request at all, and nothing is recorded.
+func TestFocusNeverDialsAReplacement(t *testing.T) {
+	t.Parallel()
+	h := &fakeHerdr{t: t, path: filepath.Join(shortDir(t), "h.sock"), streams: make(chan *stream, 64)}
+	h.focus("w1:p0")
+	normal := h.serve(22)
+	swap, swapped := make(chan struct{}), make(chan struct{})
+	var first sync.Once
+	h.h = func(r herdrtest.Request) herdrtest.Reply {
+		if r.Method == "ping" {
+			first.Do(func() {
+				close(swap)
+				<-swapped
+			})
+		}
+		return normal(r)
+	}
+	h.srv = herdrtest.StartAt(t, h.path, h.h)
+	dir := shortDir(t)
+	var logs lockedLog
+	o := opts(t, dir, h)
+	o.Poll = time.Hour // the poll never runs: only the collector can react
+	o.Logger = zerolog.New(&logs)
+	r := run(t, o)
+
+	select {
+	case <-swap:
+	case <-time.After(ready):
+		t.Fatal("the daemon did not ping herdr")
+	}
+	require.NoError(t, os.Remove(h.path))
+	replacement := &fakeHerdr{t: t, path: h.path, streams: make(chan *stream, 64)}
+	replacement.focus("w2:replacement")
+	replacement.h = replacement.serve(22)
+	replacement.srv = herdrtest.StartAt(t, replacement.path, replacement.h)
+	close(swapped)
+
+	// Only the stop for a replaced server (ErrHerdrGone) logs this: a refusal
+	// that lost its sentinel would stop the collector at its next identity
+	// check instead, with another message.
+	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "the daemon's herdr server was replaced") },
+		ready, 10*time.Millisecond, "the collector did not stop as for a replaced server")
+	replacement.srv.Settle(t)
+	assert.Empty(t, replacement.srv.Requests(), "the replacement is never asked for its events or its panes")
+	assert.Empty(t, query(t, paths(t, dir, h).DB, "SELECT pane_id FROM focus"), "nothing is recorded")
+	assert.True(t, r.alive(), "the collector stops; Run's poll ends the daemon")
+}
+
+// TestFocusSnapshotNeverDialsAReplacement: the collector's pane.list goes
+// through its own client too. On its own server the snapshot records the
+// focused pane. On a socket that names a replacement, one as willing to
+// answer, it sends nothing at all and records nothing, and it stops
+// collection (ErrHerdrGone) rather than costing only the snapshot, as a
+// pane.list that fails any other way does, such as one with no server to
+// dial.
+func TestFocusSnapshotNeverDialsAReplacement(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		change   func(h *fakeHerdr) // what becomes of the server before the snapshot
+		err      error
+		requests []string // the methods the server at the path receives
+		recorded []string
+	}{
+		"its own server": {change: func(*fakeHerdr) {}, requests: []string{"pane.list"}, recorded: []string{"w1:p0"}},
+		"its own server, nothing focused": {
+			change: func(h *fakeHerdr) { h.focus("") }, requests: []string{"pane.list"}, recorded: []string{},
+		},
+		// A new socket at the same path: the next daemon's server.
+		"a replacement":    {change: (*fakeHerdr).restart, err: daemon.ErrHerdrGone, recorded: []string{}},
+		"no server at all": {change: (*fakeHerdr).stop, recorded: []string{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHerdr(t, 22)
+			h.focus("w1:p0")
+			ident := mustIdentity(t, h.path)
+			tc.change(h)
+			st, err := store.Open(t.Context(), filepath.Join(shortDir(t), "state.db"))
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = st.Close() })
+
+			err = daemon.FocusSnapshotOver(t.Context(), h.path, ident, st)
+			if tc.err != nil {
+				require.ErrorIs(t, err, tc.err)
+			} else {
+				require.NoError(t, err)
+			}
+			h.srv.Settle(t)
+			var methods []string
+			for _, r := range h.srv.Requests() {
+				methods = append(methods, r.Method)
+			}
+			assert.Equal(t, tc.requests, methods)
+			rows, err := st.RecentFocus(t.Context(), store.FocusCap)
+			require.NoError(t, err)
+			recorded := []string{}
+			for _, row := range rows {
+				recorded = append(recorded, row.PaneID)
+			}
+			assert.Equal(t, tc.recorded, recorded)
+		})
+	}
+}
+
+// TestFocusDialGuardClasses: the check the collector's client runs on every
+// connection passes only while the socket path still names the socket the
+// daemon's server bound, directly or through a symlink, and fails with
+// ErrHerdrGone for whatever else the path names by the time it dials.
+func TestFocusDialGuardClasses(t *testing.T) {
+	t.Parallel()
+	bind := func(t *testing.T, path string) {
+		t.Helper()
+		ln, err := net.Listen("unix", path)
+		require.NoError(t, err)
+		ln.(*net.UnixListener).SetUnlinkOnClose(false)
+		require.NoError(t, ln.Close())
+	}
+
+	for name, tc := range map[string]struct {
+		// path returns the socket path the daemon is given, for a server
+		// that bound sock, after whatever happened to it since.
+		path func(t *testing.T, sock string) string
+		want error
+	}{
+		"its own server": {path: func(_ *testing.T, sock string) string { return sock }},
+		"its own server, through a symlink": {path: func(t *testing.T, sock string) string {
+			link := filepath.Join(shortDir(t), "link.sock")
+			require.NoError(t, os.Symlink(sock, link))
+			return link
+		}},
+		"its own server, through a hard link": {path: func(t *testing.T, sock string) string {
+			alias := filepath.Join(filepath.Dir(sock), "alias.sock")
+			require.NoError(t, os.Link(sock, alias))
+			return alias
+		}},
+		"its own server, mode 0": {path: func(t *testing.T, sock string) string {
+			require.NoError(t, os.Chmod(sock, 0))
+			return sock
+		}},
+		"replaced": {path: func(t *testing.T, sock string) string {
+			require.NoError(t, os.Remove(sock))
+			bind(t, sock)
+			return sock
+		}, want: daemon.ErrHerdrGone},
+		"removed": {path: func(t *testing.T, sock string) string {
+			require.NoError(t, os.Remove(sock))
+			return sock
+		}, want: daemon.ErrHerdrGone},
+		"a dangling symlink": {path: func(t *testing.T, sock string) string {
+			require.NoError(t, os.Remove(sock))
+			link := filepath.Join(shortDir(t), "link.sock")
+			require.NoError(t, os.Symlink(sock, link))
+			return link
+		}, want: daemon.ErrHerdrGone},
+		"a regular file": {path: func(t *testing.T, sock string) string {
+			require.NoError(t, os.Remove(sock))
+			require.NoError(t, os.WriteFile(sock, nil, 0o600))
+			return sock
+		}, want: daemon.ErrHerdrGone},
+		"a FIFO": {path: func(t *testing.T, sock string) string {
+			require.NoError(t, os.Remove(sock))
+			require.NoError(t, syscall.Mkfifo(sock, 0o600))
+			return sock
+		}, want: daemon.ErrHerdrGone},
+		"a directory": {path: func(t *testing.T, sock string) string {
+			require.NoError(t, os.Remove(sock))
+			require.NoError(t, os.Mkdir(sock, 0o700))
+			return sock
+		}, want: daemon.ErrHerdrGone},
+		"a parent it cannot search": {path: func(t *testing.T, sock string) string {
+			if os.Geteuid() == 0 {
+				t.Skip("root searches any directory")
+			}
+			dir := filepath.Dir(sock)
+			require.NoError(t, os.Chmod(dir, 0)) //nolint:gosec // the class under test
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+			return sock
+		}, want: daemon.ErrHerdrGone},
+		"no socket path": {path: func(*testing.T, string) string { return "" }, want: daemon.ErrHerdrGone},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			sock := filepath.Join(shortDir(t), "h.sock")
+			bind(t, sock)
+			ident := mustIdentity(t, sock)
+
+			guard := daemon.FocusDialGuard(tc.path(t, sock), ident)
+			require.NotNil(t, guard, "the collector's client checks every connection")
+			err := guard()
+			if tc.want == nil {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, tc.want)
 		})
 	}
 }

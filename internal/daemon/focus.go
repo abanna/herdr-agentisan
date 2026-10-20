@@ -35,8 +35,10 @@ func backoff(n int) time.Duration {
 // after a bounded backoff and resyncs the same way: focus may have moved
 // while it was not listening (A3). It only ever follows the server ident
 // names: once the socket is another server's, or gone, it stops, and Run's
-// poll ends the daemon.
+// poll ends the daemon. Every herdr call it makes goes through a client of its
+// own (forFocus), so none of them reaches a replacement.
 func (o Options) followFocus(ctx context.Context, st *store.Store, w *walker, ident Identity) {
+	o = o.forFocus(ident)
 	failures := 0
 	for {
 		err := o.streamFocus(ctx, st, w, ident, &failures)
@@ -65,13 +67,14 @@ func (o Options) followFocus(ctx context.Context, st *store.Store, w *walker, id
 // records every focus event until the subscription ends, and returns why it
 // ended. An event resets failures: the subscription is working.
 //
-// The identity is checked again once the subscription is acknowledged, and
-// snapshotFocus checks it once more after pane.list answers. A socket
-// identity never recurs, so a check that passes after an answer proves the
-// connection reached the daemon's own server, and one that fails means it may
-// have reached the replacement: that subscription is closed unread, or that
-// pane.list answer is dropped, and collection stops (ErrHerdrGone). Nothing
-// the replacement says is recorded.
+// Every connection proves, once made and before anything is sent on it, that
+// the socket still names the daemon's own server (forFocus), so none reaches
+// the replacement. The identity is checked again once the subscription is
+// acknowledged, and snapshotFocus checks it once more after pane.list
+// answers: a check that fails then means the socket was replaced while the
+// answer was on its way, so the daemon's server is going. That subscription
+// is closed unread, or that pane.list answer is dropped, and collection stops
+// (ErrHerdrGone).
 func (o Options) streamFocus(ctx context.Context, st *store.Store, w *walker, ident Identity, failures *int) error {
 	sub, err := o.Herdr.Subscribe(ctx, herdr.SubscribePaneFocused)
 	if err != nil {
@@ -99,13 +102,17 @@ func (o Options) streamFocus(ctx context.Context, st *store.Store, w *walker, id
 // snapshotFocus records the pane herdr reports focused now. herdr reports at
 // most one: the focused pane of the active tab of the active workspace.
 // pane.list is a connection of its own, dialled after the subscription's
-// identity check, so the identity is checked again once it has answered: if
-// the socket was replaced meanwhile, the answer may be the replacement's, and
-// it is dropped unrecorded (ErrHerdrGone). A pane.list that fails costs only
-// the snapshot. Once focus is read afresh, the walker forgets the moves it
-// still expected herdr to announce.
+// identity check. One that finds, once connected, that the socket names
+// another server sends nothing and stops collection (ErrHerdrGone), and the
+// identity is checked again once it has answered: if the socket was replaced
+// meanwhile, the answer is dropped unrecorded (ErrHerdrGone). A pane.list
+// that fails any other way costs only the snapshot. Once focus is read
+// afresh, the walker forgets the moves it still expected herdr to announce.
 func (o Options) snapshotFocus(ctx context.Context, st *store.Store, w *walker, ident Identity) error {
 	panes, err := o.Herdr.ListPanes(ctx)
+	if errors.Is(err, ErrHerdrGone) {
+		return fmt.Errorf("read the focused pane: %w", err)
+	}
 	if err != nil {
 		o.Logger.Warn().Err(err).Msg("read the focused pane")
 		return nil
@@ -134,6 +141,26 @@ func (o Options) recordFocus(ctx context.Context, st *store.Store, w *walker, pa
 func (o Options) sameServer(ident Identity) bool {
 	now, err := HerdrIdentity(o.HerdrSocket)
 	return err == nil && now == ident
+}
+
+// onServer is a herdr.Client Dialed hook for the server ident names: it fails
+// with ErrHerdrGone once the socket names another server, or none (A3).
+func (o Options) onServer(ident Identity) func() error {
+	return func() error {
+		if !o.sameServer(ident) {
+			return fmt.Errorf("%w: the socket now names another server, or none", ErrHerdrGone)
+		}
+		return nil
+	}
+}
+
+// forFocus is o for the focus collector: its Herdr is a client of its own on
+// o.HerdrSocket, as the team poll's is, whose every connection checks onServer
+// before anything is sent. Only the collector's copy changes; Back and Run's
+// poll keep o.Herdr.
+func (o Options) forFocus(ident Identity) Options {
+	o.Herdr = herdr.Client{SocketPath: o.HerdrSocket, Dialed: o.onServer(ident)}
+	return o
 }
 
 // sleep waits d or until ctx ends.
