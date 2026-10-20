@@ -79,10 +79,12 @@ type teamPoll struct {
 }
 
 // startTeam starts the team poll when o.Team is set, and beside it the
-// header's GitHub collection; the poll caches each snapshot in cache. The
-// function it returns stops both and waits for them, so once it returns
-// nothing more is pushed and no gh is left running.
-func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache) (stop func()) {
+// header's GitHub collection and the agent view's sync (A28 addendum); the
+// poll caches each snapshot in cache and gives views each model. The
+// function it returns stops all three and waits for them, so once it
+// returns nothing more is pushed, the view is cleared unless the server is
+// gone, and no gh is left running.
+func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, views *viewSync) (stop func()) {
 	if o.Team == nil {
 		return func() {}
 	}
@@ -90,7 +92,8 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 	header := newHeaderCache(o.Team.GitHub)
 	var wg sync.WaitGroup
 	wg.Go(func() { o.collectGitHub(ctx, header) })
-	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header) })
+	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header, views) })
+	wg.Go(func() { o.syncView(ctx, views, ident) })
 	return func() {
 		cancel()
 		wg.Wait()
@@ -114,7 +117,7 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 // read answered by the replacement, or a push landing on it, would be the
 // next daemon's business. So the poll is a client of its own, whose Dialed
 // hook checks the identity; a failed check stops the poll (ErrHerdrGone).
-func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, header *headerCache) {
+func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, header *headerCache, views *viewSync) {
 	teams, err := settings.Teams(o.Team.ConfigDir)
 	if err != nil {
 		o.Logger.Error().Err(err).Msg("herdr-agentisan.toml does not resolve; the ◆ spaces belong to the unnamed project, and no tabs team is found, until it is fixed and the daemon restarts")
@@ -155,6 +158,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 				o.Team.emitTransitions(ctx, *last, *built)
 			}
 			last = built
+			views.built(*built)
 		}
 		select {
 		case <-ctx.Done():
@@ -232,18 +236,20 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 			o.Logger.Warn().Err(err).Str("workspace", t.Target.WorkspaceID).Msg("push $team")
 		}
 	}
-	if err := o.pushCtx(ctx, c, l); err != nil {
+	if err := o.pushCtx(ctx, c, m, l); err != nil {
 		return nil, err
 	}
 	return &m, nil
 }
 
-// pushCtx pushes every agent pane in l its ctx display (A28), with `$team`'s
-// source and TTL. A refused push, such as to a pane closed since the list, is
-// logged and the others go on; it returns ErrHerdrGone, and pushes nothing
-// more, once a call finds the socket no longer names the daemon's server.
-func (o Options) pushCtx(ctx context.Context, c herdr.Client, l team.Layout) error {
-	for _, pt := range team.CtxTokens(l) {
+// pushCtx pushes every agent pane in l its ctx display (A28) and, when a
+// team in m places it, its place in the team, which the agent view sorts by
+// (A28 addendum), with `$team`'s source and TTL. A refused push, such as to
+// a pane closed since the list, is logged and the others go on; it returns
+// ErrHerdrGone, and pushes nothing more, once a call finds the socket no
+// longer names the daemon's server.
+func (o Options) pushCtx(ctx context.Context, c herdr.Client, m team.Model, l team.Layout) error {
+	for _, pt := range team.SidebarTokens(m, l) {
 		// Once ctx ends, each push fails before it dials.
 		err := c.ReportPaneMetadata(ctx, herdr.PaneMetadata{
 			PaneID:    pt.PaneID,

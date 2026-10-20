@@ -46,7 +46,7 @@ func StillServedOver(ctx context.Context, socket string, ident Identity, protoco
 // the daemon's own client.
 func FocusSnapshotOver(ctx context.Context, socket string, ident Identity, st *store.Store) error {
 	o := Options{HerdrSocket: socket, Logger: zerolog.Nop()}.withDefaults().forServer(ident)
-	return o.snapshotFocus(ctx, st, newWalker(), ident)
+	return o.snapshotFocus(ctx, st, newWalker(), newViewSync(), ident)
 }
 
 // DialGuard is the check the daemon's client runs on every connection, for

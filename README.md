@@ -154,7 +154,7 @@ description = "Agentisan: back to the previous pane"
 This takes prefix+b from herdr's default `toggle_sidebar`; see
 [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml).
 
-## `$team` and the ctx display in the sidebar
+## `$team`, the ctx display and the focused team in the sidebar
 
 The daemon pushes each `◆ <group>` workspace, and each team's workspace, its
 `$team` token every 3 s: `4 agents · 0 working · 1 ready`, with
@@ -167,6 +167,11 @@ so they clear themselves within 9 s of the daemon stopping. `◆ boss` and
 `◆ herdr` get no `$team`. `[spaces] project` in `herdr-agentisan.toml` names
 the project the spaces belong to; with no config file they belong to one
 unnamed project. See ADR-001 A17 and A28.
+
+The agents panel shows the team you are in: the daemon sets herdr's agent
+view to its workspaces and any blocked agent, labelled with the project
+(`◆ spaces` when `[spaces] project` names none), in the team's order. Outside
+every team, and when it stops cleanly, it clears the view (A28 addendum).
 
 herdr plugins cannot ship config: to show them, put the rows in
 [`docs/config/herdr-sidebar.example.toml`](docs/config/herdr-sidebar.example.toml)
