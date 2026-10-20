@@ -415,7 +415,7 @@ func TestFind(t *testing.T) {
 		"a symlink to gh":               {path: join(link, b), want: filepath.Join(link, "gh")},
 		"a dangling symlink":            {path: join(dangling, b), want: second},
 		"a directory it cannot search":  {path: join(filepath.Dir(locked), b), want: second},
-		"a relative entry is skipped":   {path: join(".", "a", "../b", b), want: second},
+		"a relative entry is skipped":   {path: join(".", "a", "../b", "ghtest", b), want: second},
 		"an empty entry is skipped":     {path: join("", b), want: second},
 		"nowhere":                       {path: join(empty, plain, asDir), want: ""},
 		"a missing directory":           {path: join(filepath.Join(root, "gone")), want: ""},
