@@ -373,6 +373,36 @@ func TestRunPushesTheCtxDisplayToEveryAgentPane(t *testing.T) {
 	}
 }
 
+// TestRunReportsEachAgentPaneOnceAPoll: the order key rides the ctx push (A28
+// addendum), so a poll reports each agent pane once, never twice.
+func TestRunReportsEachAgentPaneOnceAPoll(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	run(t, teamOpts(t, shortDir(t), th, ""))
+	polled(t, th.srv, 3)
+
+	var polls []map[string]int // each poll starts with its workspace.list
+	for _, r := range th.srv.Requests() {
+		switch {
+		case r.Method == "workspace.list":
+			polls = append(polls, map[string]int{})
+		case r.Method == "pane.report_metadata" && len(polls) > 0:
+			var p struct {
+				PaneID string `json:"pane_id"`
+			}
+			require.NoError(t, json.Unmarshal(r.Params, &p))
+			polls[len(polls)-1][p.PaneID]++
+		}
+	}
+	require.GreaterOrEqual(t, len(polls), 3)
+	for _, pushes := range polls[:len(polls)-1] { // the last may still be pushing
+		assert.NotEmpty(t, pushes)
+		for pane, n := range pushes {
+			assert.Equal(t, 1, n, "%s is reported once a poll", pane)
+		}
+	}
+}
+
 // TestNoCtxDisplayWithoutAnAgent: a layout of plain shells gets `$team` and
 // no ctx display: there is no agent pane to push one to.
 func TestNoCtxDisplayWithoutAnAgent(t *testing.T) {

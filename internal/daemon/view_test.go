@@ -2,6 +2,7 @@
 package daemon_test
 
 import (
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -179,6 +180,24 @@ func TestRunSendsTheViewAgainAfterAResync(t *testing.T) {
 	assertSet(t, calls[1], viewSpaces)
 }
 
+// TestRunSetsTheViewOfTheFocusAtStart: a daemon reads the focused pane as it
+// starts, so it sets that team's view on its first poll, before focus moves:
+// after daemon-restart the panel shows the team again without a keypress.
+func TestRunSetsTheViewOfTheFocusAtStart(t *testing.T) {
+	t.Parallel()
+	th, cfg := viewTeams(t)
+	th.mu.Lock()
+	for _, p := range th.panes {
+		if p["pane_id"] == "wN:p1" {
+			p["focused"] = true
+		}
+	}
+	th.mu.Unlock()
+	run(t, teamOpts(t, shortDir(t), th, cfg))
+	th.nextStream(t)
+	assertSet(t, awaitViews(t, th.srv, 1)[0], viewSpaces)
+}
+
 // TestRunTriesTheViewAgainAfterAFailure: a view herdr refuses, as it does
 // while the plugin is not linked, is sent again on every poll, and logged
 // once for each reason herdr gives, not every poll.
@@ -255,7 +274,8 @@ func TestCleanStopClearsTheView(t *testing.T) {
 // replacement at the path, which the next daemon belongs to, whether the
 // daemon exits on finding it or is stopped while it is there, nor to a
 // socket that is gone, whose dial would fail before the client's identity
-// check.
+// check. Every call the original gets is the set: a focus resync, which a
+// loaded run can cause, sends the same set again.
 func TestNoViewClearOnAServerThatIsGone(t *testing.T) {
 	t.Parallel()
 
@@ -290,8 +310,10 @@ func TestNoViewClearOnAServerThatIsGone(t *testing.T) {
 			}
 			original.Settle(t)
 			calls := viewCalls(original)
-			require.Len(t, calls, 1, "the set alone: %v", calls)
-			assertSet(t, calls[0], viewSpaces)
+			require.NotEmpty(t, calls)
+			for _, c := range calls { // a resync under load sends the same set again
+				assertSet(t, c, viewSpaces)
+			}
 			if th.srv != original {
 				th.srv.Settle(t)
 				assert.Empty(t, viewCalls(th.srv), "the replacement gets no view call")
@@ -299,4 +321,31 @@ func TestNoViewClearOnAServerThatIsGone(t *testing.T) {
 			assert.NotContains(t, logs.String(), "clear the agent view", "nothing to clear, nothing to log")
 		})
 	}
+}
+
+// TestViewNeverReachesAReplacement: every view call dials through the
+// identity check (A3). herdr's socket is replaced while the daemon's own
+// server still streams focus, before the poll notices: the view the next
+// focus event makes due finds the replacement on dialling, and the sync
+// stops without sending it anything.
+func TestViewNeverReachesAReplacement(t *testing.T) {
+	t.Parallel()
+	th, cfg := viewTeams(t)
+	var logs lockedLog
+	o := teamOpts(t, shortDir(t), th, cfg)
+	o.Poll = time.Hour // one poll at start; then only focus moves the view
+	o.Logger = zerolog.New(&logs)
+	r := run(t, o)
+	s := th.nextStream(t)
+	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
+	awaitViews(t, th.srv, 1)
+
+	require.NoError(t, os.Remove(th.path)) // the original serves on, unlinked
+	replacement := herdrtest.StartAt(t, th.path, th.serveTeam(th.serve(22)))
+	s.lines <- herdrtest.PaneFocused("w14:p2", "w14")
+	require.Eventually(t, func() bool { return strings.Contains(logs.String(), "agent view stops") }, ready, 5*time.Millisecond,
+		"the sync never found the replacement: %s", logs.String())
+	replacement.Settle(t)
+	assert.Empty(t, viewCalls(replacement), "the replacement gets no view call")
+	assert.True(t, r.alive())
 }

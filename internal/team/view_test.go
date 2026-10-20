@@ -244,6 +244,25 @@ func TestSidebarTokens(t *testing.T) {
 	}, got)
 }
 
+// TestSidebarTokensFollowTheSnapshotsGroupOrder: places follow the groups in
+// the order the snapshot shows them (the project's Order), not the order the
+// model holds them in.
+func TestSidebarTokensFollowTheSnapshotsGroupOrder(t *testing.T) {
+	t.Parallel()
+	agent := func(id string) team.Worker { return team.Worker{ID: id, Pane: team.Pane{ID: id, Agent: "claude"}} }
+	m := team.Model{Projects: []team.Project{{
+		Name: "p", Short: "pp", Workspaces: []string{"w1"}, Order: []string{"qa", "coders"},
+		Groups: []team.Group{{Name: "coders", Workers: []team.Worker{agent("w1:p1")}}, {Name: "qa", Workers: []team.Worker{agent("w1:p2")}}},
+	}}}
+	l := team.Layout{Panes: []herdr.PaneInfo{{PaneID: "w1:p1", WorkspaceID: "w1", Agent: "claude"}, {PaneID: "w1:p2", WorkspaceID: "w1", Agent: "claude"}}}
+
+	got := map[string]string{}
+	for _, pt := range team.SidebarTokens(m, l) {
+		got[pt.PaneID] = pt.Tokens["order_pp"]
+	}
+	assert.Equal(t, map[string]string{"w1:p2": "000", "w1:p1": "001"}, got)
+}
+
 // TestSidebarTokensWidenPastAThousand: places are three digits, wider only
 // when a team has more than 1,000 agents, every place in it then as wide, so
 // herdr's string order is still the team's.
