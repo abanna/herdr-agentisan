@@ -11,16 +11,20 @@ import (
 )
 
 // Snapshot is the team of project in m as the snapshot v1 contract describes
-// it (ADR-001 D5, D6, A18), built at at:
+// it (ADR-001 D5, D6, A18), built at at, from that project's entry in m
+// alone:
 //
-//   - one group per group of the project: those order names first, in that
-//     order, then the rest by name, each with one row per worker in the
+//   - one group per group of the project: those its Order names first, in
+//     that order, then the rest by name, each with one row per worker in the
 //     model's order (by target, then pane id). The order is the resolver's
 //     (Spaces.GroupOrder for the ◆ spaces); the dashboard keeps it;
 //   - the boss: the first agent pane, by pane id, in the boss's place, or
 //     none when no agent runs there. The contract has one boss, and a shell
 //     there (this dashboard's own pane, say) is not one;
-//   - the project's colour, when it has one, as its only reported state.
+//   - the project's Color, when it has one, as its only reported state.
+//
+// A project with no entry in m, one herdr shows no workspace of, is its name
+// and nothing else.
 //
 // Each row is named by agent.list's name, else the pane's label, else its
 // pane id, as v12 names it; a row named any way but the first is Unnamed, so
@@ -29,16 +33,16 @@ import (
 // a bare integer from 0 to 100 and left out otherwise; item and stage are
 // the tokens; the stage's start comes from clock, which may be nil. The
 // model is left out: the daemon does not know it.
-func Snapshot(m Model, project, color string, order []string, at time.Time, clock *StageClock) snapshot.Snapshot {
+func Snapshot(m Model, project string, at time.Time, clock *StageClock) snapshot.Snapshot {
 	s := snapshot.Snapshot{V: snapshot.Version, At: at.UTC(), Team: project, Groups: []snapshot.Group{}}
-	if color != "" {
-		s.Project = &snapshot.Project{Color: color}
-	}
 	i := slices.IndexFunc(m.Projects, func(p Project) bool { return p.Name == project })
 	if i < 0 {
 		return s
 	}
 	pr := m.Projects[i]
+	if pr.Color != "" {
+		s.Project = &snapshot.Project{Color: pr.Color}
+	}
 	for _, w := range pr.Boss {
 		if w.Pane.IsAgent() {
 			s.Boss = &snapshot.Boss{Agent: row(w.Pane, clock)}
@@ -47,7 +51,7 @@ func Snapshot(m Model, project, color string, order []string, at time.Time, cloc
 	}
 	groups := slices.Clone(pr.Groups)
 	slices.SortStableFunc(groups, func(a, b Group) int {
-		ra, rb := rank(order, a.Name), rank(order, b.Name)
+		ra, rb := rank(pr.Order, a.Name), rank(pr.Order, b.Name)
 		return cmp.Or(cmp.Compare(ra, rb), strings.Compare(a.Name, b.Name))
 	})
 	for _, g := range groups {
