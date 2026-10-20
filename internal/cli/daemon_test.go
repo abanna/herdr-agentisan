@@ -42,13 +42,19 @@ type daemonEnv struct {
 
 func newDaemonEnv(t *testing.T) daemonEnv {
 	t.Helper()
+	return newDaemonEnvWith(t, func(herdrtest.Request) herdrtest.Reply {
+		return herdrtest.Reply{Result: map[string]any{"type": "pong", "version": "0.9.3", "protocol": 22}}
+	})
+}
+
+// newDaemonEnvWith is newDaemonEnv with a herdr that answers h.
+func newDaemonEnvWith(t *testing.T, h herdrtest.Handler) daemonEnv {
+	t.Helper()
 	dir, err := os.MkdirTemp("", "dc")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	e := daemonEnv{herdrSock: filepath.Join(dir, "h.sock"), stateDir: filepath.Join(dir, "state")}
-	herdrtest.StartAt(t, e.herdrSock, func(herdrtest.Request) herdrtest.Reply {
-		return herdrtest.Reply{Result: map[string]any{"type": "pong", "version": "0.9.3", "protocol": 22}}
-	})
+	herdrtest.StartAt(t, e.herdrSock, h)
 	return e
 }
 

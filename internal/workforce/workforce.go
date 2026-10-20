@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
@@ -68,9 +69,29 @@ func (s *Service) now() time.Time {
 // team whose workspace holds CallerPane, else the only tabs team.
 type Selector struct {
 	Project string `json:"project,omitempty"`
-	// CallerPane is the pane the command ran from (HERDR_PANE_ID), which
-	// can be stale: herdr resolves it.
+	// CallerPane is the current id of the pane the command runs in, as
+	// FindCallerPane confirmed it, or "": the op looks it up as is.
 	CallerPane string `json:"caller_pane,omitempty"`
+}
+
+// FindCallerPane is the current id of the pane the command runs in, or ""
+// when nothing confirms one: HERDR_PANE_ID counts only as report.ResolvePane
+// confirms it, by a process in the command's own lineage, since herdr can
+// reissue a closed workspace's ids to new panes. A failing herdr is ErrHerdr.
+func FindCallerPane(ctx context.Context, h report.PaneFinder, pane report.Pane) (string, error) {
+	if pane.PaneID == "" || pane.Lineage == nil {
+		return "", nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, herdr.CallTimeout)
+	defer cancel()
+	id, err := report.ResolvePane(ctx, h, pane)
+	switch {
+	case errors.Is(err, report.ErrPaneUnresolved), errors.Is(err, report.ErrAmbiguousPane):
+		return "", nil
+	case err != nil:
+		return "", herdrFailed("find the caller's pane", err)
+	}
+	return id, nil
 }
 
 // layout is herdr's answers one op works from.
@@ -138,7 +159,7 @@ func configFailed(err error) error {
 
 // selectTeam picks the team sel names among teams. Only an explicit project
 // may name the ◆ spaces project; the defaults look for a tabs team.
-func (s *Service) selectTeam(ctx context.Context, sel Selector, teams []settings.Team, l layout) (settings.Team, error) {
+func selectTeam(sel Selector, teams []settings.Team, l layout) (settings.Team, error) {
 	if sel.Project != "" {
 		i := slices.IndexFunc(teams, func(t settings.Team) bool { return t.Project == sel.Project })
 		if i < 0 {
@@ -152,9 +173,9 @@ func (s *Service) selectTeam(ctx context.Context, sel Selector, teams []settings
 			tabs = append(tabs, t)
 		}
 	}
-	if ws := s.callerWorkspace(ctx, sel.CallerPane, l); ws != "" {
+	if p, ok := l.pane(sel.CallerPane); ok {
 		for _, t := range tabs {
-			if id, _ := tabsOf(t).Workspace(l.Workspaces); id == ws {
+			if id, _ := tabsOf(t).Workspace(l.Workspaces); id == p.WorkspaceID {
 				return t, nil
 			}
 		}
@@ -163,23 +184,6 @@ func (s *Service) selectTeam(ctx context.Context, sel Selector, teams []settings
 		return tabs[0], nil
 	}
 	return settings.Team{}, fmt.Errorf("%w: pass --project: the caller's pane is in no team's workspace, and the tabs teams are %s", ErrBadRequest, names(tabs))
-}
-
-// callerWorkspace is the workspace the caller's pane is in now, or "".
-// HERDR_PANE_ID is frozen at the shell's start, so herdr resolves it first:
-// pane.process_info answers with the pane's current id.
-func (s *Service) callerWorkspace(ctx context.Context, paneID string, l layout) string {
-	if paneID == "" {
-		return ""
-	}
-	if info, err := s.Herdr.PaneProcessInfo(ctx, paneID); err == nil {
-		paneID = info.PaneID
-	}
-	p, ok := l.pane(paneID)
-	if !ok {
-		return ""
-	}
-	return p.WorkspaceID
 }
 
 func names(teams []settings.Team) string {

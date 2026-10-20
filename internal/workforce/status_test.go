@@ -1,12 +1,16 @@
 package workforce_test
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/team"
 	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
@@ -127,26 +131,22 @@ func TestStatusOfTheSpacesProject(t *testing.T) {
 }
 
 // TestStatusPicksTheTeam: --project wins; else the team whose workspace holds
-// the caller's pane, resolved by herdr, since the shell's HERDR_PANE_ID can
-// be an id herdr has since reissued; else the only tabs team; else it is
-// refused.
+// the caller's pane, as FindCallerPane confirmed it; else the only tabs team;
+// else it is refused. No caller pane, as when FindCallerPane confirms none,
+// takes the fallbacks.
 func TestStatusPicksTheTeam(t *testing.T) {
 	t.Parallel()
 	two := teamConfig + "\n[projects.assay]\nrepo = \"REPO\"\nshort = \"as\"\n[projects.assay.groups.coder]\nworkers = 0\nslots = 2\n"
 	f := newFixture(t, two)
 	as := f.h.addWorkspace("assay")
 	asBoss := f.h.addTab(as, "as-boss", "claude", "idle")
-	f.h.mu.Lock()
-	f.h.alias["w3:p1"] = asBoss
-	f.h.mu.Unlock()
 
 	for name, tc := range map[string]struct {
 		sel  workforce.Selector
 		want string
 	}{
-		"the caller's team":                   {sel: workforce.Selector{CallerPane: asBoss}, want: "assay"},
-		"a frozen pane id, as herdr resolves": {sel: workforce.Selector{CallerPane: "w3:p1"}, want: "assay"},
-		"--project beats the caller's pane":   {sel: workforce.Selector{Project: "herdr-agentisan", CallerPane: asBoss}, want: "herdr-agentisan"},
+		"the caller's team":                 {sel: workforce.Selector{CallerPane: asBoss}, want: "assay"},
+		"--project beats the caller's pane": {sel: workforce.Selector{Project: "herdr-agentisan", CallerPane: asBoss}, want: "herdr-agentisan"},
 	} {
 		got, err := f.svc.Status(t.Context(), workforce.StatusRequest{Selector: tc.sel})
 		require.NoError(t, err, name)
@@ -155,19 +155,86 @@ func TestStatusPicksTheTeam(t *testing.T) {
 
 	_, err := f.svc.Status(t.Context(), workforce.StatusRequest{Selector: workforce.Selector{CallerPane: "w99:p9"}})
 	require.ErrorIs(t, err, workforce.ErrBadRequest, "two tabs teams and the caller in neither")
+	_, err = f.svc.Status(t.Context(), workforce.StatusRequest{})
+	require.ErrorIs(t, err, workforce.ErrBadRequest, "two tabs teams and no caller pane")
 	assert.Contains(t, err.Error(), "assay, herdr-agentisan")
 	_, err = f.svc.Status(t.Context(), workforce.StatusRequest{Selector: workforce.Selector{Project: "nope"}})
 	require.ErrorIs(t, err, workforce.ErrUnknownProject)
 	assert.Contains(t, err.Error(), "configured: assay, herdr-agentisan")
 
 	g := newFixture(t, teamConfig)
-	got, err := g.svc.Status(t.Context(), workforce.StatusRequest{Selector: workforce.Selector{CallerPane: "w99:p9"}})
+	got, err := g.svc.Status(t.Context(), workforce.StatusRequest{})
 	require.NoError(t, err)
-	assert.Equal(t, "herdr-agentisan", got.Project, "a pane in no team falls back to the only tabs team")
+	assert.Equal(t, "herdr-agentisan", got.Project, "no caller pane falls back to the only tabs team")
 
 	broken := newFixture(t, "schema_version = 1\n[projects.herdr-agentisan]\nrepo = \"REPO\"\nlayout = \"grid\"\n")
 	_, err = broken.svc.Status(t.Context(), workforce.StatusRequest{})
 	require.ErrorIs(t, err, workforce.ErrConfig)
+}
+
+// paneFinder is a herdr whose panes answer pane.process_info by any id in
+// panes, aliases included, and pane.list with listed; or fail with failing.
+type paneFinder struct {
+	panes   map[string]herdr.ProcessInfo
+	listed  []herdr.PaneInfo
+	failing error
+}
+
+func (f paneFinder) PaneProcessInfo(_ context.Context, id string) (herdr.ProcessInfo, error) {
+	if info, ok := f.panes[id]; ok || f.failing != nil {
+		return info, f.failing
+	}
+	return herdr.ProcessInfo{}, herdr.ErrPaneNotFound
+}
+
+func (f paneFinder) ListPanes(context.Context) ([]herdr.PaneInfo, error) { return f.listed, nil }
+
+// TestFindCallerPane: HERDR_PANE_ID counts only when one of its pane's
+// processes is in the command's lineage, so an alias resolves, and an id
+// reissued to another team's pane yields the caller's own pane, else none,
+// and selection takes its fallbacks (TestStatusPicksTheTeam).
+func TestFindCallerPane(t *testing.T) {
+	t.Parallel()
+	// The command (5000) runs in w1:p1's shell (600); w2:p1, in another
+	// team's workspace, runs 7000.
+	procs := map[int]report.Stat{5000: {PPID: 600, Start: 90}, 600: {PPID: 1, Start: 40}}
+	lineage := report.ReadLineage(5000, func(pid int) (report.Stat, error) {
+		s, ok := procs[pid]
+		if !ok {
+			return report.Stat{}, errors.New("no such process")
+		}
+		return s, nil
+	})
+	ours, theirs := herdr.ProcessInfo{PaneID: "w1:p1", ShellPID: 600}, herdr.ProcessInfo{PaneID: "w2:p1", ShellPID: 7000}
+	both := paneFinder{panes: map[string]herdr.ProcessInfo{"w1:p1": ours, "w9:p9": ours, "w2:p1": theirs}, listed: []herdr.PaneInfo{{PaneID: "w1:p1"}, {PaneID: "w2:p1"}}}
+	failing := paneFinder{failing: herdr.ErrAPI}
+	for name, tc := range map[string]struct {
+		frozen  string
+		h       paneFinder
+		lineage *report.Lineage
+		want    string
+		err     error
+	}{
+		"the caller's pane":                      {frozen: "w1:p1", h: both, lineage: lineage, want: "w1:p1"},
+		"a frozen alias, as herdr resolves it":   {frozen: "w9:p9", h: both, lineage: lineage, want: "w1:p1"},
+		"an id reissued to another team's pane":  {frozen: "w2:p1", h: both, lineage: lineage, want: "w1:p1"},
+		"that, and the caller's pane gone: none": {frozen: "w2:p1", h: paneFinder{panes: map[string]herdr.ProcessInfo{"w2:p1": theirs}, listed: []herdr.PaneInfo{{PaneID: "w2:p1"}}}, lineage: lineage},
+		"two panes run the lineage: none": {frozen: "w8:p8", h: paneFinder{
+			panes:  map[string]herdr.ProcessInfo{"w1:p1": ours, "w3:p1": {PaneID: "w3:p1", ShellPID: 600}},
+			listed: []herdr.PaneInfo{{PaneID: "w1:p1"}, {PaneID: "w3:p1"}},
+		}, lineage: lineage},
+		"no lineage confirms nothing, herdr unasked": {frozen: "w1:p1", h: failing},
+		"no HERDR_PANE_ID, herdr unasked":            {h: failing, lineage: lineage},
+		"a failing herdr is ErrHerdr":                {frozen: "w1:p1", h: failing, lineage: lineage, err: workforce.ErrHerdr},
+	} {
+		got, err := workforce.FindCallerPane(t.Context(), tc.h, report.Pane{SocketPath: "unused", PaneID: tc.frozen, Lineage: tc.lineage})
+		if tc.err != nil {
+			require.ErrorIs(t, err, tc.err, name)
+			continue
+		}
+		require.NoError(t, err, name)
+		assert.Equal(t, tc.want, got, name)
+	}
 }
 
 // TestStatusFailsWhenHerdrDoes: a herdr list that fails is ErrHerdr.

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/abanna/herdr-agentisan/internal/cli"
+	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
 )
 
 // oneJSONObject decodes out as exactly one JSON object and nothing else.
@@ -27,7 +28,7 @@ func oneJSONObject(t *testing.T, out string) map[string]any {
 }
 
 // runOut runs args with stdout and stderr apart, as the skill's wrapper
-// reads them.
+// reads them, in the test lineage.
 func runOut(t *testing.T, lookup func(string) (string, bool), args ...string) (stdout, stderr string, err error) {
 	t.Helper()
 	root := cli.Root()
@@ -35,7 +36,7 @@ func runOut(t *testing.T, lookup func(string) (string, bool), args ...string) (s
 	root.SetOut(&out)
 	root.SetErr(&errOut)
 	root.SetArgs(args)
-	err = root.ExecuteContext(cli.WithLookupEnv(t.Context(), lookup))
+	err = root.ExecuteContext(cli.WithLookupEnv(cli.WithLineage(t.Context(), testLineage), lookup))
 	return out.String(), errOut.String(), err
 }
 
@@ -78,7 +79,8 @@ func TestWorkforceHelpMeetsTheWrapper(t *testing.T) {
 
 // TestWorkforceCommandsAlwaysAnswerInJSON: stdout is exactly one JSON object
 // on every path the command line can take, and the exit is 1 for each
-// refusal: a flag or argument error, an unknown verb, and no daemon.
+// refusal: a flag or argument error, an unknown verb, no daemon, and a herdr
+// that fails finding the caller's pane, refused before the daemon is asked.
 func TestWorkforceCommandsAlwaysAnswerInJSON(t *testing.T) {
 	t.Parallel()
 	e := newDaemonEnv(t)
@@ -95,6 +97,7 @@ func TestWorkforceCommandsAlwaysAnswerInJSON(t *testing.T) {
 		"no daemon":                  {args: []string{"team", "status"}, code: "daemon_unavailable"},
 		"no state dir":               {args: []string{"team", "status"}, env: map[string]string{"HERDR_PLUGIN_STATE_DIR": ""}, code: "daemon_unavailable"},
 		"no herdr":                   {args: []string{"team", "status"}, env: map[string]string{"HERDR_SOCKET_PATH": ""}, code: "daemon_unavailable"},
+		"herdr failing":              {args: []string{"team", "status"}, env: map[string]string{"HERDR_PANE_ID": "w14:p1"}, code: "herdr_failed"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -111,10 +114,19 @@ func TestWorkforceCommandsAlwaysAnswerInJSON(t *testing.T) {
 }
 
 // TestWorkforceCommandsAskTheDaemon: each command sends its op with the
-// request the daemon decodes, the caller's pane included, and prints the
-// daemon's answer as the envelope: data when ok, its code when refused.
+// request the daemon decodes, the caller's pane included as
+// workforce.FindCallerPane confirms it, and prints the daemon's answer as
+// the envelope: data when ok, its code when refused.
 func TestWorkforceCommandsAskTheDaemon(t *testing.T) {
 	t.Parallel()
+	// theirs is a herdr whose only pane, w3:p1, is another team's: its shell
+	// is not in the test lineage.
+	theirs := func(r herdrtest.Request) herdrtest.Reply {
+		if r.Method == "pane.list" {
+			return herdrtest.Reply{Result: map[string]any{"type": "pane_list", "panes": []map[string]any{{"pane_id": "w3:p1"}}}}
+		}
+		return herdrtest.Reply{Result: map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w3:p1", "shell_pid": 7000}}}
+	}
 	const ok = `{"ok":true,"data":{"project":"ha"}}`
 	const unknown = `{"ok":false,"error":{"code":"unknown_project","message":"\"nope\"; configured: ha"}}`
 	tests := map[string]struct {
@@ -125,30 +137,46 @@ func TestWorkforceCommandsAskTheDaemon(t *testing.T) {
 		// stateDir passes the daemon's state dir as --state-dir, with
 		// HERDR_PLUGIN_STATE_DIR naming another.
 		stateDir bool
+		// pane is HERDR_PANE_ID, in a herdr where w14:p1 runs the test
+		// lineage and w9:p9 is its alias, unless herdr is set.
+		pane  string
+		herdr herdrtest.Handler
 	}{
 		"team status, the caller's team": {
-			args: []string{"team", "status"}, reply: ok,
+			args: []string{"team", "status"}, reply: ok, pane: "w14:p1",
 			sent: `{"v":1,"op":"team.status","args":{"caller_pane":"w14:p1"}}`, want: ok,
 		},
 		"team status of a project": {
-			args: []string{"team", "status", "--project", "ha"}, reply: ok,
+			args: []string{"team", "status", "--project", "ha"}, reply: ok, pane: "w14:p1",
 			sent: `{"v":1,"op":"team.status","args":{"project":"ha","caller_pane":"w14:p1"}}`, want: ok,
 		},
 		"a refusal is printed with its code": {
-			args: []string{"team", "status", "--project", "nope"}, reply: unknown,
+			args: []string{"team", "status", "--project", "nope"}, reply: unknown, pane: "w14:p1",
 			sent: `{"v":1,"op":"team.status","args":{"project":"nope","caller_pane":"w14:p1"}}`, want: unknown,
 		},
 		"--state-dir beats the environment": {
-			args: []string{"team", "status"}, reply: ok, stateDir: true,
+			args: []string{"team", "status"}, reply: ok, stateDir: true, pane: "w14:p1",
 			sent: `{"v":1,"op":"team.status","args":{"caller_pane":"w14:p1"}}`, want: ok,
+		},
+		"a frozen alias sends the pane's current id": {
+			args: []string{"team", "status"}, reply: ok, pane: "w9:p9",
+			sent: `{"v":1,"op":"team.status","args":{"caller_pane":"w14:p1"}}`, want: ok,
+		},
+		"an id reissued to another team's pane is not sent": {
+			args: []string{"team", "status"}, reply: ok, pane: "w3:p1", herdr: theirs,
+			sent: `{"v":1,"op":"team.status","args":{}}`, want: ok,
 		},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			e := newDaemonEnv(t)
+			h := tc.herdr
+			if h == nil {
+				h = paneHerdr("w14:p1", "w9:p9")
+			}
+			e := newDaemonEnvWith(t, h)
 			sent := fakeDaemon(t, e, tc.reply)
-			env := map[string]string{"HERDR_PANE_ID": "w14:p1"}
+			env := map[string]string{"HERDR_PANE_ID": tc.pane}
 			args := tc.args
 			if tc.stateDir {
 				env["HERDR_PLUGIN_STATE_DIR"] = t.TempDir()

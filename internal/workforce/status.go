@@ -75,7 +75,7 @@ func (s *Service) Status(ctx context.Context, req StatusRequest) (StatusResult, 
 	if err != nil {
 		return StatusResult{}, err
 	}
-	t, err := s.selectTeam(ctx, req.Selector, teams, l)
+	t, err := selectTeam(req.Selector, teams, l)
 	if err != nil {
 		return StatusResult{}, err
 	}

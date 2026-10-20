@@ -2,7 +2,6 @@ package workforce_test
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,7 +21,7 @@ import (
 
 // fakeHerdr is a herdr server with state: workspaces, tabs, panes and the
 // agents named in them, answering the lists the workforce reads the way
-// herdr 0.9.3 does. Knobs make a method fail, or a stale pane id resolve.
+// herdr 0.9.3 does. A knob makes a method fail.
 type fakeHerdr struct {
 	t   *testing.T
 	srv *herdrtest.Server
@@ -34,9 +33,6 @@ type fakeHerdr struct {
 	next       int
 	// fail answers a method with an error code.
 	fail map[string]string
-	// alias maps a pane id herdr no longer lists, one frozen in a shell's
-	// HERDR_PANE_ID, to the pane pane.process_info resolves it to.
-	alias map[string]string
 }
 
 type fakeWS struct{ id, label string }
@@ -51,7 +47,7 @@ type fakePane struct {
 
 func newFake(t *testing.T) *fakeHerdr {
 	t.Helper()
-	f := &fakeHerdr{t: t, fail: map[string]string{}, alias: map[string]string{}}
+	f := &fakeHerdr{t: t, fail: map[string]string{}}
 	f.srv = herdrtest.Start(t, f.handle)
 	return f
 }
@@ -139,9 +135,6 @@ func (f *fakeHerdr) handle(r herdrtest.Request) herdrtest.Reply {
 	if code, ok := f.fail[r.Method]; ok {
 		return errReply(code)
 	}
-	var p map[string]any
-	_ = json.Unmarshal(r.Params, &p)
-	str := func(k string) string { s, _ := p[k].(string); return s }
 	switch r.Method {
 	case "pane.list":
 		out := []map[string]any{}
@@ -171,15 +164,6 @@ func (f *fakeHerdr) handle(r herdrtest.Request) herdrtest.Reply {
 			}
 		}
 		return herdrtest.Reply{Result: map[string]any{"type": "agent_list", "agents": out}}
-	case "pane.process_info":
-		pane := f.pane(str("pane_id"))
-		if real, ok := f.alias[str("pane_id")]; ok {
-			pane = f.pane(real)
-		}
-		if pane == nil {
-			return errReply("pane_not_found")
-		}
-		return herdrtest.Reply{Result: map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": pane.id, "shell_pid": 100, "foreground_process_group_id": 100}}}
 	}
 	return errReply("unknown_method")
 }

@@ -10,7 +10,9 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
+	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/plugin"
+	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
@@ -96,15 +98,10 @@ func (f *opFlags) add(c *cobra.Command) {
 	c.Flags().StringVar(&f.project, "project", "", "the team's project (default: the team whose workspace this pane is in, else the only tabs team)")
 }
 
-// selector is the team the command means: --project, else the caller's
-// pane, HERDR_PANE_ID.
-func (f *opFlags) selector(cmd *cobra.Command) workforce.Selector {
-	pane, _ := lookupEnvFrom(cmd.Context())("HERDR_PANE_ID")
-	return workforce.Selector{Project: f.project, CallerPane: pane}
-}
-
-// runOp asks the daemon to run op with args and prints its answer.
-func (f *opFlags) runOp(cmd *cobra.Command, args []string, op string, req any) error {
+// runOp asks the daemon to run op with req(the team the command means) and
+// prints its answer. The team is --project, else the caller's pane, as
+// workforce.FindCallerPane confirms it by this command's lineage.
+func (f *opFlags) runOp(cmd *cobra.Command, args []string, op string, req func(workforce.Selector) any) error {
 	if len(args) > 0 {
 		return badRequest(cmd, fmt.Errorf("%s takes no arguments, got %s", cmd.CommandPath(), strings.Join(args, " ")))
 	}
@@ -121,7 +118,13 @@ func (f *opFlags) runOp(cmd *cobra.Command, args []string, op string, req any) e
 	if err != nil {
 		return refuseWith(cmd, codeDaemonUnavailable, noHerdr(err).Error())
 	}
-	data, err := daemon.Workforce(ctx, paths.Socket, op, req)
+	pane := report.PaneFrom(lookupEnvFrom(ctx))
+	pane.Lineage = lineageFrom(ctx)()
+	caller, err := workforce.FindCallerPane(ctx, herdr.Client{SocketPath: pane.SocketPath}, pane)
+	if err != nil {
+		return refuseWith(cmd, "herdr_failed", err.Error())
+	}
+	data, err := daemon.Workforce(ctx, paths.Socket, op, req(workforce.Selector{Project: f.project, CallerPane: caller}))
 	var refused *daemon.RequestError
 	switch {
 	case err == nil:
@@ -141,7 +144,7 @@ func newTeamStatusCmd() *cobra.Command {
 		Short: "Every worker's group, status, ctx, item, stage and idle time, and open slots",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return f.runOp(cmd, args, daemon.OpTeamStatus, workforce.StatusRequest{Selector: f.selector(cmd)})
+			return f.runOp(cmd, args, daemon.OpTeamStatus, func(sel workforce.Selector) any { return workforce.StatusRequest{Selector: sel} })
 		},
 	}
 	f.add(c)
