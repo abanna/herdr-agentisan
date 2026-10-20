@@ -181,8 +181,9 @@ FROM logs-agentisan.otel-*
 | KEEP @timestamp, attributes.herdr.pane.id, attributes.agentisan.status.from, attributes.agentisan.status.to
 ```
 
-Field names on the Elastic side depend on its OTLP mapping; check one event in
-Discover before saving a query.
+`attributes.agentisan.worker.id` is the logical worker id, such as
+`coders-1`, once a `workers` row binds the pane, and the pane id, such as
+`w14:p8`, until then; `attributes.agentisan.worker.bound` says which.
 
 ## Coming
 
