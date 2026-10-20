@@ -93,7 +93,9 @@ type Options struct {
 	StateDir string
 	// HerdrSocket is the herdr server's socket (HERDR_SOCKET_PATH).
 	HerdrSocket string
-	// Herdr is the client for that socket.
+	// Herdr is the client for that socket. Run dials through a client of
+	// its own on HerdrSocket, guarded against a replaced server (forServer),
+	// and keeps only this one's Timeout.
 	Herdr HerdrClient
 	// LockWait bounds the wait for a stale holder; zero is DefaultLockWait.
 	LockWait time.Duration
@@ -203,6 +205,7 @@ func Run(ctx context.Context, o Options) error {
 	if err != nil {
 		return err
 	}
+	o = o.forServer(ident)
 	if err := os.MkdirAll(paths.Dir, 0o700); err != nil {
 		return fmt.Errorf("create %s: %w", paths.Dir, err)
 	}
@@ -320,12 +323,17 @@ func (o Options) prune(ctx context.Context, st *store.Store) time.Time {
 // died and left its socket file behind), on the protocol it was pinned at. A
 // ping that fails any other way, such as a busy herdr timing out, is not
 // taken as the server going.
+//
+// It pings first, through the daemon's guarded client, which checks the
+// identity once connected and sends nothing to a replacement (A3), and checks
+// the identity again after every ping, whatever it answered.
 func (o Options) stillServed(ctx context.Context, ident Identity, protocol uint32) error {
-	if !o.sameServer(ident) {
-		return fmt.Errorf("%w: the socket the daemon belongs to was removed or replaced", ErrHerdrGone)
-	}
 	pong, err := o.Herdr.Ping(ctx)
 	switch {
+	case !o.sameServer(ident):
+		return fmt.Errorf("%w: the socket the daemon belongs to was removed or replaced", ErrHerdrGone)
+	case errors.Is(err, ErrHerdrGone):
+		return fmt.Errorf("ping: %w", err)
 	case errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ENOENT):
 		return fmt.Errorf("%w: nothing answers its socket: %w", ErrHerdrGone, err)
 	case err != nil:
