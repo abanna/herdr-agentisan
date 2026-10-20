@@ -47,8 +47,8 @@ statusline has no context percentage yet, it reports nothing. Set
 
 ## Report `$ctx` from Codex
 
-Each Codex agent pushes the same `ctx` token through two Codex hooks, with the
-number Codex itself shows as "Context N% used". Add them to
+Each Codex agent pushes the same `ctx` token through four Codex hooks, with
+the number Codex itself shows as "Context N% used". Add them to
 `~/.codex/config.toml`, or to a trusted project's `.codex/config.toml`
 ([sample](docs/config/codex-hooks.example.toml)), and trust them once when
 Codex asks:
@@ -70,15 +70,41 @@ type = "command"
 command = "herdr-agentisan report codex"
 timeout = 10
 async = true
+
+[[hooks.PostCompact]]
+
+[[hooks.PostCompact.hooks]]
+type = "command"
+command = "herdr-agentisan report codex"
+timeout = 10
+async = true
+
+[[hooks.SessionEnd]]
+
+[[hooks.SessionEnd.hooks]]
+type = "command"
+command = "herdr-agentisan report codex"
+timeout = 10
 ```
 
 Start Codex with `codex --no-daemon`. By default Codex runs its sessions in a
 shared background server whose hooks carry the environment of whichever pane
 started it, so the report cannot tell which pane it belongs to and reports
-nothing. Like `report statusline`, it prints nothing and always exits 0; the
-token expires 180 s after the last tool call or turn, so an idle Codex agent's
-`ctx` goes blank. `HERDR_AGENTISAN_LOG_LEVEL=debug` logs why nothing was
-reported. ADR-001 A22 has the details.
+nothing. Like `report statusline`, it prints nothing and always exits 0.
+`HERDR_AGENTISAN_LOG_LEVEL=debug` logs why nothing was reported.
+
+Codex's context changes only in a turn or a compaction, and those are when
+its hooks run, so the token lasts 24 h, set again by every report: an idle
+Codex agent keeps its `ctx`. PostCompact reports after a compaction, but may
+still read the count from before it; the next turn corrects it. SessionEnd
+clears `ctx` as Codex exits. Two cases leave a value behind until the TTL
+runs out or the next Codex in the pane reports:
+
+- a Codex that crashes or is killed while its shell keeps the pane;
+- a PostToolUse or Stop report still running when Codex exits, which can
+  land after the clear.
+
+ADR-001 A22 and A27 have the details.
 
 ## Report `$item` and `$stage` from agentisan
 

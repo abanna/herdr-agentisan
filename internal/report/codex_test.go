@@ -41,6 +41,15 @@ func info(body string) string {
 const (
 	userMessage = `{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}}`
 	nullInfo    = `{"type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":{"primary":null}}}`
+	// compacted is the line Codex writes when a compaction replaces the
+	// history, before it records the new history's estimated size.
+	compacted = `{"timestamp":"2026-10-10T07:00:00.000Z","type":"compacted","payload":{"message":"summary","replacement_history":[]}}`
+	// overflow is the count Codex records when the context overflows: the
+	// window as the whole session total (fill_to_context_window).
+	overflow = `{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":258400},"last_token_usage":{"total_tokens":3},"model_context_window":258400}}}`
+	// estimate is the count a compaction after an overflow records: the
+	// overflow's total, kept, and the compacted history's estimated size.
+	estimate = `{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":258400},"last_token_usage":{"total_tokens":135200},"model_context_window":258400}}}`
 )
 
 // lines is a rollout of ls, one per line.
@@ -116,6 +125,43 @@ func TestTranscriptContextMatchesTheTUI(t *testing.T) {
 				require.ErrorIs(t, err, tc.err)
 				return
 			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestTranscriptContextAfterAnOverflow: the overflow's total reads 100 until
+// a compaction line separates a count from the one before it; that count is
+// the compaction's estimate (A27). With no count before it in the tail, a
+// count with that total is an overflow.
+func TestTranscriptContextAfterAnOverflow(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		content string
+		want    int
+	}{
+		"an overflow first in the tail":           {content: lines(overflow), want: 100},
+		"an overflow after a count":               {content: lines(tokenCount(24610, window), overflow), want: 100},
+		"an overflow's total with a large last":   {content: lines(tokenCount(24610, window), estimate), want: 100},
+		"an estimate first in the tail":           {content: lines(estimate), want: 100},
+		"a compaction after the overflow":         {content: lines(overflow, compacted, estimate), want: 50},
+		"other lines around the compaction":       {content: lines(overflow, userMessage, compacted, nullInfo, userMessage, estimate), want: 50},
+		"a second compaction":                     {content: lines(overflow, compacted, strings.Replace(estimate, "135200", "24610", 1), compacted, estimate), want: 50},
+		"a compaction before the previous count":  {content: lines(compacted, overflow, estimate), want: 100},
+		"an estimate sent again":                  {content: lines(overflow, compacted, estimate, estimate), want: 50},
+		"an overflow sent again":                  {content: lines(tokenCount(24610, window), overflow, overflow), want: 100},
+		"an overflow after an estimate":           {content: lines(overflow, compacted, estimate, overflow), want: 100},
+		"a compaction alone, with no count after": {content: lines(tokenCount(24610, window), compacted), want: 5},
+		"a quoted compacted type is not one":      {content: lines(overflow, `{"type":"response_item","payload":{"type":"compacted"}}`, estimate), want: 100},
+		"an unparsable compaction line":           {content: lines(overflow, compacted[:60], estimate), want: 100},
+		"CRLF line endings":                       {content: lines(overflow+"\r", compacted+"\r", estimate+"\r"), want: 50},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := report.TranscriptContext(transcript(t, tc.content))
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got)
 		})
@@ -246,8 +292,27 @@ func hookJSON(path string, pad int) string {
 		`"tool_response":"` + strings.Repeat("o", pad) + `","tool_use_id":"call_1"}`
 }
 
-// TestParseCodexHookClasses walks the payload shapes. Only transcript_path
-// and agent_id matter; every other field is Codex's to add or change.
+// eventHook is hookJSON fired as event, or naming no event when it is empty.
+func eventHook(path, event string) string {
+	field := ""
+	if event != "" {
+		field = `"hook_event_name":` + strconv.Quote(event) + `,`
+	}
+	return strings.Replace(hookJSON(path, 1), `"hook_event_name":"PostToolUse",`, field, 1)
+}
+
+// sessionEnd is a SessionEnd payload as Codex 0.161 sends it as it exits.
+func sessionEnd(path string) string {
+	tp := "null"
+	if path != "" {
+		tp = strconv.Quote(path)
+	}
+	return `{"session_id":"0199","transcript_path":` + tp + `,"cwd":"/w","hook_event_name":"SessionEnd","reason":"other"}`
+}
+
+// TestParseCodexHookClasses walks the payload shapes. Only transcript_path,
+// agent_id and hook_event_name matter; every other field is Codex's to add
+// or change.
 func TestParseCodexHookClasses(t *testing.T) {
 	t.Parallel()
 
@@ -256,9 +321,12 @@ func TestParseCodexHookClasses(t *testing.T) {
 		want report.CodexHook
 		err  error
 	}{
-		"a PostToolUse payload":      {in: hookJSON("/r.jsonl", 3), want: report.CodexHook{TranscriptPath: "/r.jsonl"}},
-		"a null transcript":          {in: hookJSON("", 3)},
-		"no transcript field":        {in: `{"hook_event_name":"Stop"}`},
+		"a PostToolUse payload":      {in: hookJSON("/r.jsonl", 3), want: report.CodexHook{TranscriptPath: "/r.jsonl", Event: "PostToolUse"}},
+		"a SessionEnd payload":       {in: sessionEnd("/r.jsonl"), want: report.CodexHook{TranscriptPath: "/r.jsonl", Event: "SessionEnd"}},
+		"a null transcript":          {in: hookJSON("", 3), want: report.CodexHook{Event: "PostToolUse"}},
+		"no transcript field":        {in: `{"hook_event_name":"Stop"}`, want: report.CodexHook{Event: "Stop"}},
+		"a null hook_event_name":     {in: `{"hook_event_name":null}`},
+		"hook_event_name not string": {in: `{"hook_event_name":1}`, err: report.ErrMalformed},
 		"a subagent's hook":          {in: `{"transcript_path":"/r.jsonl","agent_id":"a1","agent_type":"worker"}`, want: report.CodexHook{TranscriptPath: "/r.jsonl", AgentID: "a1"}},
 		"a null agent_id":            {in: `{"transcript_path":"/r.jsonl","agent_id":null}`, want: report.CodexHook{TranscriptPath: "/r.jsonl"}},
 		"invalid UTF-8 in the path":  {in: `{"transcript_path":"/r` + "\xff" + `.jsonl"}`, want: report.CodexHook{TranscriptPath: "/r\ufffd.jsonl"}},
@@ -389,21 +457,55 @@ func codexLineage(procs map[int]report.Stat, cmds map[int][]string) *report.Line
 	return report.ReadLineage(5000, newProcTable(procs).stat).WithCmdline(argv(cmds))
 }
 
-// TestCodexPushesTheTokenContract: from an embedded Codex, ctx lands on the
-// pane the TUI runs in, under the same contract as Claude's.
+// TestCodexPushesTheTokenContract: from an embedded Codex, every hook but
+// SessionEnd sets ctx on the pane the TUI runs in, under Claude's contract
+// but for Codex's 24 h TTL (A27). An event it does not know, or none, still
+// reports: the count is the same whichever hook read it.
 func TestCodexPushesTheTokenContract(t *testing.T) {
 	t.Parallel()
-	srv := herdrtest.Start(t, fakeHerdr([]fakePane{{id: "w15:p4", shell: 600, pgid: 899, fg: []uint32{899, 900}}}))
-	pane := report.Pane{SocketPath: srv.Path, PaneID: "w15:p4", Lineage: codexLineage(embeddedProcs(), embeddedArgv)}
-	path := transcript(t, tokenCount(24610, window)+"\n")
 
-	got, err := report.Codex(t.Context(), herdr.Client{SocketPath: srv.Path}, pane, strings.NewReader(hookJSON(path, 10)))
-	require.NoError(t, err)
-	assert.Equal(t, report.Result{Ctx: 5, PaneID: "w15:p4"}, got)
+	for name, event := range map[string]string{
+		"PostToolUse": "PostToolUse", "Stop": "Stop", "PostCompact": "PostCompact",
+		"another event": "UserPromptSubmit", "SessionEnd in another case": "sessionend", "no event": "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, fakeHerdr([]fakePane{{id: "w15:p4", shell: 600, pgid: 899, fg: []uint32{899, 900}}}))
+			pane := report.Pane{SocketPath: srv.Path, PaneID: "w15:p4", Lineage: codexLineage(embeddedProcs(), embeddedArgv)}
+			path := transcript(t, tokenCount(24610, window)+"\n")
 
-	reqs := srv.Requests()
-	require.Equal(t, []string{process, reportM}, methods(reqs))
-	assert.JSONEq(t, `{"pane_id":"w15:p4","source":"agentisan","tokens":{"ctx":"5"},"ttl_ms":180000}`, string(reqs[1].Params))
+			got, err := report.Codex(t.Context(), herdr.Client{SocketPath: srv.Path}, pane, strings.NewReader(eventHook(path, event)))
+			require.NoError(t, err)
+			assert.Equal(t, report.Result{Ctx: 5, PaneID: "w15:p4"}, got)
+
+			reqs := srv.Requests()
+			require.Equal(t, []string{process, reportM}, methods(reqs))
+			assert.JSONEq(t, `{"pane_id":"w15:p4","source":"agentisan","tokens":{"ctx":"5"},"ttl_ms":86400000}`, string(reqs[1].Params))
+		})
+	}
+}
+
+// TestCodexSessionEndClearsCtx: as Codex exits, its SessionEnd hook clears
+// ctx, with no TTL (A11), rather than leave the last count for a day. It
+// never reads the transcript.
+func TestCodexSessionEndClearsCtx(t *testing.T) {
+	t.Parallel()
+
+	for name, path := range map[string]string{"a missing transcript": "/nowhere/rollout.jsonl", "no transcript": ""} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, fakeHerdr([]fakePane{{id: "w15:p4", shell: 600, pgid: 899, fg: []uint32{899, 900}}}))
+			pane := report.Pane{SocketPath: srv.Path, PaneID: "w15:p4", Lineage: codexLineage(embeddedProcs(), embeddedArgv)}
+
+			got, err := report.Codex(t.Context(), herdr.Client{SocketPath: srv.Path}, pane, strings.NewReader(sessionEnd(path)))
+			require.NoError(t, err)
+			assert.Equal(t, report.Result{PaneID: "w15:p4", Cleared: true}, got)
+
+			reqs := srv.Requests()
+			require.Equal(t, []string{process, reportM}, methods(reqs))
+			assert.JSONEq(t, `{"pane_id":"w15:p4","source":"agentisan","tokens":{"ctx":""}}`, string(reqs[1].Params))
+		})
+	}
 }
 
 // TestCodexRefusesWhatItCannotPlace: nothing reaches herdr unless the hook
@@ -458,6 +560,9 @@ func TestCodexRefusesWhatItCannotPlace(t *testing.T) {
 		"only codex helpers, never codex":    {lineage: codexLineage(embeddedProcs(), helpersOnly), want: report.ErrNoCodexHost},
 		"an ancestor's pid reused mid-check": {lineage: reusedLineage, want: report.ErrHostUnverified},
 		"a hook inside a subagent":           {lineage: codexLineage(embeddedProcs(), embeddedArgv), hook: `{"transcript_path":"/r","agent_id":"a1"}`, want: report.ErrSubagent},
+		"a SessionEnd inside a subagent":     {lineage: codexLineage(embeddedProcs(), embeddedArgv), hook: `{"hook_event_name":"SessionEnd","agent_id":"a1"}`, want: report.ErrSubagent},
+		"a SessionEnd under the daemon":      {lineage: codexLineage(daemon, daemonArgv), hook: sessionEnd(""), want: report.ErrCodexDaemon},
+		"a SessionEnd off Linux":             {lineage: nil, hook: sessionEnd(""), want: report.ErrHostUnverified},
 		"an ephemeral session":               {lineage: codexLineage(embeddedProcs(), embeddedArgv), hook: hookJSON("", 1), want: report.ErrNoContext},
 		"an unreadable payload":              {lineage: codexLineage(embeddedProcs(), embeddedArgv), hook: `{`, want: report.ErrMalformed},
 	}

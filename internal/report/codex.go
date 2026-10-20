@@ -13,9 +13,10 @@ import (
 	"strings"
 )
 
-// The Codex ctx adapter (ADR-001 A22). Codex runs `report codex` as an async
-// PostToolUse and Stop hook and passes the hook's JSON on stdin; ctx itself
-// keeps the token contract Statusline writes.
+// The Codex ctx adapter (ADR-001 A22, A27). Codex runs `report codex` as an
+// async PostToolUse, Stop and PostCompact hook, and as its SessionEnd hook,
+// and passes the hook's JSON on stdin; ctx keeps the token contract
+// Statusline writes but for its TTL, CodexCtxTTL.
 const (
 	// MaxCodexHookBytes bounds the hook payload kept from stdin. A PostToolUse
 	// payload carries the tool's input and output, so it can be large; one
@@ -29,6 +30,9 @@ const (
 	// codexBaselineTokens is Codex's BASELINE_TOKENS: context the TUI counts
 	// as always in use, taken off both the window and the usage.
 	codexBaselineTokens = 12000
+	// codexSessionEnd is the hook_event_name of the hook Codex runs as it
+	// exits.
+	codexSessionEnd = "SessionEnd"
 )
 
 var (
@@ -62,13 +66,17 @@ type CodexHook struct {
 	TranscriptPath string
 	// AgentID is set only when the hook fired inside a subagent.
 	AgentID string
+	// Event is hook_event_name, such as PostToolUse or SessionEnd; empty
+	// when the payload names none.
+	Event string
 }
 
 // ParseCodexHook reads a Codex hook payload from r, and reads r to its end
 // whatever it finds, so Codex's write of the payload always completes rather
 // than meeting a closed pipe. (Codex 0.161 tolerates a closed pipe too: a
 // broken pipe on a hook's stdin counts as written.) Fields other than
-// transcript_path and agent_id are Codex's to add or change, and ignored.
+// transcript_path, agent_id and hook_event_name are Codex's to add or
+// change, and ignored.
 func ParseCodexHook(r io.Reader) (CodexHook, error) {
 	// Run by hand in a pane, stdin is the terminal: reading it would wait
 	// for Ctrl-D with nothing on screen to say so.
@@ -88,6 +96,7 @@ func ParseCodexHook(r io.Reader) (CodexHook, error) {
 	var in struct {
 		TranscriptPath *string `json:"transcript_path"`
 		AgentID        *string `json:"agent_id"`
+		Event          *string `json:"hook_event_name"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return CodexHook{}, fmt.Errorf("%w: %w", ErrMalformed, err)
@@ -98,6 +107,9 @@ func ParseCodexHook(r io.Reader) (CodexHook, error) {
 	}
 	if in.AgentID != nil {
 		h.AgentID = *in.AgentID
+	}
+	if in.Event != nil {
+		h.Event = *in.Event
 	}
 	return h, nil
 }
@@ -235,45 +247,97 @@ type codexTokenInfo struct {
 // latestContext scans tail backwards for the newest token count Codex
 // recorded with usage, skipping every line that is not one: other events, a
 // line still being written, and counts with no info yet.
+//
+// One deliberate difference from the TUI: when the context overflows, Codex
+// records the full window as the session total with nothing else counted
+// (fill_to_context_window), and its last usage is whatever the window lacked
+// of the old total, usually 0. The TUI then shows almost nothing used just
+// as the context fills. A count with that total reads 100 here, the value
+// rotation needs, unless a compaction line separates it from the count
+// before it: a compaction keeps the total and records the new history's
+// estimated size as the last usage, which is then read as usual. A count
+// Codex sent again unchanged, as it does when only the rate limits changed,
+// is the same count; one with no count before it in the tail reads 100
+// (A27).
 func latestContext(tail []byte) (int, error) {
+	pct := 0
+	var overflow *codexTokenInfo // the newest count, when it has the overflow's total
 	for _, line := range slices.Backward(bytes.Split(tail, []byte{'\n'})) {
-		if !bytes.Contains(line, []byte(`"token_count"`)) {
+		if overflow != nil && isCompacted(line) {
+			return pct, nil
+		}
+		info := tokenCountInfo(line)
+		switch {
+		case info == nil, overflow != nil && overflow.resentAs(*info):
 			continue
+		case overflow != nil:
+			return 100, nil
 		}
-		var ev struct {
-			Type    string `json:"type"`
-			Payload struct {
-				Type string          `json:"type"`
-				Info *codexTokenInfo `json:"info"`
-			} `json:"payload"`
+		var err error
+		if pct, err = info.percent(); err != nil || !info.overflowed() {
+			return pct, err
 		}
-		if json.Unmarshal(line, &ev) != nil || ev.Type != "event_msg" || ev.Payload.Type != "token_count" ||
-			ev.Payload.Info == nil || ev.Payload.Info.Last == nil {
-			continue
-		}
-		return ev.Payload.Info.percent()
+		overflow = info
+	}
+	if overflow != nil {
+		return 100, nil
 	}
 	return 0, fmt.Errorf("%w: no codex token count in the last %d bytes of the transcript", ErrNoContext, MaxTranscriptTail)
+}
+
+// tokenCountInfo returns the info of line when it is a token count Codex
+// recorded with usage, and nil for any other line.
+func tokenCountInfo(line []byte) *codexTokenInfo {
+	if !bytes.Contains(line, []byte(`"token_count"`)) {
+		return nil
+	}
+	var ev struct {
+		Type    string `json:"type"`
+		Payload struct {
+			Type string          `json:"type"`
+			Info *codexTokenInfo `json:"info"`
+		} `json:"payload"`
+	}
+	if json.Unmarshal(line, &ev) != nil || ev.Type != "event_msg" || ev.Payload.Type != "token_count" ||
+		ev.Payload.Info == nil || ev.Payload.Info.Last == nil {
+		return nil
+	}
+	return ev.Payload.Info
+}
+
+// isCompacted reports whether line is the one Codex writes when a
+// compaction replaces the history.
+func isCompacted(line []byte) bool {
+	if !bytes.Contains(line, []byte(`"compacted"`)) {
+		return false
+	}
+	var ev struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(line, &ev) == nil && ev.Type == "compacted"
+}
+
+// overflowed reports whether i carries the session total Codex records when
+// the context overflows: the window, with nothing else counted.
+func (i codexTokenInfo) overflowed() bool {
+	return i.Window != nil && i.Total != nil && *i.Total == (codexUsage{TotalTokens: *i.Window})
+}
+
+// resentAs reports whether j is i, a count with the overflow's total, sent
+// again unchanged: the same window, total and last usage.
+func (i codexTokenInfo) resentAs(j codexTokenInfo) bool {
+	return j.overflowed() && *j.Window == *i.Window && *j.Last == *i.Last
 }
 
 // percent is Codex's "Context N% used" (codex-rs rust-v0.161.0
 // tui/src/token_usage.rs): the baseline comes off the window and the usage,
 // the REMAINING share is rounded half away from zero, and used is 100 minus
 // it. The window is already the model's usable share of its context.
-//
-// One deliberate difference: when the context overflows, Codex records the
-// full window as the session total with nothing else counted and leaves the
-// last usage near 0 (fill_to_context_window), so the TUI shows almost nothing
-// used just as the context fills. That record reads 100 here, the value
-// rotation needs.
 func (i codexTokenInfo) percent() (int, error) {
 	if i.Window == nil || *i.Window <= codexBaselineTokens {
 		return 0, fmt.Errorf("%w: codex token count has no usable context window", ErrNoContext)
 	}
 	window := *i.Window
-	if i.Total != nil && *i.Total == (codexUsage{TotalTokens: window}) {
-		return 100, nil
-	}
 	effective := window - codexBaselineTokens
 	// max before subtracting, so an extreme negative count cannot wrap.
 	used := max(i.Last.TotalTokens, codexBaselineTokens) - codexBaselineTokens
@@ -284,8 +348,9 @@ func (i codexTokenInfo) percent() (int, error) {
 
 // Codex pushes the ctx token from a Codex hook's payload in r: the latest
 // token count in the session's transcript, as the TUI's "Context N% used"
-// shows it, set on the pane the session's Codex runs in. It reads r to its
-// end first, then reports nothing outside a pane, from a subagent, from a
+// shows it, set on the pane the session's Codex runs in for CodexCtxTTL. A
+// SessionEnd hook clears ctx instead, reading no transcript. It reads r to
+// its end first, then reports nothing outside a pane, from a subagent, from a
 // session it cannot place (CheckCodexHost), or with no count to report.
 //
 // One herdr.CallTimeout bounds the herdr calls, finding the pane included.
@@ -303,6 +368,9 @@ func Codex(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (Result, e
 	if err := pane.Lineage.CheckCodexHost(); err != nil {
 		return Result{}, err
 	}
+	if hook.Event == codexSessionEnd {
+		return clearCtx(ctx, rep, pane)
+	}
 	if hook.TranscriptPath == "" {
 		return Result{}, fmt.Errorf("%w: the codex session keeps no transcript", ErrNoContext)
 	}
@@ -310,5 +378,5 @@ func Codex(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (Result, e
 	if err != nil {
 		return Result{}, err
 	}
-	return pushCtx(ctx, rep, pane, pct)
+	return pushCtx(ctx, rep, pane, pct, CodexCtxTTL)
 }

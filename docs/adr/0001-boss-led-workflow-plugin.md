@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A20, A22 and A25 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A20, A22, A25 and A27 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -708,3 +708,26 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
   - A Codex `allow` rule for `herdr-agentisan report stage` would not change that. A rule bypasses the sandbox only when every part of the top-level tool command matches (`core/src/exec_policy.rs:440-455`), and Agentisan runs the report from inside its own step scripts.
   - The worker launch settings belong to NERD-5278.
   - Binding a Codex thread to its pane from the `report codex` hook, so that a stage could find its pane by `CODEX_THREAD_ID`, is deferred. It would add a key to the token contract, and the default sandbox would still deny the connect.
+
+### A27. Codex `ctx` survives idle periods
+
+*Overrides:* the `ctx` TTL in the token contract, and two bullets of A22, "Idle expiry" and "One deliberate difference from the TUI". *Closes for Codex:* the risk "An idle Claude agent loses `$ctx`" (Risks and mitigations), by the mitigation it names. *Adds to:* D7 and Report commands. Verified against the codex-rs source at `rust-v0.161.0` (NERD-5280).
+
+| Overridden | Now |
+| --- | --- |
+| `ctx` TTL (token contract) | `report statusline`: 180,000 ms, unchanged. `report codex`: 86,400,000 ms (24 h, Herdr's maximum), set again on every report |
+| A22, Idle expiry | An idle Codex agent keeps its `ctx`. `report codex` also runs from `PostCompact`, which reports again, and from `SessionEnd`, which clears `ctx` |
+| A22, One deliberate difference from the TUI | The overflow's count reads 100 unless a `compacted` line separates it from the count before it |
+
+- **Why 24 h holds.** Codex has no timer hook; `SessionStart` runs only when a turn starts (`turn.rs:322`). Codex writes a token count only in a turn or a compaction, and hooks run in both, so an idle session's last count stays true. The writer is event-driven, the case the risk's mitigation names.
+- **The events.** `report codex` reads `hook_event_name`.
+  - `SessionEnd` clears `ctx` (an empty value with no TTL, A11) after the subagent and `CheckCodexHost` checks, without reading the transcript. Codex runs it from the shutdown handler of the root session (`session/handlers.rs:325`), synchronously even when it is configured `async` (`hooks/src/engine/discovery.rs:533`). The sample gives it no `async` and a 10 s timeout.
+  - Every other event, or none, reports the newest count as before.
+  - `PostCompact` runs after a compaction has recorded the new history's size (`compact.rs:165-215`), a manual `/compact` included, which runs no `Stop` (`compact.rs:146`). Nothing flushes the rollout before the hook, so it may read the count from before the compaction; the next turn corrects it. It is best-effort, with no retry.
+- **A compaction after an overflow.** On overflow Codex sets the session total to the window (`fill_to_context_window`) and keeps it. A compaction then writes a `compacted` line and a count that keeps that total, with the new history's estimated size as its last usage (`recompute_token_usage`, `session/mod.rs:4749-4786`). The two counts look alike. So a count with the overflow's total reads 100 unless a `compacted` line sits between it and the count before it, and reads 100 when no count comes before it in the 4 MiB tail. Without this, under a 24 h TTL, a compacted session would keep reading 100 while idle.
+  - A count Codex sends again unchanged is the same count. Codex re-sends the current count when only its rate limits change (`update_rate_limits`, `session/mod.rs:4789`), including for a turn stopped after its rate limits arrived but before its response completed (`turn.rs:2944-2949,3178`).
+- **The TTL no longer proves the writer is alive.** A clean exit clears `ctx`. Two cases leave the last value until the TTL runs out or the next Codex in the pane reports:
+  - a Codex that crashes or is killed while its shell keeps the pane;
+  - an async `PostToolUse` or `Stop` report still running at exit. Codex aborts async hooks before `SessionEnd` but kills only the hook's direct child (`session/handlers.rs:305`, `hooks/src/engine/command_runner.rs:188-195,422`), so a report already under way can land after the clear. This is a known gap, with no code.
+- **D7 and the dashboard are to count `ctx` only on a pane where Herdr detects an agent**, so a crashed Codex's last value is ignored. The snapshot on main reads it from every pane (`internal/team/snapshot.go`); that change belongs to NERD-5255. An expired `ctx` is unknown, as before. A notice is to fire when `ctx` crosses a level, not when it reappears (NERD-5261).
+- This changes a token-contract cell by amendment, as A5 did. D4's one writer per key is unchanged.
