@@ -1,6 +1,6 @@
 # Codex hooks that report each Codex agent's context use to its herdr pane as
-# the `ctx` token (ADR-001 A22). Add them to ~/.codex/config.toml, or to a
-# trusted project's .codex/config.toml.
+# the `ctx` token (ADR-001 A22, A27). Add them to ~/.codex/config.toml, or to
+# a trusted project's .codex/config.toml.
 #
 # - Start Codex with `codex --no-daemon`. A hook run by the shared app-server
 #   daemon carries the daemon's environment, not the pane's, so the report
@@ -12,6 +12,9 @@
 #   its PATH (`task install`), or give an absolute path.
 # - `async` keeps herdr's latency out of every turn, and keeps anything your
 #   shell's startup files print from failing the Stop hook.
+# - PostCompact reports again after a compaction, such as /compact. Codex may
+#   not have written the new count yet when the hook reads it; the next turn
+#   corrects it.
 
 [[hooks.PostToolUse]]
 matcher = "*"
@@ -25,6 +28,14 @@ async = true
 [[hooks.Stop]]
 
 [[hooks.Stop.hooks]]
+type = "command"
+command = "herdr-agentisan report codex"
+timeout = 10
+async = true
+
+[[hooks.PostCompact]]
+
+[[hooks.PostCompact.hooks]]
 type = "command"
 command = "herdr-agentisan report codex"
 timeout = 10

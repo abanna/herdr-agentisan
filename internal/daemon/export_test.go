@@ -32,23 +32,38 @@ func BackOver(ctx context.Context, h HerdrClient, st *store.Store) (BackResult, 
 	return Options{Herdr: h, Logger: zerolog.Nop()}.withDefaults().back(ctx, st, newWalker())
 }
 
+// StillServedOver is Run's poll check for a daemon on socket, bound to the
+// server ident names and pinned at protocol, through the daemon's own
+// client.
+func StillServedOver(ctx context.Context, socket string, ident Identity, protocol uint32) error {
+	o := Options{HerdrSocket: socket, Logger: zerolog.Nop()}.withDefaults().forServer(ident)
+	return o.stillServed(ctx, ident, protocol)
+}
+
 // FocusSnapshotOver takes one focus snapshot into st as the focus collector
 // of a daemon on socket, bound to the server ident names, takes it: through
-// the collector's own client.
+// the daemon's own client.
 func FocusSnapshotOver(ctx context.Context, socket string, ident Identity, st *store.Store) error {
-	o := Options{HerdrSocket: socket, Logger: zerolog.Nop()}.withDefaults().forFocus(ident)
+	o := Options{HerdrSocket: socket, Logger: zerolog.Nop()}.withDefaults().forServer(ident)
 	return o.snapshotFocus(ctx, st, newWalker(), ident)
 }
 
-// FocusDialGuard is the check the focus collector's client runs on every
-// connection, for a daemon on socket bound to the server ident names; nil if
-// the collector's client is not a herdr.Client.
-func FocusDialGuard(socket string, ident Identity) func() error {
-	c, ok := Options{HerdrSocket: socket}.forFocus(ident).Herdr.(herdr.Client)
-	if !ok || c.SocketPath != socket {
+// DialGuard is the check the daemon's client runs on every connection, for
+// a daemon on socket bound to the server ident names; nil if that client does
+// not dial socket.
+func DialGuard(socket string, ident Identity) func() error {
+	c := ServerClient(Options{HerdrSocket: socket}, ident)
+	if c.SocketPath != socket {
 		return nil
 	}
 	return c.Dialed
+}
+
+// ServerClient is the client a daemon of the server ident names dials
+// through, built from o as Run builds it.
+func ServerClient(o Options, ident Identity) herdr.Client {
+	c, _ := o.forServer(ident).Herdr.(herdr.Client)
+	return c
 }
 
 // CacheSnapshot caches s as the team poll does, and returns what the
@@ -66,4 +81,13 @@ func CacheSnapshot(s snapshot.Snapshot) (json.RawMessage, error) {
 func WithGitHubTicks(g GitHubOptions, ticks <-chan time.Time) GitHubOptions {
 	g.ticks = ticks
 	return g
+}
+
+// StartTimeFrom is the StartTime hook a daemon builds from a process table
+// reader: nil when stat is nil.
+var StartTimeFrom = startTimeFrom
+
+// DefaultStartTime is the StartTime hook a daemon has when none is injected.
+func DefaultStartTime() func(pid int) (uint64, error) {
+	return Options{}.withDefaults().Hooks.StartTime
 }

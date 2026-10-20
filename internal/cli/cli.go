@@ -225,10 +225,10 @@ func newReportCodexCmd() *cobra.Command {
 		Short: "Push ctx from a Codex hook's payload on stdin",
 		Long: "Reads the JSON a Codex hook passes on stdin and sets this pane's ctx\n" +
 			"token to what Codex shows as \"Context N% used\", from the latest token\n" +
-			"count in the session's transcript. Run it as an async PostToolUse and\n" +
-			"Stop hook (docs/config/codex-hooks.example.toml), and start Codex with\n" +
-			"--no-daemon: a hook run by the shared app-server daemon cannot tell which\n" +
-			"pane it belongs to, and reports nothing.\n\n" +
+			"count in the session's transcript, for 24 h. Run it as an async PostToolUse,\n" +
+			"Stop and PostCompact hook (docs/config/codex-hooks.example.toml), and start\n" +
+			"Codex with --no-daemon: a hook run by the shared app-server daemon cannot\n" +
+			"tell which pane it belongs to, and reports nothing.\n\n" +
 			"It prints nothing and always exits 0; why it reported nothing goes to\n" +
 			"the debug log (HERDR_AGENTISAN_LOG_LEVEL=debug).",
 		Args: cobra.NoArgs,

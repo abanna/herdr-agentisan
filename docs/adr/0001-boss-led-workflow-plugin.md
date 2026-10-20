@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A22, A25, A26 and A29 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A22, A25 to A27 and A29 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -734,6 +734,27 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
 - **Start times are wall-clock.** On darwin `Stat.Start` is the microsecond the process forked (`p_start`, kept across exec), not clock ticks since boot. A clock step backwards breaks the rule that a reissued pid starts later: a pid reissued after the step can pass for the parent the lineage expects. A step otherwise makes a child look older than its parent, which only cuts the lineage short.
 - **Compile-checked only.** There is no macOS CI job, and `.github/workflows/` is not this change's to edit. The darwin readers are checked with `GOOS=darwin` vet, build, test compile, golangci-lint and gosec, for arm64 and amd64. A live check on a Mac follows the merge.
 - **Not changed.** `daemon.lock` liveness on darwin is NERD-5307.
+
+### A27. Codex `ctx` survives idle periods
+
+*Overrides:* the `ctx` TTL in the token contract, and two bullets of A22, "Idle expiry" and "One deliberate difference from the TUI". *Closes for Codex:* the risk "An idle Claude agent loses `$ctx`" (Risks and mitigations), by the mitigation it names. *Adds to:* D7 and Report commands. Verified against the codex-rs source at `rust-v0.161.0` (NERD-5280).
+
+| Overridden | Now |
+| --- | --- |
+| `ctx` TTL (token contract) | `report statusline`: 180,000 ms, unchanged. `report codex`: 86,400,000 ms (24 h, Herdr's maximum), set again on every report |
+| A22, Idle expiry | An idle Codex agent keeps its `ctx`. `report codex` also runs from `PostCompact`, which reports again |
+| A22, One deliberate difference from the TUI | The overflow's count reads 100 unless a `compacted` line separates it from the count before it |
+
+- **Why 24 h holds.** Codex has no timer hook; `SessionStart` runs only when a turn starts (`turn.rs:322`). Codex writes a token count only in a turn or a compaction, and hooks run in both, so an idle session's last count stays true. The writer is event-driven, the case the risk's mitigation names.
+- **PostCompact.** Every hook reports the newest count; `report codex` never reads the event name. `PostCompact` runs after a compaction has recorded the new history's size (`compact.rs:165-215`), a manual `/compact` included, which runs no `Stop` (`compact.rs:146`). Nothing flushes the rollout before the hook, so it may read the count from before the compaction; the next turn corrects it. It is best-effort, with no retry.
+- **A compaction after an overflow.** On overflow Codex sets the session total to the window (`fill_to_context_window`) and keeps it. A compaction then writes a `compacted` line and a count that keeps that total, with the new history's estimated size as its last usage (`recompute_token_usage`, `session/mod.rs:4749-4786`). The two counts look alike. So a count with the overflow's total reads 100 unless a `compacted` line sits between it and the count before it, and reads 100 when no count comes before it in the 4 MiB tail. Without this, under a 24 h TTL, a compacted session would keep reading 100 while idle.
+  - A count Codex sends again unchanged is the same count. Codex re-sends the current count when only its rate limits change (`update_rate_limits`, `session/mod.rs:4789`), including for a turn stopped after its rate limits arrived but before its response completed (`turn.rs:2944-2949,3178`).
+- **The TTL no longer proves the writer is alive.** Nothing clears `ctx` when Codex exits: a clean exit, like a crash, leaves the last value until the TTL runs out or the next Codex in the pane reports.
+  - A `SessionEnd` hook that cleared `ctx` was tried and dropped. Codex 0.161 runs `SessionEnd` whenever a root thread shuts down (`core/src/session/handlers.rs:325`), not only when it exits, and its payload's `reason` is always `other` (`hooks/src/events/session_end.rs:24`).
+  - Under `--no-daemon` the embedded app-server shuts down a thread that has had no subscribers and been idle for `thread_unload_delay`, 60 s by default (`app-server/src/request_processors/thread_lifecycle.rs:363-393`, `core/src/config/mod.rs:3922`). `/new`, `/resume` and a fork leave the old thread in that state, so a clear would blank the new session's `ctx` about a minute later.
+  - The opt-in memory consolidation (`features.memories`) shuts its internal thread down the same way (`memories/write/src/runtime.rs:398-456`). The same decision covers it.
+- **D7 and the dashboard are to count `ctx` only on a pane where Herdr detects an agent**, so the value a Codex left behind, after a clean exit or a crash, is ignored. The snapshot on main reads it from every pane (`internal/team/snapshot.go`); that change belongs to NERD-5255. An expired `ctx` is unknown, as before. A notice is to fire when `ctx` crosses a level, not when it reappears (NERD-5261).
+- This changes a token-contract cell by amendment, as A5 did. D4's one writer per key is unchanged.
 
 ### A29. The header's GitHub collection
 
