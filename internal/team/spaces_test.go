@@ -4,8 +4,10 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/team"
 )
 
@@ -29,7 +31,7 @@ func placed(m team.Model) map[string]string {
 // TestSpacesResolverLabels: a workspace whose label starts with "◆ " (or v12's
 // legacy "agentisan · ") is a group space, its group the rest of the label
 // trimmed. "◆ boss" is the boss space, not a group target; "◆ herdr", the
-// user's edit shell, is not part of the model at all. Everything else is
+// user's edit shell, places no pane in the model. Everything else is
 // outside the model. The match is exact: case, the space after the prefix
 // and the full group name all count.
 func TestSpacesResolverLabels(t *testing.T) {
@@ -146,4 +148,30 @@ func TestSpacesResolverLayouts(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+// TestSpacesTeamCarriesItsOrderAndColour: the spaces team's model entry
+// carries the resolver's group order and the [spaces] project's colour, and
+// the snapshot reads both from that entry alone, as it reads any team's: no
+// caller passes either beside the model (ADR-001 A18, A19).
+func TestSpacesTeamCarriesItsOrderAndColour(t *testing.T) {
+	t.Parallel()
+
+	m := team.Build(groupsLayout("qa", "coders"), team.Spaces{Project: "agentisan", Color: "#7c3aed"}, nil)
+	require.Len(t, m.Projects, 1)
+	assert.Equal(t, "agentisan", m.Projects[0].Name)
+	assert.Equal(t, "#7c3aed", m.Projects[0].Color)
+	assert.Equal(t, team.Spaces{}.GroupOrder(), m.Projects[0].Order)
+
+	s := team.Snapshot(m, "agentisan", at, nil)
+	assert.Equal(t, &snapshot.Project{Color: "#7c3aed"}, s.Project)
+	assert.Equal(t, []string{"coders", "qa"}, groupNames(s))
+
+	m.Projects[0].Color, m.Projects[0].Order = "#000000", []string{"qa"}
+	s = team.Snapshot(m, "agentisan", at, nil)
+	assert.Equal(t, &snapshot.Project{Color: "#000000"}, s.Project, "the colour is the entry's")
+	assert.Equal(t, []string{"qa", "coders"}, groupNames(s), "and so is the order")
+
+	m.Projects[0].Color = ""
+	assert.Nil(t, team.Snapshot(m, "agentisan", at, nil).Project, "no colour, no project state")
 }

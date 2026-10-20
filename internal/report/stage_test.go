@@ -339,10 +339,20 @@ func codexProcs() map[int]report.Stat {
 	}
 }
 
+// codexArgv is what codexProcs' processes run: an embedded Codex TUI
+// (codex --no-daemon) at 800, so the host check passes (A25).
+var codexArgv = map[int][]string{
+	5000: {"herdr-agentisan", "report", "stage", "--item=NERD-5253", "--stage=build_test"}, 4990: {"python3", "agentisan_workflow.py"},
+	4980: {"uv", "run"}, 4970: {"/bin/zsh", "-lc", "python3 agentisan_workflow.py"}, 800: {"/opt/codex/vendor/codex", "--no-daemon"},
+	600: {"-zsh"}, 100: {"herdr", "server"},
+}
+
 // TestStageFromACodexPane: Codex sets no CLAUDE_PID, and the reporter runs in
 // a session of its own, so no pane names it in its foreground job. The parent
 // walk still reaches codex and the pane shell, because agentisan waits for
-// the report and every ancestor is alive while it runs.
+// the report and every ancestor is alive while it runs. The report carries
+// CODEX_THREAD_ID, so it reports only once the host check has found the
+// pane's own Codex among those ancestors (A25).
 func TestStageFromACodexPane(t *testing.T) {
 	t.Parallel()
 
@@ -382,19 +392,20 @@ func TestStageFromACodexPane(t *testing.T) {
 		},
 		// Were agentisan to exit before the report read its parents, the
 		// reporter would be re-parented to init with no anchor to reach the
-		// pane: it reports nowhere rather than trusting the id.
+		// pane, and no codex among its ancestors: it reports nowhere, and
+		// asks herdr nothing, rather than trusting the id.
 		"codex reporter orphaned before reading its lineage": {
 			envPane: "w3:p2",
 			table:   func() map[int]report.Stat { return map[int]report.Stat{5000: {PPID: 1, Start: 950}} },
-			panes:   []fakePane{codexPane}, err: report.ErrPaneUnresolved, calls: []string{process, list, process},
+			panes:   []fakePane{codexPane}, err: report.ErrNoCodexHost, calls: []string{},
 		},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			srv := herdrtest.Start(t, fakeHerdr(tc.panes))
-			lineage := report.ReadLineage(5000, newProcTable(tc.table()).stat, anchors...)
-			pane := report.Pane{SocketPath: srv.Path, PaneID: tc.envPane, Lineage: lineage}
+			lineage := report.ReadLineage(5000, newProcTable(tc.table()).stat, anchors...).WithCmdline(argv(codexArgv))
+			pane := report.Pane{SocketPath: srv.Path, PaneID: tc.envPane, Lineage: lineage, CodexThread: "019a"}
 
 			got, err := report.Stage(t.Context(), herdr.Client{SocketPath: srv.Path}, pane, "NERD-5253", "build_test")
 			reqs := srv.Requests()
@@ -520,4 +531,63 @@ func TestStageWrapsTheReportError(t *testing.T) {
 	_, err := report.Stage(t.Context(), errReporter{err: boom}, report.Pane{SocketPath: "/x", PaneID: "w1:p1"}, "NERD-5253", "review")
 	require.ErrorIs(t, err, boom)
 	assert.Contains(t, err.Error(), "w1:p1")
+}
+
+// TestStageUnderCodexRefuses: a report run by a Codex tool command lands on
+// its own Codex's pane or nowhere (A25). Under the shared app-server daemon
+// it inherits the daemon's HERDR_PANE_ID, w9:p1 here, the pane whose TUI
+// started the daemon; the walk even reaches that pane through the TUI. In
+// Codex's network sandbox seccomp denies connect; in its pid namespace the
+// walk sees no codex at all. Each refuses before asking herdr anything.
+// Without CODEX_THREAD_ID nothing changes: no lineage still trusts the id.
+func TestStageUnderCodexRefuses(t *testing.T) {
+	t.Parallel()
+
+	// report (5000) -> python (4990) -> zsh (4970) -> app-server (4000) ->
+	// pid-update-loop (3000) -> the TUI that started it (900) -> w9:p1's shell (700).
+	daemon := map[int]report.Stat{
+		5000: {PPID: 4990, Start: 950}, 4990: {PPID: 4970, Start: 940}, 4970: {PPID: 4000, Start: 920},
+		4000: {PPID: 3000, Start: 700}, 3000: {PPID: 900, Start: 600}, 900: {PPID: 700, Start: 500}, 700: {PPID: 1, Start: 400},
+	}
+	daemonArgv := map[int][]string{
+		5000: codexArgv[5000], 4990: codexArgv[4990], 4970: codexArgv[4970],
+		4000: {"/home/u/.codex/packages/bin/codex", "app-server", "--listen", "unix://"},
+		3000: {"codex", "app-server", "daemon", "pid-update-loop"}, 900: {"codex"}, 700: {"-zsh"},
+	}
+	// Inside bubblewrap's pid namespace: report (3) -> python (2) -> the
+	// namespace's init (1), which ends the walk; no codex is visible.
+	sandboxed := map[int]report.Stat{3: {PPID: 2, Start: 90}, 2: {PPID: 1, Start: 80}}
+	sandboxedArgv := map[int][]string{3: codexArgv[5000], 2: codexArgv[4990]}
+	lineage := func(pid int, procs map[int]report.Stat, cmds map[int][]string) *report.Lineage {
+		return report.ReadLineage(pid, newProcTable(procs).stat).WithCmdline(argv(cmds))
+	}
+	started := fakePane{id: "w9:p1", shell: 700, pgid: 900, fg: []uint32{900}}
+
+	tests := map[string]struct {
+		pane report.Pane
+		want error
+	}{
+		"the shared app-server daemon":    {pane: report.Pane{PaneID: "w9:p1", Lineage: lineage(5000, daemon, daemonArgv), CodexThread: "019a"}, want: report.ErrCodexDaemon},
+		"Codex's network sandbox":         {pane: report.Pane{PaneID: "w3:p2", Lineage: lineage(5000, codexProcs(), codexArgv), CodexThread: "019a", CodexNetworkSandboxed: true}, want: report.ErrCodexSandboxed},
+		"Codex's pid namespace":           {pane: report.Pane{PaneID: "w3:p2", Lineage: lineage(3, sandboxed, sandboxedArgv), CodexThread: "019a"}, want: report.ErrNoCodexHost},
+		"no lineage (off Linux)":          {pane: report.Pane{PaneID: "w9:p1", CodexThread: "019a"}, want: report.ErrHostUnverified},
+		"an unreadable ancestor":          {pane: report.Pane{PaneID: "w3:p2", Lineage: lineage(5000, codexProcs(), map[int][]string{5000: codexArgv[5000]}), CodexThread: "019a"}, want: report.ErrHostUnverified},
+		"not Codex, no lineage (as ever)": {pane: report.Pane{PaneID: "w9:p1"}},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, fakeHerdr([]fakePane{started, {id: "w3:p2", shell: 600, pgid: 800, fg: []uint32{800}}}))
+			tc.pane.SocketPath = srv.Path
+
+			got, err := report.Stage(t.Context(), herdr.Client{SocketPath: srv.Path}, tc.pane, "NERD-5253", "build_test")
+			if tc.want != nil {
+				require.ErrorIs(t, err, tc.want)
+				assert.Empty(t, srv.Requests(), "nothing reaches herdr")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, "w9:p1", got.PaneID)
+		})
+	}
 }

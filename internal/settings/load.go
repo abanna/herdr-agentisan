@@ -69,23 +69,19 @@ func Load(opts LoadOptions) (Resolved, error) {
 		if err := m.checkFields(); err != nil {
 			return Resolved{}, err
 		}
-		if err := m.spaces(names); err != nil {
+		views := projectViews(shared, projects, flags)
+		teams, err := m.teams(names, views)
+		if err != nil {
 			return Resolved{}, err
 		}
 		// Lint every project too, short of the repo checks, which touch
-		// the filesystem and wait for a selection. The same merge gives
-		// each project's colour, short of its repo file.
-		colors := map[string]string{}
+		// the filesystem and wait for a selection.
 		for _, name := range names {
-			pm := merge(slices.Concat([]*source{defaults(), shared, projects[name]}, flags)...)
-			if err := pm.checkFields(); err != nil {
+			if err := views[name].checkFields(); err != nil {
 				return Resolved{}, err
 			}
-			if v, ok := pm.get("color"); ok {
-				colors[name], _ = v.(string)
-			}
 		}
-		return Resolved{Values: m.values, Sources: m.sources, Projects: names, colors: colors}, nil
+		return Resolved{Values: m.values, Sources: m.sources, Projects: names, Teams: teams}, nil
 	}
 
 	project, ok := projects[opts.Project]
@@ -112,7 +108,8 @@ func Load(opts LoadOptions) (Resolved, error) {
 	if err := m.checkFields(); err != nil {
 		return Resolved{}, err
 	}
-	if err := m.spaces(names); err != nil {
+	teams, err := m.teams(names, projectViews(shared, projects, flags))
+	if err != nil {
 		return Resolved{}, err
 	}
 	if err := checkBundle(repo, opts.Stat, m.at("repo")); err != nil {
@@ -124,6 +121,7 @@ func Load(opts LoadOptions) (Resolved, error) {
 		Values:   m.values,
 		Sources:  m.sources,
 		Projects: names,
+		Teams:    teams,
 	}, nil
 }
 
@@ -218,7 +216,7 @@ func loadShared(path string) (*source, map[string]*source, error) {
 		return nil, nil, fmt.Errorf("projects (%s): %w: want a table, got %s", path, ErrInvalid, tomlType(raw))
 	}
 	for _, name := range slices.Sorted(maps.Keys(table)) {
-		p := &source{layer: LayerProject, origin: path, prefix: "projects." + name + "."}
+		p := &source{layer: LayerProject, origin: path, prefix: "projects." + name + ".", schema: projectSchema}
 		if !namePattern.MatchString(name) {
 			return nil, nil, fmt.Errorf("%s: %w: a project name must match %s", p.at(""), ErrInvalid, namePattern)
 		}

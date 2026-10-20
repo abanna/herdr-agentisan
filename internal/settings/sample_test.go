@@ -44,6 +44,10 @@ func TestSampleConfigResolves(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"agentisan", "assay"}, all.Projects)
 	assert.Equal(t, "agentisan", all.SpacesProject(), "the sample names the spaces' project")
+	assert.Equal(t, []settings.Team{
+		{Project: "agentisan", Layout: settings.LayoutSpaces, Color: "#7c3aed"},
+		{Project: "assay", Short: "as", Layout: settings.LayoutTabs, Color: "#0ea5e9"},
+	}, all.Teams, "the spaces' project and one tabs team")
 
 	for name, repo := range repos {
 		t.Run(name, func(t *testing.T) {
@@ -57,7 +61,7 @@ func TestSampleConfigResolves(t *testing.T) {
 			assert.Equal(t, repo, p.Repo)
 			assert.Equal(t, "nerds-run/"+filepath.Base(repo), p.GitHub)
 			assert.NotEmpty(t, p.Color)
-			for _, g := range []string{"coders", "precheck", "qa", "codex", "research", "clerk", "debugger"} {
+			for _, g := range []string{"coder", "precheck", "qa", "review", "research", "librarian", "debugger"} {
 				assert.Containsf(t, p.Groups, g, "group %s", g)
 			}
 			assert.NotEmpty(t, p.Verify)
