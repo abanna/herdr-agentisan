@@ -188,6 +188,12 @@ exempts whatever is later added under that name.
   events into Elasticsearch is `docs/config/otelcol-agentisan.yaml`, run by
   `task otelcol:up`; `collector_test.go` pins its keys and the task's
   `docker run`.
+- `internal/trail/` — the trail read back (ADR-001 item 12): an ES|QL client
+  over `logs-agentisan.otel-*`, the debugger's recipes, and the env file its
+  URL and read key come from, `[debugger] env_file` in the shared config,
+  read at each query. No caller chooses the URL, the variables or the file.
+  Tests run an httptest Elasticsearch on a recorded answer
+  (`testdata/worker-trail.json`).
 - `.devcontainer/` — the reproducible dev environment: Go 1.26.9 plus the
   two tools `go tool` does not resolve (Task, uv).
 - `docs/architecture.md` — why the pieces are shaped this way, and the

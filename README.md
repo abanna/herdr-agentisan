@@ -193,6 +193,15 @@ the last write wins; after, the daemon's next push, within 3 s, replaces the
 value v12 left on each group space. The daemon never writes `◆ herdr`, so
 v12's last value there clears itself when its 30 s TTL runs out.
 
+## The trail, read back
+
+`herdr-agentisan events worker <id>` answers "what happened to worker X in
+the last hour" from the workflow events in Elasticsearch, and `events query
+'<ES|QL>'` runs any read of them. They are the debugger agent's tools
+(ADR-001 item 12). They take Elasticsearch's URL and read key from the env
+file `[debugger] env_file` names, at each query, so the key never enters an
+agent's environment. See [`docs/debugger.md`](docs/debugger.md).
+
 ## Teams: one workspace, one tab per worker
 
 Every configured project but the `[spaces] project` is a team: one herdr

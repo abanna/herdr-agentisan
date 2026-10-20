@@ -45,6 +45,9 @@ func TestSampleConfigResolves(t *testing.T) {
 	assert.Equal(t, []string{"agentisan", "assay"}, all.Projects)
 	assert.Equal(t, "agentisan", all.SpacesProject(), "the sample names the spaces' project")
 	assert.Equal(t, "127.0.0.1:4328", all.TelemetryEndpoint(), "the sample names the events' collector")
+	envFile, err := settings.DebuggerEnvFile(dir, envOf(map[string]string{"HOME": home}))
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, ".config", "herdr-agentisan", "elastic.env"), envFile, "the sample names the debugger's env file")
 	assert.Equal(t, []settings.Team{
 		{Project: "agentisan", Layout: settings.LayoutSpaces, Color: "#7c3aed"},
 		{Project: "assay", Short: "as", Layout: settings.LayoutTabs, Color: "#0ea5e9"},

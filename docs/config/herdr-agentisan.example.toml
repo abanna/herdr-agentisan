@@ -82,6 +82,15 @@ project = "agentisan"
 [telemetry]
 endpoint = "127.0.0.1:4328"
 
+# The debugger's env file (docs/debugger.md, ADR-001 item 12). Its `events`
+# commands read ELASTIC_URL and ELASTIC_API_KEY, a read-only key, from this
+# file each time they query, and take nothing else from it: the key never
+# enters the agent's environment. An absolute path or one under ~/, on this
+# machine, never in a repo; a file 1Password mounts works. Shared file and
+# --set only.
+[debugger]
+env_file = "~/.config/herdr-agentisan/elastic.env"
+
 # ---------------------------------------------------------------------------
 # Projects. The key is the project's name: lower case, digits and dashes.
 #
