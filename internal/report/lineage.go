@@ -21,20 +21,23 @@ const MaxLineage = 64
 // child's environment, overwriting any value it inherited.
 const ClaudePIDEnv = "CLAUDE_PID"
 
-// ErrProcStat means a process's /proc stat could not be read or parsed, as
-// when the process has already exited.
-var ErrProcStat = errors.New("unreadable /proc stat")
+// ErrProcStat means a process's parent and start time could not be read or
+// parsed (its /proc stat on Linux, its kinfo_proc on darwin), as when the
+// process has already exited.
+var ErrProcStat = errors.New("unreadable process stat")
 
-// ErrProcCmdline means a process's /proc cmdline could not be read, as when
-// the process has already exited.
-var ErrProcCmdline = errors.New("unreadable /proc cmdline")
+// ErrProcCmdline means a process's arguments could not be read or parsed
+// (its /proc cmdline on Linux, its kern.procargs2 on darwin), as when the
+// process has already exited.
+var ErrProcCmdline = errors.New("unreadable process arguments")
 
-// Stat is the part of a process's /proc stat a lineage needs.
+// Stat is the part of a process's status a lineage needs.
 type Stat struct {
 	PPID int
-	// Start is when the process started, in clock ticks since boot. A pid is
-	// reused only by a process that starts later, so a pid with the same Start
-	// at two reads is the same process, alive in between.
+	// Start is when the process started: in clock ticks since boot on Linux,
+	// in microseconds since the epoch on darwin. A pid is reused only by a
+	// process that starts later, so a pid with the same Start at two reads is
+	// the same process, alive in between.
 	Start uint64
 }
 
@@ -229,15 +232,29 @@ func ProcCmdline(proc fs.FS) CmdlineFunc {
 	}
 }
 
-// SelfLineage is the running process's lineage, read from /proc and anchored
-// on the environment lookup reads (os.LookupEnv in production), with /proc's
-// cmdline reader for CheckCodexHost. It is nil where the OS has no procfs: a
-// report given no lineage trusts HERDR_PANE_ID unchecked, as it did before
-// lineage existed.
+// SelfLineage is the running process's lineage, read from the OS's process
+// table (/proc on Linux, sysctl on darwin) and anchored on the environment
+// lookup reads (os.LookupEnv in production), with the table's cmdline reader
+// for CheckCodexHost. It is nil on an OS with no reader: a report given no
+// lineage trusts HERDR_PANE_ID unchecked, as it did before lineage existed.
 func SelfLineage(lookup func(string) (string, bool)) *Lineage {
-	if !procfs {
+	stat, cmdline := systemReaders()
+	if stat == nil {
 		return nil
 	}
-	proc := os.DirFS("/proc")
-	return ReadLineage(os.Getpid(), ProcStat(proc), AnchorsFrom(lookup)...).WithCmdline(ProcCmdline(proc))
+	return ReadLineage(os.Getpid(), stat, AnchorsFrom(lookup)...).WithCmdline(cmdline)
+}
+
+// SystemStat is the reader SelfLineage reads Stats through, nil on an OS
+// with no process table reader.
+func SystemStat() StatFunc {
+	stat, _ := systemReaders()
+	return stat
+}
+
+// SystemCmdline is the reader SelfLineage's lineage reads arguments through
+// for CheckCodexHost, nil on an OS with no process table reader.
+func SystemCmdline() CmdlineFunc {
+	_, cmdline := systemReaders()
+	return cmdline
 }

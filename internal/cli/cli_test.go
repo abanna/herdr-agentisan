@@ -7,7 +7,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -437,8 +436,9 @@ func TestReportStatuslineDoesNothing(t *testing.T) {
 
 // TestReportStatuslineReadsTheRealLineageByDefault: with no reader injected
 // (or a nil one), the command reads the real process table. The fake pane's
-// shell is this test binary, so on Linux the lineage proves the pane is
-// ours; off Linux there is no lineage and the report trusts HERDR_PANE_ID.
+// shell is this test binary, so where the OS has a process table reader
+// (Linux, darwin) the lineage proves the pane is ours; elsewhere there is no
+// lineage and the report trusts HERDR_PANE_ID.
 func TestReportStatuslineReadsTheRealLineageByDefault(t *testing.T) {
 	t.Parallel()
 	srv := herdrtest.Start(t, func(r herdrtest.Request) herdrtest.Reply {
@@ -453,7 +453,7 @@ func TestReportStatuslineReadsTheRealLineageByDefault(t *testing.T) {
 	require.NoError(t, err)
 
 	want := []string{"pane.process_info", "pane.report_metadata"}
-	if runtime.GOOS != "linux" {
+	if report.SystemStat() == nil {
 		want = []string{"pane.report_metadata"}
 	}
 	var got []string
@@ -470,8 +470,9 @@ func TestReportStatuslineReadsTheRealLineageByDefault(t *testing.T) {
 // is an older process outside this test's lineage, named by CLAUDE_PID.
 func TestReportStatuslineAnchorsOnCLAUDE_PID(t *testing.T) {
 	t.Parallel()
-	if runtime.GOOS != "linux" {
-		t.Skip("no /proc to read a lineage from")
+	stat := report.SystemStat()
+	if stat == nil {
+		t.Skip("no process table to read a lineage from")
 	}
 	own := report.SelfLineage(func(string) (string, bool) { return "", false })
 	stranger := 0
@@ -479,12 +480,21 @@ func TestReportStatuslineAnchorsOnCLAUDE_PID(t *testing.T) {
 	for _, p := range own.Procs {
 		in[p.PID] = true
 	}
-	entries, err := os.ReadDir("/proc")
-	require.NoError(t, err)
-	stat := report.ProcStat(os.DirFS("/proc"))
-	for _, e := range entries {
-		pid, err := strconv.Atoi(e.Name())
-		if err != nil || pid <= 1 || in[pid] {
+	// /proc lists Linux's pids; darwin's are tried one by one up to PID_MAX.
+	var pids []int
+	if entries, err := os.ReadDir("/proc"); err == nil {
+		for _, e := range entries {
+			if pid, err := strconv.Atoi(e.Name()); err == nil {
+				pids = append(pids, pid)
+			}
+		}
+	} else {
+		for pid := 2; pid < 100_000; pid++ {
+			pids = append(pids, pid)
+		}
+	}
+	for _, pid := range pids {
+		if pid <= 1 || in[pid] {
 			continue
 		}
 		if s, err := stat(pid); err == nil && s.Start <= own.Procs[0].Start {
@@ -508,7 +518,7 @@ func TestReportStatuslineAnchorsOnCLAUDE_PID(t *testing.T) {
 	ctx := cli.WithLineage(reportCtx(t, srv.Path, "w14:p1", &logs), nil)
 	ctx = cli.WithLookupEnv(ctx, func(k string) (string, bool) { v, ok := env[k]; return v, ok })
 
-	_, err = runReport(ctx, statusline426)
+	_, err := runReport(ctx, statusline426)
 	require.NoError(t, err)
 	assert.Contains(t, logs.String(), `"reported_to":"w14:p1"`)
 }

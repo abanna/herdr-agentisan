@@ -514,7 +514,7 @@ func TestCodexRefusesWhatItCannotPlace(t *testing.T) {
 		"the shared app-server daemon":       {lineage: codexLineage(daemon, daemonArgv), want: report.ErrCodexDaemon},
 		"the daemon's update loop":           {lineage: codexLineage(daemon, loopOnly), want: report.ErrCodexDaemon},
 		"an IDE's app-server under node":     {lineage: codexLineage(daemon, viaNode), want: report.ErrCodexDaemon},
-		"no lineage (off Linux)":             {lineage: nil, want: report.ErrHostUnverified},
+		"no lineage (no process table)":      {lineage: nil, want: report.ErrHostUnverified},
 		"a lineage with no cmdline reader":   {lineage: report.ReadLineage(5000, newProcTable(embeddedProcs()).stat), want: report.ErrHostUnverified},
 		"an ancestor's cmdline unreadable":   {lineage: codexLineage(embeddedProcs(), unreadable), want: report.ErrHostUnverified},
 		"no codex among the ancestors":       {lineage: codexLineage(embeddedProcs(), noCodex), want: report.ErrNoCodexHost},
