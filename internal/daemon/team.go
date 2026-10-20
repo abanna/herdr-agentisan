@@ -25,7 +25,8 @@ import (
 type TeamOptions struct {
 	// ConfigDir holds herdr-agentisan.toml (HERDR_PLUGIN_CONFIG_DIR). The
 	// poll reads every project's team from it once, when it starts (A19): a
-	// team added later is found after a daemon restart.
+	// team added later is found after a daemon restart. The workforce ops
+	// read it afresh each time (A23).
 	ConfigDir string
 	// Events receive each status change between two polls (D10, A21); nil
 	// emits none. `daemon run` builds them with SetupEvents.
@@ -72,17 +73,20 @@ type teamPoll struct {
 	warned map[string]string
 	// stages times each pane's stage across polls (A18).
 	stages *team.StageClock
-	cache  *snapshotCache
+	// idle times each pane's rest across polls, for team status (A23).
+	idle  *team.IdleClock
+	cache *snapshotCache
 	// header is each project's GitHub state, which the collector keeps
 	// (A29).
 	header *headerCache
 }
 
 // startTeam starts the team poll when o.Team is set, and beside it the
-// header's GitHub collection; the poll caches each snapshot in cache. The
-// function it returns stops both and waits for them, so once it returns
-// nothing more is pushed and no gh is left running.
-func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache) (stop func()) {
+// header's GitHub collection; the poll caches each snapshot in cache and
+// times each pane's rest in idle. The function it returns stops both and
+// waits for them, so once it returns nothing more is pushed and no gh is
+// left running.
+func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, idle *team.IdleClock) (stop func()) {
 	if o.Team == nil {
 		return func() {}
 	}
@@ -90,7 +94,7 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 	header := newHeaderCache(o.Team.GitHub)
 	var wg sync.WaitGroup
 	wg.Go(func() { o.collectGitHub(ctx, header) })
-	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header) })
+	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header, idle) })
 	return func() {
 		cancel()
 		wg.Wait()
@@ -114,7 +118,7 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 // read answered by the replacement, or a push landing on it, would be the
 // next daemon's business. So the poll is a client of its own, whose Dialed
 // hook checks the identity; a failed check stops the poll (ErrHerdrGone).
-func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, header *headerCache) {
+func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, header *headerCache, idle *team.IdleClock) {
 	teams, err := settings.Teams(o.Team.ConfigDir)
 	if err != nil {
 		o.Logger.Error().Err(err).Msg("herdr-agentisan.toml does not resolve; the ◆ spaces belong to the unnamed project, and no tabs team is found, until it is fixed and the daemon restarts")
@@ -126,7 +130,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 		tabs = append(tabs, t.Project)
 	}
 	o.Logger.Info().Str("project", cfg.spaces.Project).Str("color", cfg.spaces.Color).Strs("tabs_teams", tabs).Msg("team poll running")
-	tp := teamPoll{cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, cache: cache, header: header}
+	tp := teamPoll{cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, idle: idle, cache: cache, header: header}
 	onServer := o.onServer(ident)
 	c := herdr.Client{SocketPath: o.HerdrSocket, Dialed: onServer}
 	tick := time.NewTicker(o.Poll)
@@ -209,8 +213,11 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	}
 	l := team.Layout{Workspaces: workspaces, Panes: panes, Agents: agents, Tabs: tabs}
 	m := team.Build(l, tp.cfg.resolver(), rows)
+	now := o.Now()
+	// A pane's rest is pane.list's status, so a failed agent list does not
+	// stop the idle clock.
+	tp.idle.Observe(m, now)
 	if agentsErr == nil {
-		now := o.Now()
 		tp.stages.Observe(m, now)
 		header := func(project string, s *snapshot.Snapshot) { tp.header.fill(project, s, now) }
 		if err := tp.cache.store(m, tp.cfg.spaces.Project, now, tp.stages, header); err != nil {
