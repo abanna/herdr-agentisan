@@ -1,0 +1,48 @@
+#!/bin/sh
+# preflight's stand-in for tdaddy. It records where it ran and with what in
+# $FAKE_TDADDY_DIR, then answers as $FAKE_TDADDY_MODE says. It writes down
+# only what it names, never the rest of its environment.
+set -u
+d=${FAKE_TDADDY_DIR:?}
+pwd >"$d/cwd"
+printf '%s\n' "$@" >"$d/args"
+case ${FAKE_TDADDY_MODE:-ok} in
+ok) echo "tdaddy version 0.0.1-test" ;;
+fail)
+	echo "mise ERROR No version is set for shim: tdaddy" >&2
+	echo "Set a global default version with one of the following:" >&2
+	exit 1
+	;;
+silent) exit 3 ;;
+flood)
+	yes tdaddy | head -n 200000 >&2
+	exit 1
+	;;
+garbled)
+	printf '\377\376 bad bytes\n' >&2
+	exit 1
+	;;
+crlf)
+	printf 'first line\r\nsecond line\r\n' >&2
+	exit 1
+	;;
+longutf8)
+	printf 'x' >&2
+	i=0
+	while [ $i -lt 150 ]; do
+		printf '\303\251' >&2
+		i=$((i + 1))
+	done
+	echo >&2
+	exit 1
+	;;
+long)
+	printf '%0300d\n' 0 >&2
+	exit 1
+	;;
+hang)
+	sleep 300 &
+	echo $! >"$d/child"
+	wait
+	;;
+esac

@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A22, A24 to A29 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A22, A24 to A29 and A34 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -807,3 +807,25 @@ Budget: an agent pane carries `ctx`, `item`, `stage`, `handoff` and the three ba
 - **No contract change.** `project.prs` and `project.issues` have been in snapshot v1 since item 8; no key is added.
 - **Per-team snapshots (A24).** The collected state is held per project name and copied into a snapshot at one place, so a per-project snapshot takes it the same way. Two teams of one project share a header.
 - **Cutover.** herdr-status.sh, run as herdr's `tab_bar_right`, also shows the test slots, which come in part b. Retire it, and the `tab_bar_right` command, once part b ships.
+
+### A34. D12's tdaddy preflight: tdaddy must run
+
+*Refines:* D12, I8 and A10. Recorded with NERD-5254, part 5 of 5, which lands before parts 2 to 4: the check is a package of its own, `internal/preflight`, and part 3 wires it into the spawn.
+
+- **The check.** In a repo with a `go.mod` at its root, a spawn needs three things:
+  - `tdaddy` is on the daemon's PATH;
+  - `tdaddy --version`, run in the repo, exits 0;
+  - the repo's Taskfile has the top-level tasks `tdaddy:index` and `tdaddy:impact`.
+
+  A repo without a `go.mod` is not checked. A10 asked only for tdaddy on the PATH. But a mise shim with no Go version set sits on the PATH and fails every run, as it did on the author's machine. So A10's check alone passed a setup in which `task tdaddy:impact` fails.
+- **The daemon's environment.** The check runs in the daemon, so it searches the PATH herdr started the daemon with. That can differ from what a worker's shell has after its rc files run. A fix to that PATH needs a daemon restart; a fix to the Taskfile does not.
+- **The run.** `tdaddy --version` runs in the repo, with the daemon's environment and a 10 s timeout. It runs as the leader of its own process group, which is killed whole on a timeout or a cancel. The error carries the first line of what it printed, cut to 200 bytes; for a mise shim, that line says how to fix it.
+- **The Taskfile.** It is the first of Task's own file names found in the repo root, in Task's order: `Taskfile.yml`, `taskfile.yml`, `Taskfile.yaml`, `taskfile.yaml`, then the `.dist` form of each. That order was checked against Task 3.49.1. Only the names of the top-level tasks count: includes are not followed, and a task's commands are not read.
+- **The errors.**
+  - `ErrTdaddyMissing`: tdaddy is not on the PATH, or the run fails.
+  - `ErrTdaddyTasks`: there is no Taskfile, it cannot be read or parsed, or a task is missing.
+  - `ErrRepo`: the check could not tell whether the repo is a Go repo, because the path is relative or its `go.mod` cannot be stat'ed or is a directory. The spawn is refused then too.
+
+  When tdaddy and the tasks both fail, one refusal reports both. Each message says what to fix, and none names an install command.
+- **The wiring (part 3).** A spawn calls a `preflight.Check`, and `preflight.HostCheck` is the one that checks the daemon's own system. Part 3 adds `Hooks.Preflight`, which defaults to `HostCheck` the way `Hooks.StartTime` defaults to its reader. `worker spawn` and `team up` call it before they open any pane, so their tests can inject a pass or a refusal.
+- **AGENTS.md.** tdaddy's answer stays advisory and `task check` stays the gate; having tdaddy set up is the precondition. That settles A10's last sentence.
