@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -1026,12 +1027,64 @@ func TestSnapshotCacheKeepsATeamTooLarge(t *testing.T) {
 	require.ErrorIs(t, err, daemon.ErrNoTeam, "the spaces' project, with no team in the model")
 }
 
-// TestSnapshotOpNeverPairsTwoPolls is the one swap (A24): every poll moves
-// two teams between two workspaces and names each pane after the poll, while
-// dashboards ask by workspace. Each answer must be the team its workspace
-// belonged to in the very poll that built the snapshot, holding that
-// workspace's pane: an index from one poll with a snapshot from another
-// would serve a team without it, or with a name of the wrong parity.
+// TestSnapshotCacheNeverPairsTwoStores is the one swap (A24) in process, with
+// no socket in the way: stores alternate which team holds w1 and w2 while
+// readers ask by workspace, and every answer must hold the asked workspace's
+// pane. An index from one store with snapshots from another would serve the
+// team that held the workspace in the other store, without it. Every access
+// is locked, so the race detector cannot see such a split; only reading at
+// in-process speed between stores can.
+func TestSnapshotCacheNeverPairsTwoStores(t *testing.T) {
+	t.Parallel()
+	layout := func(first, second string) team.Model {
+		return team.Model{Projects: []team.Project{workerNamed(first, "w1", first+"1"), workerNamed(second, "w2", second+"1")}}
+	}
+	models := []team.Model{layout("alpha", "beta"), layout("beta", "alpha")}
+	var c daemon.TeamCache
+	require.NoError(t, c.Store(models[0], "alpha", t0))
+
+	var stop atomic.Bool
+	var stores atomic.Int64
+	var writer sync.WaitGroup
+	writer.Go(func() {
+		for i := 1; !stop.Load(); i++ {
+			_ = c.Store(models[i%2], "alpha", t0)
+			stores.Add(1)
+		}
+	})
+	var readers sync.WaitGroup
+	var reads, bad atomic.Int64
+	var first atomic.Value
+	deadline := time.Now().Add(2 * time.Second)
+	for i := range 8 {
+		ws := []string{"w1", "w2"}[i%2]
+		pane := []byte(`"pane_id":"` + ws + `:p1"`)
+		readers.Go(func() {
+			for time.Now().Before(deadline) && stores.Load() < 2000 && bad.Load() == 0 {
+				raw, err := c.Load(daemon.Selector{WorkspaceID: ws})
+				reads.Add(1)
+				if err != nil || !bytes.Contains(raw, pane) {
+					bad.Add(1)
+					first.CompareAndSwap(nil, fmt.Sprintf("%s (%v)", raw, err))
+				}
+			}
+		})
+	}
+	readers.Wait()
+	stop.Store(true)
+	writer.Wait()
+	t.Logf("%d reads over %d stores", reads.Load(), stores.Load())
+	assert.Zero(t, bad.Load(), "an answer without its workspace's pane: %v", first.Load())
+	assert.Greater(t, stores.Load(), int64(100), "the stores ran under the readers")
+}
+
+// TestSnapshotOpNeverPairsTwoPolls is the one swap (A24) end to end: every
+// poll moves two teams between two workspaces and names each pane after the
+// poll, while dashboards ask by workspace over the socket. Each answer must be
+// the team its workspace belonged to in the very poll that built the
+// snapshot, holding that workspace's pane. A split swap leaves a window of
+// about a microsecond, which socket round trips rarely hit:
+// TestSnapshotCacheNeverPairsTwoStores is the test that catches one.
 func TestSnapshotOpNeverPairsTwoPolls(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)

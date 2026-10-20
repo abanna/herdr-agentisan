@@ -322,3 +322,39 @@ func TestEachTeamCarriesItsOwnHeader(t *testing.T) {
 	assert.Equal(t, "agentisan", spaces.Team)
 	assert.Equal(t, &snapshot.Project{Color: "#7c3aed", PRs: recordedPRs(), Issues: new(14)}, spaces.Project)
 }
+
+// TestEachTeamCarriesOnlyItsOwnHeader: only the tabs team's project has a
+// repo, so a team given another project's header is caught: other carries
+// acme/other's, and the ◆ spaces' agentisan, with no repo, carries none.
+func TestEachTeamCarriesOnlyItsOwnHeader(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	ws, panes, agents := fullTeam()
+	th.layout(append(ws, herdr.WorkspaceInfo{WorkspaceID: "w30", Label: "other"}),
+		append(panes, tabPane("w30:p1", "w30", "w30:t1", "claude", "idle", nil)),
+		append(agents, named("w30:p1", "o-coder-1")))
+	th.mu.Lock()
+	th.tabs = []map[string]any{tabOf("w30:t1", "w30", "o-coder-1")}
+	th.mu.Unlock()
+	cfg := t.TempDir()
+	body := "schema_version = 1\n[spaces]\nproject = \"agentisan\"\n" +
+		"[projects.agentisan]\nrepo = \"~/Development/agentisan\"\ncolor = \"#7c3aed\"\n" +
+		"[projects.other]\nrepo = \"/elsewhere\"\nshort = \"o\"\ngithub = \"acme/other\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(cfg, settings.FileName), []byte(body), 0o600))
+	f := recordedGh(t)
+	dir := shortDir(t)
+	run(t, ghOpts(t, dir, th, cfg, f, nil))
+	sock := socketPath(t, dir, th.path)
+
+	require.Eventually(t, func() bool {
+		s, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{WorkspaceID: "w30"})
+		return err == nil && hasHeader(s)
+	}, ready, 5*time.Millisecond, "other never carried its own header")
+	calls(t, f, 2)
+	polled(t, th.srv, 3)
+	spaces, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{})
+	require.NoError(t, err)
+	assert.Equal(t, "agentisan", spaces.Team)
+	assert.True(t, noPRs(spaces), "agentisan has no repo, so no header: %+v", spaces.Project)
+	assert.Equal(t, &snapshot.Project{Color: "#7c3aed"}, spaces.Project)
+}
