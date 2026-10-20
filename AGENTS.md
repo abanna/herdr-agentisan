@@ -124,8 +124,9 @@ exempts whatever is later added under that name.
   state dir, never the real ones.
 - `internal/team/` — the team domain model (ADR-001 D5, A17): project → group
   → logical worker → current pane, built from `pane.list`, `workspace.list`,
-  `agent.list` and `state.db`'s `workers` rows. A `Resolver` maps the layout
-  onto it; `Spaces` is today's ◆ spaces, with v12's group order. Also the
+  `tab.list`, `agent.list` and `state.db`'s `workers` rows. A `Resolver` maps
+  the layout onto it: `Spaces` for the ◆ spaces, with v12's group order, and
+  `Tabs` for a team's one workspace and one tab per worker (A19). Also the
   frozen `$team` format, and the model as a snapshot v1 in the resolver's
   group order, with the in-memory stage clock (A18).
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001

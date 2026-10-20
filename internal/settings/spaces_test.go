@@ -19,7 +19,7 @@ import (
 func TestSpacesProjectPrecedence(t *testing.T) {
 	t.Parallel()
 
-	const two = "[projects.app]\nrepo = \"REPO\"\n[projects.alpha]\nrepo = \"/nonexistent\"\n"
+	const two = "[projects.app]\nrepo = \"REPO\"\nshort = \"app\"\n[projects.alpha]\nrepo = \"/nonexistent\"\nshort = \"al\"\n"
 	tests := map[string]struct {
 		file    string // the shared file after schema_version; "-" for no file
 		project string // the project selected; "" for none
@@ -70,7 +70,7 @@ func TestSpacesProjectPrecedence(t *testing.T) {
 func TestSpacesProjectErrors(t *testing.T) {
 	t.Parallel()
 
-	const two = "[projects.app]\nrepo = \"REPO\"\n[projects.alpha]\nrepo = \"/nonexistent\"\n"
+	const two = "[projects.app]\nrepo = \"REPO\"\nshort = \"app\"\n[projects.alpha]\nrepo = \"/nonexistent\"\nshort = \"al\"\n"
 	tests := map[string]struct {
 		file     string
 		repoFile string
@@ -143,7 +143,7 @@ func TestSpacesProjectForTheDaemon(t *testing.T) {
 	}{
 		"no config dir":          {file: "nodir"},
 		"no file":                {},
-		"the key":                {file: "[spaces]\nproject = \"app\"\n[projects.app]\nrepo = \"/nonexistent\"\n[projects.b]\nrepo = \"/x\"\n", want: "app"},
+		"the key":                {file: "[spaces]\nproject = \"app\"\n[projects.app]\nrepo = \"/nonexistent\"\n[projects.b]\nrepo = \"/x\"\nshort = \"b\"\n", want: "app"},
 		"the sole project":       {file: "[projects.app]\nrepo = \"/nonexistent\"\n", want: "app"},
 		"an unknown project":     {file: "[spaces]\nproject = \"x\"\n", wantErr: settings.ErrNoProject},
 		"an unrelated bad value": {file: "color = \"red\"\n", wantErr: settings.ErrInvalid},
@@ -175,28 +175,29 @@ func TestSpacesProjectForTheDaemon(t *testing.T) {
 func TestReadSpacesForTheDaemon(t *testing.T) {
 	t.Parallel()
 
-	const other = "[projects.zed]\nrepo = \"/elsewhere\"\ncolor = \"#000000\"\n"
+	const other = "[projects.zed]\nrepo = \"/elsewhere\"\ncolor = \"#000000\"\nshort = \"zed\"\n"
 	tests := map[string]struct {
 		file    string // "" for no file; "nodir" for no config dir
 		want    settings.Spaces
 		wantErr error
 	}{
-		"no config dir":                    {file: "nodir"},
-		"no file":                          {},
-		"the sole project and its colour":  {file: "[projects.app]\nrepo = \"/nonexistent\"\ncolor = \"#7c3aed\"\n", want: settings.Spaces{Project: "app", Color: "#7c3aed"}},
-		"the key picks the project":        {file: "[spaces]\nproject = \"app\"\n[projects.app]\nrepo = \"/x\"\ncolor = \"#0ea5e9\"\n" + other, want: settings.Spaces{Project: "app", Color: "#0ea5e9"}},
-		"a repo under ~, no HOME read":     {file: "[projects.app]\nrepo = \"~/Development/app\"\ncolor = \"#7c3aed\"\n", want: settings.Spaces{Project: "app", Color: "#7c3aed"}},
-		"a project without a colour":       {file: "[spaces]\nproject = \"app\"\n[projects.app]\nrepo = \"/x\"\n" + other, want: settings.Spaces{Project: "app"}},
-		"the shared colour is inherited":   {file: "color = \"#111111\"\n[projects.app]\nrepo = \"/x\"\n", want: settings.Spaces{Project: "app", Color: "#111111"}},
-		"the project's colour beats it":    {file: "color = \"#111111\"\n[projects.app]\nrepo = \"/x\"\ncolor = \"#222222\"\n", want: settings.Spaces{Project: "app", Color: "#222222"}},
-		"an upper-case colour is kept":     {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"#BD93F9\"\n", want: settings.Spaces{Project: "app", Color: "#BD93F9"}},
-		"several projects, no key":         {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"#7c3aed\"\n" + other},
-		"a colour but no projects":         {file: "color = \"#111111\"\n"},
-		"an unknown project":               {file: "[spaces]\nproject = \"x\"\n" + other, wantErr: settings.ErrNoProject},
-		"a colour that is not #rrggbb":     {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"purple\"\n", wantErr: settings.ErrInvalid},
-		"a non-ASCII colour":               {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"#7c3aéd\"\n", wantErr: settings.ErrInvalid},
-		"a colour with a trailing newline": {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"#7c3aed\\n\"\n", wantErr: settings.ErrInvalid},
-		"an empty colour":                  {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"\"\n", wantErr: settings.ErrInvalid},
+		"no config dir":                     {file: "nodir"},
+		"no file":                           {},
+		"the sole project and its colour":   {file: "[projects.app]\nrepo = \"/nonexistent\"\ncolor = \"#7c3aed\"\n", want: settings.Spaces{Project: "app", Color: "#7c3aed"}},
+		"the key picks the project":         {file: "[spaces]\nproject = \"app\"\n[projects.app]\nrepo = \"/x\"\ncolor = \"#0ea5e9\"\n" + other, want: settings.Spaces{Project: "app", Color: "#0ea5e9"}},
+		"a repo under ~, no HOME read":      {file: "[projects.app]\nrepo = \"~/Development/app\"\ncolor = \"#7c3aed\"\n", want: settings.Spaces{Project: "app", Color: "#7c3aed"}},
+		"a project without a colour":        {file: "[spaces]\nproject = \"app\"\n[projects.app]\nrepo = \"/x\"\n" + other, want: settings.Spaces{Project: "app"}},
+		"the shared colour is inherited":    {file: "color = \"#111111\"\n[projects.app]\nrepo = \"/x\"\n", want: settings.Spaces{Project: "app", Color: "#111111"}},
+		"the project's colour beats it":     {file: "color = \"#111111\"\n[projects.app]\nrepo = \"/x\"\ncolor = \"#222222\"\n", want: settings.Spaces{Project: "app", Color: "#222222"}},
+		"an upper-case colour is kept":      {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"#BD93F9\"\n", want: settings.Spaces{Project: "app", Color: "#BD93F9"}},
+		"several projects, no key":          {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"#7c3aed\"\nshort = \"app\"\n" + other},
+		"a colour but no projects":          {file: "color = \"#111111\"\n"},
+		"a sole tabs project is not theirs": {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"#7c3aed\"\nshort = \"app\"\nlayout = \"tabs\"\n"},
+		"an unknown project":                {file: "[spaces]\nproject = \"x\"\n" + other, wantErr: settings.ErrNoProject},
+		"a colour that is not #rrggbb":      {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"purple\"\n", wantErr: settings.ErrInvalid},
+		"a non-ASCII colour":                {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"#7c3aéd\"\n", wantErr: settings.ErrInvalid},
+		"a colour with a trailing newline":  {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"#7c3aed\\n\"\n", wantErr: settings.ErrInvalid},
+		"an empty colour":                   {file: "[projects.app]\nrepo = \"/x\"\ncolor = \"\"\n", wantErr: settings.ErrInvalid},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

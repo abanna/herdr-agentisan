@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A18, A20 and A22 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A20, A22 and A25 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -631,6 +631,17 @@ NERD-5244 delivers this document. It moves to Done when the pull request that ad
   - The dashboard's selection follows a named row by its name and an unnamed row by its pane id, so a refresh never moves it onto another row with the same label. Labels repeat: herdr gives every plugin pane its manifest title as its label, so two dashboard splits are two rows called "Agentisan dashboard".
 - **The pane and the key.** `herdr-plugin.toml` declares `[[panes]] dashboard`, `placement = "split"`, which runs `dashboard` against the daemon. herdr 0.9.3 reads no direction or size for a split from the manifest: the side comes from the open request and defaults to right. There is no `plugin_pane` key type (`src/config/keybinds.rs:113-118`). So the prefix+d snippet, sampled in `docs/config/herdr-keys.example.toml` and the README, which replaces `dashboard-tab.sh`, is a shell key running `herdr plugin pane open … --entrypoint dashboard --focus`. Each press opens a new split.
 
+### A19. The team model and the tabs resolver
+
+*Adds to:* D5, D9, A17 and the `team` row of the token contract. Recorded with NERD-5282, ahead of item 4's workforce commands (NERD-5254), which spawn into this layout.
+
+- **The team model.** The user's, from 2026-10-10. A herdr server holds N teams, and a team is one workspace, labelled with its project's name. Each worker has one full-size tab, never a split, labelled `<short>-<type>-<n>`; the label is also the worker's herdr agent name, its Claude `--name` and its logical id. The boss's tab is `<short>-boss`. The types, in working order: coder, precheck, qa, review (Codex), research, librarian, debugger.
+- **Configuration.** Each project gets `short` and `layout`, which only its own `[projects.<name>]` table may set: the daemon reads them without the repo file, and a shared or `--set` value would give every project the same short code. `layout` is `tabs` or `spaces`, `tabs` by default. The `[spaces] project` is always `spaces`, and no other project may be. A tabs project needs `short`: a lower-case letter, then up to 7 lower-case letters or digits, unique across projects, so a worker's name stays unique on the server and within herdr's 32 characters. A sole project that sets `layout = "tabs"` is no longer the spaces' default, and the spaces then belong to the unnamed project. `boss` is not a group name. The example config's groups are the seven types.
+- **The tabs resolver.** The team is the first workspace in sidebar order labelled exactly with the project's name; any other so labelled is logged once and left out. In it, the `<short>-boss` tab holds the boss, every pane in that tab included: the dashboard split NERD-5254 opens there is the boss's until the pane label (NERD-5255) tells it apart. A `<short>-<type>-<n>` tab, `n` from 1 without a leading zero, holds a worker of that type, an unconfigured type included. Any other tab is outside the model. `pane.list` gives a pane's tab but not the tab's label, so with a tabs team configured each poll adds one `tab.list`; a failed `tab.list` costs the poll, as a failed `pane.list` does. The two lists are two calls, and herdr 0.9.3 numbers a tab by its position in its workspace (`public_tab_id(ws_idx, tab_idx)`), so a tab opened, closed or renamed between them can put a pane under a neighbour's label, or none, for that one poll; the next poll corrects it.
+- **`$team`.** herdr has no tab tokens, so a tabs team gets one `$team`, on its workspace, summing every group there: N counts the panes in typed worker tabs, and leaves out the boss's tab and tabs that do not parse. A team with only its boss's tab gets `0 · ◐0 ●0`, as an empty space does. `team.Tokens` sums every group at a target, which changes nothing for the spaces.
+- **The model.** Each project also carries, even before any worker is there, its workspaces (a tabs team's one; every ◆ space, ◆ boss and ◆ herdr included), its group order (the seven types for a tabs team; `Spaces.GroupOrder()` for the spaces) and its colour, for the per-team dashboard (NERD-5285). The snapshot (A18) reads a team's order and colour from its project in the model and nowhere else, so a team herdr shows no workspace of reports its name alone; the spaces' colour is the `[spaces] project`'s, resolved with every other project's team.
+- **Read at start.** The daemon reads every project's team once, when it starts, so a team added or changed later appears after a daemon restart. A file that does not resolve is logged, no tabs team is found, and the spaces fall back to the unnamed project. A configuration with several projects and no `[spaces] project` now needs `short` on each.
+
 ### A20. Search is herdr's Go To anywhere, and a filter in the dashboard
 
 *Clarifies:* the Search bullet in D5, and item 11's acceptance ("bound, or a popup that jumps on Enter").
@@ -678,3 +689,22 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
 - **D7.** A Codex worker rotates on its context levels like a Claude worker, provided it was launched with `--no-daemon` and its hooks are installed and trusted (NERD-5278). A Codex worker without `ctx` rotates only when the boss directs it.
 - **Item 3 under Codex.** `report stage` runs as a Codex shell tool command, so under the daemon it carries the same stale `HERDR_PANE_ID` and lineage as a hook. Under `--no-daemon`, a sandboxed command runs in a bubblewrap PID namespace (`--unshare-pid`, `linux-sandbox/src/bwrap.rs:355-378`), so its parent walk cannot reach the pane. Whether herdr's socket is reachable from inside that sandbox is unverified. Item 3's "works from a Codex pane" stays open (NERD-5279).
 - **Back and the dashboard.** The focus history and Back are pane-level and never consult the agent kind, so they treat Codex panes like any other. The dashboard shows a Codex agent's `ctx` once its hooks run.
+
+### A25. Item and stage from a Codex pane
+
+*Settles:* A22's "Item 3 under Codex" bullet. *Clarifies:* item 3's acceptance, "work from a Codex pane", and Report commands. Verified against the codex-rs source at `rust-v0.161.0` (NERD-5279).
+
+- **Detection.** `report stage` knows it was run by a Codex tool command because `CODEX_THREAD_ID` is set; Codex sets it on every tool command (`core/src/exec_env.rs:30-37`). The lineage then decides where to report. Without that variable nothing changes, so Claude and scripts behave as before.
+- **Under Codex, `report stage` lands on the pane of its own Codex or nowhere.** Before calling herdr it refuses:
+  - Codex's restricted network (`CODEX_SANDBOX_NETWORK_DISABLED`), with `ErrCodexSandboxed`. In Codex's sandbox, seccomp then denies every `connect`, Unix sockets included (`linux-sandbox/src/landlock.rs:202-203`).
+    - Codex sets the variable from the turn's network policy, not from whether the command actually runs sandboxed (`core/src/sandboxing/mod.rs:169-175`). So a command whose escalation was approved still carries it, and reports nothing.
+  - A lineage that `CheckCodexHost` does not accept:
+    - one through a Codex app-server (`ErrCodexDaemon`), whose inherited `HERDR_PANE_ID` names the pane that started the daemon;
+    - one with no Codex process in it (`ErrNoCodexHost`), as inside the sandbox's pid namespace, where the walk sees only the namespace's own processes;
+    - one it cannot read (`ErrHostUnverified`). That includes every lineage off Linux, so off Linux, under Codex, nothing is reported.
+- **`CheckCodexHost` now requires the pane's own Codex.** That is a `codex` process among the ancestors, either the native binary or the node launcher, and no app-server. `report codex` (A22) shares the rule.
+- **So item and stage from Codex need `codex --no-daemon --sandbox danger-full-access`.** Item 3's "work from a Codex pane" holds for that session only.
+  - A Codex worker under the default sandbox reports no item or stage, even for a step whose escalation was approved.
+  - A Codex `allow` rule for `herdr-agentisan report stage` would not change that. A rule bypasses the sandbox only when every part of the top-level tool command matches (`core/src/exec_policy.rs:440-455`), and Agentisan runs the report from inside its own step scripts.
+  - The worker launch settings belong to NERD-5278.
+  - Binding a Codex thread to its pane from the `report codex` hook, so that a stage could find its pane by `CODEX_THREAD_ID`, is deferred. It would add a key to the token contract, and the default sandbox would still deny the connect.

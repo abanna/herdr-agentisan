@@ -96,6 +96,11 @@ short. Like `report statusline`, it prints nothing and exits 0 whether or not
 it reported; only a malformed command line (an unknown flag, an extra
 argument) fails.
 
+Run by Codex (it carries `CODEX_THREAD_ID`), `report stage` reports only from
+the pane's own Codex started as `codex --no-daemon --sandbox danger-full-access`.
+Under the shared app-server daemon, with Codex's default sandbox (even for an
+approved escalation), or off Linux, it reports nothing (ADR-001 A25).
+
 ## Search on prefix+/ and in the dashboard
 
 prefix+/ opens herdr's own Go To, which lists every workspace and pane: press
@@ -152,6 +157,15 @@ the last write wins; after, the daemon's next push, within 3 s, replaces the
 value v12 left on each group space. The daemon never writes `◆ herdr`, so
 v12's last value there clears itself when its 30 s TTL runs out.
 
+## Teams: one workspace, one tab per worker
+
+Every configured project but the `[spaces] project` is a team: one herdr
+workspace labelled with the project's name, the boss's tab `<short>-boss`,
+and one tab per worker, `<short>-<type>-<n>`, such as `ha-coder-2`. Give each
+such project a `short` code in `herdr-agentisan.toml`. The daemon pushes the
+team's workspace one `$team` for the whole team, the boss left out, and reads
+the teams when it starts: run the `daemon-restart` action after adding one.
+See ADR-001 A19.
 ## The dashboard
 
 `herdr-agentisan dashboard` draws the team from the daemon (ADR-001 D5,
