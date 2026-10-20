@@ -226,3 +226,114 @@ func TestSnapshotBossRuntime(t *testing.T) {
 	require.NotNil(t, handed.Boss.StartedAt)
 	assert.Equal(t, t2, *handed.Boss.StartedAt, "a new boss pane starts at the poll that first sees it")
 }
+
+// servedTeam waits until the daemon at sock serves project's snapshot and ok
+// holds of it, and returns it.
+func servedTeam(t *testing.T, sock, project string, ok func(snapshot.Snapshot) bool) snapshot.Snapshot {
+	t.Helper()
+	var got snapshot.Snapshot
+	require.Eventually(t, func() bool {
+		s, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{Project: project})
+		if err != nil || !ok(s) {
+			return false
+		}
+		got = s
+		return true
+	}, ready, 5*time.Millisecond, "team %s was never served as wanted; last: %+v", project, got)
+	return got
+}
+
+// nameAgent sets agent.list's entry for the pane id to name, or drops it for
+// "".
+func nameAgent(th *teamHerdr, id, name string) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	out := make([]map[string]any, 0, len(th.agents)+1)
+	for _, a := range th.agents {
+		if a["pane_id"] != id {
+			out = append(out, a)
+		}
+	}
+	if name != "" {
+		out = append(out, named(id, name))
+	}
+	th.agents = out
+}
+
+// swapPane replaces the pane id in pane.list with p.
+func swapPane(th *teamHerdr, id string, p map[string]any) {
+	panes := th.listedPanes()
+	for i := range panes {
+		if panes[i]["pane_id"] == id {
+			panes[i] = p
+		}
+	}
+	th.setPanes(panes)
+}
+
+// TestEveryTeamCarriesTheSlotsAndItsOwnBoss: with one snapshot per team
+// (A24), every team's carries the machine's test slots, the same count, and
+// sees a slot freed at the same poll (A31). Each team's boss.started_at is
+// its own boss pane's, and each pane's stage clock its own: a boss starting
+// in one team, or a coder moving on there, restarts nothing in another.
+func TestEveryTeamCarriesTheSlotsAndItsOwnBoss(t *testing.T) {
+	t.Parallel()
+	if _, err := os.Stat(testslots.ProcLocks); err != nil {
+		t.Skipf("no %s: %v", testslots.ProcLocks, err)
+	}
+	locks := t.TempDir()
+	gate0, gate1 := filepath.Join(locks, "gate.0.lock"), filepath.Join(locks, "gate.1.lock")
+	release := hold(t, gate0)
+	th := newTeamHerdr(t)
+	everyTeam(th)
+	// alpha's boss tab runs no agent yet.
+	swapPane(th, "w14:p1", tabPane("w14:p1", "w14", "w14:t1", "", "unknown", nil))
+	nameAgent(th, "w14:p1", "")
+	c := &clock{now: t0}
+	dir := shortDir(t)
+	o := teamOpts(t, dir, th, configDir(t, everyTeamConfig+fmt.Sprintf("[tests]\nlocks = [%q, %q]\n", gate0, gate1)))
+	o.Now = c.Now
+	run(t, o)
+	sock := socketPath(t, dir, th.path)
+	at := func(ts time.Time) func(snapshot.Snapshot) bool {
+		return func(s snapshot.Snapshot) bool { return s.At.Equal(ts) }
+	}
+	teams := []string{"agentisan", "alpha", "beta"}
+
+	for _, p := range teams {
+		s := servedTeam(t, sock, p, at(t0))
+		require.NotNil(t, s.Project, p)
+		assert.Equal(t, &snapshot.Slots{Used: 1, Total: 2}, s.Project.Slots, "team %s carries the slots", p)
+	}
+	assert.Nil(t, servedTeam(t, sock, "alpha", at(t0)).Boss, "alpha has no boss yet")
+	spaces := servedTeam(t, sock, "agentisan", at(t0))
+	require.NotNil(t, spaces.Boss.StartedAt)
+	assert.Equal(t, t0, *spaces.Boss.StartedAt)
+
+	// t1: alpha's boss starts, alpha's coder moves on to review, and the
+	// held slot is let go.
+	c.advance(3 * time.Second)
+	t1 := t0.Add(3 * time.Second)
+	swapPane(th, "w14:p1", tabPane("w14:p1", "w14", "w14:t1", "claude", "working", nil))
+	nameAgent(th, "w14:p1", "al-boss")
+	swapPane(th, "w14:p3", tabPane("w14:p3", "w14", "w14:t3", "claude", "working", map[string]string{"ctx": "50", "item": "NERD-5285", "stage": "review"}))
+	release()
+
+	alpha := servedTeam(t, sock, "alpha", func(s snapshot.Snapshot) bool {
+		return s.At.Equal(t1) && s.Boss != nil && s.Boss.Status == "working" && s.Groups[0].Agents[0].Stage == "review"
+	})
+	require.NotNil(t, alpha.Boss.StartedAt)
+	assert.Equal(t, t1, *alpha.Boss.StartedAt, "alpha's boss runtime is its own pane's")
+	require.NotNil(t, alpha.Groups[0].Agents[0].StageStartedAt)
+	assert.Equal(t, t1, *alpha.Groups[0].Agents[0].StageStartedAt, "alpha's coder's stage restarted")
+	spaces = servedTeam(t, sock, "agentisan", at(t1))
+	require.NotNil(t, spaces.Boss.StartedAt)
+	assert.Equal(t, t0, *spaces.Boss.StartedAt, "the spaces' boss keeps its own start")
+	require.NotNil(t, spaces.Groups[0].Agents[0].StageStartedAt)
+	assert.Equal(t, t0, *spaces.Groups[0].Agents[0].StageStartedAt, "the spaces' coder keeps its stage start")
+	for _, p := range teams {
+		s := servedTeam(t, sock, p, at(t1))
+		require.NotNil(t, s.Project, p)
+		assert.Equal(t, &snapshot.Slots{Used: 0, Total: 2}, s.Project.Slots, "team %s sees the slot freed", p)
+	}
+}

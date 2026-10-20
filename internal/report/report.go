@@ -31,6 +31,12 @@ const (
 	// CtxTTL is three times Claude's 60 s statusline refresh: one missed
 	// refresh keeps the token, a writer that stopped lets it expire.
 	CtxTTL = 180 * time.Second
+	// CodexCtxTTL is Codex's ctx TTL, herdr's longest, set again by every
+	// report (A27). Codex hooks fire only in turns and compactions, the only
+	// times its context changes, so an idle agent's last count stays true. A
+	// Codex that exits leaves it until the TTL runs out or the next Codex in
+	// the pane reports.
+	CodexCtxTTL = 24 * time.Hour
 	// MaxStatuslineBytes bounds the statusline JSON read from stdin. Claude
 	// sends a few kilobytes; the cap stops a runaway writer from growing the
 	// buffer without limit.
@@ -176,24 +182,26 @@ func Statusline(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (Resu
 	if err != nil {
 		return Result{}, err
 	}
-	return pushCtx(ctx, rep, pane, pct)
+	return pushCtx(ctx, rep, pane, pct, CtxTTL)
 }
 
-// pushCtx sets the ctx token to pct on the pane the reporting process runs
-// in. One herdr.CallTimeout bounds the whole push, finding the pane included.
-func pushCtx(ctx context.Context, rep Reporter, pane Pane, pct int) (Result, error) {
+// pushCtx sets the ctx token to pct, expiring after ttl, on the pane the
+// reporting process runs in. One herdr.CallTimeout bounds the whole push,
+// finding the pane included.
+func pushCtx(ctx context.Context, rep Reporter, pane Pane, pct int, ttl time.Duration) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, herdr.CallTimeout)
 	defer cancel()
 	target, err := resolvePane(ctx, rep, pane)
 	if err != nil {
 		return Result{}, err
 	}
-	err = rep.ReportPaneMetadata(ctx, herdr.PaneMetadata{
-		PaneID:    target,
-		Source:    Source,
-		Tokens:    map[string]string{CtxKey: strconv.Itoa(pct)},
-		TTLMillis: uint64(CtxTTL / time.Millisecond),
-	})
+	m := herdr.PaneMetadata{PaneID: target, Source: Source, Tokens: map[string]string{CtxKey: strconv.Itoa(pct)}}
+	// ttl is CtxTTL or CodexCtxTTL; the guard keeps the conversion from
+	// wrapping, and a zero ttl would be omitted, never expiring.
+	if ttl > 0 {
+		m.TTLMillis = uint64(ttl / time.Millisecond)
+	}
+	err = rep.ReportPaneMetadata(ctx, m)
 	if err != nil {
 		return Result{}, fmt.Errorf("report %s to %s: %w", CtxKey, target, err)
 	}

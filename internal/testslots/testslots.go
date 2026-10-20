@@ -168,6 +168,12 @@ func fileOf(path string) (File, bool, error) {
 	if !ok {
 		return File{}, false, fmt.Errorf("%w: %s: no device and inode", ErrLockFile, path)
 	}
-	dev := uint64(st.Dev) //nolint:unconvert // Dev is int32 on darwin
+	dev := devNumber(st.Dev)
 	return File{Major: unix.Major(dev), Minor: unix.Minor(dev), Inode: st.Ino}, true, nil
 }
+
+// devNumber is a stat device number as the uint64 unix.Major and unix.Minor
+// take. Dev is a uint64 on linux and an int32 on darwin, where it is negative
+// for a major of 128 or more; the conversion sign-extends it, and Major and
+// Minor mask the extension off.
+func devNumber[T ~int32 | ~uint64](dev T) uint64 { return uint64(dev) }

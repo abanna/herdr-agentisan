@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -533,5 +534,80 @@ func TestBackRefusalCodes(t *testing.T) {
 		for _, s := range []error{daemon.ErrNoHistory, daemon.ErrHerdrCall} {
 			assert.Equal(t, s == want, errors.Is(err, s), "%s is %v", code, s)
 		}
+	}
+}
+
+// TestBackNeverReachesAReplacement is A3 for Back, whose un-zoom and focus
+// are writes: during a live handoff the new server's Back action reaches the
+// old daemon, whose socket path is derived from the same herdr socket path.
+// Every call Back makes goes through the daemon's guarded client, so once the
+// socket names a replacement nothing more is sent, to it or to the original,
+// and Back refuses with herdr_failed instead of moving anything.
+func TestBackNeverReachesAReplacement(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		during string   // the call the swap lands in; "" for before Back
+		moves  []string // what reaches the original
+	}{
+		"before Back's first dial":      {moves: []string{}},
+		"while the panes are listed":    {during: "pane.list", moves: []string{}},
+		"while the un-zoom is answered": {during: "pane.zoom", moves: []string{"zoom off w1:c"}},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			hourly := func(o *daemon.Options) { o.Poll = time.Hour } // Run's own check never ends it here
+			h, dir := backDaemon(t, hourly, "w1:c", []string{"w1:a", "w1:b", "w1:c"}, "w1:a", "w1:b", "w1:c")
+			type result struct {
+				res daemon.BackResult
+				err error
+			}
+			done := make(chan result, 1)
+			var replacement *herdrtest.Server
+			if tc.during == "" {
+				replacement = swapIn(t, h)
+				res, err := back(t, dir, h)
+				done <- result{res, err}
+			} else {
+				entered, swapped := make(chan struct{}), make(chan struct{})
+				var once sync.Once
+				h.set(func(f *fakeHerdr) {
+					f.before = func(method string) {
+						if method == tc.during {
+							once.Do(func() { close(entered) })
+							<-swapped
+						}
+					}
+				})
+				go func() {
+					res, err := daemon.Back(t.Context(), socketPath(t, dir, h.path))
+					done <- result{res, err}
+				}()
+				select {
+				case <-entered:
+				case <-time.After(ready):
+					t.Fatalf("Back never called %s", tc.during)
+				}
+				replacement = swapIn(t, h)
+				close(swapped)
+			}
+			var got result
+			select {
+			case got = <-done:
+			case <-time.After(ready):
+				t.Fatal("Back did not answer")
+			}
+
+			require.ErrorIs(t, got.err, daemon.ErrHerdrCall)
+			var re *daemon.RequestError
+			require.ErrorAs(t, got.err, &re)
+			assert.Equal(t, "herdr_failed", re.Code)
+			assert.Contains(t, re.Message, "another server", "the refusal says why")
+			assert.Equal(t, daemon.BackResult{}, got.res, "Back reports it moved nothing")
+			replacement.Settle(t)
+			assert.Empty(t, replacement.Requests(), "the replacement is asked nothing, read or write")
+			assert.Equal(t, tc.moves, h.moves(), "nothing more reaches the original")
+		})
 	}
 }

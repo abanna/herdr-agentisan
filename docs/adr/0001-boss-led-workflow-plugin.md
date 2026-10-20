@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A22, A25, A26, A29 and A31 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A22, A24 to A27, A29 and A31 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -700,6 +700,13 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
 - **Item 3 under Codex.** `report stage` runs as a Codex shell tool command, so under the daemon it carries the same stale `HERDR_PANE_ID` and lineage as a hook. Under `--no-daemon`, a sandboxed command runs in a bubblewrap PID namespace (`--unshare-pid`, `linux-sandbox/src/bwrap.rs:355-378`), so its parent walk cannot reach the pane. Whether herdr's socket is reachable from inside that sandbox is unverified. Item 3's "works from a Codex pane" stays open (NERD-5279).
 - **Back and the dashboard.** The focus history and Back are pane-level and never consult the agent kind, so they treat Codex panes like any other. The dashboard shows a Codex agent's `ctx` once its hooks run.
 
+### A24. One snapshot per team
+
+*Amends:* the op and project bullets of A18. *Adds to:* D3 and D6. Recorded with NERD-5285, whose dashboard half, each dashboard finding its own team, follows. The snapshot contract v1 is unchanged.
+
+- **Every team, every poll.** Each poll with agent names snapshots every project in the model, its order and colour read from its project there (A19) and its GitHub header from its own project's collection (A29), and indexes the workspaces each team holds: a tabs team's one, every ◆ space, ◆ boss and ◆ herdr included. The snapshots and the index are swapped in as one value, so an op never pairs one poll's index with another poll's snapshots, except for a team over the size cap, whose workspaces follow the poll while it keeps its last snapshot. A team gone from the model is dropped from the next poll on. A team whose snapshot would not fit one answer line keeps its own last one, and the others are unaffected. A18's "the last snapshot stays" is now a failed `agent.list`'s alone, and it keeps every team and the index as they were.
+- **The op.** `{"v":1,"op":"snapshot","args":{"project"?,"workspace_id"?}}`. `project` names a team, and wins when both are given; `workspace_id` is looked up in the index; neither is the `[spaces] project`, as before. A team the model does not hold refuses with `no_team` (`daemon.ErrNoTeam`). With no ◆ space at all, asking for neither is now `no_team` too, where it was a team with no groups. Before the first poll every selector is `not_ready`, and so is a team whose snapshot has never fit. Args of the wrong type are `bad_request`; keys the op does not know are ignored.
+
 ### A25. Item and stage from a Codex pane
 
 *Settles:* A22's "Item 3 under Codex" bullet. *Clarifies:* item 3's acceptance, "work from a Codex pane", and Report commands. Verified against the codex-rs source at `rust-v0.161.0` (NERD-5279).
@@ -735,6 +742,27 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
 - **Compile-checked only.** There is no macOS CI job, and `.github/workflows/` is not this change's to edit. The darwin readers are checked with `GOOS=darwin` vet, build, test compile, golangci-lint and gosec, for arm64 and amd64. A live check on a Mac follows the merge.
 - **Not changed.** `daemon.lock` liveness on darwin is NERD-5307.
 
+### A27. Codex `ctx` survives idle periods
+
+*Overrides:* the `ctx` TTL in the token contract, and two bullets of A22, "Idle expiry" and "One deliberate difference from the TUI". *Closes for Codex:* the risk "An idle Claude agent loses `$ctx`" (Risks and mitigations), by the mitigation it names. *Adds to:* D7 and Report commands. Verified against the codex-rs source at `rust-v0.161.0` (NERD-5280).
+
+| Overridden | Now |
+| --- | --- |
+| `ctx` TTL (token contract) | `report statusline`: 180,000 ms, unchanged. `report codex`: 86,400,000 ms (24 h, Herdr's maximum), set again on every report |
+| A22, Idle expiry | An idle Codex agent keeps its `ctx`. `report codex` also runs from `PostCompact`, which reports again |
+| A22, One deliberate difference from the TUI | The overflow's count reads 100 unless a `compacted` line separates it from the count before it |
+
+- **Why 24 h holds.** Codex has no timer hook; `SessionStart` runs only when a turn starts (`turn.rs:322`). Codex writes a token count only in a turn or a compaction, and hooks run in both, so an idle session's last count stays true. The writer is event-driven, the case the risk's mitigation names.
+- **PostCompact.** Every hook reports the newest count; `report codex` never reads the event name. `PostCompact` runs after a compaction has recorded the new history's size (`compact.rs:165-215`), a manual `/compact` included, which runs no `Stop` (`compact.rs:146`). Nothing flushes the rollout before the hook, so it may read the count from before the compaction; the next turn corrects it. It is best-effort, with no retry.
+- **A compaction after an overflow.** On overflow Codex sets the session total to the window (`fill_to_context_window`) and keeps it. A compaction then writes a `compacted` line and a count that keeps that total, with the new history's estimated size as its last usage (`recompute_token_usage`, `session/mod.rs:4749-4786`). The two counts look alike. So a count with the overflow's total reads 100 unless a `compacted` line sits between it and the count before it, and reads 100 when no count comes before it in the 4 MiB tail. Without this, under a 24 h TTL, a compacted session would keep reading 100 while idle.
+  - A count Codex sends again unchanged is the same count. Codex re-sends the current count when only its rate limits change (`update_rate_limits`, `session/mod.rs:4789`), including for a turn stopped after its rate limits arrived but before its response completed (`turn.rs:2944-2949,3178`).
+- **The TTL no longer proves the writer is alive.** Nothing clears `ctx` when Codex exits: a clean exit, like a crash, leaves the last value until the TTL runs out or the next Codex in the pane reports.
+  - A `SessionEnd` hook that cleared `ctx` was tried and dropped. Codex 0.161 runs `SessionEnd` whenever a root thread shuts down (`core/src/session/handlers.rs:325`), not only when it exits, and its payload's `reason` is always `other` (`hooks/src/events/session_end.rs:24`).
+  - Under `--no-daemon` the embedded app-server shuts down a thread that has had no subscribers and been idle for `thread_unload_delay`, 60 s by default (`app-server/src/request_processors/thread_lifecycle.rs:363-393`, `core/src/config/mod.rs:3922`). `/new`, `/resume` and a fork leave the old thread in that state, so a clear would blank the new session's `ctx` about a minute later.
+  - The opt-in memory consolidation (`features.memories`) shuts its internal thread down the same way (`memories/write/src/runtime.rs:398-456`). The same decision covers it.
+- **D7 and the dashboard are to count `ctx` only on a pane where Herdr detects an agent**, so the value a Codex left behind, after a clean exit or a crash, is ignored. The snapshot on main reads it from every pane (`internal/team/snapshot.go`); that change belongs to NERD-5255. An expired `ctx` is unknown, as before. A notice is to fire when `ctx` crosses a level, not when it reappears (NERD-5261).
+- This changes a token-contract cell by amendment, as A5 did. D4's one writer per key is unchanged.
+
 ### A29. The header's GitHub collection
 
 *Adds to:* D3, D5 and A18. *Overrides:* A18's "PRs, issues and slots stay unreported until item 9", for the PRs and the issue count. Recorded with item 9, part a (NERD-5257). The test slots and the boss's runtime are part b.
@@ -765,7 +793,7 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
 *Adds to:* D5, D9, A18 and A29. *Overrides:* A18's "PRs, issues and slots stay unreported until item 9", for the slots. Recorded with item 9, part b (NERD-5257).
 
 - **`[tests] locks`.** The test slots are lock files, one per slot, named as absolute paths in `[tests] locks`. Only the shared file and `--set` may set it: the slots are the machine's, so in a project table or a repo file it is an unknown key. Each entry must be absolute (`~` is not expanded) and named once after cleaning, with at most 32 of them. Unset or empty, no slots are reported. The daemon reads the list once, at start.
-- **Counting.** Every team poll, the daemon counts how many of those files some process holds a lock on, as `/proc/locks` lists them. flock(2), POSIX and open-file-description locks all count; a waiter, a lease and a delegation do not. A file that does not exist is free. The daemon never opens or locks a lock file itself, so it can neither take a slot nor delay a suite taking one. The count is `project.slots`: used, of the number of files.
+- **Counting.** Every team poll, the daemon counts how many of those files some process holds a lock on, as `/proc/locks` lists them. flock(2), POSIX and open-file-description locks all count; a waiter, a lease and a delegation do not. A file that does not exist is free. The daemon never opens or locks a lock file itself, so it can neither take a slot nor delay a suite taking one. The count is `project.slots`: used, of the number of files. The slots are the machine's, so every team's snapshot (A24) carries the same count, made once per poll.
 - **Failures.** When `/proc/locks` cannot be read (off Linux), is over 8 MiB, or holds a line in a form the daemon does not know, or a lock file cannot be looked at, no slots are reported, never all free. The daemon logs that when it starts or changes kind, and when it recovers. A waiter's, a lease's or a delegation's line is not read for its file: the kernel names none, `<none>:0`, for an opener waiting to break a lease.
 - **Where the locks live.** A file is matched by the device and inode `stat` gives it. On a filesystem where those can differ from what the kernel lists, such as btrfs subvolumes or overlayfs, a held lock may read as free. Keep the locks on tmpfs or ext4, such as `$XDG_RUNTIME_DIR`, where agentisan's gate keeps them: `$XDG_RUNTIME_DIR/agentisan/gate.<n>.lock`, one per `AGENTISAN_GATE_CONCURRENCY` slot.
 - **The boss's runtime.** `boss.started_at` is when this daemon first saw the boss's pane run an agent in the boss's place, held in memory beside the stage clock (A18). It holds while that pane stays the boss, whatever its stage. A handoff to another pane, an agent started again after the pane was a shell, and a daemon restart each start it again. So the runtime is the boss session as this daemon has seen it, not the session's own start, which herdr does not report. Workers carry none.

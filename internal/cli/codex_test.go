@@ -68,7 +68,7 @@ func TestReportCodexPushesCtx(t *testing.T) {
 	reqs := srv.Requests()
 	require.Len(t, reqs, 2)
 	assert.Equal(t, "pane.report_metadata", reqs[1].Method)
-	assert.JSONEq(t, `{"pane_id":"w15:p4","source":"agentisan","tokens":{"ctx":"5"},"ttl_ms":180000}`, string(reqs[1].Params))
+	assert.JSONEq(t, `{"pane_id":"w15:p4","source":"agentisan","tokens":{"ctx":"5"},"ttl_ms":86400000}`, string(reqs[1].Params))
 	assert.Contains(t, logs.String(), `"ctx":5`)
 }
 
@@ -116,7 +116,7 @@ func TestReportCodexDoesNothing(t *testing.T) {
 }
 
 // TestCodexHookSnippetRunsReportCodex keeps the documented Codex hooks
-// (sample and README) runnable: both events run the real `report codex`
+// (sample and README) runnable: all three events run the real `report codex`
 // command, asynchronously, under a timeout.
 func TestCodexHookSnippetRunsReportCodex(t *testing.T) {
 	t.Parallel()
@@ -137,6 +137,7 @@ func TestCodexHookSnippetRunsReportCodex(t *testing.T) {
 		Hooks struct {
 			PostToolUse []group `toml:"PostToolUse"`
 			Stop        []group `toml:"Stop"`
+			PostCompact []group `toml:"PostCompact"`
 		} `toml:"hooks"`
 	}
 	dec := toml.NewDecoder(bytes.NewReader(sample))
@@ -146,13 +147,14 @@ func TestCodexHookSnippetRunsReportCodex(t *testing.T) {
 	require.Len(t, cfg.Hooks.PostToolUse, 1)
 	require.NotNil(t, cfg.Hooks.PostToolUse[0].Matcher)
 	assert.Equal(t, "*", *cfg.Hooks.PostToolUse[0].Matcher, "every tool, not just the shell")
-	require.Len(t, cfg.Hooks.Stop, 1)
-	for _, g := range [][]handler{cfg.Hooks.PostToolUse[0].Hooks, cfg.Hooks.Stop[0].Hooks} {
-		require.Len(t, g, 1)
-		assert.Equal(t, "command", g[0].Type)
-		assert.Equal(t, "herdr-agentisan report codex", g[0].Command)
-		assert.True(t, g[0].Async, "a Stop hook that is not async fails on any stray stdout")
-		assert.Positive(t, g[0].Timeout)
+	for event, groups := range map[string][]group{"PostToolUse": cfg.Hooks.PostToolUse, "Stop": cfg.Hooks.Stop, "PostCompact": cfg.Hooks.PostCompact} {
+		require.Len(t, groups, 1, event)
+		g := groups[0].Hooks
+		require.Len(t, g, 1, event)
+		assert.Equal(t, "command", g[0].Type, event)
+		assert.Equal(t, "herdr-agentisan report codex", g[0].Command, event)
+		assert.True(t, g[0].Async, "%s: a Stop hook that is not async fails on any stray stdout", event)
+		assert.Positive(t, g[0].Timeout, event)
 	}
 
 	sub, _, err := cli.Root().Find([]string{"report", "codex"})

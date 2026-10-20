@@ -17,9 +17,10 @@ const lockVersion = 1
 type LockInfo struct {
 	V   int `json:"v"`
 	PID int `json:"pid"`
-	// Start is the holder's process start time (clock ticks since boot), or 0
-	// where it cannot be read. It tells the holder apart from a later process
-	// that reuses its pid.
+	// Start is the holder's process start time, as report.Stat.Start has it
+	// (clock ticks since boot on Linux, microseconds since the epoch on
+	// darwin), or 0 where it cannot be read. It tells the holder apart from a
+	// later process that reuses its pid.
 	Start     uint64    `json:"start"`
 	Herdr     Identity  `json:"herdr"`
 	StartedAt time.Time `json:"started_at"`

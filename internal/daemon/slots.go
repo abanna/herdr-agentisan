@@ -37,13 +37,13 @@ func (o Options) newSlotCounter() *slotCounter {
 	return &slotCounter{locks: locks, procLocks: procLocks}
 }
 
-// fillSlots sets s's project's slots, when there are lock files to count
-// and they can be counted. A failure is logged when it starts or changes
-// kind, and a recovery when it comes, not every poll; while it lasts no
-// slots are reported, never all free.
-func (o Options) fillSlots(c *slotCounter, s *snapshot.Snapshot) {
+// countSlots is the test slots for one poll, when there are lock files to
+// count and they can be counted, and nil otherwise. A failure is logged when
+// it starts or changes kind, and a recovery when it comes, not every poll;
+// while it lasts no slots are reported, never all free.
+func (o Options) countSlots(c *slotCounter) *snapshot.Slots {
 	if c == nil || len(c.locks) == 0 {
-		return
+		return nil
 	}
 	slots, err := testslots.Count(c.procLocks, c.locks)
 	if err != nil {
@@ -51,16 +51,24 @@ func (o Options) fillSlots(c *slotCounter, s *snapshot.Snapshot) {
 			c.failing = kind
 			o.Logger.Warn().Err(err).Msg("test slots: cannot count them; the header reports none until it can")
 		}
-		return
+		return nil
 	}
 	if c.failing != "" {
 		c.failing = ""
 		o.Logger.Info().Msg("test slots: counting again")
 	}
+	return &slots
+}
+
+// setSlots gives s's project its own copy of slots; nil reports none.
+func setSlots(s *snapshot.Snapshot, slots *snapshot.Slots) {
+	if slots == nil {
+		return
+	}
 	if s.Project == nil {
 		s.Project = &snapshot.Project{}
 	}
-	s.Project.Slots = &slots
+	s.Project.Slots = new(*slots)
 }
 
 // failureKind is what a counting failure is, for logging it once. A lock

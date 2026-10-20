@@ -20,6 +20,7 @@ import (
 	_ "modernc.org/sqlite" // the driver the store registers, for read-only looks at state.db
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
+	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
 	"github.com/abanna/herdr-agentisan/internal/store"
 )
@@ -431,8 +432,8 @@ func TestFocusSnapshotNeverDialsAReplacement(t *testing.T) {
 	}
 }
 
-// TestFocusDialGuardClasses: the check the collector's client runs on every
-// connection passes only while the socket path still names the socket the
+// TestFocusDialGuardClasses: the check the daemon's client, the focus
+// collector's included, runs on every connection passes only while the socket path still names the socket the
 // daemon's server bound, directly or through a symlink, and fails with
 // ErrHerdrGone for whatever else the path names by the time it dials.
 func TestFocusDialGuardClasses(t *testing.T) {
@@ -513,7 +514,7 @@ func TestFocusDialGuardClasses(t *testing.T) {
 			bind(t, sock)
 			ident := mustIdentity(t, sock)
 
-			guard := daemon.FocusDialGuard(tc.path(t, sock), ident)
+			guard := daemon.DialGuard(tc.path(t, sock), ident)
 			require.NotNil(t, guard, "the collector's client checks every connection")
 			err := guard()
 			if tc.want == nil {
@@ -776,4 +777,21 @@ func TestBackoffIsBounded(t *testing.T) {
 			assert.Equal(t, tc.want, daemon.Backoff(tc.attempt))
 		})
 	}
+}
+
+// TestServerClientKeepsOnlyTheTimeout: the daemon dials its own socket
+// through its guarded client whatever client it was given, keeping only
+// that client's Timeout, so a caller's bound still applies.
+func TestServerClientKeepsOnlyTheTimeout(t *testing.T) {
+	t.Parallel()
+	given := herdr.Client{SocketPath: "/elsewhere/h.sock", Timeout: 7 * time.Second}
+	c := daemon.ServerClient(daemon.Options{HerdrSocket: "/run/h.sock", Herdr: given}, daemon.Identity{})
+	assert.Equal(t, "/run/h.sock", c.SocketPath)
+	assert.Equal(t, 7*time.Second, c.Timeout)
+	assert.NotNil(t, c.Dialed)
+
+	c = daemon.ServerClient(daemon.Options{HerdrSocket: "/run/h.sock"}, daemon.Identity{})
+	assert.Equal(t, "/run/h.sock", c.SocketPath)
+	assert.Zero(t, c.Timeout, "no client given: herdr's own CallTimeout")
+	assert.NotNil(t, c.Dialed)
 }

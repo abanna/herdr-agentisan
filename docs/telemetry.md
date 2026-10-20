@@ -14,7 +14,7 @@ page, `internal/telemetry/events.go` and its test together.
 
 | Setting | Where | Notes |
 | --- | --- | --- |
-| `[telemetry] endpoint` | the shared `herdr-agentisan.toml` in `HERDR_PLUGIN_CONFIG_DIR`, or `--set` | `host:port`, such as `localhost:4318`. Not allowed in a project table or a repo file: there is one daemon per herdr server |
+| `[telemetry] endpoint` | the shared `herdr-agentisan.toml` in `HERDR_PLUGIN_CONFIG_DIR`, or `--set` | `host:port`, such as `127.0.0.1:4328`, the collector below. Not allowed in a project table or a repo file: there is one daemon per herdr server |
 | `HERDR_AGENTISAN_OTLP_ENDPOINT` | the daemon's environment | Overrides the key when set, and must be `host:port` too. Traces use it too |
 
 With neither set, nothing is built and nothing is exported, which is the
@@ -34,16 +34,101 @@ carry those for another program, and they must not redirect the events or
 attach their headers.
 
 The connection is plaintext with no credentials: the collector is expected on
-localhost and holds Elastic's own key. The slot for a collector across the
-network, a `token = { env = "…" }` or `{ op = "op://…" }` reference sent as
-`Authorization` over TLS, arrives when one is needed; until then any key but
-`endpoint` in `[telemetry]` is an unknown key.
+localhost and holds Elastic's own key, as the one below does. The slot for a
+collector across the network, a `token = { env = "…" }` or `{ op = "op://…" }`
+reference sent as `Authorization` over TLS, arrives when one is needed; until
+then any key but `endpoint` in `[telemetry]` is an unknown key.
 
 Telemetry never stops the daemon. A file that does not resolve is logged and
 the daemon runs without events; a collector that is down or refuses an export
 is a `telemetry export` warning in `daemon.log`. On exit the daemon flushes
 what is pending for at most 2 s, after it has released its lock, so a dead
 collector never holds up the next daemon.
+
+## A collector into Elasticsearch
+
+`docs/config/otelcol-agentisan.yaml` is a collector for these events:
+otelcol-contrib with an OTLP/HTTP receiver on `127.0.0.1:4328` and one logs
+pipeline into Elasticsearch, in the `otel` mapping. Each record lands in the
+data stream `logs-agentisan.otel-default`: the collector sets
+`data_stream.dataset` to `agentisan` and `data_stream.namespace` to `default`
+on every resource, and the exporter appends `.otel` to the dataset. It takes
+logs only, so traces sent to it through `HERDR_AGENTISAN_OTLP_ENDPOINT` are
+refused.
+
+It reads two variables, and nothing secret is in the file:
+
+| Variable | Value |
+| --- | --- |
+| `HERDR_AGENTISAN_ES_URL` | Elasticsearch's URL, such as `https://elastic.example:9200`, with no `user:password@` in it: the collector prints a URL it cannot use in its error |
+| `HERDR_AGENTISAN_ES_WRITE_KEY` | The `encoded` form of an API key that can only write this stream |
+
+Create the key with index privileges `create_doc` and `auto_configure` on
+`logs-agentisan.otel-*` and no cluster privileges, so it can add events to
+the one stream, and create it on the first write, but read nothing:
+
+```
+POST /_security/api_key
+{
+  "name": "herdr-agentisan-collector",
+  "role_descriptors": {
+    "agentisan-events-writer": {
+      "indices": [
+        { "names": ["logs-agentisan.otel-*"], "privileges": ["create_doc", "auto_configure"] }
+      ]
+    }
+  }
+}
+```
+
+With both variables exported, `task otelcol:up` in the plugin's checkout runs
+the collector in Docker as `herdr-agentisan-otelcol`, after validating the
+file in a throwaway container. It replaces one already running, stopping it
+first so it can flush what it holds; `task otelcol:down` removes it. The
+container reads the file from that checkout, so run it from one you keep:
+once the file is gone, the container cannot start again. Without Task, the
+same container is:
+
+```
+docker run -d --name herdr-agentisan-otelcol --network host --restart unless-stopped \
+  -e HERDR_AGENTISAN_ES_URL -e HERDR_AGENTISAN_ES_WRITE_KEY \
+  --mount "type=bind,src=$PWD/docs/config/otelcol-agentisan.yaml,dst=/etc/otelcol/agentisan.yaml,readonly" \
+  otel/opentelemetry-collector-contrib:0.159.0 --config=/etc/otelcol/agentisan.yaml
+```
+
+Export both variables first: the task refuses to start without them, but
+this command does not, and `validate` accepts a missing key, so a collector
+with no key starts and Elasticsearch refuses its every write with 401.
+Without Docker, the same applies to `otelcol-contrib --config
+docs/config/otelcol-agentisan.yaml`. Then set `[telemetry] endpoint =
+"127.0.0.1:4328"` and run the `daemon-restart` action. An event reaches
+Elasticsearch about 11 s after the change: the daemon batches for 1 s and the
+exporter for 10 s.
+
+Where a failure shows:
+
+- **The collector is down:** a `telemetry export` warning in `daemon.log`.
+- **Elasticsearch is down, throttling, or refuses the key:** the collector's
+  log, `docker logs herdr-agentisan-otelcol`. The exporter retries while
+  Elasticsearch cannot be reached or answers 429, then drops the batch; a
+  batch it refuses, with 401 or 403, is dropped at once. The daemon sees a
+  collector that accepted its records and logs nothing, until the
+  collector's queue fills and it refuses them too.
+
+Mind three things:
+
+- **The key is on disk while the container exists.** The variables reach it
+  by name, never as a value on a command line, and never through
+  `--env-file`, which would hand it every other variable in that file. But
+  Docker keeps a container's environment in its config, where `docker
+  inspect` shows it to anyone who can run Docker; `--restart unless-stopped`
+  is what brings the collector back after a reboot with no one there to give
+  it the key. `task otelcol:down` removes that copy.
+- **The receiver is plaintext and unauthenticated**, on loopback only: any
+  local process can write into the stream. The key's privileges keep every
+  write inside it.
+- **Use `https://` for an Elasticsearch across a network.** The key goes with
+  every request.
 
 ## Events
 
@@ -84,10 +169,11 @@ How to read them:
 - **A pane that moves to another group, keeping its status,** gives no event.
   A pane moved out of every ◆ space leaves (`to` is `absent`).
 
-A query for one worker's last hour, in ES|QL:
+A query for one worker's last hour, in ES|QL, against the stream the
+collector above writes:
 
 ```
-FROM logs-*
+FROM logs-agentisan.otel-*
 | WHERE event_name == "agentisan.worker.status_changed"
     AND attributes.agentisan.worker.id == "coders-1"
     AND @timestamp > NOW() - 1 hour
@@ -95,8 +181,9 @@ FROM logs-*
 | KEEP @timestamp, attributes.herdr.pane.id, attributes.agentisan.status.from, attributes.agentisan.status.to
 ```
 
-Field names on the Elastic side depend on its OTLP mapping; check one event in
-Discover before saving a query.
+`attributes.agentisan.worker.id` is the logical worker id, such as
+`coders-1`, once a `workers` row binds the pane, and the pane id, such as
+`w14:p8`, until then; `attributes.agentisan.worker.bound` says which.
 
 ## Coming
 

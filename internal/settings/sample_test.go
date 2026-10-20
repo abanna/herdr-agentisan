@@ -44,7 +44,7 @@ func TestSampleConfigResolves(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []string{"agentisan", "assay"}, all.Projects)
 	assert.Equal(t, "agentisan", all.SpacesProject(), "the sample names the spaces' project")
-	assert.Equal(t, "localhost:4318", all.TelemetryEndpoint(), "the sample names the events' collector")
+	assert.Equal(t, "127.0.0.1:4328", all.TelemetryEndpoint(), "the sample names the events' collector")
 	assert.Equal(t, []string{"/run/user/1000/agentisan/gate.0.lock"}, all.TestLocks(), "the sample names the test slots' lock")
 	assert.Equal(t, []settings.Team{
 		{Project: "agentisan", Layout: settings.LayoutSpaces, Color: "#7c3aed"},
