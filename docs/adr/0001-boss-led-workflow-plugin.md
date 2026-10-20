@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A22, A25 to A27 and A29 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A22, A24 to A27 and A29 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -699,6 +699,13 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
 - **D7.** A Codex worker rotates on its context levels like a Claude worker, provided it was launched with `--no-daemon` and its hooks are installed and trusted (NERD-5278). A Codex worker without `ctx` rotates only when the boss directs it.
 - **Item 3 under Codex.** `report stage` runs as a Codex shell tool command, so under the daemon it carries the same stale `HERDR_PANE_ID` and lineage as a hook. Under `--no-daemon`, a sandboxed command runs in a bubblewrap PID namespace (`--unshare-pid`, `linux-sandbox/src/bwrap.rs:355-378`), so its parent walk cannot reach the pane. Whether herdr's socket is reachable from inside that sandbox is unverified. Item 3's "works from a Codex pane" stays open (NERD-5279).
 - **Back and the dashboard.** The focus history and Back are pane-level and never consult the agent kind, so they treat Codex panes like any other. The dashboard shows a Codex agent's `ctx` once its hooks run.
+
+### A24. One snapshot per team
+
+*Amends:* the op and project bullets of A18. *Adds to:* D3 and D6. Recorded with NERD-5285, whose dashboard half, each dashboard finding its own team, follows. The snapshot contract v1 is unchanged.
+
+- **Every team, every poll.** Each poll with agent names snapshots every project in the model, its order and colour read from its project there (A19) and its GitHub header from its own project's collection (A29), and indexes the workspaces each team holds: a tabs team's one, every ◆ space, ◆ boss and ◆ herdr included. The snapshots and the index are swapped in as one value, so an op never pairs one poll's index with another poll's snapshots, except for a team over the size cap, whose workspaces follow the poll while it keeps its last snapshot. A team gone from the model is dropped from the next poll on. A team whose snapshot would not fit one answer line keeps its own last one, and the others are unaffected. A18's "the last snapshot stays" is now a failed `agent.list`'s alone, and it keeps every team and the index as they were.
+- **The op.** `{"v":1,"op":"snapshot","args":{"project"?,"workspace_id"?}}`. `project` names a team, and wins when both are given; `workspace_id` is looked up in the index; neither is the `[spaces] project`, as before. A team the model does not hold refuses with `no_team` (`daemon.ErrNoTeam`). With no ◆ space at all, asking for neither is now `no_team` too, where it was a team with no groups. Before the first poll every selector is `not_ready`, and so is a team whose snapshot has never fit. Args of the wrong type are `bad_request`; keys the op does not know are ignored.
 
 ### A25. Item and stage from a Codex pane
 

@@ -971,23 +971,32 @@ func TestSocketProtocolClasses(t *testing.T) {
 		line string
 		code string // "" means ok
 	}{
-		"health":                    {line: `{"v":1,"op":"health","args":{}}` + "\n"},
-		"health without args":       {line: `{"v":1,"op":"health"}` + "\n"},
-		"no trailing newline":       {line: `{"v":1,"op":"health"}`},
-		"CRLF line ending":          {line: `{"v":1,"op":"health"}` + "\r\n"},
-		"unknown op":                {line: `{"v":1,"op":"teleport"}` + "\n", code: "unknown_op"},
-		"snapshot, no team poll":    {line: `{"v":1,"op":"snapshot"}` + "\n", code: "not_ready"},
-		"snapshot in another case":  {line: `{"v":1,"op":"Snapshot"}` + "\n", code: "unknown_op"},
-		"op in another case":        {line: `{"v":1,"op":"HEALTH"}` + "\n", code: "unknown_op"},
-		"missing version":           {line: `{"op":"health"}` + "\n", code: "unsupported_version"},
-		"newer version":             {line: `{"v":2,"op":"health"}` + "\n", code: "unsupported_version"},
-		"not JSON":                  {line: "health\n", code: "bad_request"},
-		"empty line":                {line: "\n", code: "bad_request"},
-		"two objects":               {line: `{"v":1,"op":"health"}{"v":1,"op":"health"}` + "\n", code: "bad_request"},
-		"invalid UTF-8 in the op":   {line: "{\"v\":1,\"op\":\"he\xffalth\"}\n", code: "unknown_op"},
-		"over the request size cap": {line: `{"v":1,"op":"health","args":"` + strings.Repeat("x", 1<<20) + `"}` + "\n", code: "bad_request"},
-		"op is not a string":        {line: `{"v":1,"op":7}` + "\n", code: "bad_request"},
-		"back with no history":      {line: `{"v":1,"op":"back","args":{}}` + "\n", code: "no_history"},
+		"health":                 {line: `{"v":1,"op":"health","args":{}}` + "\n"},
+		"health without args":    {line: `{"v":1,"op":"health"}` + "\n"},
+		"no trailing newline":    {line: `{"v":1,"op":"health"}`},
+		"CRLF line ending":       {line: `{"v":1,"op":"health"}` + "\r\n"},
+		"unknown op":             {line: `{"v":1,"op":"teleport"}` + "\n", code: "unknown_op"},
+		"snapshot, no team poll": {line: `{"v":1,"op":"snapshot"}` + "\n", code: "not_ready"},
+		// The args are checked before the cache is: a malformed selector is
+		// the client's mistake, whatever the daemon holds (A24).
+		"snapshot args not an object":   {line: `{"v":1,"op":"snapshot","args":[1]}` + "\n", code: "bad_request"},
+		"snapshot project not a string": {line: `{"v":1,"op":"snapshot","args":{"project":7}}` + "\n", code: "bad_request"},
+		"snapshot workspace not a string": {
+			line: `{"v":1,"op":"snapshot","args":{"workspace_id":true}}` + "\n", code: "bad_request",
+		},
+		"snapshot args null":             {line: `{"v":1,"op":"snapshot","args":null}` + "\n", code: "not_ready"},
+		"snapshot args it does not know": {line: `{"v":1,"op":"snapshot","args":{"team":"x"}}` + "\n", code: "not_ready"},
+		"snapshot in another case":       {line: `{"v":1,"op":"Snapshot"}` + "\n", code: "unknown_op"},
+		"op in another case":             {line: `{"v":1,"op":"HEALTH"}` + "\n", code: "unknown_op"},
+		"missing version":                {line: `{"op":"health"}` + "\n", code: "unsupported_version"},
+		"newer version":                  {line: `{"v":2,"op":"health"}` + "\n", code: "unsupported_version"},
+		"not JSON":                       {line: "health\n", code: "bad_request"},
+		"empty line":                     {line: "\n", code: "bad_request"},
+		"two objects":                    {line: `{"v":1,"op":"health"}{"v":1,"op":"health"}` + "\n", code: "bad_request"},
+		"invalid UTF-8 in the op":        {line: "{\"v\":1,\"op\":\"he\xffalth\"}\n", code: "unknown_op"},
+		"over the request size cap":      {line: `{"v":1,"op":"health","args":"` + strings.Repeat("x", 1<<20) + `"}` + "\n", code: "bad_request"},
+		"op is not a string":             {line: `{"v":1,"op":7}` + "\n", code: "bad_request"},
+		"back with no history":           {line: `{"v":1,"op":"back","args":{}}` + "\n", code: "no_history"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

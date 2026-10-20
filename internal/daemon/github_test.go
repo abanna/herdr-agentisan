@@ -17,6 +17,7 @@ import (
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/github/ghtest"
+	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 )
@@ -287,4 +288,73 @@ func TestGitHubNotCollected(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestEachTeamCarriesItsOwnHeader: with every team snapshotted (A24), each
+// carries its own project's GitHub header (A29): the tabs team other gets
+// acme/other's, beside the ◆ spaces' agentisan with its own and its colour.
+func TestEachTeamCarriesItsOwnHeader(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	ws, panes, agents := fullTeam()
+	th.layout(append(ws, herdr.WorkspaceInfo{WorkspaceID: "w30", Label: "other"}),
+		append(panes, tabPane("w30:p1", "w30", "w30:t1", "claude", "idle", nil)),
+		append(agents, named("w30:p1", "o-coder-1")))
+	th.mu.Lock()
+	th.tabs = []map[string]any{tabOf("w30:t1", "w30", "o-coder-1")}
+	th.mu.Unlock()
+	f := recordedGh(t)
+	dir := shortDir(t)
+	run(t, ghOpts(t, dir, th, ghConfig(t), f, nil))
+	sock := socketPath(t, dir, th.path)
+
+	var other snapshot.Snapshot
+	require.Eventually(t, func() bool {
+		s, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{WorkspaceID: "w30"})
+		other = s
+		return err == nil && hasHeader(s)
+	}, ready, 5*time.Millisecond, "the tabs team never carried its header: %+v", other.Project)
+	assert.Equal(t, "other", other.Team)
+	assert.Equal(t, &snapshot.Project{PRs: recordedPRs(), Issues: new(14)}, other.Project)
+	assert.Contains(t, f.Args(t, "pr"), "--repo=acme/other")
+
+	spaces := served(t, sock, hasHeader)
+	assert.Equal(t, "agentisan", spaces.Team)
+	assert.Equal(t, &snapshot.Project{Color: "#7c3aed", PRs: recordedPRs(), Issues: new(14)}, spaces.Project)
+}
+
+// TestEachTeamCarriesOnlyItsOwnHeader: only the tabs team's project has a
+// repo, so a team given another project's header is caught: other carries
+// acme/other's, and the ◆ spaces' agentisan, with no repo, carries none.
+func TestEachTeamCarriesOnlyItsOwnHeader(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	ws, panes, agents := fullTeam()
+	th.layout(append(ws, herdr.WorkspaceInfo{WorkspaceID: "w30", Label: "other"}),
+		append(panes, tabPane("w30:p1", "w30", "w30:t1", "claude", "idle", nil)),
+		append(agents, named("w30:p1", "o-coder-1")))
+	th.mu.Lock()
+	th.tabs = []map[string]any{tabOf("w30:t1", "w30", "o-coder-1")}
+	th.mu.Unlock()
+	cfg := t.TempDir()
+	body := "schema_version = 1\n[spaces]\nproject = \"agentisan\"\n" +
+		"[projects.agentisan]\nrepo = \"~/Development/agentisan\"\ncolor = \"#7c3aed\"\n" +
+		"[projects.other]\nrepo = \"/elsewhere\"\nshort = \"o\"\ngithub = \"acme/other\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(cfg, settings.FileName), []byte(body), 0o600))
+	f := recordedGh(t)
+	dir := shortDir(t)
+	run(t, ghOpts(t, dir, th, cfg, f, nil))
+	sock := socketPath(t, dir, th.path)
+
+	require.Eventually(t, func() bool {
+		s, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{WorkspaceID: "w30"})
+		return err == nil && hasHeader(s)
+	}, ready, 5*time.Millisecond, "other never carried its own header")
+	calls(t, f, 2)
+	polled(t, th.srv, 3)
+	spaces, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{})
+	require.NoError(t, err)
+	assert.Equal(t, "agentisan", spaces.Team)
+	assert.True(t, noPRs(spaces), "agentisan has no repo, so no header: %+v", spaces.Project)
+	assert.Equal(t, &snapshot.Project{Color: "#7c3aed"}, spaces.Project)
 }
