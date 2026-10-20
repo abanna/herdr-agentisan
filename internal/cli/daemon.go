@@ -11,6 +11,7 @@ import (
 
 	"github.com/abanna/herdr-agentisan/internal/config"
 	"github.com/abanna/herdr-agentisan/internal/daemon"
+	"github.com/abanna/herdr-agentisan/internal/github"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/logging"
 	"github.com/abanna/herdr-agentisan/internal/plugin"
@@ -54,7 +55,8 @@ func newDaemonCmd() *cobra.Command {
 // environment, the loaded configuration and the --state-dir flag.
 func daemonOptions(cmd *cobra.Command, stateDirFlag string) (daemon.Options, error) {
 	ctx := cmd.Context()
-	env, err := plugin.EnvFrom(lookupEnvFrom(ctx))
+	lookup := lookupEnvFrom(ctx)
+	env, err := plugin.EnvFrom(lookup)
 	if err != nil {
 		return daemon.Options{}, fmt.Errorf("read plugin environment: %w", err)
 	}
@@ -89,8 +91,14 @@ func daemonOptions(cmd *cobra.Command, stateDirFlag string) (daemon.Options, err
 		Commit:          config.Commit,
 		Logger:          logging.From(ctx),
 		Hooks:           hooks,
-		Team:            &daemon.TeamOptions{ConfigDir: env.ConfigDir},
+		Team:            &daemon.TeamOptions{ConfigDir: env.ConfigDir, GitHub: daemon.GitHubOptions{Gh: findGh(lookup)}},
 	}, nil
+}
+
+// findGh is gh on the PATH the command was given, or "" (A29).
+func findGh(lookup func(string) (string, bool)) string {
+	path, _ := lookup("PATH")
+	return github.Find(path)
 }
 
 // noHerdr explains a missing herdr socket in the terms a user can act on.

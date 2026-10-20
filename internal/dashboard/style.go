@@ -83,32 +83,31 @@ func StatusIcon(s snapshot.Status) string {
 	}
 }
 
-// ciGlyph is a PR's CI state: ✓ passed, ✗ failed, ⏳ pending, ? unknown.
-func ciGlyph(c snapshot.CIState) seg {
-	switch c {
-	case snapshot.CISuccess:
-		return seg{"✓", greenStyle}
+// prMark is a PR's one mark, herdr-status.sh's (ADR-001 A29). CI decides
+// first: ✗ a check failed, ⏳ checks pending, ? a CI state it cannot read.
+// Once every check passed: ✓ with a 👍 and a clean merge, 💬 when Codex has
+// findings to answer, ? for a Codex state it cannot read, and otherwise …,
+// waiting for the 👍 (Codex's, or on a repo without Codex the reviewer's)
+// or for a clean merge.
+func prMark(pr snapshot.PR) seg {
+	switch pr.CI {
 	case snapshot.CIFailure:
 		return seg{"✗", errorStyle}
 	case snapshot.CIPending:
 		return seg{"⏳", noteStyle}
+	case snapshot.CISuccess:
 	default:
 		return seg{"?", dimStyle}
 	}
-}
-
-// codexGlyph is where Codex's review stands: 👍 approved, 💬 findings to
-// answer, … not yet reviewed, ? unknown.
-func codexGlyph(c snapshot.CodexState) seg {
-	switch c {
-	case snapshot.CodexApproved:
-		return seg{"👍", plainStyle}
-	case snapshot.CodexFindings:
+	switch {
+	case pr.Codex == snapshot.CodexApproved && pr.Merge == snapshot.MergeClean:
+		return seg{"✓", greenStyle}
+	case pr.Codex == snapshot.CodexFindings:
 		return seg{"💬", orangeStyle}
-	case snapshot.CodexPending:
-		return seg{"…", dimStyle}
-	default:
+	case pr.Codex == snapshot.CodexUnknown || !pr.Codex.Valid():
 		return seg{"?", dimStyle}
+	default:
+		return seg{"…", dimStyle}
 	}
 }
 

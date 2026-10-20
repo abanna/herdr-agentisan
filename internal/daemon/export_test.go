@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/rs/zerolog"
 
@@ -38,4 +39,11 @@ func CacheSnapshot(s snapshot.Snapshot) (json.RawMessage, error) {
 		return nil, err
 	}
 	return c.load()
+}
+
+// WithGitHubTicks returns g with ticks standing in for its interval's
+// ticker, so a test says when each round after the first runs.
+func WithGitHubTicks(g GitHubOptions, ticks <-chan time.Time) GitHubOptions {
+	g.ticks = ticks
+	return g
 }

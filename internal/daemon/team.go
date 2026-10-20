@@ -23,6 +23,9 @@ type TeamOptions struct {
 	// poll reads [spaces] project, and that project's colour, from it once,
 	// when it starts.
 	ConfigDir string
+	// GitHub is the header's GitHub collection (A29), for every project
+	// the same file gives a github repo.
+	GitHub GitHubOptions
 }
 
 // teamPoll is what one team poll works with besides herdr and state.db.
@@ -33,18 +36,24 @@ type teamPoll struct {
 	// goroutine touches it.
 	stages *team.StageClock
 	cache  *snapshotCache
+	// header is each project's GitHub state, which the collector keeps
+	// (A29).
+	header *headerCache
 }
 
-// startTeam starts the team poll when o.Team is set; it caches each poll's
-// snapshot in cache. The function it returns stops the poll and waits for
-// it, so once it returns nothing more is pushed.
+// startTeam starts the team poll when o.Team is set, and beside it the
+// header's GitHub collection; the poll caches each snapshot in cache. The
+// function it returns stops both and waits for them, so once it returns
+// nothing more is pushed and no gh is left running.
 func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache) (stop func()) {
 	if o.Team == nil {
 		return func() {}
 	}
 	ctx, cancel := context.WithCancel(ctx)
+	header := newHeaderCache(o.Team.GitHub)
 	var wg sync.WaitGroup
-	wg.Go(func() { o.pollTeam(ctx, st, ident, cache) })
+	wg.Go(func() { o.collectGitHub(ctx, header) })
+	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header) })
 	return func() {
 		cancel()
 		wg.Wait()
@@ -67,14 +76,14 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 // read answered by the replacement, or a push landing on it, would be the
 // next daemon's business. So the poll is a client of its own, whose Dialed
 // hook checks the identity; a failed check stops the poll (ErrHerdrGone).
-func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache) {
+func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, header *headerCache) {
 	spaces, err := settings.ReadSpaces(o.Team.ConfigDir)
 	if err != nil {
 		o.Logger.Error().Err(err).Msg("herdr-agentisan.toml does not resolve; the ◆ spaces belong to the unnamed project until it is fixed and the daemon restarts")
 		spaces = settings.Spaces{}
 	}
 	o.Logger.Info().Str("project", spaces.Project).Str("color", spaces.Color).Msg("team poll running")
-	tp := teamPoll{resolver: team.Spaces{Project: spaces.Project}, spaces: spaces, stages: &team.StageClock{}, cache: cache}
+	tp := teamPoll{resolver: team.Spaces{Project: spaces.Project}, spaces: spaces, stages: &team.StageClock{}, cache: cache, header: header}
 	onServer := func() error {
 		if !o.sameServer(ident) {
 			return fmt.Errorf("%w: the socket now names another server, or none", ErrHerdrGone)
@@ -106,7 +115,8 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 }
 
 // pushTeam is one poll: it lists panes, workspaces and agents, builds the
-// model with state.db's workers rows, caches the snapshot of it, and pushes
+// model with state.db's workers rows, caches the snapshot of it with the
+// project's GitHub header (A29), and pushes
 // each group target its `$team`. A failed pane or workspace list costs the
 // poll; a failed agent list costs only the snapshot, which `$team` does not
 // need, so the last one built with names stays served; a failed push is
@@ -138,6 +148,7 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 		now := o.Now()
 		tp.stages.Observe(m, now)
 		snap := team.Snapshot(m, tp.spaces.Project, tp.spaces.Color, tp.resolver.GroupOrder(), now, tp.stages)
+		tp.header.fill(tp.spaces.Project, &snap, now)
 		if err := tp.cache.store(snap); err != nil {
 			o.Logger.Error().Err(err).Msg("team poll: cache the snapshot; the last one stays served")
 		}

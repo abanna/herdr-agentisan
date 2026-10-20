@@ -1,0 +1,38 @@
+#!/bin/sh
+# ghtest's stand-in for gh. It records the call in $FAKE_GH_DIR, then answers
+# as the files there say. It never reaches GitHub, and it writes down only
+# the variables it names, never the rest of its environment.
+set -u
+d=${FAKE_GH_DIR:?}
+verb=${1:-}
+echo "$verb" >>"$d/calls"
+printf '%s\n' "$@" >"$d/args.$verb"
+tty=none
+for fd in 0 1 2; do
+	if [ -t $fd ]; then tty=$fd; fi
+done
+printf 'GH_PROMPT_DISABLED=%s\nNO_COLOR=%s\nGH_NO_UPDATE_NOTIFIER=%s\nPROBE=%s\nTTY=%s\n' \
+	"${GH_PROMPT_DISABLED-}" "${NO_COLOR-}" "${GH_NO_UPDATE_NOTIFIER-}" "${PROBE-}" "$tty" >"$d/env"
+case $(cat "$d/mode" 2>/dev/null) in
+fail)
+	cat "$d/stderr" >&2 2>/dev/null
+	exit 1
+	;;
+hang)
+	sleep 300 &
+	echo $! >"$d/child"
+	wait
+	exit 0
+	;;
+warn) echo "A new release of gh is available" >&2 ;;
+flood) exec yes ;;
+kill) kill -9 $$ ;;
+esac
+case $verb in
+pr) cat "$d/prs" ;;
+api) cat "$d/issues" ;;
+*)
+	echo "ghtest: unexpected gh $verb" >&2
+	exit 2
+	;;
+esac
