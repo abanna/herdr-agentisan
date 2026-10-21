@@ -35,6 +35,8 @@ func TestMain(m *testing.M) {
 		helperIdentity()
 	case "exit3":
 		os.Exit(3)
+	case "hold":
+		helperHold()
 	case "modes":
 		helperModes()
 	default:
@@ -55,6 +57,19 @@ func helperIdentity() {
 	raw, _ := json.Marshal(out)
 	_ = os.WriteFile(os.Getenv("DAEMON_TEST_OUT"), raw, 0o600)
 	os.Exit(0)
+}
+
+// helperHold runs until the file DAEMON_TEST_RELEASE names exists, then
+// exits 0: a daemon that is still running. It gives up after a minute, so a
+// failed test leaves nothing behind for long.
+func helperHold() {
+	release := os.Getenv("DAEMON_TEST_RELEASE")
+	for deadline := time.Now().Add(time.Minute); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(release); err == nil {
+			os.Exit(0)
+		}
+	}
+	os.Exit(9)
 }
 
 // helperModes runs a daemon under umask 000 against a minimal herdr and
@@ -178,8 +193,9 @@ func TestExecSpawnDetaches(t *testing.T) {
 	t.Setenv("DAEMON_TEST_OUT", out)
 	t.Setenv("DAEMON_TEST_MARKER", "inherited")
 
-	pid, err := daemon.ExecSpawn(selfExe(t))(t.Context())
+	spawned, err := daemon.ExecSpawn(selfExe(t))(t.Context())
 	require.NoError(t, err)
+	pid := spawned.PID
 	require.Positive(t, pid)
 
 	var got map[string]any
@@ -201,8 +217,8 @@ func TestExecSpawnDetaches(t *testing.T) {
 }
 
 // TestExecSpawnFailures: a binary that cannot start is an error before any
-// child exists; one that starts and exits non-zero is not ExecSpawn's error
-// (Start sees it never answers health).
+// child exists; one that starts and exits non-zero is not ExecSpawn's error,
+// but its Exited closes, which Start reads as the daemon gone (A48).
 func TestExecSpawnFailures(t *testing.T) {
 	t.Run("missing binary", func(t *testing.T) {
 		t.Parallel()
@@ -218,10 +234,40 @@ func TestExecSpawnFailures(t *testing.T) {
 	})
 	t.Run("a child that exits non-zero still spawned", func(t *testing.T) {
 		t.Setenv(helperEnv, "exit3")
-		pid, err := daemon.ExecSpawn(selfExe(t))(t.Context())
+		spawned, err := daemon.ExecSpawn(selfExe(t))(t.Context())
 		require.NoError(t, err)
-		assert.Positive(t, pid)
+		assert.Positive(t, spawned.PID)
+		select {
+		case <-spawned.Exited:
+		case <-time.After(ready):
+			t.Fatal("Exited never closed for a child that exited")
+		}
 	})
+}
+
+// TestExecSpawnExitedFollowsTheChild: Exited stays open while the daemon runs
+// and closes once it exits, so Start neither gives up on a daemon still
+// starting nor waits on one that is gone (A48).
+func TestExecSpawnExitedFollowsTheChild(t *testing.T) {
+	release := filepath.Join(t.TempDir(), "release")
+	t.Setenv(helperEnv, "hold")
+	t.Setenv("DAEMON_TEST_RELEASE", release)
+	spawned, err := daemon.ExecSpawn(selfExe(t))(t.Context())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.WriteFile(release, nil, 0o600) })
+
+	select {
+	case <-spawned.Exited:
+		t.Fatal("Exited closed while the child still runs")
+	case <-time.After(300 * time.Millisecond):
+	}
+	require.NoError(t, syscall.Kill(spawned.PID, 0), "the child runs")
+	require.NoError(t, os.WriteFile(release, nil, 0o600))
+	select {
+	case <-spawned.Exited:
+	case <-time.After(ready):
+		t.Fatal("Exited never closed after the child exited")
+	}
 }
 
 // TestCreatedFilesKeepTheirModesUnderAnyUmask: the daemon creates its state

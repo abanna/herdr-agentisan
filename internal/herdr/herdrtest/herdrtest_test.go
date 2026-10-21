@@ -2,6 +2,8 @@ package herdrtest_test
 
 import (
 	"bufio"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -9,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -267,9 +270,63 @@ func TestRequestLines(t *testing.T) {
 				got = append(got, r.ID+" "+r.Method)
 			}
 			assert.Equal(t, tc.want, got)
+
+			// Settle waits for a request to be recorded, not answered, so
+			// the handler may still be running: the answer on this
+			// connection is what says the server is done with it. A
+			// recorded request gets one reply line, a dropped one none: a
+			// close, read as EOF, or as a reset when the server closed with
+			// bytes it had not read.
+			require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+			reply, err := bufio.NewReader(conn).ReadBytes('\n')
+			if len(tc.want) > 0 {
+				require.NoError(t, err)
+				var answer struct {
+					ID string `json:"id"`
+				}
+				require.NoError(t, json.Unmarshal(reply, &answer))
+				assert.Equal(t, "1", answer.ID)
+			} else {
+				assert.Empty(t, reply)
+				if !errors.Is(err, io.EOF) {
+					require.ErrorIs(t, err, syscall.ECONNRESET)
+				}
+			}
 			assert.Equal(t, int32(len(tc.want)), handled.Load(), "only a recorded request is answered")
 		})
 	}
+}
+
+// TestSettleWaitsForTheRequestNotTheAnswer: Settle returns once a request is
+// recorded. Its handler may still be running, here blocked until the test
+// lets it go, and does not hold Settle up. So a test that counts what a
+// handler did reads the answer first, as TestRequestLines does: reading the
+// count straight after Settle is the race NERD-5341 found there.
+func TestSettleWaitsForTheRequestNotTheAnswer(t *testing.T) {
+	t.Parallel()
+	release := make(chan struct{})
+	var handled atomic.Int32
+	srv := herdrtest.Start(t, func(r herdrtest.Request) herdrtest.Reply {
+		<-release
+		handled.Add(1)
+		return ok(r)
+	})
+	var once sync.Once
+	letGo := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(letGo) // before the server's Close, which waits for the handler
+
+	conn := dial(t, srv)
+	_, err := conn.Write([]byte(`{"id":"1","method":"ping"}` + "\n"))
+	require.NoError(t, err)
+	srv.Settle(t)
+	assert.Len(t, srv.Requests(), 1, "recorded")
+	assert.Zero(t, handled.Load(), "while its handler has not run")
+
+	letGo()
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	_, err = bufio.NewReader(conn).ReadBytes('\n')
+	require.NoError(t, err, "the answer")
+	assert.Equal(t, int32(1), handled.Load())
 }
 
 // nested is a ping whose params are n arrays deep, so the request is n+1

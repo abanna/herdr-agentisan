@@ -26,6 +26,18 @@ task plugin:unlink
 `herdr plugin link` never builds, which is why `task plugin:link` does. The
 binary also runs by hand: `task run:cli -- version --json`.
 
+herdr's startup hook runs `daemon start`, and the `daemon-restart` action
+`daemon restart`. Each waits for the daemon to answer health, for up to 13 s,
+and then says one of three things (ADR-001 A48):
+
+- `daemon running (pid N)`;
+- `daemon starting (pid N) but not answering health yet`, exit 0, since it
+  may still come up;
+- an error, exit non-zero, when the daemon exited before it answered.
+
+`herdr plugin log list --plugin nerdsrun.agentisan` shows which, and the
+`daemon.log` the message names says why.
+
 Requires Go 1.26.10+ and [Task](https://taskfile.dev). Linters and scanners are
 pinned in `go.mod` under the `tool` directive — nothing to install globally.
 
@@ -220,16 +232,18 @@ See ADR-001 A19.
 
 ## The workforce commands
 
-The boss reads its team with a command the daemon runs (ADR-001 D11, A23);
-the `herdr-workforce` skill drives it. `worker retire`, `worker spawn` and
-`team up` follow in later parts of NERD-5254.
+The boss reads its team and retires workers with commands the daemon runs
+(ADR-001 D11, A23); the `herdr-workforce` skill drives them. `worker spawn`
+and `team up` follow in later parts of NERD-5254.
 
 | Command | What it does |
 | --- | --- |
 | `team status [--project p]` | Every group's counts and open slots, and each worker's status, ctx, item, stage and idle time |
+| `worker retire <id> [--after-handoff]` | Closes a worker's pane, by logical id or pane id; with the flag, once its handoff is written |
 
-It prints one JSON object and exits 1 when refused. Without `--project` it
-reads the team whose workspace the command runs in, else the only tabs team.
+Each prints one JSON object and exits 1 when refused. Without `--project`
+status reads the team whose workspace the command runs in, else the only
+tabs team.
 A tabs team's worker is named by its logical id, `<short>-<type>-<n>`, its
 tab's label; a pane of the ◆ spaces by its pane id. Idle times start when
 the daemon does, and a team added to the configuration since gets them
@@ -269,7 +283,14 @@ with `q`. Add `--direction down` to split below the focused pane instead.
 See [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml).
 
 `herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json`
-draws a snapshot file instead, outside herdr too.
+draws a snapshot file instead, outside herdr too. A fixture's time is fixed,
+so its footer always reads `data Ns old`.
+
+The dashboard keeps v12's cues (ADR-001 A38). A stage that says READY is
+bold green, RED or blocked bold red, and waiting or queued yellow, matched
+by whole word in any case. The footer says `data Ns old` once the snapshot
+drawn is more than 15 s old, so a stalled daemon never passes for a live
+one. A plain shell is drawn as `▸ shell`.
 
 ### Group descriptions
 

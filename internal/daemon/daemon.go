@@ -33,8 +33,13 @@ const (
 	PollInterval = 3 * time.Second
 	// DefaultLockWait is how long a new daemon waits for a stale holder (A3).
 	DefaultLockWait = 15 * time.Second
-	// DefaultStartWait is how long Start waits for the new daemon's health.
-	DefaultStartWait = 3 * time.Second
+	// DefaultStartWait is the longest Start waits for the daemon's health
+	// (A48): a poll for an old daemon to notice a live handoff and let go of
+	// the lock (A3), then the new daemon's own bounds before it serves, its
+	// ping (herdr.CallTimeout) and its store's waits (store.BusyTimeout).
+	// Start returns as soon as the daemon answers or exits, so only a daemon
+	// still starting waits it out.
+	DefaultStartWait = PollInterval + herdr.CallTimeout + store.BusyTimeout
 	// DefaultStopWait is how long Stop waits for the daemon to let go.
 	DefaultStopWait = 10 * time.Second
 	// PruneInterval is how often, by Options.Now, the daemon prunes finished
@@ -66,6 +71,10 @@ var (
 	ErrStopTimeout = errors.New("timed out waiting for the daemon to stop")
 	// ErrSpawn means the daemon process could not be started.
 	ErrSpawn = errors.New("could not start the daemon")
+	// ErrDaemonExited means the daemon Start was waiting on exited before it
+	// answered health, and no other daemon of the herdr server holds the
+	// lock: nothing is running (A48).
+	ErrDaemonExited = errors.New("the daemon exited before it answered health")
 )
 
 // HerdrClient is the slice of the herdr client the daemon needs.
@@ -80,14 +89,22 @@ type HerdrClient interface {
 // Hooks are the process operations, injected so tests can run daemons in
 // process. A nil hook uses the real operation.
 type Hooks struct {
-	// Spawn starts a detached `daemon run` and returns its pid (ExecSpawn).
-	Spawn func(ctx context.Context) (int, error)
+	// Spawn starts a detached `daemon run` (ExecSpawn).
+	Spawn func(ctx context.Context) (Spawned, error)
 	// Signal asks the daemon with pid to stop (SIGTERM).
 	Signal func(pid int) error
 	// StartTime returns a process's start time, by default through
 	// report.SystemStat (/proc on Linux, sysctl on darwin). With none, a
 	// holder is checked by pid alone.
 	StartTime func(pid int) (uint64, error)
+}
+
+// Spawned is the daemon process a Spawn hook started.
+type Spawned struct {
+	PID int
+	// Exited is closed once the process has exited. Nil means the hook cannot
+	// tell, and Start waits out StartWait for a daemon that never answers.
+	Exited <-chan struct{}
 }
 
 // Options configure one daemon and the operations on it.
@@ -263,14 +280,19 @@ func Run(ctx context.Context, o Options) error {
 	if svc := o.newWorkforce(st, ident, idle); svc != nil {
 		ops = workforceOps(svc, ready)
 	}
-	srv, err := listen(ctx, paths.Socket, o.health(ctx, st, HealthInfo{
+	opsCtx, stopOps := context.WithCancel(ctx)
+	srv, err := listen(opsCtx, paths.Socket, o.health(ctx, st, HealthInfo{
 		PID: os.Getpid(), Version: o.Version, Commit: o.Commit, StartedAt: startedAt,
 		HerdrProtocol: pong.Protocol, HerdrSocket: o.HerdrSocket, Herdr: ident,
 	}), func() (BackResult, error) { return o.back(ctx, st, w) }, snapshots.load, ops, o.Logger)
 	if err != nil {
+		stopOps()
 		return err
 	}
 	defer srv.close()
+	// Deferred after the close, so it runs first: an op waiting out a
+	// handoff ends now rather than holding the close.
+	defer stopOps()
 
 	focusCtx, stopFocus := context.WithCancel(ctx)
 	var focus sync.WaitGroup
@@ -394,19 +416,22 @@ func (o Options) acquire(ctx context.Context, f *os.File, path string, ident Ide
 
 // StartResult reports what Start found or did.
 type StartResult struct {
-	// PID is the daemon's pid, or the spawned process's when it has not
-	// answered health yet.
+	// PID is the daemon's pid, or, when it has not answered health yet, the
+	// pid of the daemon holding the lock or else of the spawned process.
 	PID int
 	// AlreadyRunning means a daemon of this herdr server was already running.
 	AlreadyRunning bool
-	// Healthy means the daemon of this herdr server answered health.
+	// Healthy means the daemon of this herdr server answered health. Without
+	// an error, false means it is still starting after StartWait.
 	Healthy bool
 }
 
 // Start makes sure a daemon runs for the herdr server: it spawns `daemon run`
-// unless a live daemon of this server holds the lock, then waits up to
-// StartWait for the daemon to answer health. It never takes the lock itself,
-// so the daemon it spawns cannot end up waiting on its parent.
+// unless a live daemon of this server holds the lock, then waits for the
+// daemon to answer health, for up to StartWait (A48). A daemon that exits
+// before it answers, with no other daemon of this server holding the lock,
+// is ErrDaemonExited. Start never takes the lock itself, so the daemon it
+// spawns cannot end up waiting on its parent.
 func Start(ctx context.Context, o Options) (StartResult, error) {
 	o = o.withDefaults()
 	paths, err := PathsFor(o.StateDir, o.HerdrSocket)
@@ -426,33 +451,77 @@ func Start(ctx context.Context, o Options) (StartResult, error) {
 	}
 	if live && info.Herdr == ident {
 		// It may have taken the lock a moment ago and not be listening yet.
-		res := o.awaitHealth(ctx, paths.Socket, ident, info.PID)
+		// No process of Start's own is coming, so only the holder counts.
+		res, err := o.awaitHealth(ctx, paths, ident, Spawned{PID: info.PID, Exited: closed})
 		res.AlreadyRunning = true
-		return res, nil
+		return res, err
 	}
 	if o.Hooks.Spawn == nil {
 		return StartResult{}, fmt.Errorf("%w: no spawner configured", ErrSpawn)
 	}
-	pid, err := o.Hooks.Spawn(ctx)
+	spawned, err := o.Hooks.Spawn(ctx)
 	if err != nil {
 		return StartResult{}, fmt.Errorf("%w: %w", ErrSpawn, err)
 	}
-	return o.awaitHealth(ctx, paths.Socket, ident, pid), nil
+	return o.awaitHealth(ctx, paths, ident, spawned)
 }
 
+// closed is a channel that is already closed.
+var closed = func() <-chan struct{} {
+	c := make(chan struct{})
+	close(c)
+	return c
+}()
+
 // awaitHealth waits up to StartWait for the daemon of the herdr server ident
-// to answer health. A stale daemon still serving answers too, naming its own
-// server; only this server's counts. Without an answer it reports pid
-// unhealthy.
-func (o Options) awaitHealth(ctx context.Context, socket string, ident Identity, pid int) StartResult {
+// to answer health (A48). A stale daemon still serving answers too, naming
+// its own server; only this server's counts. While the lock record names a
+// live daemon of this server, that daemon is starting, whatever process it
+// is (a concurrent start's spawn, say), and awaitHealth waits on it.
+// Otherwise it waits on p, which may still be waiting for the lock, as during
+// a live handoff, until p exits: that is ErrDaemonExited. Without an answer
+// by StartWait it reports the daemon unhealthy, still starting; a ctx that
+// ends first is its error. The pid it reports is the live holder's, or else
+// p's.
+//
+// It reads the record without probing the lock: a probe takes a free lock
+// for an instant, and a daemon trying it then would read the record of one
+// that has let go but not yet exited as a live holder, and give up.
+func (o Options) awaitHealth(ctx context.Context, paths Paths, ident Identity, p Spawned) (StartResult, error) {
 	deadline := time.Now().Add(o.StartWait)
+	var pid int
 	for {
-		if h, err := Health(ctx, socket); err == nil && h.Herdr == ident {
-			return StartResult{PID: h.PID, Healthy: true}
+		if h, err := Health(ctx, paths.Socket); err == nil && h.Herdr == ident {
+			return StartResult{PID: h.PID, Healthy: true}, nil
 		}
-		if time.Now().After(deadline) || pause(ctx) != nil {
-			return StartResult{PID: pid}
+		// The exit is read before the record: a spawn that exits as
+		// already running read a live holder's record first, so the read
+		// after this one sees it.
+		gone := exited(p.Exited)
+		if info := readInfo(paths.Lock); info.Herdr == ident && o.alive(info) {
+			pid = info.PID
+		} else {
+			pid = p.PID // no live holder to name
+			if gone {
+				return StartResult{PID: pid}, fmt.Errorf("%w: pid %d", ErrDaemonExited, pid)
+			}
 		}
+		if time.Now().After(deadline) {
+			return StartResult{PID: pid}, nil
+		}
+		if err := pause(ctx); err != nil {
+			return StartResult{PID: pid}, err
+		}
+	}
+}
+
+// exited reports whether c is closed. A nil c never is.
+func exited(c <-chan struct{}) bool {
+	select {
+	case <-c:
+		return true
+	default:
+		return false
 	}
 }
 
