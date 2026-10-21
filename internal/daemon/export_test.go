@@ -130,3 +130,18 @@ var CallWith = callWith
 func WorkforceOf(o Options, ident Identity) *workforce.Service {
 	return o.newWorkforce(nil, ident, &team.IdleClock{})
 }
+
+// LaunchModels is the team poll's launch models (A39), driven one poll at a
+// time.
+type LaunchModels struct{ m *launchModels }
+
+// NewLaunchModels is a cache with nothing in it.
+func NewLaunchModels() LaunchModels { return LaunchModels{m: newLaunchModels()} }
+
+// Refresh is one poll's look at panes, each a team's agent pane.
+func (l LaunchModels) Refresh(ctx context.Context, c herdr.Client, panes []herdr.PaneInfo, startTime func(int) (uint64, error), now time.Time, log zerolog.Logger) (map[string]string, error) {
+	return l.m.refresh(ctx, c, panes, startTime, now, log)
+}
+
+// AgentPanes are the panes of m's teams where herdr detects an agent.
+var AgentPanes = agentPanes

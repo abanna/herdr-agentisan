@@ -321,7 +321,10 @@ func (c Client) ShowNotification(ctx context.Context, n Notification) (Notificat
 
 // PaneInfo is one pane in pane.list, limited to the fields this plugin reads.
 type PaneInfo struct {
-	PaneID      string `json:"pane_id"`
+	PaneID string `json:"pane_id"`
+	// TerminalID is the terminal the pane shows (src/api/schema/panes.rs:451).
+	// A live handoff gives a pane a new one and keeps its pane id.
+	TerminalID  string `json:"terminal_id"`
 	WorkspaceID string `json:"workspace_id"`
 	// TabID is the tab the pane is in (src/api/schema/panes.rs:453).
 	TabID string `json:"tab_id"`
@@ -369,6 +372,9 @@ func (c Client) ListPanes(ctx context.Context) ([]PaneInfo, error) {
 type Process struct {
 	PID  uint32 `json:"pid"`
 	Name string `json:"name"`
+	// Argv is the process's arguments as herdr read them; nil when it could
+	// not. They can hold a system prompt: never log them.
+	Argv []string `json:"argv"`
 }
 
 // ProcessInfo is the result of pane.process_info, limited to the processes

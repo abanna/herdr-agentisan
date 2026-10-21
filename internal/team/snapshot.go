@@ -32,7 +32,8 @@ import (
 // handoff token, and "unknown" for a plain shell. ctx is the token when it is
 // a bare integer from 0 to 100 and left out otherwise; item and stage are
 // the tokens; the stage's start comes from clock, which may be nil. The
-// model is left out: the daemon does not know it.
+// model is left out: the daemon fills it from each pane's processes
+// (FillModels, A39).
 func Snapshot(m Model, project string, at time.Time, clock *StageClock) snapshot.Snapshot {
 	s := snapshot.Snapshot{V: snapshot.Version, At: at.UTC(), Team: project, Groups: []snapshot.Group{}}
 	i := slices.IndexFunc(m.Projects, func(p Project) bool { return p.Name == project })

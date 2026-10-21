@@ -254,6 +254,16 @@ See [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml)
 `herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json`
 draws a snapshot file instead, outside herdr too.
 
+### The model column
+
+Each row shows the model its agent was started with: Claude's `--model`, or
+Codex's `-m` or `--model`, read from the pane's processes through herdr
+(ADR-001 A39). The daemon asks herdr again only when a pane's agent
+restarted or changed, and a pane where it finds no agent process once a
+minute. It is the launch model: a `/model` switch shows once the agent
+restarts, and an agent started without the flag, such as a Codex that takes
+its model from `config.toml`, shows none.
+
 ### PRs and issues in the header
 
 For every project with a `github` repo in `herdr-agentisan.toml`, the daemon

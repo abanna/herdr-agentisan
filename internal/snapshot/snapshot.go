@@ -90,8 +90,9 @@ type Agent struct {
 	Unnamed bool   `json:"unnamed,omitempty"`
 	PaneID  string `json:"pane_id"`
 	Status  Status `json:"status"`
-	// Model is the model as the agent reports it, e.g. "claude-opus-4-1";
-	// empty, and left out, when it is not reported.
+	// Model is the model the agent was started with, e.g. "claude-opus-5-5":
+	// Claude's --model or Codex's -m, read from its pane's processes (ADR-001
+	// A39); empty, and left out, when it is not known.
 	Model string `json:"model,omitempty"`
 	// Ctx is the context window used, 0..100. Nil means not reported.
 	Ctx   *int   `json:"ctx,omitempty"`

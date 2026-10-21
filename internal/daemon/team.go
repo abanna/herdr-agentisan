@@ -79,6 +79,8 @@ type teamPoll struct {
 	// header is each project's GitHub state, which the collector keeps
 	// (A29).
 	header *headerCache
+	// models are each agent pane's launch model (A39).
+	models *launchModels
 }
 
 // startTeam starts the team poll when o.Team is set, and beside it the
@@ -130,7 +132,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 		tabs = append(tabs, t.Project)
 	}
 	o.Logger.Info().Str("project", cfg.spaces.Project).Str("color", cfg.spaces.Color).Strs("tabs_teams", tabs).Msg("team poll running")
-	tp := teamPoll{cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, idle: idle, cache: cache, header: header}
+	tp := teamPoll{cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, idle: idle, cache: cache, header: header, models: newLaunchModels()}
 	onServer := o.onServer(ident)
 	c := herdr.Client{SocketPath: o.HerdrSocket, Dialed: onServer}
 	tick := time.NewTicker(o.Poll)
@@ -179,6 +181,8 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 // of a pane herdr knows only by name; a failed push is logged and the
 // others go on. It returns ErrHerdrGone, and pushes nothing more, once a
 // call finds the socket no longer names the daemon's server.
+// Each row carries its pane's launch model, which herdr is asked for only
+// when the pane changed (A39).
 // The model it returns is nil when a pane, workspace or tab list failed and
 // no model was built; agent names change neither which panes it holds nor
 // their statuses, so a failed agent list still gives the status events their
@@ -219,8 +223,15 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	tp.idle.Observe(m, now)
 	if agentsErr == nil {
 		tp.stages.Observe(m, now)
-		header := func(project string, s *snapshot.Snapshot) { tp.header.fill(project, s, now) }
-		if err := tp.cache.store(m, tp.cfg.spaces.Project, now, tp.stages, header); err != nil {
+		models, err := tp.models.refresh(ctx, c, agentPanes(m, panes), o.Hooks.StartTime, now, o.Logger)
+		if err != nil {
+			return nil, err
+		}
+		fill := func(project string, s *snapshot.Snapshot) {
+			tp.header.fill(project, s, now)
+			team.FillModels(s, models)
+		}
+		if err := tp.cache.store(m, tp.cfg.spaces.Project, now, tp.stages, fill); err != nil {
 			o.Logger.Error().Err(err).Msg("team poll: cache the snapshots; a team too large to serve keeps its last one")
 		}
 	}

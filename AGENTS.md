@@ -121,8 +121,9 @@ exempts whatever is later added under that name.
   and the workforce ops (A23, `workforce.go`), each with a budget of its
   own. Every poll it also rebuilds the team model, pushes `$team` and every
   agent pane's ctx display (`team.go`, A28) and caches every team's
-  snapshot, with the workspaces each holds, which the `snapshot` op serves
-  by project or workspace, so the op never calls herdr (A18, A24,
+  snapshot, each row with its agent's launch model from the pane's processes
+  (`models.go`, A39), with the workspaces each holds, which the `snapshot` op
+  serves by project or workspace, so the op never calls herdr (A18, A24,
   `snapshot.go`, with `SnapshotSource`, the dashboard's client), and sends
   each status change since the last poll as a workflow event
   (`events.go`). `daemon start` spawns a detached `daemon run`; herdr's

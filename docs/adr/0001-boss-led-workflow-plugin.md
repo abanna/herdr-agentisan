@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A29 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A29 and A39 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -821,3 +821,18 @@ Budget: an agent pane carries `ctx`, `item`, `stage`, `handoff` and the three ba
 - **No contract change.** `project.prs` and `project.issues` have been in snapshot v1 since item 8; no key is added.
 - **Per-team snapshots (A24).** The collected state is held per project name and copied into a snapshot at one place, so a per-project snapshot takes it the same way. Two teams of one project share a header.
 - **Cutover.** herdr-status.sh, run as herdr's `tab_bar_right`, also shows the test slots, which come in part b. Retire it, and the `tab_bar_right` command, once part b ships.
+
+### A39. The model column from each pane's processes
+
+*Overrides:* A18's "`model`: left out, since the daemon does not know it and the screen is not scraped". *Adds to:* D4, D5 and A18. Recorded with NERD-5319 (G1). The snapshot contract v1 is unchanged: `model` has been in it since item 8.
+
+Each row's `model` is the model its agent was started with, which the daemon reads from the arguments of the pane's processes through `pane.process_info`, a herdr API, so no screen is scraped (D4).
+
+- **The agent.** It is the first process of the pane's foreground job, in herdr's order, whose arguments are Claude's (argv[0] named `claude`) or Codex's (argv[0] named `codex`, or `node` running `codex` or `codex.js`, whose own flags follow its script). Both rules are tried on every process, so the model does not depend on herdr's name for the agent.
+- **The flags.** The last `--model X` or `--model=X` before any `--`; for Codex also `-m X`, `-mX` or `-m=X`. A flag with no value, an empty value or one starting with `-` gives none. Codex's `-c model=`, profiles and `config.toml` are not read, so a Codex started without `-m` shows none, as in v12 and the stopgap.
+- **The value.** A row carries it only when it is printable UTF-8 of at most 80 code points, a herdr token's limit, so no argument can push a team past the snapshot's size. argv can hold a system prompt: it is never logged, and only the model is kept.
+- **The cache.** One entry per team pane where herdr detects an agent, workers and bosses; no other pane is asked. An entry holds while its pane shows the same `terminal_id` and agent and, where a process's start time can be read (`Hooks.StartTime`: /proc on Linux, sysctl on darwin), the same agent process. So a poll asks nothing for a pane that has not changed, and one `pane.process_info` after a restart, a reused pid, a live handoff or another agent. Elsewhere an entry holds until its pane's terminal or agent changes. Entries of panes no longer listed are dropped.
+- **A miss.** A pane with no agent process, argv herdr could not read, a pid herdr reports as null, or an agent gone before its start time is read: no model, asked again 60 s later.
+- **The poll.** The asks run on a poll that builds the snapshots, before they are cached, through the poll's own client, so `ErrHerdrGone` stops the poll. They share a 1 s budget, so a slow herdr never makes `$team` late; a pane not asked in time has no model until a later poll, and the overrun is logged once until a poll asks every pane. A failed ask leaves its pane no model, keeps nothing and is asked again at the next poll, logged once until an ask succeeds; a pane closed since the list (`pane_not_found`) is not logged.
+- **The launch model.** A `/model` switch shows only after the agent restarts, and an agent started with no flag shows none. The stopgap has the same limit; v12, which read the screen, did not. A `model` token from Claude's statusline is a possible follow-up, not filed.
+- **Unchanged.** The dashboard already draws the model (`ShortModel`); Fable's and Codex's short names are G2's (NERD-5320). `team status` (A23) carries no model.

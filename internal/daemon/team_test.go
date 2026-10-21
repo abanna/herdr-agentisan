@@ -37,6 +37,9 @@ type teamHerdr struct {
 	agents    []map[string]any
 	agentsErr bool
 	refuse    map[string]bool
+	// procs are pane.process_info's foreground processes, by pane; a pane
+	// with none runs no foreground job.
+	procs map[string][]map[string]any
 	// onCall, when set, runs before each request is answered.
 	onCall func(method string)
 }
@@ -94,6 +97,20 @@ func (th *teamHerdr) serveTeam(normal herdrtest.Handler) herdrtest.Handler {
 				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "pane_not_found", Message: "pane " + params.PaneID + " not found"}}
 			}
 			return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
+		case "pane.process_info":
+			var params struct {
+				PaneID string `json:"pane_id"`
+			}
+			_ = json.Unmarshal(r.Params, &params)
+			th.mu.Lock()
+			defer th.mu.Unlock()
+			procs := th.procs[params.PaneID]
+			if procs == nil {
+				procs = []map[string]any{}
+			}
+			return herdrtest.Reply{Result: map[string]any{"type": "pane_process_info", "process_info": map[string]any{
+				"pane_id": params.PaneID, "shell_pid": 1, "foreground_process_group_id": 1, "foreground_processes": slices.Clone(procs),
+			}}}
 		case "workspace.report_metadata":
 			var params struct {
 				WorkspaceID string `json:"workspace_id"`

@@ -378,8 +378,8 @@ func TestListPanesSendsTheSchemaShape(t *testing.T) {
 				{"pane_id": "wN:p2", "terminal_id": "term_b", "workspace_id": "wN", "tab_id": "wN:t1", "focused": false, "agent_status": "working", "revision": 9, "agent": "claude"},
 			},
 			want: []herdr.PaneInfo{
-				{PaneID: "w1:p1", WorkspaceID: "w1", TabID: "w1:t1", Focused: true, AgentStatus: "idle"},
-				{PaneID: "wN:p2", WorkspaceID: "wN", TabID: "wN:t1", Agent: "claude", AgentStatus: "working"},
+				{PaneID: "w1:p1", TerminalID: "term_a", WorkspaceID: "w1", TabID: "w1:t1", Focused: true, AgentStatus: "idle"},
+				{PaneID: "wN:p2", TerminalID: "term_b", WorkspaceID: "wN", TabID: "wN:t1", Agent: "claude", AgentStatus: "working"},
 			},
 		},
 		"no panes": {panes: []map[string]any{}, want: []herdr.PaneInfo{}},
@@ -425,8 +425,25 @@ func TestPaneProcessInfoSendsTheSchemaShape(t *testing.T) {
 			},
 			want: herdr.ProcessInfo{
 				PaneID: "w14:p1", ShellPID: 599895, ForegroundProcessGroupID: 894377,
-				ForegroundProcesses: []herdr.Process{{PID: 894377, Name: "claude"}, {PID: 919306, Name: "uv"}},
+				ForegroundProcesses: []herdr.Process{{PID: 894377, Name: "claude", Argv: []string{"claude"}}, {PID: 919306, Name: "uv"}},
 			},
+		},
+		// argv as herdr sends it, every element kept; one herdr leaves out
+		// (a process it could not read) or sends null is nil.
+		"argv kept, left out, null and empty": {
+			paneID: "w1:p1",
+			info: map[string]any{"pane_id": "w1:p1", "foreground_processes": []map[string]any{
+				{"pid": 3, "name": "claude", "argv": []string{"/home/u/.local/bin/claude", "--model", "claude-opus-5-5", "", "a b\n\u00e9"}},
+				{"pid": 4, "name": "codex"},
+				{"pid": 5, "name": "node", "argv": nil},
+				{"pid": 6, "name": "sh", "argv": []string{}},
+			}},
+			want: herdr.ProcessInfo{PaneID: "w1:p1", ForegroundProcesses: []herdr.Process{
+				{PID: 3, Name: "claude", Argv: []string{"/home/u/.local/bin/claude", "--model", "claude-opus-5-5", "", "a b\n\u00e9"}},
+				{PID: 4, Name: "codex"},
+				{PID: 5, Name: "node"},
+				{PID: 6, Name: "sh", Argv: []string{}},
+			}},
 		},
 		// herdr answers an alias with the pane's current id.
 		"an alias answers with the current id": {
@@ -517,6 +534,9 @@ func TestPaneQueryFailureClasses(t *testing.T) {
 		"info: pid one past uint32":          {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w1:p1", "foreground_processes": []map[string]any{{"pid": 1 << 32, "name": "x"}}}}), call: info, want: herdr.ErrProtocol},
 		"info: pane_id empty":                {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": ""}}), call: info, want: herdr.ErrProtocol},
 		"info: process_info missing":         {handler: reply(map[string]any{"type": "pane_process_info"}), call: info, want: herdr.ErrProtocol},
+		"info: argv is not an array":         {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w1:p1", "foreground_processes": []map[string]any{{"pid": 1, "name": "x", "argv": "claude --model opus"}}}}), call: info, want: herdr.ErrProtocol},
+		"info: argv holds a non-string":      {handler: reply(map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w1:p1", "foreground_processes": []map[string]any{{"pid": 1, "name": "x", "argv": []any{"claude", 7}}}}}), call: info, want: herdr.ErrProtocol},
+		"list: terminal_id is not a string":  {handler: reply(map[string]any{"type": "pane_list", "panes": []map[string]any{{"pane_id": "w1:p1", "terminal_id": 7}}}), call: list, want: herdr.ErrProtocol},
 		"info: closed without a reply":       {handler: func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Silent: true} }, call: info, want: herdr.ErrUnavailable},
 	}
 	for name, tc := range tests {
@@ -668,7 +688,7 @@ func TestFocusPaneAndUnzoomPaneSendTheSchemaShape(t *testing.T) {
 
 			pane, err := c.FocusPane(t.Context(), id)
 			require.NoError(t, err)
-			assert.Equal(t, herdr.PaneInfo{PaneID: "w2:p1", WorkspaceID: "w2", TabID: "w2:t1", Focused: true, AgentStatus: "idle"}, pane)
+			assert.Equal(t, herdr.PaneInfo{PaneID: "w2:p1", TerminalID: "t1", WorkspaceID: "w2", TabID: "w2:t1", Focused: true, AgentStatus: "idle"}, pane)
 			zoom, err := c.UnzoomPane(t.Context(), id)
 			require.NoError(t, err)
 			assert.Equal(t, herdr.PaneZoom{PaneID: "w2:p1", Reason: "already_unzoomed"}, zoom, "a tab that is not zoomed is no error")
