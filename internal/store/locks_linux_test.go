@@ -40,7 +40,7 @@ func holdsLock(t *testing.T, ino uint64) bool {
 	data, err := os.ReadFile("/proc/locks")
 	require.NoError(t, err)
 	pid, suffix := fmt.Sprint(os.Getpid()), fmt.Sprintf(":%d", ino)
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		f := strings.Fields(line)
 		// 1: POSIX  ADVISORY  READ 12345 fd:01:6815774 1073741826 1073742335
 		if len(f) >= 6 && f[1] == "POSIX" && f[4] == pid && strings.HasSuffix(f[5], suffix) {
