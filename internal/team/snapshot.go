@@ -35,7 +35,8 @@ import (
 // a bare integer from 0 to 100 on a pane herdr detects an agent in (A27) and
 // left out otherwise; item and stage are the tokens; the stage's start comes
 // from clock, and an agent's rest from idle (A37), either of which may be
-// nil. The tab is herdr's. The model is left out: the daemon fills it from
+// nil; the stage's stage_at and whether it is stale come from StageOf, with
+// idle's stretches (A42). The tab is herdr's. The model is left out: the daemon fills it from
 // each pane's processes (FillModels, A39).
 func Snapshot(m Model, project string, at time.Time, clock *StageClock, idle *IdleClock) snapshot.Snapshot {
 	s := snapshot.Snapshot{V: snapshot.Version, At: at.UTC(), Team: project, Groups: []snapshot.Group{}}
@@ -49,7 +50,7 @@ func Snapshot(m Model, project string, at time.Time, clock *StageClock, idle *Id
 	}
 	for _, w := range pr.Boss {
 		if w.Pane.IsAgent() {
-			s.Boss = &snapshot.Boss{Agent: row(w.Pane, clock, idle)}
+			s.Boss = &snapshot.Boss{Agent: row(w.Pane, clock, idle, at)}
 			if since, ok := clock.BossSince(w.Pane.ID); ok {
 				since = since.UTC()
 				s.Boss.StartedAt = &since
@@ -60,7 +61,7 @@ func Snapshot(m Model, project string, at time.Time, clock *StageClock, idle *Id
 	for _, g := range orderedGroups(pr) {
 		out := snapshot.Group{Name: g.Name, Agents: make([]snapshot.Agent, 0, len(g.Workers))}
 		for _, w := range g.Workers {
-			out.Agents = append(out.Agents, row(w.Pane, clock, idle))
+			out.Agents = append(out.Agents, row(w.Pane, clock, idle, at))
 		}
 		s.Groups = append(s.Groups, out)
 	}
@@ -86,9 +87,10 @@ func rank(order []string, name string) int {
 	return len(order)
 }
 
-// row is one pane as a snapshot row. Only an agent rests: a plain shell's
-// status is unknown, so it never carries idle_since, whatever herdr says.
-func row(p Pane, clock *StageClock, idle *IdleClock) snapshot.Agent {
+// row is one pane as a snapshot row at now. Only an agent rests: a plain
+// shell's status is unknown, so it never carries idle_since, whatever herdr
+// says. Its stage's stage_at and staleness are StageOf's.
+func row(p Pane, clock *StageClock, idle *IdleClock, now time.Time) snapshot.Agent {
 	a := snapshot.Agent{Name: p.Name, PaneID: p.ID, TabID: p.TabID, Status: rowStatus(p), Item: p.Item, Stage: p.Stage, Shell: !p.IsAgent()}
 	if a.Name == "" {
 		a.Unnamed = true
@@ -108,6 +110,12 @@ func row(p Pane, clock *StageClock, idle *IdleClock) snapshot.Agent {
 		since = since.UTC()
 		a.IdleSince = &since
 	}
+	st := StageOf(p, idle, now)
+	if !st.At.IsZero() {
+		at := st.At.UTC()
+		a.StageAt = &at
+	}
+	a.StageStale = st.Stale
 	return a
 }
 

@@ -1,0 +1,12 @@
+╭──────────────────────────────────────────────────────────────────╮
+│ aged                                                    [ btop ] │
+│ boss ▸ ● idle · #900 · ctx ▓▓░░░░░░ 30%                    17:19 │
+╰──────────────────────────────────────────────────────────────────╯
+
+╭─ CODERS · 5 ✔1 ◐1 ●2 ?1 ─────────────────────────────────────────╮
+│ ● pee01  idle     opus  ▓▓░░░  41%  NERD-5320  waiting: boss     │
+│ ● pee02  idle     opus  ▓▓▓░░  52%  NERD-5334  buil… · 3h05m ago │
+│ ✔ pee03  done     opus  ▓░░░░  12%  NERD-5260  bloc… · 1d00h ago │
+│ ? pee04  unknown        ░░░░░   --  NERD-5321  review · stale    │
+│ ◐ pee05  working  opus  ▓▓▓░░  61%  NERD-5255  go-review         │
+ enter jump · ↑↓ move · ctrl-b m btop · ? help · q quit

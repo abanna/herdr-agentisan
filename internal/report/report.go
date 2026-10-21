@@ -88,6 +88,16 @@ type Pane struct {
 	// the command in a sandbox whose seccomp filter denies every connect,
 	// herdr's socket included.
 	CodexNetworkSandboxed bool
+	// Now is the clock a stage report's stage_at reads; nil is time.Now.
+	Now func() time.Time
+}
+
+// now is the time p's clock reads.
+func (p Pane) now() time.Time {
+	if p.Now == nil {
+		return time.Now()
+	}
+	return p.Now()
 }
 
 // PaneFrom reads HERDR_SOCKET_PATH, HERDR_PANE_ID, CODEX_THREAD_ID and

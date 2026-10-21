@@ -307,21 +307,22 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 			o.Logger.Warn().Err(err).Str("workspace", t.Target.WorkspaceID).Msg("push $team")
 		}
 	}
-	if err := o.pushCtx(ctx, c, m, l); err != nil {
+	if err := o.pushCtx(ctx, c, m, l, tp.idle, now); err != nil {
 		return nil, "", err
 	}
 	focused, _ := focusedPane(panes)
 	return &m, focused.WorkspaceID, nil
 }
 
-// pushCtx pushes every agent pane in l its ctx display (A28) and, when a
-// team in m places it, its place in the team, which the agent view sorts by
-// (A28 addendum), with `$team`'s source and TTL. A refused push, such as to
+// pushCtx pushes every agent pane in l its ctx display (A28), its stage
+// display at now by the stretches idle saw (A42) and, when a team in m
+// places it, its place in the team, which the agent view sorts by (A28
+// addendum), with `$team`'s source and TTL. A refused push, such as to
 // a pane closed since the list, is logged and the others go on; it returns
 // ErrHerdrGone, and pushes nothing more, once a call finds the socket no
 // longer names the daemon's server.
-func (o Options) pushCtx(ctx context.Context, c herdr.Client, m team.Model, l team.Layout) error {
-	for _, pt := range team.SidebarTokens(m, l) {
+func (o Options) pushCtx(ctx context.Context, c herdr.Client, m team.Model, l team.Layout, idle *team.IdleClock, now time.Time) error {
+	for _, pt := range team.SidebarTokens(m, l, idle, now) {
 		// Once ctx ends, each push fails before it dials.
 		err := c.ReportPaneMetadata(ctx, herdr.PaneMetadata{
 			PaneID:    pt.PaneID,

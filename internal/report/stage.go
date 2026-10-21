@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -30,7 +31,28 @@ const (
 	// MaxValueChars is herdr's limit on a token value, in Unicode characters
 	// (code points). herdr cuts a longer value short; CheckValue refuses it.
 	MaxValueChars = 80
+	// StageAtKey is the pane token holding when the stage was last reported,
+	// in Unix seconds (FormatStageAt), so a reader can tell a stage reported
+	// again from one left over (A42): herdr gives no token a time. It is set
+	// in the same report as every stage value, cleared with the stage, and
+	// never written by an item alone, so it times the stage, not the item.
+	StageAtKey = "stage_at"
 )
+
+// FormatStageAt is t as a stage_at value: whole Unix seconds, in decimal.
+func FormatStageAt(t time.Time) string { return strconv.FormatInt(t.Unix(), 10) }
+
+// ParseStageAt reads a stage_at value as FormatStageAt writes it: a positive
+// count of Unix seconds in canonical decimal, with no sign, space or leading
+// zero. Anything else is no stage_at, so a reader never ages a stage on a
+// time it cannot trust.
+func ParseStageAt(v string) (time.Time, bool) {
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 || strconv.FormatInt(n, 10) != v {
+		return time.Time{}, false
+	}
+	return time.Unix(n, 0), true
+}
 
 // ErrInvalidValue means an item or stage value is one herdr would not store
 // exactly as sent. Nothing is reported rather than a value herdr changes.
@@ -80,9 +102,9 @@ func CheckValue(v string) error {
 	return nil
 }
 
-// Stage pushes the item and stage tokens to the pane the reporting process
-// runs in, in one report with source agentisan and the StageTTL, and returns
-// what it pushed where. Outside a pane it returns ErrNotInPane, and for a
+// Stage pushes the item and stage tokens, and stage_at from pane's clock, to
+// the pane the reporting process runs in, in one report with source
+// agentisan and the StageTTL, and returns what it pushed where. Outside a pane it returns ErrNotInPane, and for a
 // value CheckValue refuses it returns ErrInvalidValue prefixed with the key;
 // neither calls herdr.
 //
@@ -115,7 +137,7 @@ func Stage(ctx context.Context, rep Reporter, pane Pane, item, stage string) (St
 	err = rep.ReportPaneMetadata(ctx, herdr.PaneMetadata{
 		PaneID:    target,
 		Source:    Source,
-		Tokens:    map[string]string{ItemKey: item, StageKey: stage},
+		Tokens:    map[string]string{ItemKey: item, StageKey: stage, StageAtKey: FormatStageAt(pane.now())},
 		TTLMillis: uint64(StageTTL / time.Millisecond),
 	})
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -230,6 +231,69 @@ func TestNoCtxWithoutADetectedAgent(t *testing.T) {
 		bands := map[string]string{"ctx_ok": push.Tokens["ctx_ok"], "ctx_warn": push.Tokens["ctx_warn"], "ctx_hot": push.Tokens["ctx_hot"]}
 		assert.Equal(t, map[string]string{"ctx_ok": want, "ctx_warn": "", "ctx_hot": ""}, bands, pane)
 	}
+}
+
+// TestRunAgesAStaleStage is A42 on a herdrtest team, over the poll's own
+// clock: a stage carried into a turn that reports nothing is current while
+// the daemon has seen no turn and while the turn runs; once it ends, the
+// sidebar's stage moves from stage_now to stage_old with its age and the
+// snapshot marks it stale with its stage_at. Reported again, it is current.
+func TestRunAgesAStaleStage(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	ws, _, _ := fullTeam()
+	pane := func(status string, reported time.Time) []map[string]any {
+		return []map[string]any{teamPane("wN:p1", "wN", "claude", status, "", map[string]string{
+			"item": "NERD-5334", "stage": "qa: reading", "stage_at": strconv.FormatInt(reported.Unix(), 10),
+		})}
+	}
+	agents := []map[string]any{named("wN:p1", "pee01")}
+	reported := t0.Add(-2 * time.Hour)
+	th.layout(ws, pane("idle", reported), agents)
+	dir := shortDir(t)
+	o := teamOpts(t, dir, th, projectConfig(t))
+	o.Now = func() time.Time { return t0 }
+	run(t, o)
+	sock := socketPath(t, dir, th.path)
+
+	pushed := func() [2]string {
+		params := panePushes(t, th.srv)["wN:p1"]
+		require.NotEmpty(t, params)
+		var push struct {
+			Tokens map[string]string `json:"tokens"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(params[len(params)-1]), &push))
+		return [2]string{push.Tokens[team.StageNowKey], push.Tokens[team.StageOldKey]}
+	}
+	row := func(s snapshot.Snapshot) snapshot.Agent {
+		for _, g := range s.Groups {
+			for _, a := range g.Agents {
+				if a.PaneID == "wN:p1" {
+					return a
+				}
+			}
+		}
+		return snapshot.Agent{}
+	}
+
+	polled(t, th.srv, 2)
+	assert.Equal(t, [2]string{"qa: reading", ""}, pushed(), "no turn seen yet")
+	th.layout(ws, pane("working", reported), agents)
+	polled(t, th.srv, 2)
+	assert.Equal(t, [2]string{"qa: reading", ""}, pushed(), "a turn running")
+	th.layout(ws, pane("idle", reported), agents)
+	polled(t, th.srv, 2)
+	assert.Equal(t, [2]string{"", "qa: reading · 2h"}, pushed(), "the turn ended with no report")
+	got := row(served(t, sock, func(s snapshot.Snapshot) bool { return row(s).StageStale }))
+	require.NotNil(t, got.StageAt)
+	assert.Equal(t, reported, *got.StageAt)
+
+	th.layout(ws, pane("idle", t0), agents)
+	polled(t, th.srv, 2)
+	assert.Equal(t, [2]string{"qa: reading", ""}, pushed(), "reported again")
+	got = row(served(t, sock, func(s snapshot.Snapshot) bool { return !row(s).StageStale }))
+	require.NotNil(t, got.StageAt)
+	assert.Equal(t, t0, *got.StageAt)
 }
 
 // TestSnapshotOpBeforeTheFirstPoll: until the team poll has built a

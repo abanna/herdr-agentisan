@@ -167,8 +167,10 @@ func (tok sidebarToken) colour(t *testing.T, value string) string {
 // writes (ADR-001 A28 and its addendum):
 //   - agents, line 1: the state icon, the three ctx band tokens, each with a
 //     colour of its own and no rule (gt and lt cannot read "ctx 56%"), then
-//     the name; line 2: the item and the stage, and no workspace, since the
-//     agent view shows the focused team;
+//     the name; line 2: the item, then the stage display (A42), and no
+//     workspace, since the agent view shows the focused team: stage_now with
+//     the stage colour rules, and stage_old dim, with no rule, so an old
+//     "blocked" never shows red (F4);
 //   - spaces, line 2: `$team` alone, red when any agent is blocked, else pink
 //     when any is ready, else its own colour, which the rules get right for
 //     $team's real values, two-digit counts included.
@@ -185,7 +187,17 @@ func TestSidebarSnippet(t *testing.T) {
 		fgs = append(fgs, tok.Fg)
 	}
 	assert.Len(t, slices.Compact(slices.Sorted(slices.Values(fgs))), 3, "each band has its own colour")
-	assert.Equal(t, []string{"$" + report.ItemKey, "$" + report.StageKey}, names(agents[1]))
+	require.Equal(t, []string{"$" + report.ItemKey, "$" + team.StageNowKey, "$" + team.StageOldKey}, names(agents[1]))
+	now, old := agents[1][1], agents[1][2]
+	assert.Empty(t, old.Rules, "a stale stage takes no stage colour")
+	assert.NotEmpty(t, old.Fg)
+	assert.NotEqual(t, now.Fg, old.Fg, "a stale stage is dimmed")
+	for _, stage := range []string{"blocked: 1Password agent", "READY", "waiting: boss", "tests RED", "queued"} {
+		assert.NotEqual(t, now.Fg, now.colour(t, stage), "a current %q keeps its colour", stage)
+		assert.NotEqual(t, now.colour(t, stage), old.colour(t, stage+" · 3h"), "a stale %q does not", stage)
+		assert.Equal(t, old.Fg, old.colour(t, stage+" · 3h"))
+	}
+	assert.Equal(t, now.Fg, now.colour(t, "build_test"))
 
 	require.Len(t, spaces, 2)
 	assert.Equal(t, []string{"state_icon", "workspace"}, names(spaces[0]))

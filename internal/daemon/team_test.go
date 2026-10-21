@@ -323,8 +323,9 @@ func TestRunPushesTeamToEachGroupSpace(t *testing.T) {
 }
 
 // ctxPush is the exact params of the ctx display push to pane: value in the
-// band key, the other two bands cleared, and, unless place is "", the
-// pane's place in the spaces under order-spaces (A28 addendum); source
+// band key, the other two bands cleared, unless place is "", the pane's
+// place in the spaces under order-spaces (A28 addendum), and the stage
+// display of a pane with no stage, both keys cleared (A42); source
 // agentisan, TTL 9000 ms. Written out by hand rather than from the
 // package's constants.
 func ctxPush(pane, key, value, place string) string {
@@ -334,7 +335,7 @@ func ctxPush(pane, key, value, place string) string {
 	if place != "" {
 		order = fmt.Sprintf(`,"order-spaces":%q`, place)
 	}
-	return fmt.Sprintf(`{"pane_id":%q,"source":"agentisan","tokens":{"ctx_ok":%q,"ctx_warn":%q,"ctx_hot":%q%s},"ttl_ms":9000}`,
+	return fmt.Sprintf(`{"pane_id":%q,"source":"agentisan","tokens":{"ctx_ok":%q,"ctx_warn":%q,"ctx_hot":%q%s,"stage_now":"","stage_old":""},"ttl_ms":9000}`,
 		pane, bands["ctx_ok"], bands["ctx_warn"], bands["ctx_hot"], order)
 }
 

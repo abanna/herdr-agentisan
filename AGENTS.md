@@ -111,7 +111,8 @@ exempts whatever is later added under that name.
   24 h TTL (A27), and
   `report stage` pushes `item` and `stage` on each agentisan step
   transition, and `report turn` pushes them from the `item:` and
-  `BOSS:`/`STATUS:` lines of a Claude or Codex turn (A42, hooks sampled in
+  `BOSS:`/`STATUS:` lines of a Claude or Codex turn, each stage with its
+  `stage_at` (A42, hooks sampled in
   `docs/config/claude-hooks.example.json` and
   `docs/config/codex-turn-hooks.example.toml`). They read `HERDR_PANE_ID`, a
   pane-shell variable, which is why it is not in `plugin.Env`.
@@ -158,7 +159,9 @@ exempts whatever is later added under that name.
   sidebar rows that show them, `docs/config/herdr-sidebar.example.toml`, for
   herdr's own config (`TestSidebarSnippet`), and the model as a snapshot v1
   in the resolver's group order, with the in-memory stage clock (A18) and
-  idle clock (A23).
+  idle clock (A23), whose working stretches tell an old stage from a
+  current one (`stage.go`, A42: `StageOf`, and the sidebar's `stage_now` and
+  `stage_old`).
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
   `team status` and `worker retire` so far: each group's counts and members
   on a tabs team or the ◆ spaces, with idle times from the daemon's clock and
