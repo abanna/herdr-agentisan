@@ -163,7 +163,10 @@ exempts whatever is later added under that name.
   references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check,
   each group's one-line description (A36), never from a repo file, and each
   project's test-slot lock files, which the daemon reads once at start
-  (`tests.go`, A40). Sample in `docs/config/herdr-agentisan.example.toml`.
+  (`tests.go`, A40). A repo file is committed, so it sets only colour, github,
+  group counts, models and rotation (A46, `repoFileKeys`, refused by default),
+  and a model from any layer is checked as safe to pass to an agent
+  (`CheckModel`). Sample in `docs/config/herdr-agentisan.example.toml`.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
   embedded from `migrations/` and tracked by `user_version`. The daemon holds
