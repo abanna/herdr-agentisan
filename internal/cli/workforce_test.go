@@ -48,7 +48,8 @@ func runOut(t *testing.T, lookup func(string) (string, bool), args ...string) (s
 func TestWorkforceHelpMeetsTheWrapper(t *testing.T) {
 	t.Parallel()
 	tests := map[string][]string{
-		"team status": {"--project", "--state-dir"},
+		"team status":   {"--project", "--state-dir"},
+		"worker retire": {"--after-handoff", "--state-dir"},
 	}
 	e := newDaemonEnv(t)
 	for cmd, flags := range tests {
@@ -94,6 +95,11 @@ func TestWorkforceCommandsAlwaysAnswerInJSON(t *testing.T) {
 		"an argument to team status": {args: []string{"team", "status", "now"}, code: "bad_request"},
 		"an unknown verb":            {args: []string{"team", "down"}, code: "bad_request"},
 		"a group alone":              {args: []string{"team"}, code: "bad_request"},
+		"retire with no id":          {args: []string{"worker", "retire"}, code: "bad_request"},
+		"retire with two ids":        {args: []string{"worker", "retire", "a", "b"}, code: "bad_request"},
+		"retire takes no project":    {args: []string{"worker", "retire", "ha-coder-1", "--project", "ha"}, code: "bad_request"},
+		"an unknown worker verb":     {args: []string{"worker", "spawn"}, code: "bad_request"},
+		"retire with no daemon":      {args: []string{"worker", "retire", "ha-coder-1"}, code: "daemon_unavailable"},
 		"no daemon":                  {args: []string{"team", "status"}, code: "daemon_unavailable"},
 		"no state dir":               {args: []string{"team", "status"}, env: map[string]string{"HERDR_PLUGIN_STATE_DIR": ""}, code: "daemon_unavailable"},
 		"no herdr":                   {args: []string{"team", "status"}, env: map[string]string{"HERDR_SOCKET_PATH": ""}, code: "daemon_unavailable"},
@@ -116,7 +122,8 @@ func TestWorkforceCommandsAlwaysAnswerInJSON(t *testing.T) {
 // TestWorkforceCommandsAskTheDaemon: each command sends its op with the
 // request the daemon decodes, the caller's pane included as
 // workforce.FindCallerPane confirms it, and prints the daemon's answer as
-// the envelope: data when ok, its code when refused.
+// the envelope: data when ok, its code when refused. Under --project, and
+// for worker retire, which needs no team, herdr is never asked.
 func TestWorkforceCommandsAskTheDaemon(t *testing.T) {
 	t.Parallel()
 	// theirs is a herdr whose only pane, w3:p1, is another team's: its shell
@@ -126,6 +133,9 @@ func TestWorkforceCommandsAskTheDaemon(t *testing.T) {
 			return herdrtest.Reply{Result: map[string]any{"type": "pane_list", "panes": []map[string]any{{"pane_id": "w3:p1"}}}}
 		}
 		return herdrtest.Reply{Result: map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": "w3:p1", "shell_pid": 7000}}}
+	}
+	failing := func(herdrtest.Request) herdrtest.Reply {
+		return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "internal", Message: "boom"}}
 	}
 	const ok = `{"ok":true,"data":{"project":"ha"}}`
 	const unknown = `{"ok":false,"error":{"code":"unknown_project","message":"\"nope\"; configured: ha"}}`
@@ -146,13 +156,21 @@ func TestWorkforceCommandsAskTheDaemon(t *testing.T) {
 			args: []string{"team", "status"}, reply: ok, pane: "w14:p1",
 			sent: `{"v":1,"op":"team.status","args":{"caller_pane":"w14:p1"}}`, want: ok,
 		},
-		"team status of a project": {
-			args: []string{"team", "status", "--project", "ha"}, reply: ok, pane: "w14:p1",
-			sent: `{"v":1,"op":"team.status","args":{"project":"ha","caller_pane":"w14:p1"}}`, want: ok,
+		"team status of a project, herdr unasked": {
+			args: []string{"team", "status", "--project", "ha"}, reply: ok, pane: "w14:p1", herdr: failing,
+			sent: `{"v":1,"op":"team.status","args":{"project":"ha"}}`, want: ok,
 		},
 		"a refusal is printed with its code": {
 			args: []string{"team", "status", "--project", "nope"}, reply: unknown, pane: "w14:p1",
-			sent: `{"v":1,"op":"team.status","args":{"project":"nope","caller_pane":"w14:p1"}}`, want: unknown,
+			sent: `{"v":1,"op":"team.status","args":{"project":"nope"}}`, want: unknown,
+		},
+		"worker retire after its handoff, herdr unasked": {
+			args: []string{"worker", "retire", "ha-coder-2", "--after-handoff"}, reply: ok, pane: "w14:p1", herdr: failing,
+			sent: `{"v":1,"op":"worker.retire","args":{"target":"ha-coder-2","after_handoff":true}}`, want: ok,
+		},
+		"worker retire by pane id": {
+			args: []string{"worker", "retire", "w14:p7"}, reply: ok, pane: "w14:p1",
+			sent: `{"v":1,"op":"worker.retire","args":{"target":"w14:p7"}}`, want: ok,
 		},
 		"--state-dir beats the environment": {
 			args: []string{"team", "status"}, reply: ok, stateDir: true, pane: "w14:p1",
