@@ -250,17 +250,18 @@ func TestStageDisplay(t *testing.T) {
 		st         team.StageState
 		key, value string
 	}{
-		"current":              {stage: "build_test", st: team.StageState{At: now}, key: team.StageNowKey, value: "build_test"},
-		"current, no stage_at": {stage: "build_test", key: team.StageNowKey, value: "build_test"},
-		"current, 80 long":     {stage: long, key: team.StageNowKey, value: long},
-		"stale":                {stage: "build_test", st: old, key: team.StageOldKey, value: "build_test · 3h"},
-		"stale, age unknown":   {stage: "build_test", st: team.StageState{Stale: true}, key: team.StageOldKey, value: "build_test · stale"},
-		"stale, 80 long":       {stage: long, st: old, key: team.StageOldKey, value: strings.Repeat("x", 74) + "… · 3h"},
-		"stale, 80 wide chars": {stage: wide, st: old, key: team.StageOldKey, value: strings.Repeat("é", 74) + "… · 3h"},
-		"stale, just fits":     {stage: strings.Repeat("x", 75), st: old, key: team.StageOldKey, value: strings.Repeat("x", 75) + " · 3h"},
-		"stale, one over":      {stage: strings.Repeat("x", 76), st: old, key: team.StageOldKey, value: strings.Repeat("x", 74) + "… · 3h"},
-		"stale, long, unknown": {stage: long, st: team.StageState{Stale: true}, key: team.StageOldKey, value: strings.Repeat("x", 71) + "… · stale"},
-		"no stage":             {st: old},
+		"current":                {stage: "build_test", st: team.StageState{At: now}, key: team.StageNowKey, value: "build_test"},
+		"current, no stage_at":   {stage: "build_test", key: team.StageNowKey, value: "build_test"},
+		"current, 80 long":       {stage: long, key: team.StageNowKey, value: long},
+		"stale":                  {stage: "build_test", st: old, key: team.StageOldKey, value: "build_test · 3h"},
+		"stale, age unknown":     {stage: "build_test", st: team.StageState{Stale: true}, key: team.StageOldKey, value: "build_test · stale"},
+		"stale, 80 long":         {stage: long, st: old, key: team.StageOldKey, value: strings.Repeat("x", 74) + "… · 3h"},
+		"stale, 80 wide chars":   {stage: wide, st: old, key: team.StageOldKey, value: strings.Repeat("é", 74) + "… · 3h"},
+		"stale, just fits":       {stage: strings.Repeat("x", 75), st: old, key: team.StageOldKey, value: strings.Repeat("x", 75) + " · 3h"},
+		"stale, wide, just fits": {stage: strings.Repeat("é", 75), st: old, key: team.StageOldKey, value: strings.Repeat("é", 75) + " · 3h"},
+		"stale, one over":        {stage: strings.Repeat("x", 76), st: old, key: team.StageOldKey, value: strings.Repeat("x", 74) + "… · 3h"},
+		"stale, long, unknown":   {stage: long, st: team.StageState{Stale: true}, key: team.StageOldKey, value: strings.Repeat("x", 71) + "… · stale"},
+		"no stage":               {st: old},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
