@@ -129,6 +129,29 @@ func TestAPaneSendersNoticeFollowsItsTerminal(t *testing.T) {
 	assert.Empty(t, p.to("w2:p1"), "never the pane's old id")
 }
 
+// TestSendWakesTheDispatcher: a message send queued is typed at once, not
+// at the next poll. Only the poll at start runs, and its pass serves the
+// boss's message seeded before it; the coder, whom that pass did not list,
+// is served only because the send woke the dispatcher.
+func TestSendWakesTheDispatcher(t *testing.T) {
+	t.Parallel()
+	th, p, dir := haTeam(t)
+	st := stateStore(t, dir, th)
+	seeded := sent(t, st, haBoss, coder, "before the start")
+	o := teamOpts(t, dir, th, workforceConfig(t))
+	o.Poll = time.Hour // only the poll at start runs
+	run(t, o)
+	assert.Equal(t, "ha-boss", p.next(t).Target)
+	eventuallyState(t, st, seeded.ID, store.MessageDelivered)
+
+	data, err := daemon.Workforce(t.Context(), socketPath(t, dir, th.path), daemon.OpSend,
+		workforce.SendRequest{To: "ha-coder-1", Body: "now", CallerPane: "w14:p1"})
+	require.NoError(t, err)
+	var res workforce.SendResult
+	require.NoError(t, json.Unmarshal(data, &res))
+	assert.Equal(t, typed{Target: "ha-coder-1", Pane: "w14:p2", Text: "[msg " + res.ID + " from ha-boss] now"}, p.next(t))
+}
+
 // TestSendWaitsForTheFirstReconcile: before the team poll has reconciled the
 // rows since the daemon started, send refuses not_ready, as the workforce
 // ops do (A35): a row a herdr restart left behind would name its sender.
