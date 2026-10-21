@@ -118,6 +118,8 @@ func TestGroupViewContents(t *testing.T) {
 	assert.Contains(t, frame, " write the code", "the description sits under the title")
 	assert.Contains(t, lineWith(t, frame, "◐ pee01 · working"), "╭─", "a box's title is its top border")
 	assert.Contains(t, lineWith(t, frame, "⟳ pee02 · ready"), "⟳ READY ─╮", "a ready agent's badge is at the top right")
+	assert.Contains(t, lineWith(t, frame, "▸ scratch · shell"), "╭─", "a plain shell's box title is its row's: ▸ and shell (A38)")
+	assert.NotContains(t, frame, "? scratch", "a shell is not drawn as an unknown agent")
 	assert.Contains(t, frame, "opus  ctx ▓▓▓▓░░░░░░ 38%")
 	assert.Contains(t, frame, "│ ctx ▓▓░░░░░░░░ 22%", "no model reported (G1): the gauge leads")
 	assert.Contains(t, frame, "│ ctx ░░░░░░░░░░ --", "no ctx reported: an empty gauge")

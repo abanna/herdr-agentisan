@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"image/color"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -35,7 +36,38 @@ var (
 	// buttonStyle is the btop button: bold on the accent, never reverse
 	// video, which marks the selected agent alone.
 	buttonStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#282a36")).Background(colAccent)
+	// stageReadyStyle and stageRedStyle are a stage's READY and RED, v12's
+	// bold green and bold red.
+	stageReadyStyle = lipgloss.NewStyle().Bold(true).Foreground(colGreen)
+	stageRedStyle   = lipgloss.NewStyle().Bold(true).Foreground(colRed)
 )
+
+// stageStyle is a stage's colour, v12's rules made case-insensitive and
+// word-bounded (ADR-001 A38), tried in v12's order: bold green when a word
+// is "ready"; else bold red when one is "red" or "blocked"; else yellow when
+// one is "waiting" or "queued"; else dim. A word is a run of letters, marks
+// and digits, so "ready_to_merge" is ready, "already" is not, and "restored"
+// is not red.
+func stageStyle(stage string) lipgloss.Style {
+	words := strings.FieldsFunc(stage, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsMark(r) && !unicode.IsDigit(r)
+	})
+	has := func(targets ...string) bool {
+		return slices.ContainsFunc(words, func(w string) bool {
+			return slices.ContainsFunc(targets, func(want string) bool { return strings.EqualFold(w, want) })
+		})
+	}
+	switch {
+	case has("ready"):
+		return stageReadyStyle
+	case has("red", "blocked"):
+		return stageRedStyle
+	case has("waiting", "queued"):
+		return noteStyle
+	default:
+		return dimStyle
+	}
+}
 
 // Thresholds are the context levels of ADR-001 D7, in percent. ctx below
 // Soft is green, below Hard yellow, below Ceiling orange, and red from
@@ -136,6 +168,35 @@ func statusLabel(s snapshot.Status) string {
 	return string(snapshot.StatusUnknown)
 }
 
+// A plain shell's glyph and state word (ADR-001 A38), v12's.
+const (
+	shellIcon  = "▸"
+	shellLabel = "shell"
+)
+
+// isShell reports whether a is drawn as a plain shell: it is marked one and
+// its status is unknown. A shell with another status, ready from a handoff
+// token, is drawn as that status, as $team counts it.
+func isShell(a snapshot.Agent) bool {
+	return a.Shell && statusLabel(a.Status) == string(snapshot.StatusUnknown)
+}
+
+// rowIcon and rowLabel are the glyph and the state word a row draws for a:
+// its status's, or a plain shell's. A shell is drawn in unknown's style.
+func rowIcon(a snapshot.Agent) string {
+	if isShell(a) {
+		return shellIcon
+	}
+	return StatusIcon(a.Status)
+}
+
+func rowLabel(a snapshot.Agent) string {
+	if isShell(a) {
+		return shellLabel
+	}
+	return statusLabel(a.Status)
+}
+
 func statusStyle(s snapshot.Status) lipgloss.Style {
 	switch s {
 	case snapshot.StatusWorking:
@@ -153,9 +214,10 @@ func statusStyle(s snapshot.Status) lipgloss.Style {
 	}
 }
 
-// ShortModel is the model as a row shows it, four cells at most: opus, son
-// or hai for Claude's families wherever they appear in the name, otherwise
-// the first word, lower-cased, cut to four cells (two wide characters).
+// ShortModel is the model as a row shows it, four cells at most: opus, son,
+// hai or fab for Claude's families wherever they appear in the name, cdx for
+// a Codex model, otherwise the first word, lower-cased, cut to four cells
+// (two wide characters).
 func ShortModel(model string) string {
 	m := strings.ToLower(clean(model))
 	switch {
@@ -165,6 +227,10 @@ func ShortModel(model string) string {
 		return "son"
 	case strings.Contains(m, "haiku"):
 		return "hai"
+	case strings.Contains(m, "fable"):
+		return "fab"
+	case strings.Contains(m, "codex"):
+		return "cdx"
 	}
 	words := strings.Fields(m)
 	if len(words) == 0 {
