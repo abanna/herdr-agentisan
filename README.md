@@ -271,6 +271,17 @@ See [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml)
 `herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json`
 draws a snapshot file instead, outside herdr too.
 
+### A group's view
+
+Press 1-9, or click a group's title, to open that group's view (ADR-001
+A37): a box per agent, two to a row from 110 columns, with its model and
+ctx, item, the whole stage (two lines, then `…`), how long it has been in
+that stage and at rest, and the pane and tab it runs in. Everything in it is
+what the agents report and the daemon times; nothing is read from a screen,
+so a worker's stage line is what says what it is doing. Enter or a click
+jumps to the agent, as on the overview; Esc, ← or `◀ back` returns, and `/`
+returns and starts a search.
+
 ### PRs and issues in the header
 
 For every project with a `github` repo in `herdr-agentisan.toml`, the daemon
