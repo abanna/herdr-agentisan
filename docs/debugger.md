@@ -106,7 +106,8 @@ same as `dir`, `env` and `argv`. The parts of the launch:
   `Agent`, `Workflow`, `Monitor`, `TaskStop`, `EnterPlanMode`, the `Cron` tools,
   `ScheduleWakeup`, `RemoteTrigger`, `SendMessage`, `ListAgents`,
   `PushNotification`, `SendUserFile`, `SendFeedback`, the `Artifact` tools,
-  `DesignSync`, `EnterWorktree`, `ExitWorktree` and the MCP resource tools.
+  `DesignSync`, `EnterWorktree`, `ExitWorktree`, and the MCP resource tools
+  `ListMcpResourcesTool`, `ReadMcpResourceTool` and `ReadMcpResourceDirTool`.
   Most need no permission, so `dontAsk` never stops them: a live check found
   `CronList` running before they were denied. A deny rule naming a tool
   removes it from the session. A tool a later Claude Code adds runs until it

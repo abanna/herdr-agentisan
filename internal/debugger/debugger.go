@@ -54,7 +54,7 @@ var sessionTools = []string{
 	"SendMessage", "ListAgents", "PushNotification", "SendUserFile", "SendFeedback",
 	"Artifact", "ArtifactData", "ArtifactComments", "DesignSync",
 	"EnterWorktree", "ExitWorktree",
-	"ListMcpResourcesTool", "ReadMcpResourceTool",
+	"ListMcpResourcesTool", "ReadMcpResourceTool", "ReadMcpResourceDirTool",
 }
 
 // mcpFile is a project's MCP config. Claude Code reads one in the directory

@@ -61,7 +61,7 @@ func TestCommand(t *testing.T) {
 		"SendMessage", "ListAgents", "PushNotification", "SendUserFile", "SendFeedback",
 		"Artifact", "ArtifactData", "ArtifactComments", "DesignSync",
 		"EnterWorktree", "ExitWorktree",
-		"ListMcpResourcesTool", "ReadMcpResourceTool",
+		"ListMcpResourcesTool", "ReadMcpResourceTool", "ReadMcpResourceDirTool",
 	}, got.Args)
 	assert.Equal(t, map[string]string{"HERDR_PLUGIN_CONFIG_DIR": launch.ConfigDir}, got.Env)
 	assert.Equal(t, launch.Repo, got.Dir, "it starts in the repo: the directory it starts in is a working directory")
