@@ -90,6 +90,53 @@ func (p Profile) AgentFor(typ string) Agent {
 	return Agent{Command: slices.Clone(p.Agent.Command), Model: model}
 }
 
+// maxModel bounds a model's length in bytes.
+const maxModel = 128
+
+// modelPattern is what a model may be (ADR-001 A46): a letter or digit, then
+// letters, digits and . _ - : / @ [ ], at most maxModel bytes. The workforce
+// passes it as one argument after --model, which herdr types into the pane's
+// shell bare when every character is in its own safe set, and otherwise inside
+// single quotes (PowerShell's for pwsh): none of these is special in either
+// form in any shell herdr accepts, fish included, and the first one can never
+// start a flag. It still covers opus[1m], gpt-5.1-codex,
+// a Bedrock id with its :0 and a Vertex one with its @date.
+var modelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,127}$`)
+
+// CheckModel refuses a model the workforce could not pass to an agent
+// safely, one modelPattern does not match. The error never holds the model,
+// which may come from a repo file. "" is no model.
+func CheckModel(model string) error {
+	if model == "" || modelPattern.MatchString(model) {
+		return nil
+	}
+	return fmt.Errorf("%w: a model is a letter or digit, then letters, digits and . _ - : / @ [ ], at most %d bytes", ErrInvalid, maxModel)
+}
+
+// checkModels checks agent.model and every group's agent.model as merged,
+// whichever layer sets each: a model another layer overrides never reaches
+// an agent.
+func (m merged) checkModels() error {
+	v, _ := m.get("groups")
+	groups, _ := v.(map[string]any)
+	paths := make([]string, 0, 1+len(groups))
+	paths = append(paths, "agent.model")
+	for _, name := range slices.Sorted(maps.Keys(groups)) {
+		paths = append(paths, "groups."+name+".agent.model")
+	}
+	for _, path := range paths {
+		raw, set := m.get(path)
+		if !set {
+			continue
+		}
+		s, _ := raw.(string)
+		if err := CheckModel(s); err != nil {
+			return fmt.Errorf("%s: %w", m.at(path), err)
+		}
+	}
+	return nil
+}
+
 // launchFlags are the agent flags the workforce sets itself: a command that
 // carries one would be launched with two. --effort is routing's (A50).
 var launchFlags = []string{"--model", "-m", "--name", "-n", "--effort"}

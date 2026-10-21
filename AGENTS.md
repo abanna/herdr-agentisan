@@ -161,7 +161,10 @@ exempts whatever is later added under that name.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
   references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check,
-  and each group's one-line description (A36), never from a repo file.
+  and each group's one-line description (A36), never from a repo file. A
+  repo file is committed, so it sets only colour, github, group counts,
+  models and rotation (A46, `repoFileKeys`, refused by default), and a model
+  from any layer is checked as safe to pass to an agent (`CheckModel`).
   Sample in `docs/config/herdr-agentisan.example.toml`.
 - `internal/routing/` — the model and effort each spawned worker starts
   with (ADR-001 A50, NERD-5289). It reads the user's routing rules,

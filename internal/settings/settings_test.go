@@ -927,8 +927,10 @@ func TestLoadEncodingClasses(t *testing.T) {
 			check:  func(t *testing.T, r settings.Resolved) { assert.Equal(t, "#123456", r.Profile.Color) },
 		},
 		"non-ASCII values pass through": {
-			shared: app + "[projects.app.agent]\nmodel = \"opus-café\"\n",
-			check:  func(t *testing.T, r settings.Resolved) { assert.Equal(t, "opus-café", r.Profile.Agent.Model) },
+			shared: app + "[projects.app.integrations.wiki]\nurl = \"https://café.example\"\n",
+			check: func(t *testing.T, r settings.Resolved) {
+				assert.Equal(t, "https://café.example", r.Profile.Integrations["wiki"].URL)
+			},
 		},
 		"invalid UTF-8 in the repo file": {
 			shared: app, repoFile: "schema_version = 1\ncolor = \"x\xff\"\n", wantErr: settings.ErrInvalid, wantIn: settings.RepoFileName,

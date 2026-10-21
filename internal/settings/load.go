@@ -248,6 +248,9 @@ func loadRepoFile(path string) (*source, error) {
 	if err := s.checkNoDescriptions(); err != nil {
 		return nil, err
 	}
+	if err := s.checkRepoFileKeys(); err != nil {
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -264,6 +267,65 @@ func (s *source) checkNoDescriptions() error {
 		}
 	}
 	return nil
+}
+
+// repoFileKeys are the only keys a repo file may set (ADR-001 A46): what
+// neither runs, nor is typed in the user's terminals, nor says where a secret
+// is read or sent. A repo file is committed, so whoever can commit to the
+// repo would choose anything else in it, and every workforce op reads it with
+// the project's profile. Every other key comes only from the user's own
+// layers, the shared file, its project tables and --set, and so does a key the
+// schema gains later until it is listed here. A * stands for any one name.
+var repoFileKeys = []string{
+	"agent.model",
+	"color",
+	"github",
+	"groups.*.agent.model",
+	"groups.*.slots",
+	"groups.*.workers",
+	"rotation.thresholds",
+}
+
+// checkRepoFileKeys refuses a repo file that sets any key outside
+// repoFileKeys, whatever the value: an empty list still replaces the user's
+// own. The first such key in path order is the one reported.
+func (s *source) checkRepoFileKeys() error {
+	for _, path := range leafPaths(s.values, "") {
+		if !slices.ContainsFunc(repoFileKeys, func(k string) bool { return matchPath(k, path) }) {
+			return fmt.Errorf("%s: %w: a repo file is committed, so it sets only color, github, a group's workers and slots, models and rotation; set it in %s or with --set", s.at(path), ErrInvalid, FileName)
+		}
+	}
+	return nil
+}
+
+// leafPaths are the key paths of every leaf under tree, each table's keys in
+// order.
+func leafPaths(tree map[string]any, prefix string) []string {
+	var out []string
+	for _, k := range slices.Sorted(maps.Keys(tree)) {
+		p := join(prefix, k)
+		if sub, ok := tree[k].(map[string]any); ok {
+			out = append(out, leafPaths(sub, p)...)
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
+}
+
+// matchPath reports whether path matches pattern segment by segment, a *
+// matching any one segment.
+func matchPath(pattern, path string) bool {
+	want, got := strings.Split(pattern, "."), strings.Split(path, ".")
+	if len(want) != len(got) {
+		return false
+	}
+	for i := range want {
+		if want[i] != "*" && want[i] != got[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // parseFlags turns each --set into a layer of its own, applied in order.

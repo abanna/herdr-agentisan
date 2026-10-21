@@ -111,6 +111,10 @@ func TestRoutingRefuses(t *testing.T) {
 		"a model from --set while routing is on":    {file: "[routing]\nenabled = true\n", set: []string{"agent.model=opus"}, wantErr: settings.ErrInvalid, wantIn: []string{"agent.model (flag, --set)"}},
 		"a project's model while routing is on":     {file: "[routing]\nenabled = true\n[projects.app.agent]\nmodel = \"opus\"\n", wantErr: settings.ErrInvalid, wantIn: []string{"projects.app.agent.model"}},
 		"a repo file's model while routing is on":   {file: "[routing]\nenabled = true\n", repoFile: "[agent]\nmodel = \"opus\"\n", project: true, wantErr: settings.ErrInvalid, wantIn: []string{"agent.model (repo, "}},
+		"a repo file's group model while routing is on (A46)": {
+			file: "[routing]\nenabled = true\n", repoFile: "[groups.qa]\nworkers = 1\nslots = 1\nagent = { model = \"opus\" }\n", project: true,
+			wantErr: settings.ErrInvalid, wantIn: []string{"groups.qa.agent.model (repo, "},
+		},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
