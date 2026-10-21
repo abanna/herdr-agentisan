@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A29, A31 and A35 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A29, A31, A35 and A40 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -904,3 +904,24 @@ Budget: an agent pane a team places carries 8 keys, and a push sets 4.
 - **Logs, not events.** A rebind or a re-key is logged at info. A lost row, and a candidate with another shell, are logged at warn. Workflow events for them can follow as an addition to `docs/telemetry.md`.
 - **A19's tab race is narrower.** herdr 0.9.3 maps a tab's position to its saved number (`src/app/ids.rs:19-25`), so a tab opened or closed between `pane.list` and `tab.list` cannot put a neighbour's label on a pane. Only a tab renamed between the two calls can mislabel a pane, for that one poll.
 - **Out of scope.** The focus history (Back already skips unlisted panes, A16), messages to a bare pane, and the tokens a live handoff erases.
+
+### A40. Test slots per project, and held slots
+
+*Amends:* A31's counting and its failures. *Overrides:* A31's "in a project table or a repo file it is an unknown key", for a project table, and its "every team's snapshot carries the same count". *Adds to:* A18's snapshot v1, with `project.slots.held`. Recorded with NERD-5323 (parity gap G5).
+
+- **Why.** The skills team counts three `/tmp/agentisan-suite-1000*.lock` slots and herdr-agentisan counts agentisan's gate, so one shared list showed both teams a wrong total. A boss also holds a slot for itself with `flock <lock> sleep …` (`slot-hold.sh`), which herdr-status.sh showed as "(3rd held)" and A31 counts as used.
+- **`[projects.<p>.tests] locks`.** A project's own table may set it, with A31's rules; a repo file still may not, since the lock files are the machine's. It replaces `[tests] locks` for that project whole, so `locks = []` reports no slots for it. A project without its own list, and the ◆ spaces' unnamed project, count the shared list. The daemon reads every list once, at start.
+- **One reading per poll.** Every poll reads the held locks once for every team, and each team counts its own project's lock files from that reading, so a lock taken mid-poll never gives two teams two answers. Each lock file is looked up, and each locked file's holders judged, once per poll.
+- **Two passes.** The kernel lists the locks a page at a time, and a lock released between two pages can shift the next page past one still held, which then reads as free. With about 500 locks on a developer machine, that happened in about one test run in twenty. So a reading is two passes, back to back, holding every lock and every waiter either pass lists. The kernel never lists a lock that was not there, so the union only keeps a lock released during the reading taken until the next poll, the side A31 errs on.
+- **A hold.** A slot is **held**, not used, when a holder of its lock is a hold, which needs all of these:
+  - The holder's pid, from `/proc/locks`, runs flock(1): `argv[0]` in `/proc/<pid>/cmdline` has base name `flock`.
+  - flock's own options come first, spelt in full (`-s`, `-x`, `-e`, `-n`, `-o`, `-w`, `-E` and their long forms), then `--` or the lock.
+  - The command is `sleep`, by base name or path, or `-c`/`--command` with one string whose first word is `sleep`.
+  - Some entry of `/proc/<pid>/fd` is the lock, by device and inode, never by the name in argv.
+- **Anything else is used,** never held or free. That covers an open-file-description lock (pid -1); a holder that is gone, can't be read, or has a command line over 64 KiB; any other argv, such as `flock -F` (which becomes the command itself), `sh -c 'flock …'` or `-c 'exec sleep …'`; and a pid also on any waiter line. A suite's `flock -n "$fd"` leaves its exited pid on its holder line, and a hold queued behind it can be given the same number; the waiter line tells them apart. A hold still waiting holds nothing: the slot stays the run's.
+- **Who holds it.** Nothing shows who started a hold, so any `flock <lock> sleep …` holder counts, the boss's or not. A shared lock is held if any of its holders is a hold.
+- **The contract.** `project.slots` gains `held`, an optional key in snapshot v1, absent when no slot is held, as with A18's `unnamed`; `used + held` is at most `total`. A dashboard started before the install refuses the key until it is reopened.
+- **The header.** A held slot leaves the count: one used, one held and one free of three shows `slots 1/2 (1 held)`. It is drawn as "no slot free" once used reaches total less held.
+- **Failures.** A lock list that can't be read blanks every team's slots, logged once, as in A31. A lock file that can't be looked at blanks only the projects that list it, logged once for each.
+- **Against herdr-status.sh.** The script counts with `fuser`, which takes any process with the file open, a waiter included. The daemon counts holders only, so it can show fewer slots used.
+- **Off Linux,** no slots are reported, as before. **Out of scope:** the tab bar's line (G6), retiring herdr-status.sh, commands that take or release a hold, and a group's `slots`, which caps its workers.

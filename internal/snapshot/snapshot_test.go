@@ -139,6 +139,9 @@ func TestDecodeAcceptsEveryContractValue(t *testing.T) {
 		"issues 0":                   project(`"issues":0`),
 		"slots 0 of 0":               project(`"slots":{"used":0,"total":0}`),
 		"slots all used":             project(`"slots":{"used":3,"total":3}`),
+		"slots, one held":            project(`"slots":{"used":1,"total":3,"held":1}`),
+		"slots all held":             project(`"slots":{"used":0,"total":2,"held":2}`),
+		"slots, none held":           project(`"slots":{"used":1,"total":2,"held":0}`),
 		"a lower-case colour":        project(`"color":"#bd93f9"`),
 		"an upper-case colour":       project(`"color":"#BD93F9"`),
 		"watchers 0":                 boss(`"watchers":0`),
@@ -272,7 +275,11 @@ func TestDecodeRefuses(t *testing.T) {
 		"slots used past total":           {in: project(`"slots":{"used":3,"total":2}`), want: snapshot.ErrInvalid, contains: []string{"3/2"}},
 		"slots without used":              {in: project(`"slots":{"total":2}`), want: snapshot.ErrInvalid, contains: []string{`"used"`}},
 		"slots without total":             {in: project(`"slots":{"used":0}`), want: snapshot.ErrInvalid, contains: []string{`"total"`}},
-		"an unknown slots key":            {in: project(`"slots":{"used":0,"total":2,"held":1}`), want: snapshot.ErrInvalid},
+		"an unknown slots key":            {in: project(`"slots":{"used":0,"total":2,"free":2}`), want: snapshot.ErrInvalid},
+		"slots held -1":                   {in: project(`"slots":{"used":0,"total":2,"held":-1}`), want: snapshot.ErrInvalid},
+		"slots used and held past total":  {in: project(`"slots":{"used":2,"total":3,"held":2}`), want: snapshot.ErrInvalid, contains: []string{"2/3", "2 held"}},
+		"slots held past total":           {in: project(`"slots":{"used":0,"total":1,"held":2}`), want: snapshot.ErrInvalid},
+		"held, not a number":              {in: project(`"slots":{"used":0,"total":2,"held":"1"}`), want: snapshot.ErrInvalid},
 		"a duplicate slots key":           {in: project(`"slots":{"used":0,"used":1,"total":2}`), want: snapshot.ErrInvalid},
 		"colour without #":                {in: project(`"color":"bd93f9"`), want: snapshot.ErrInvalid, contains: []string{"bd93f9"}},
 		"colour of three digits":          {in: project(`"color":"#fff"`), want: snapshot.ErrInvalid},
@@ -598,4 +605,23 @@ func TestUnnamedIsLeftOutUnlessSet(t *testing.T) {
 	got, err := snapshot.Decode(bytes.NewReader(raw))
 	require.NoError(t, err)
 	assert.True(t, got.Groups[0].Agents[0].Unnamed)
+}
+
+// TestHeldIsLeftOutUnlessSet: a writer leaves held out when no slot is held
+// (ADR-001 A40), so a snapshot with none reads as one written before the key
+// existed; set, it survives a round trip.
+func TestHeldIsLeftOutUnlessSet(t *testing.T) {
+	t.Parallel()
+
+	none, err := json.Marshal(snapshot.Slots{Used: 1, Total: 2})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"used":1,"total":2}`, string(none))
+
+	doc := snapshot.Snapshot{V: snapshot.Version, Team: "t", Groups: []snapshot.Group{}, Project: &snapshot.Project{Slots: &snapshot.Slots{Used: 1, Total: 3, Held: 1}}}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	got, err := snapshot.Decode(bytes.NewReader(raw))
+	require.NoError(t, err)
+	require.NotNil(t, got.Project)
+	assert.Equal(t, &snapshot.Slots{Used: 1, Total: 3, Held: 1}, got.Project.Slots)
 }

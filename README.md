@@ -281,9 +281,12 @@ action after changing them.
 The header shows `slots used/total` for the lock files `[tests] locks`
 names in the shared `herdr-agentisan.toml` (ADR-001 A31): a slot is in use
 while some process holds a lock on its file, as `/proc/locks` lists them,
-counted every poll. Give absolute paths on tmpfs or ext4; agentisan's gate
-keeps one per slot in `$XDG_RUNTIME_DIR/agentisan/gate.<n>.lock`. Without
-`[tests]`, or off Linux, no slots are shown. The boss's `up 2h14m` counts
+counted every poll. A project's own `[projects.<p>.tests] locks` replaces
+the shared list for its team (A40). Give absolute paths on tmpfs or ext4;
+agentisan's gate keeps one per slot in
+`$XDG_RUNTIME_DIR/agentisan/gate.<n>.lock`. A slot a boss holds with
+`flock <lock> sleep …` shows as held, not used: `slots 1/2 (1 held)`.
+Without a list, or off Linux, no slots are shown. The boss's `up 2h14m` counts
 from when this daemon first saw the boss's pane, so a handoff or a daemon
 restart starts it again.
 

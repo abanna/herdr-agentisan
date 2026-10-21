@@ -147,10 +147,12 @@ type PR struct {
 }
 
 // Slots are the test slots: how many are in use, of how many. Both keys are
-// required.
+// required. Held is how many of the others a boss's hold keeps (ADR-001
+// A40): neither in use nor free. It is optional, and absent when none are.
 type Slots struct {
 	Used  int `json:"used"`
 	Total int `json:"total"`
+	Held  int `json:"held,omitempty"`
 }
 
 // CIState is the combined state of a PR's checks.
@@ -310,8 +312,8 @@ func (p Project) validate() error {
 	if p.Issues != nil && *p.Issues < 0 {
 		return fmt.Errorf("%w: issues %d", errProject, *p.Issues)
 	}
-	if sl := p.Slots; sl != nil && (sl.Used < 0 || sl.Total < 0 || sl.Used > sl.Total) {
-		return fmt.Errorf("%w: slots %d/%d: both are counts, and used is at most total", errProject, sl.Used, sl.Total)
+	if sl := p.Slots; sl != nil && (sl.Used < 0 || sl.Total < 0 || sl.Held < 0 || sl.Used > sl.Total-sl.Held) {
+		return fmt.Errorf("%w: slots %d/%d, %d held: all are counts, and used and held are at most total", errProject, sl.Used, sl.Total, sl.Held)
 	}
 	seen := map[int]bool{}
 	for _, pr := range p.PRs {
@@ -398,7 +400,7 @@ var (
 		"name": nil, "description": nil, "agents": {elem: agentShape},
 	}}
 	prShape      = &shape{keys: map[string]*shape{"number": nil, "ci": nil, "codex": nil, "merge": nil}}
-	slotsShape   = &shape{keys: map[string]*shape{"used": nil, "total": nil}, required: []string{"used", "total"}}
+	slotsShape   = &shape{keys: map[string]*shape{"used": nil, "total": nil, "held": nil}, required: []string{"used", "total"}}
 	projectShape = &shape{keys: map[string]*shape{
 		"color": nil, "prs": {elem: prShape}, "issues": nil, "slots": slotsShape,
 	}}

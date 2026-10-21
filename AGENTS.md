@@ -151,8 +151,10 @@ exempts whatever is later added under that name.
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
-  references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check.
-  Sample in `docs/config/herdr-agentisan.example.toml`.
+  references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check,
+  and each project's test-slot lock files, which the daemon reads once at
+  start (`tests.go`, A40). Sample in
+  `docs/config/herdr-agentisan.example.toml`.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
   embedded from `migrations/` and tracked by `user_version`. The daemon holds
@@ -175,11 +177,14 @@ exempts whatever is later added under that name.
   it with an environment they build, never the real gh or GitHub. The
   daemon's collector (`internal/daemon/github.go`) runs it every 60 s beside
   the team poll and caches each project's result for the snapshot.
-- `internal/testslots/` — the dashboard header's test slots (ADR-001 A31):
-  which of `[tests] locks` some process holds a lock on, read from the
-  kernel's `/proc/locks` every team poll without opening or locking a lock
-  file. Tests hold real locks on temp files and read them back; the parser
-  is tested on its own against written lines.
+- `internal/testslots/` — the dashboard header's test slots (ADR-001 A31,
+  A40): which of a project's lock files some process holds a lock on, read
+  from the kernel's `/proc/locks` once every team poll, in two passes,
+  without opening or locking a lock file, and which of those a boss's
+  `flock <lock> sleep …` holds, told by the holder's `/proc` cmdline and
+  open files. Tests hold real locks on temp files, and run a real flock(1)
+  hold, and read them back; the parser and the hold check are tested on
+  their own against written lines and a stand-in `/proc`.
 - `internal/snapshot/` — the versioned snapshot contract (ADR-001 D5/D6,
   A18): the groups and agents, the boss, and the project's PRs, issues and
   test slots. Decoding is strict: exact keys, closed enums, RFC 3339 times.

@@ -62,6 +62,9 @@ func TestHeld(t *testing.T) {
 		"no number":                   {content: "FLOCK  ADVISORY  WRITE 1 08:01:9 0 EOF\n", wantErr: true},
 		"a number with no colon":      {content: "1 FLOCK  ADVISORY  WRITE 1 08:01:9 0 EOF\n", wantErr: true},
 		"a number that is not one":    {content: "x: FLOCK  ADVISORY  WRITE 1 08:01:9 0 EOF\n", wantErr: true},
+		"a pid not a number":          {content: "1: FLOCK  ADVISORY  WRITE x 08:01:9 0 EOF\n", wantErr: true},
+		"a pid past 64 bits":          {content: "1: FLOCK  ADVISORY  WRITE 99999999999999999999 08:01:9 0 EOF\n", wantErr: true},
+		"a waiter pid not a number":   {content: "1: FLOCK  ADVISORY  WRITE 1 08:01:9 0 EOF\n1: -> FLOCK  ADVISORY  WRITE 1.5 08:01:9 0 EOF\n", wantErr: true},
 		"a device and no inode":       {content: "1: FLOCK  ADVISORY  WRITE 1 08:01 0 EOF\n", wantErr: true},
 		"a device that is not hex":    {content: "1: FLOCK  ADVISORY  WRITE 1 zz:01:9 0 EOF\n", wantErr: true},
 		"an inode in hex":             {content: "1: FLOCK  ADVISORY  WRITE 1 08:01:ff 0 EOF\n", wantErr: true},
@@ -100,7 +103,17 @@ func devOf(t *testing.T, path string) string {
 	return fmt.Sprintf("%02x:%02x:%d", unix.Major(dev), unix.Minor(dev), st.Ino)
 }
 
-// TestCountWithAStandIn: Count reads whatever lock list it is given, so the
+// count reads procLocks once, judging its holders against the machine's own
+// /proc, and counts paths against it.
+func count(procLocks string, paths []string) (snapshot.Slots, error) {
+	r, err := testslots.Read(procLocks, testslots.Proc)
+	if err != nil {
+		return snapshot.Slots{}, err //nolint:wrapcheck // the error under test
+	}
+	return r.Count(paths) //nolint:wrapcheck // the error under test
+}
+
+// TestCountWithAStandIn: Read reads whatever lock list it is given, so the
 // matching itself is checked against lines written for the test's files.
 func TestCountWithAStandIn(t *testing.T) {
 	t.Parallel()
@@ -118,21 +131,21 @@ func TestCountWithAStandIn(t *testing.T) {
 			"2: -> FLOCK  ADVISORY  WRITE 2 "+devOf(t, a)+" 0 EOF\n"+
 			"3: FLOCK  ADVISORY  WRITE 3 "+devOf(t, fifo)+" 0 EOF\n"), 0o600))
 
-	got, err := testslots.Count(locks, []string{a, b})
+	got, err := count(locks, []string{a, b})
 	require.NoError(t, err)
 	assert.Equal(t, snapshot.Slots{Used: 1, Total: 2}, got, "b is held; a only waited on")
 
-	got, err = testslots.Count(locks, []string{fifo, dangling})
+	got, err = count(locks, []string{fifo, dangling})
 	require.NoError(t, err)
 	assert.Equal(t, snapshot.Slots{Used: 1, Total: 2}, got, "a FIFO is matched like any file, never opened; a dangling symlink is free")
 
-	got, err = testslots.Count(locks, nil)
+	got, err = count(locks, nil)
 	require.NoError(t, err)
 	assert.Equal(t, snapshot.Slots{}, got, "no lock files, no slots")
 }
 
 // TestCountFailures: when the held locks cannot be read, or a lock file
-// cannot be looked at, Count says so rather than report a slot free.
+// cannot be looked at, Read or Count says so rather than report a slot free.
 func TestCountFailures(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -172,7 +185,7 @@ func TestCountFailures(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			got, err := testslots.Count(tc.procLocks, tc.paths)
+			got, err := count(tc.procLocks, tc.paths)
 			require.ErrorIs(t, err, tc.wantErr)
 			assert.Equal(t, tc.want, got)
 		})

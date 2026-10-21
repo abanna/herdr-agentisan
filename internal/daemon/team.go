@@ -35,9 +35,9 @@ type TeamOptions struct {
 	// GitHub is the header's GitHub collection (A29), for every project
 	// the same file gives a github repo.
 	GitHub GitHubOptions
-	// procLocks, when set, stands in for /proc/locks in counting the test
-	// slots (tests).
-	procLocks string
+	// procLocks and proc, when set, stand in for /proc/locks and /proc in
+	// counting the test slots (tests).
+	procLocks, proc string
 }
 
 // teamConfig is what the poll reads of the configuration: the project the ◆
@@ -83,7 +83,7 @@ type teamPoll struct {
 	// header is each project's GitHub state, which the collector keeps
 	// (A29).
 	header *headerCache
-	// slots counts the test slots (A31).
+	// slots counts each project's test slots (A31, A40).
 	slots *slotCounter
 	// bind keeps the workers rows bound to their panes (A35).
 	bind *binder
@@ -184,8 +184,8 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 // workspaces, with a tabs team configured tabs, and agents; reconciles the
 // rows with the panes (A35), unless the rows or the agents could not be
 // read; builds the model with the rows; caches every team's snapshot, each
-// with its project's GitHub header (A29) and the test slots, counted once
-// for the poll (A31), and the workspaces each team holds (A24); pushes each
+// with its project's GitHub header (A29) and its project's test slots, counted once
+// for the poll (A31, A40), and the workspaces each team holds (A24); pushes each
 // group target and tabs team its `$team`; and pushes every agent pane its
 // ctx display. A failed pane, workspace or tab list costs the poll; a failed
 // agent list costs only the snapshots, which `$team` does not need, so the
@@ -244,12 +244,13 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	tp.idle.Observe(m, now)
 	if agentsErr == nil {
 		tp.stages.Observe(m, now)
-		// The slots are the machine's: one count for every team, so a list
-		// that changes mid-poll cannot give two teams two counts.
+		// The held locks are read once for every team, so a list that
+		// changes mid-poll cannot give two teams two counts; each team
+		// counts its own project's lock files (A40).
 		slots := o.countSlots(tp.slots)
 		fill := func(project string, s *snapshot.Snapshot) {
 			tp.header.fill(project, s, now)
-			setSlots(s, slots)
+			setSlots(s, slots(project))
 		}
 		if err := tp.cache.store(m, tp.cfg.spaces.Project, now, tp.stages, fill); err != nil {
 			o.Logger.Error().Err(err).Msg("team poll: cache the snapshots; a team too large to serve keeps its last one")

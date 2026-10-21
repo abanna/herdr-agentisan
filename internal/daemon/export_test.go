@@ -101,6 +101,13 @@ func WithProcLocks(t TeamOptions, procLocks string) TeamOptions {
 	return t
 }
 
+// WithProc returns t with proc standing in for /proc when the team poll
+// tells a hold from its holder.
+func WithProc(t TeamOptions, proc string) TeamOptions {
+	t.proc = proc
+	return t
+}
+
 // StartTimeFrom is the StartTime hook a daemon builds from a process table
 // reader: nil when stat is nil.
 var StartTimeFrom = startTimeFrom
