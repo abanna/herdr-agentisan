@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -75,6 +76,12 @@ func trailEnv(t *testing.T, status int, body []byte) (context.Context, func() []
 	}
 }
 
+// workerCols are the columns of the worker recipe's answer.
+const workerCols = `[{"name":"@timestamp","type":"date"},{"name":"attributes.agentisan.worker.id","type":"keyword"},` +
+	`{"name":"attributes.herdr.pane.id","type":"keyword"},{"name":"attributes.agentisan.status.from","type":"keyword"},` +
+	`{"name":"attributes.agentisan.status.to","type":"keyword"},{"name":"attributes.agentisan.group","type":"keyword"},` +
+	`{"name":"attributes.agentisan.worker.bound","type":"boolean"}]`
+
 // recordedTrail is the live check's recorded answer with its rows newest
 // first, as Elasticsearch returns them for the worker recipe.
 func recordedTrail(t *testing.T) []byte {
@@ -131,32 +138,103 @@ func TestEventsWorkerTellsTheTrail(t *testing.T) {
 // never rendered as an empty screen.
 func TestEventsWorkerSaysWhenNothingChanged(t *testing.T) {
 	t.Parallel()
-	cols := `[{"name":"@timestamp","type":"date"},{"name":"attributes.agentisan.worker.id","type":"keyword"},` +
-		`{"name":"attributes.herdr.pane.id","type":"keyword"},{"name":"attributes.agentisan.status.from","type":"keyword"},` +
-		`{"name":"attributes.agentisan.status.to","type":"keyword"},{"name":"attributes.agentisan.group","type":"keyword"},` +
-		`{"name":"attributes.agentisan.worker.bound","type":"boolean"}]`
-	ctx, _ := trailEnv(t, http.StatusOK, []byte(`{"columns":`+cols+`,"values":[]}`))
+	ctx, _ := trailEnv(t, http.StatusOK, []byte(`{"columns":`+workerCols+`,"values":[]}`))
 	out, err := runIn(ctx, "events", "worker", "ha-coder-9", "--since", "2h")
 	require.NoError(t, err)
 	assert.Equal(t, "ha-coder-9, the last 2h: no status changes\n", out)
 }
 
+// TestEventsWorkerRendersEachChange: a bound worker shows its pane beside
+// its id, a partial answer says so, a change with no pane or group shows
+// neither, and no value can break its line: a tab or a line break in the id
+// or in any value is flattened, as events query's cells are, and everything
+// else is written as it came.
+func TestEventsWorkerRendersEachChange(t *testing.T) {
+	t.Parallel()
+	const at = "2026-10-20T12:00:00.000Z"
+	// forge would start a forged change on a line of its own; flat is it
+	// flattened.
+	const forge, flat = "\r" + at + "\n\tx", " " + at + "  x"
+	// odd is kept as it came: precomposed and decomposed accents, a NUL and
+	// a BOM. The id cannot hold the NUL: WorkerQuery refuses it.
+	const odd, oddID = "é e\u0301 \x00\ufeff", "é e\u0301 \ufeff"
+	row := func(vals ...any) string {
+		data, err := json.Marshal(vals)
+		require.NoError(t, err)
+		return string(data)
+	}
+	tests := map[string]struct {
+		id, row string
+		partial bool
+		want    string
+	}{
+		"bound, partial": {
+			id: "coders-1", row: row(at, "coders-1", "w14:p8", "idle", "working", "coders", true), partial: true,
+			want: "coders-1, the last 1h: 1 status change\n" + at + "  coders-1 (w14:p8)  idle → working  coders  bound\n" +
+				"partial: Elasticsearch did not search everything it was asked to\n",
+		},
+		"no pane, no group": {
+			id: "ha-coder-9", row: row(at, "ha-coder-9", "", "idle", "working", "", false),
+			want: "ha-coder-9, the last 1h: 1 status change\n" + at + "  ha-coder-9  idle → working  -  unbound\n",
+		},
+		"every value null": {
+			id: "ha-coder-9", row: row(nil, nil, nil, nil, nil, nil, nil),
+			want: "ha-coder-9, the last 1h: 1 status change\n     →   -  unbound\n",
+		},
+		"case kept: a pane that differs only in case is shown": {
+			id: "w14:p8", row: row(at, "w14:p8", "W14:P8", "idle", "working", "coder", false),
+			want: "w14:p8, the last 1h: 1 status change\n" + at + "  w14:p8 (W14:P8)  idle → working  coder  unbound\n",
+		},
+		"a forged change in the id and every value": {
+			id: "coders-1" + forge, row: row(at+forge, "coders-1"+forge, "w14:p8"+forge, "idle"+forge, "working"+forge, "coders"+forge, false),
+			want: "coders-1" + flat + ", the last 1h: 1 status change\n" + at + flat + "  coders-1" + flat + " (w14:p8" + flat + ")  idle" + flat +
+				" → working" + flat + "  coders" + flat + "  unbound\n",
+		},
+		"accents, a NUL and a BOM as they came": {
+			id: "coders-1" + oddID, row: row(at+odd, "coders-1"+odd, "w14:p8"+odd, "idle"+odd, "working"+odd, "coders"+odd, true),
+			want: "coders-1" + oddID + ", the last 1h: 1 status change\n" + at + odd + "  coders-1" + odd + " (w14:p8" + odd + ")  idle" + odd +
+				" → working" + odd + "  coders" + odd + "  bound\n",
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			ctx, _ := trailEnv(t, http.StatusOK, []byte(`{"columns":`+workerCols+`,"values":[`+tc.row+`],"is_partial":`+
+				strconv.FormatBool(tc.partial)+`}`))
+			out, err := runIn(ctx, "events", "worker", tc.id)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, out)
+		})
+	}
+}
+
+// TestEventsRefuseBeforeReadingTheEnvFile: a query or a window that is
+// refused is refused before the env file is read, so a mounted file is
+// never asked for (1Password may prompt) on a query that cannot run.
+func TestEventsRefuseBeforeReadingTheEnvFile(t *testing.T) {
+	t.Parallel()
+	ctx := envCtx(t, map[string]string{}) // no config dir: reading it would be the error
+	_, err := runIn(ctx, "events", "query", "FROM logs-* | LIMIT 1")
+	require.ErrorIs(t, err, trail.ErrInvalid, "the query's refusal, not the missing config dir's")
+	assert.Contains(t, err.Error(), "starts FROM")
+	_, err = runIn(ctx, "events", "worker", "w1:p1", "--since", "30s")
+	require.ErrorIs(t, err, trail.ErrInvalid, "the window's refusal, not the missing config dir's")
+	assert.Contains(t, err.Error(), "--since")
+}
+
 // TestEventsWorkerSaysWhenItCut: an answer that reached the row limit
-// ends with what was cut and what to do about it.
+// ends with what was cut and how to read the older ones: a narrower
+// --since still keeps the newest, so it names events query.
 func TestEventsWorkerSaysWhenItCut(t *testing.T) {
 	t.Parallel()
 	var rows []string
 	for i := trail.RowLimit - 1; i >= 0; i-- {
 		rows = append(rows, fmt.Sprintf(`["2026-10-20T00:%02d:%02dZ","w1:p1","w1:p1","idle","working","coder",false]`, i/60%60, i%60))
 	}
-	cols := `[{"name":"@timestamp","type":"date"},{"name":"attributes.agentisan.worker.id","type":"keyword"},` +
-		`{"name":"attributes.herdr.pane.id","type":"keyword"},{"name":"attributes.agentisan.status.from","type":"keyword"},` +
-		`{"name":"attributes.agentisan.status.to","type":"keyword"},{"name":"attributes.agentisan.group","type":"keyword"},` +
-		`{"name":"attributes.agentisan.worker.bound","type":"boolean"}]`
-	ctx, _ := trailEnv(t, http.StatusOK, []byte(`{"columns":`+cols+`,"values":[`+strings.Join(rows, ",")+`]}`))
+	ctx, _ := trailEnv(t, http.StatusOK, []byte(`{"columns":`+workerCols+`,"values":[`+strings.Join(rows, ",")+`]}`))
 	out, err := runIn(ctx, "events", "worker", "w1:p1", "--since", "168h")
 	require.NoError(t, err)
-	assert.True(t, strings.HasSuffix(out, "cut: only the newest 1000 are shown; narrow --since for the older ones\n"), out[len(out)-120:])
+	assert.True(t, strings.HasSuffix(out, "cut: only the newest 1000 are shown; read older ones with events query and a WHERE on @timestamp\n"), out[len(out)-120:])
 
 	out, err = runIn(ctx, "events", "worker", "w1:p1", "--json")
 	require.NoError(t, err)

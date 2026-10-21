@@ -24,13 +24,14 @@ const viewClearTimeout = 2 * time.Second
 
 // viewSync is the agent view's state between the goroutines that feed it
 // and the one that sends it (A28 addendum): the focus collector gives the
-// focused workspace, the team poll each model it builds, and syncView sets
-// the view of the team that holds the workspace, or clears it outside
-// every team. It sends nothing when that is what it last sent, and forgets
-// what it sent after a call that fails and whenever focus is read afresh, so
-// the next decision sends again: herdr has no call to read the view, and
-// another source, or an unlinked plugin, may have replaced it. Every poll
-// is a decision, so a failed call is tried again within one.
+// focused workspace, the team poll each model it builds and the workspace
+// its pane list had focused (A49), and syncView sets the view of the team
+// that holds the workspace, or clears it outside every team. It sends
+// nothing when that is what it last sent, and forgets what it sent after a
+// call that fails and whenever focus is read afresh, so the next decision
+// sends again: herdr has no call to read the view, and another source, or an
+// unlinked plugin, may have replaced it. Every poll is a decision, so a
+// failed call is tried again within one.
 type viewSync struct {
 	wake chan struct{}
 
@@ -44,6 +45,9 @@ type viewSync struct {
 	// forgets counts the times sent was forgotten, so a send that raced a
 	// forget does not record what it sent.
 	forgets uint64
+	// seen counts the focused workspaces the collector recorded, so a
+	// poll's focus that one may have overtaken is dropped.
+	seen uint64
 }
 
 // viewState is a view to set, or a clear.
@@ -62,6 +66,7 @@ func (v *viewSync) focus(workspace string) {
 	}
 	v.mu.Lock()
 	v.workspace = workspace
+	v.seen++
 	v.mu.Unlock()
 	v.poke()
 }
@@ -73,6 +78,7 @@ func (v *viewSync) resynced(workspace string) {
 	v.mu.Lock()
 	if workspace != "" {
 		v.workspace = workspace
+		v.seen++
 	}
 	v.sent = nil
 	v.forgets++
@@ -80,10 +86,27 @@ func (v *viewSync) resynced(workspace string) {
 	v.poke()
 }
 
-// built records a model the poll built.
-func (v *viewSync) built(m team.Model) {
+// focusSeen is the count of focused workspaces the collector has recorded,
+// which a poll reads before it lists the panes and gives back to polled.
+func (v *viewSync) focusSeen() uint64 {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.seen
+}
+
+// polled records a model the poll built and the workspace of the pane its
+// list had focused, "" for none, which changes nothing (A49). herdr can move
+// focus without a pane.focused event, so the poll's list is a source of
+// focus too, but an older one than any event the collector recorded after
+// the poll read seen: the focus is taken only when the collector recorded
+// none since. Unlike a resync it forgets nothing, so a poll that finds focus
+// where it was sends nothing.
+func (v *viewSync) polled(m team.Model, workspace string, seen uint64) {
 	v.mu.Lock()
 	v.model = &m
+	if workspace != "" && v.seen == seen {
+		v.workspace = workspace
+	}
 	v.mu.Unlock()
 	v.poke()
 }

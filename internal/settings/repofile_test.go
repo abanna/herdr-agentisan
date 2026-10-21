@@ -271,8 +271,8 @@ func tomlString(s string) string {
 }
 
 // TestModelsAreSafeToPass: a model is a letter or digit, then letters,
-// digits and . _ - : / @ [ ], at most 128 bytes, in every layer that sets one
-// (ADR-001 A46). herdr types it into the pane's shell inside POSIX single
+// digits and . _ - : / @ [ ], at most 128 bytes, whichever layer sets it
+// (ADR-001 A46). herdr types it into the pane's shell bare or inside single
 // quotes, which fish reads differently, so a quote, a backslash, whitespace,
 // a shell metacharacter or a leading - is refused, with the key and its layer
 // and never the model.

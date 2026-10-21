@@ -93,9 +93,10 @@ const maxModel = 128
 // modelPattern is what a model may be (ADR-001 A46): a letter or digit, then
 // letters, digits and . _ - : / @ [ ], at most maxModel bytes. The workforce
 // passes it as one argument after --model, which herdr types into the pane's
-// shell inside POSIX single quotes whatever that shell is: none of these is
-// special inside them in any shell herdr accepts, fish included, and the
-// first one can never start a flag. It still covers opus[1m], gpt-5.1-codex,
+// shell bare when every character is in its own safe set, and otherwise inside
+// single quotes (PowerShell's for pwsh): none of these is special in either
+// form in any shell herdr accepts, fish included, and the first one can never
+// start a flag. It still covers opus[1m], gpt-5.1-codex,
 // a Bedrock id with its :0 and a Vertex one with its @date.
 var modelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@\[\]-]{0,127}$`)
 
@@ -109,8 +110,9 @@ func CheckModel(model string) error {
 	return fmt.Errorf("%w: a model is a letter or digit, then letters, digits and . _ - : / @ [ ], at most %d bytes", ErrInvalid, maxModel)
 }
 
-// checkModels checks agent.model and every group's agent.model, in every
-// layer that sets one.
+// checkModels checks agent.model and every group's agent.model as merged,
+// whichever layer sets each: a model another layer overrides never reaches
+// an agent.
 func (m merged) checkModels() error {
 	v, _ := m.get("groups")
 	groups, _ := v.(map[string]any)

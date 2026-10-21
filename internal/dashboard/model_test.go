@@ -1497,7 +1497,7 @@ func TestNoTeamHereDrawsNoBoard(t *testing.T) {
 	full := fixture(t, "full")
 	src := &script{steps: []func() (snapshot.Snapshot, error){
 		serve(full),
-		fail(fmt.Errorf("this workspace (w9) is not a team's; pass --project: %w", dashboard.ErrNoTeamHere)),
+		fail(fmt.Errorf("this workspace (w9) is not a team's; pass --project: %w", dashboard.ErrNotATeamsWorkspace)),
 		serve(full),
 	}}
 	cfg := config(src, &recorder{})
@@ -1516,13 +1516,43 @@ func TestNoTeamHereDrawsNoBoard(t *testing.T) {
 	m, cmd := update(t, m, keyDown)
 	assert.Nil(t, cmd)
 	assert.Nil(t, m.Frame().Snapshot)
-	assert.True(t, m.Frame().NoTeam)
+	assert.ErrorIs(t, m.Frame().NoTeam, dashboard.ErrNotATeamsWorkspace)
 
 	m, _ = pollOnce(t, m, tick)
 	out = m.View().Content
 	assert.Contains(t, out, "pee01")
 	assert.NotContains(t, out, "no team in this workspace")
 	assert.NotContains(t, out, "pass --project")
+}
+
+// TestAnotherFailureKeepsTheNoTeamBody: after a poll that found no team
+// here, a failure of another kind keeps the no-team body, as any failure
+// keeps the last board (ADR-001 A24), and the footer names the new failure
+// alone. A served snapshot ends both.
+func TestAnotherFailureKeepsTheNoTeamBody(t *testing.T) {
+	t.Parallel()
+
+	src := &script{steps: []func() (snapshot.Snapshot, error){
+		fail(fmt.Errorf("this workspace (w9) is not a team's; pass --project: %w", dashboard.ErrNotATeamsWorkspace)),
+		fail(fmt.Errorf("%w: daemon not running", snapshot.ErrUnavailable)),
+		serve(fixture(t, "full")),
+	}}
+	cfg := config(src, &recorder{})
+	cfg.Interval = time.Millisecond
+	m, tick := startedPolling(t, cfg, 120, 40)
+	require.Contains(t, m.View().Content, "no team in this workspace")
+
+	m, tick = pollOnce(t, m, tick)
+	out := m.View().Content
+	assert.Contains(t, out, "no team in this workspace", "the last answer stands")
+	assert.NotContains(t, out, "waiting for the daemon")
+	assert.Contains(t, out, "✖ snapshot source is unavailable: daemon not running")
+	assert.NotContains(t, out, "pass --project", "the footer names the new failure alone")
+	assert.ErrorIs(t, m.Frame().NoTeam, dashboard.ErrNotATeamsWorkspace)
+
+	m, _ = pollOnce(t, m, tick)
+	assert.NoError(t, m.Frame().NoTeam)
+	assert.Contains(t, m.View().Content, "pee01")
 }
 
 // noted is a source with a note of its own.
