@@ -479,8 +479,10 @@ agentisan's gate keeps one per slot in
 `$XDG_RUNTIME_DIR/agentisan/gate.<n>.lock`. A slot a boss holds with
 `flock <lock> sleep …` shows as held, not used: `slots 1/2 (1 held)`.
 Without a list, or off Linux, no slots are shown. The boss's `up 2h14m` counts
-from when this daemon first saw the boss's pane, so a handoff or a daemon
-restart starts it again.
+from when the boss's agent process started (A47), so it survives a daemon
+restart and a `/clear`, while a new session or a handoff to another pane
+starts it again. Where that start cannot be read, as off Linux and darwin, no
+runtime is shown.
 
 ## The team's line in herdr's tab bar
 

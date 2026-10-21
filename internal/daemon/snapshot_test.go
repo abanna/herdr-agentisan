@@ -103,15 +103,15 @@ func fullTeam() ([]herdr.WorkspaceInfo, []map[string]any, []map[string]any) {
 //go:fix inline
 
 // wantFullTeam is fullTeam's snapshot at t0, by hand: the groups in v12's
-// order, then the rest by name; the rows by pane id; every stage, and the
-// boss, first seen at t0, and every agent at rest first seen resting at t0
-// (A37).
+// order, then the rest by name; the rows by pane id; every stage first seen
+// at t0, and every agent at rest first seen resting at t0 (A37). The boss
+// has no runtime: herdr lists no agent process in its pane (A47).
 func wantFullTeam() snapshot.Snapshot {
 	return snapshot.Snapshot{
 		V: 1, At: t0, Team: "agentisan", Project: &snapshot.Project{Color: "#7c3aed"},
 		Boss: &snapshot.Boss{Agent: snapshot.Agent{
 			Name: "boss", PaneID: "wJ:p1", Status: "working", Ctx: new(23), Item: "#867", Stage: "review", StageStartedAt: new(t0),
-		}, StartedAt: new(t0)},
+		}},
 		Groups: []snapshot.Group{
 			{Name: "coders", Agents: []snapshot.Agent{
 				{Name: "pee01", PaneID: "wN:p1", Status: "working", Ctx: new(40), Item: "NERD-5255", Stage: "build_test", StageStartedAt: new(t0)},
@@ -148,18 +148,18 @@ func rawSnapshot(t *testing.T, sock string) map[string]any {
 }
 
 // served waits until the daemon at sock serves a snapshot that satisfies
-// ok, and returns it.
+// ok, and returns it. A wait that runs out reports the last answer read.
 func served(t *testing.T, sock string, ok func(snapshot.Snapshot) bool) snapshot.Snapshot {
 	t.Helper()
 	var got snapshot.Snapshot
-	require.Eventually(t, func() bool {
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
 		s, err := daemon.Snapshot(t.Context(), sock)
-		if err != nil {
-			return false
+		if !assert.NoError(c, err) {
+			return
 		}
 		got = s
-		return ok(s)
-	}, ready, 5*time.Millisecond, "the daemon never served the snapshot wanted; last: %+v", got)
+		assert.Truef(c, ok(s), "the daemon never served the snapshot wanted; last: %+v", s)
+	}, ready, 5*time.Millisecond)
 	return got
 }
 
@@ -795,13 +795,14 @@ func everyTeam(th *teamHerdr) {
 }
 
 // wantTeams is everyTeam's snapshot of each team at t0, by hand: each team in
-// its own resolver's group order and colour, each boss first seen at t0.
+// its own resolver's group order and colour, and no boss with a runtime,
+// since herdr lists no agent process in any pane (A47).
 func wantTeams() map[string]snapshot.Snapshot {
 	return map[string]snapshot.Snapshot{
 		"agentisan": wantFullTeam(),
 		"alpha": {
 			V: 1, At: t0, Team: "alpha", Project: &snapshot.Project{Color: "#16a34a"},
-			Boss: &snapshot.Boss{Agent: snapshot.Agent{Name: "al-boss", PaneID: "w14:p1", TabID: "w14:t1", Status: "working"}, StartedAt: new(t0)},
+			Boss: &snapshot.Boss{Agent: snapshot.Agent{Name: "al-boss", PaneID: "w14:p1", TabID: "w14:t1", Status: "working"}},
 			Groups: []snapshot.Group{
 				{Name: "coder", Agents: []snapshot.Agent{
 					{Name: "al-coder-1", PaneID: "w14:p3", TabID: "w14:t3", Status: "working", Ctx: new(50), Item: "NERD-5285", Stage: "build_test", StageStartedAt: new(t0)},

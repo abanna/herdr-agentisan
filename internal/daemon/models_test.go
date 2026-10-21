@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -63,11 +64,27 @@ func withModels(s snapshot.Snapshot, byPane map[string]string) snapshot.Snapshot
 	return s
 }
 
+// withBossStart is s with its boss's started_at set from byPane, in UTC, or
+// none.
+func withBossStart(s snapshot.Snapshot, byPane map[string]time.Time) snapshot.Snapshot {
+	if s.Boss == nil {
+		return s
+	}
+	b := *s.Boss
+	b.StartedAt = nil
+	if at, ok := byPane[b.PaneID]; ok {
+		at = at.UTC()
+		b.StartedAt = &at
+	}
+	s.Boss = &b
+	return s
+}
+
 // TestSnapshotCarriesLaunchModels: every team's snapshot, the spaces' and
 // both tabs teams', carries each row's launch model, the boss's included
-// (A39), and the op's data still decodes strictly. Shells and panes outside
-// every team are never asked, and a poll asks nothing for a pane that has
-// not changed.
+// (A39), each boss its agent process's start (A47), and the op's data still
+// decodes strictly. Shells and panes outside every team are never asked,
+// and a poll asks nothing for a pane that has not changed.
 func TestSnapshotCarriesLaunchModels(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
@@ -105,6 +122,8 @@ func TestSnapshotCarriesLaunchModels(t *testing.T) {
 		"wJ:p1": "opus", "wN:p1": "claude-opus-5-5", "wN:p3": "sonnet", "wN:p4": "o3", "wQ:p1": "haiku", "wP:p1": "opus",
 		"w14:p1": "claude-fable-5-1", "w14:p3": "claude-opus-5-5",
 	}
+	// The bosses' processes, by ticksSinceBoot: 1001 and 1010 ticks.
+	starts := map[string]time.Time{"wJ:p1": boot.Add(10010 * time.Millisecond), "w14:p1": boot.Add(10100 * time.Millisecond)}
 	want := wantTeams()
 	served(t, sock, func(s snapshot.Snapshot) bool { return s.Boss != nil && s.Boss.Agent.Model != "" })
 	for _, project := range []string{"agentisan", "alpha", "beta"} {
@@ -114,7 +133,7 @@ func TestSnapshotCarriesLaunchModels(t *testing.T) {
 		require.NoError(t, err)
 		got, err := snapshot.Decode(bytes.NewReader(data))
 		require.NoError(t, err, "%s: one strict snapshot v1 document", project)
-		assert.Equal(t, withModels(want[project], models), got, project)
+		assert.Equal(t, withBossStart(withModels(want[project], models), starts), got, project)
 	}
 
 	asked := processAsks(th.srv)
@@ -303,6 +322,75 @@ func TestLaunchModelsWithoutAStartTime(t *testing.T) {
 	ph.set("w1:p1", agentProc(103, "codex", "-m", "o3"))
 	poll("o3")
 	assert.Equal(t, 3, processAsks(ph.srv)["w1:p1"])
+}
+
+// TestLaunchModelsStarted: each agent process found has its start on the
+// wall clock (A47), put there once while its entry holds, so the boss's
+// runtime never moves from poll to poll; a start the clock cannot place is
+// tried again at the next poll, and a new process is placed afresh. A miss,
+// a pane with no start time read, and a daemon with no clock have none.
+func TestLaunchModelsStarted(t *testing.T) {
+	t.Parallel()
+	ph := newProcHerdr(t)
+	c := herdr.Client{SocketPath: ph.srv.Path}
+	pt := &procs{start: map[int]uint64{101: 100, 201: 200, 301: 300}}
+	lm := daemon.NewLaunchModels()
+	ph.set("w1:p1", agentProc(101, "claude"))
+	ph.set("w1:p2", agentProc(201, "codex", "-m", "o3"))
+	ph.set("w1:p3", agentProc(301, "claude"))
+	ph.set("w1:p4", agentProc(401, "/bin/zsh"))
+	panes := []herdr.PaneInfo{agentPane("w1:p1", "t1", "claude"), agentPane("w1:p2", "t2", "codex"), agentPane("w1:p3", "t3", "claude"), agentPane("w1:p4", "t4", "claude")}
+	refresh := func() {
+		t.Helper()
+		_, err := lm.Refresh(t.Context(), c, panes, pt.startTime, t0, zerolog.Nop())
+		require.NoError(t, err)
+	}
+	// wall places every start but w1:p3's first, counting each call by
+	// start.
+	var mu sync.Mutex
+	calls := map[uint64]int{}
+	wall := func(start uint64) (time.Time, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		calls[start]++
+		if start == 300 && calls[start] == 1 {
+			return time.Time{}, errors.New("no boot time")
+		}
+		return ticksSinceBoot(start)
+	}
+	at := func(ticks int) time.Time { return boot.Add(time.Duration(ticks) * 10 * time.Millisecond) }
+
+	refresh()
+	assert.Empty(t, lm.Started(nil), "no clock: no starts")
+	assert.Equal(t, map[string]time.Time{"w1:p1": at(100), "w1:p2": at(200)}, lm.Started(wall),
+		"each agent's start; w1:p3's is not placed yet, and w1:p4 runs no agent")
+	refresh()
+	assert.Equal(t, map[string]time.Time{"w1:p1": at(100), "w1:p2": at(200), "w1:p3": at(300)}, lm.Started(wall),
+		"w1:p3 placed at the next poll")
+	assert.Equal(t, map[uint64]int{100: 1, 200: 1, 300: 2}, calls, "a start once placed is not placed again")
+
+	exit(pt, 101)
+	pt.set(102, 150)
+	ph.set("w1:p1", agentProc(102, "claude"))
+	refresh()
+	assert.Equal(t, at(150), lm.Started(wall)["w1:p1"], "a new agent process in the pane starts again")
+
+	exit(pt, 201)
+	ph.set("w1:p2", agentProc(201, "/bin/zsh"))
+	refresh()
+	got := lm.Started(wall)
+	assert.NotContains(t, got, "w1:p2", "its agent gone, it has no start: never a guess")
+	assert.Equal(t, at(300), got["w1:p3"])
+
+	zero := daemon.NewLaunchModels()
+	_, err := zero.Refresh(t.Context(), c, panes[:1], pt.startTime, t0, zerolog.Nop())
+	require.NoError(t, err)
+	assert.Empty(t, zero.Started(func(uint64) (time.Time, error) { return time.Time{}, nil }), "a zero time is not a start")
+
+	untimed := daemon.NewLaunchModels()
+	_, err = untimed.Refresh(t.Context(), c, panes, nil, t0, zerolog.Nop())
+	require.NoError(t, err)
+	assert.Empty(t, untimed.Started(wall), "no start time read, as off Linux and darwin: none")
 }
 
 // TestLaunchModelsFailures: a failed ask leaves its pane no model and is

@@ -7,3 +7,8 @@ package report
 func systemReaders() (StatFunc, CmdlineFunc) {
 	return nil, nil
 }
+
+// systemStartedAt has no starts to put on the wall clock here.
+func systemStartedAt() StartedAtFunc {
+	return nil
+}

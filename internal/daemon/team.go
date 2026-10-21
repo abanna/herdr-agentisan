@@ -220,7 +220,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 // pushes nothing more, once a call finds the socket no longer names the
 // daemon's server.
 // Each row carries its pane's launch model, which herdr is asked for only
-// when the pane changed (A39).
+// when the pane changed (A39), and the boss its agent process's start (A47).
 // The model it returns is nil when a pane, workspace or tab list failed and
 // no model was built; agent names change neither which panes it holds nor
 // their statuses, so a failed agent list still gives the status events their
@@ -278,6 +278,8 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 		if err != nil {
 			return nil, "", err
 		}
+		// The boss's runtime is its agent process's (A47).
+		started := tp.models.started(o.Hooks.StartedAt)
 		// The held locks are read once for every team, so a list that
 		// changes mid-poll cannot give two teams two counts; each team
 		// counts its own project's lock files (A40).
@@ -286,6 +288,7 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 			tp.header.fill(project, s, now)
 			setSlots(s, slots(project))
 			team.FillModels(s, models)
+			team.FillBossStart(s, started)
 			team.Describe(s, tp.descriptions.of(project))
 		}
 		if err := tp.cache.store(m, tp.cfg.spaces.Project, now, tp.stages, tp.idle, fill); err != nil {

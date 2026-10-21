@@ -18,6 +18,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
@@ -211,6 +212,15 @@ func (p *procs) set(pid int, start uint64) {
 	p.start[pid] = start
 }
 
+// boot is when ticksSinceBoot's machine booted.
+var boot = time.Date(2026, 10, 21, 6, 0, 0, 0, time.UTC)
+
+// ticksSinceBoot is a StartedAt hook as Linux's is: a start is clock ticks,
+// 10 ms each, since boot.
+func ticksSinceBoot(start uint64) (time.Time, error) {
+	return boot.Add(time.Duration(start) * 10 * time.Millisecond), nil
+}
+
 // opts builds Options for one daemon on h, with fast polling.
 func opts(t *testing.T, stateDir string, h *fakeHerdr) daemon.Options {
 	t.Helper()
@@ -227,6 +237,7 @@ func opts(t *testing.T, stateDir string, h *fakeHerdr) daemon.Options {
 		Logger:      zerolog.Nop(),
 		Hooks: daemon.Hooks{
 			StartTime: (&procs{start: map[int]uint64{os.Getpid(): 77}}).startTime,
+			StartedAt: ticksSinceBoot,
 		},
 	}
 }
@@ -1283,6 +1294,28 @@ func TestStartTimeComesFromTheLineageReader(t *testing.T) {
 	assert.Equal(t, want.Start, got)
 }
 
+// TestStartedAtComesFromTheReport: with no hook injected, a daemon puts the
+// starts its StartTime hook reads on the wall clock through
+// report.SystemStartedAt (A47): this process's own start is in the past and
+// recent. Where the OS has no reader there is none, so the boss shows no
+// runtime.
+func TestStartedAtComesFromTheReport(t *testing.T) {
+	t.Parallel()
+	def := daemon.DefaultStartedAt()
+	if report.SystemStartedAt() == nil {
+		assert.Nil(t, def)
+		return
+	}
+	require.NotNil(t, def)
+	start, err := daemon.DefaultStartTime()(os.Getpid())
+	require.NoError(t, err)
+	got, err := def(start)
+	require.NoError(t, err)
+	now := time.Now()
+	assert.False(t, got.After(now.Add(time.Second)), "started %v, after now %v", got, now)
+	assert.WithinDuration(t, now, got, time.Hour, "this test binary started moments ago")
+}
+
 // request sends one raw line to the daemon socket and returns the raw reply.
 func request(t *testing.T, sock string, line []byte) map[string]any {
 	t.Helper()
@@ -1619,10 +1652,6 @@ func TestStillServedClasses(t *testing.T) {
 			require.NoError(t, os.Remove(sock))
 			return nil
 		},
-		"crashed, its socket file left behind": func(_ *testing.T, _ string, srv *herdrtest.Server) *herdrtest.Server {
-			srv.Crash()
-			return nil
-		},
 		"behind a parent it cannot search": func(t *testing.T, sock string, _ *herdrtest.Server) *herdrtest.Server {
 			dir := filepath.Dir(sock)
 			require.NoError(t, os.Chmod(dir, 0o600))
@@ -1647,6 +1676,99 @@ func TestStillServedClasses(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestStillServedACrashedServer: a herdr that crashed leaves its socket file
+// behind, and the poll check takes it as gone (A3) once nothing answers it:
+// a refused connection. A child forked anywhere in the daemon's process
+// keeps a copy of the listener's descriptor until it execs, and a ping that
+// reaches that copy is reset when the child lets it go. A reset is a ping
+// that failed, which the check takes, as any other, as the server still up,
+// never as gone, so the next poll decides (NERD-5349).
+func TestStillServedACrashedServer(t *testing.T) {
+	t.Parallel()
+	t.Run("gone once nothing holds its listener", func(t *testing.T) {
+		t.Parallel()
+		sock := filepath.Join(shortDir(t), "h.sock")
+		srv := herdrtest.StartAt(t, sock, pong(22))
+		ident := mustIdentity(t, sock)
+		srv.Crash()
+		// A child another test forks may hold the listener for a moment:
+		// until it lets go, each check reads the server as up.
+		require.Eventually(t, func() bool {
+			err := daemon.StillServedOver(t.Context(), sock, ident, 22)
+			if err != nil && !errors.Is(err, daemon.ErrHerdrGone) {
+				t.Errorf("a crashed server is up or gone, never %v", err)
+			}
+			return errors.Is(err, daemon.ErrHerdrGone)
+		}, ready, 5*time.Millisecond)
+	})
+
+	// heldCrash is a server on a socket of its own that crashed while a
+	// second descriptor of its listener, as a forked child holds, stays
+	// open; nothing accepts on it. It returns the socket, the identity it
+	// had and that descriptor.
+	heldCrash := func(t *testing.T) (string, daemon.Identity, *os.File) {
+		t.Helper()
+		sock := filepath.Join(shortDir(t), "h.sock")
+		ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
+		require.NoError(t, err)
+		ln.SetUnlinkOnClose(false)
+		ident := mustIdentity(t, sock)
+		held, err := ln.File()
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = held.Close() })
+		require.NoError(t, ln.Close())
+		return sock, ident, held
+	}
+	// letGo waits until a connection waits on held, unaccepted, then closes
+	// held, as the child's exec does, which resets that connection.
+	letGo := func(t *testing.T, held *os.File) {
+		t.Helper()
+		fds := []unix.PollFd{{Fd: int32(held.Fd()), Events: unix.POLLIN}} //nolint:gosec // a descriptor fits an int32
+		for {
+			n, err := unix.Poll(fds, int(ready/time.Millisecond))
+			if errors.Is(err, unix.EINTR) {
+				continue
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, n, "a connection reaches the held listener")
+			break
+		}
+		require.NoError(t, held.Close())
+	}
+	answer := func(t *testing.T, done <-chan error) error {
+		t.Helper()
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(ready):
+			t.Fatal("the ping never returned")
+			return nil
+		}
+	}
+
+	t.Run("a held listener resets the ping", func(t *testing.T) {
+		t.Parallel()
+		sock, _, held := heldCrash(t)
+		done := make(chan error, 1)
+		go func() {
+			_, err := herdr.Client{SocketPath: sock}.Ping(t.Context())
+			done <- err
+		}()
+		letGo(t, held)
+		err := answer(t, done)
+		assert.True(t, errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE), "reset, not refused: %v", err)
+	})
+	t.Run("a reset ping is up, then the refusal is gone", func(t *testing.T) {
+		t.Parallel()
+		sock, ident, held := heldCrash(t)
+		done := make(chan error, 1)
+		go func() { done <- daemon.StillServedOver(t.Context(), sock, ident, 22) }()
+		letGo(t, held)
+		require.NoError(t, answer(t, done), "a reset ping is not the server gone")
+		require.ErrorIs(t, daemon.StillServedOver(t.Context(), sock, ident, 22), daemon.ErrHerdrGone, "now nothing holds the listener: refused, gone")
+	})
 }
 
 // TestStillServedChecksTheServerAfterThePing: the socket is replaced while

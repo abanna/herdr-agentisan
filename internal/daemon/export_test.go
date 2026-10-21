@@ -136,6 +136,11 @@ func DefaultStartTime() func(pid int) (uint64, error) {
 	return Options{}.withDefaults().Hooks.StartTime
 }
 
+// DefaultStartedAt is the StartedAt hook a daemon has when none is injected.
+func DefaultStartedAt() func(start uint64) (time.Time, error) {
+	return Options{}.withDefaults().Hooks.StartedAt
+}
+
 // ServedBudget is the budget the daemon's own op map gives op with args,
 // which the server enforces; OpBudget is the client's copy.
 func ServedBudget(op string, args json.RawMessage) time.Duration {
@@ -210,6 +215,12 @@ func NewLaunchModels() LaunchModels { return LaunchModels{m: newLaunchModels()} 
 // process_info reply held from earlier in the poll.
 func (l LaunchModels) Refresh(ctx context.Context, c herdr.Client, panes []herdr.PaneInfo, startTime func(int) (uint64, error), now time.Time, log zerolog.Logger) (map[string]string, error) {
 	return l.m.refresh(ctx, c, paneProcesses{}, panes, startTime, now, log)
+}
+
+// Started is when each pane's agent process started, on the wall clock
+// through wall, as the last Refresh left the entries (A47).
+func (l LaunchModels) Started(wall func(uint64) (time.Time, error)) map[string]time.Time {
+	return l.m.started(wall)
 }
 
 // PaneProcesses are one poll's process_info replies.

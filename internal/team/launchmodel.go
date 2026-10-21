@@ -3,6 +3,7 @@ package team
 import (
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -108,5 +109,20 @@ func FillModels(s *snapshot.Snapshot, byPane map[string]string) {
 		for j := range s.Groups[i].Agents {
 			s.Groups[i].Agents[j].Model = byPane[s.Groups[i].Agents[j].PaneID]
 		}
+	}
+}
+
+// FillBossStart sets s's boss's started_at to when its pane's agent process
+// started, as byPane holds it, in UTC (ADR-001 A47), and leaves it out when
+// byPane holds none for that pane: the runtime is never a guess. Workers
+// carry no runtime.
+func FillBossStart(s *snapshot.Snapshot, byPane map[string]time.Time) {
+	if s.Boss == nil {
+		return
+	}
+	s.Boss.StartedAt = nil
+	if at, ok := byPane[s.Boss.PaneID]; ok {
+		at = at.UTC()
+		s.Boss.StartedAt = &at
 	}
 }

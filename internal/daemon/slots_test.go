@@ -186,10 +186,22 @@ func TestTestSlotsLogABadListOnce(t *testing.T) {
 	assert.Contains(t, logs.String(), "line 1", "the first failure is the one logged")
 }
 
-// TestSnapshotBossRuntime: the boss's started_at is when this daemon first
-// saw its pane run an agent in the boss's place (A31). It keeps that start
-// poll after poll; a handoff to another pane starts again at the poll that
-// first sees it; workers carry none.
+// setProcs sets pane.process_info's foreground processes for the pane id.
+func (th *teamHerdr) setProcs(id string, procs ...map[string]any) {
+	th.mu.Lock()
+	defer th.mu.Unlock()
+	if th.procs == nil {
+		th.procs = map[string][]map[string]any{}
+	}
+	th.procs[id] = procs
+}
+
+// TestSnapshotBossRuntime: the boss's started_at is when its agent process
+// started, from the pane's processes and the OS's start time on the wall
+// clock (A47), in UTC. It keeps that start poll after poll; a new agent
+// process in the pane, or a handoff to another pane, starts it again at
+// that process's start; with no agent process found it is left out, never
+// guessed from when the daemon saw the pane.
 func TestSnapshotBossRuntime(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
@@ -202,46 +214,104 @@ func TestSnapshotBossRuntime(t *testing.T) {
 	}
 	agents := []map[string]any{named("wJ:p1", "boss"), named("wJ:p2", "boss2"), named("wN:p1", "pee01")}
 	th.layout(ws, bossIn("wJ:p1"), agents)
+	th.setProcs("wJ:p1", agentProc(1001, "claude", "--model", "opus"))
+	th.setProcs("wJ:p2", agentProc(1003, "claude"))
+	th.setProcs("wN:p1", agentProc(1002, "claude"))
+	pt := &procs{start: map[int]uint64{os.Getpid(): 77, 1001: 4200, 1002: 5000, 1003: 6000}}
 	c := &clock{now: t0}
 	dir := shortDir(t)
 	o := teamOpts(t, dir, th, "")
+	o.Hooks.StartTime = pt.startTime
 	o.Now = c.Now
 	run(t, o)
 	sock := socketPath(t, dir, th.path)
+	// ticks is when a process ticksSinceBoot places at n ticks started.
+	ticks := func(n int) time.Time { return boot.Add(time.Duration(n) * 10 * time.Millisecond) }
+	startedAt := func(want time.Time) func(snapshot.Snapshot) bool {
+		return func(s snapshot.Snapshot) bool {
+			return s.Boss != nil && s.Boss.StartedAt != nil && s.Boss.StartedAt.Equal(want)
+		}
+	}
 
-	first := served(t, sock, func(s snapshot.Snapshot) bool { return s.At.Equal(t0) })
-	require.NotNil(t, first.Boss)
-	require.NotNil(t, first.Boss.StartedAt)
-	assert.Equal(t, t0, *first.Boss.StartedAt)
-	assert.Nil(t, first.Groups[0].Agents[0].StageStartedAt, "a worker has no runtime")
+	first := served(t, sock, func(s snapshot.Snapshot) bool { return s.At.Equal(t0) && s.Boss != nil && s.Boss.StartedAt != nil })
+	assert.Equal(t, ticks(4200), *first.Boss.StartedAt, "its agent process's start, not the daemon's first sight of it")
+	assert.Equal(t, time.UTC, first.Boss.StartedAt.Location())
 
-	t1 := t0.Add(3 * time.Second)
 	c.advance(3 * time.Second)
+	t1 := t0.Add(3 * time.Second)
 	later := served(t, sock, func(s snapshot.Snapshot) bool { return s.At.Equal(t1) })
 	require.NotNil(t, later.Boss.StartedAt)
-	assert.Equal(t, t0, *later.Boss.StartedAt, "the same boss keeps its start")
+	assert.Equal(t, ticks(4200), *later.Boss.StartedAt, "the same process keeps its start")
 
-	t2 := t0.Add(6 * time.Second)
-	c.advance(3 * time.Second)
+	// The boss's session is started again in its pane: another process.
+	exit(pt, 1001)
+	pt.set(1004, 7000)
+	th.setProcs("wJ:p1", agentProc(1004, "claude"))
+	served(t, sock, startedAt(ticks(7000)))
+
 	th.layout(ws, bossIn("wJ:p2"), agents)
-	handed := served(t, sock, func(s snapshot.Snapshot) bool { return s.Boss != nil && s.Boss.PaneID == "wJ:p2" })
-	require.NotNil(t, handed.Boss.StartedAt)
-	assert.Equal(t, t2, *handed.Boss.StartedAt, "a new boss pane starts at the poll that first sees it")
+	handed := served(t, sock, func(s snapshot.Snapshot) bool {
+		return s.Boss != nil && s.Boss.PaneID == "wJ:p2" && s.Boss.StartedAt != nil
+	})
+	assert.Equal(t, ticks(6000), *handed.Boss.StartedAt, "a handoff takes the new pane's agent process's start")
+
+	// herdr still detects an agent, but the pane's processes show none.
+	exit(pt, 1003)
+	th.setProcs("wJ:p2", agentProc(1005, "/bin/zsh"))
+	unread := served(t, sock, func(s snapshot.Snapshot) bool {
+		return s.Boss != nil && s.Boss.PaneID == "wJ:p2" && s.Boss.StartedAt == nil
+	})
+	assert.Equal(t, "boss2", unread.Boss.Name, "still the boss, with no runtime")
+}
+
+// TestBossRuntimeSurvivesADaemonRestart: a daemon that follows one that
+// exited reads the same boss agent's start again (A47), so the runtime goes
+// on counting from it instead of starting at the new daemon's first poll.
+func TestBossRuntimeSurvivesADaemonRestart(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	ws := []herdr.WorkspaceInfo{{WorkspaceID: "wJ", Label: "◆ boss"}}
+	th.layout(ws, []map[string]any{teamPane("wJ:p1", "wJ", "claude", "working", "", nil)}, []map[string]any{named("wJ:p1", "boss")})
+	th.setProcs("wJ:p1", agentProc(1001, "claude"))
+	started := boot.Add(42 * time.Second)
+	c := &clock{now: t0}
+	dir := shortDir(t)
+	o := teamOpts(t, dir, th, "")
+	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 1001: 4200}}).startTime
+	o.Now = c.Now
+	first := run(t, o)
+	sock := socketPath(t, dir, th.path)
+	before := served(t, sock, func(s snapshot.Snapshot) bool { return s.Boss != nil && s.Boss.StartedAt != nil })
+	assert.Equal(t, started, *before.Boss.StartedAt)
+
+	first.cancel()
+	require.NoError(t, first.wait(t, ready))
+	c.advance(time.Hour)
+	// As restarted gives it, a later start for this process, which the next
+	// daemon runs as; the boss's agent is the same process.
+	next := o
+	next.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 78, 1001: 4200}}).startTime
+	run(t, next)
+	after := served(t, sock, func(s snapshot.Snapshot) bool {
+		return s.At.Equal(t0.Add(time.Hour)) && s.Boss != nil && s.Boss.StartedAt != nil
+	})
+	assert.Equal(t, started, *after.Boss.StartedAt, "the runtime survives the restart, not counted from the new daemon's first poll")
 }
 
 // servedTeam waits until the daemon at sock serves project's snapshot and ok
-// holds of it, and returns it.
+// holds of it, and returns it. A wait that runs out reports the last answer
+// read.
 func servedTeam(t *testing.T, sock, project string, ok func(snapshot.Snapshot) bool) snapshot.Snapshot {
 	t.Helper()
 	var got snapshot.Snapshot
-	require.Eventually(t, func() bool {
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
 		s, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{Project: project})
-		if err != nil || !ok(s) {
-			return false
+		if !assert.NoError(c, err) {
+			return
 		}
 		got = s
-		return true
-	}, ready, 5*time.Millisecond, "team %s was never served as wanted; last: %+v", project, got)
+		assert.Truef(c, ok(s), "team %s was never served as wanted; last: %+v", project, s)
+	}, ready, 5*time.Millisecond)
 	return got
 }
 
@@ -273,27 +343,45 @@ func swapPane(th *teamHerdr, id string, p map[string]any) {
 	th.setPanes(panes)
 }
 
+// replaceFile puts content at path in one rename, so a reader opens the old
+// file or the new one, never one half written.
+func replaceFile(t *testing.T, path, content string) {
+	t.Helper()
+	tmp := path + ".new"
+	require.NoError(t, os.WriteFile(tmp, []byte(content), 0o600))
+	require.NoError(t, os.Rename(tmp, path))
+}
+
 // TestEveryTeamCarriesTheSlotsAndItsOwnBoss: with one snapshot per team
-// (A24), every team's carries the machine's test slots, the same count, and
-// sees a slot freed at the same poll (A31). Each team's boss.started_at is
-// its own boss pane's, and each pane's stage clock its own: a boss starting
-// in one team, or a coder moving on there, restarts nothing in another.
+// (A24), every team's carries the same test slots, from the poll's one
+// reading of the held locks (A31, A40), and a slot let go before a poll
+// stamped t1 is free for every team at t1: the poll takes its time before it
+// reads the locks. Each team's boss.started_at is its own boss agent's
+// process start (A47), and each pane's stage clock its own: a boss starting
+// in one team, or a coder moving on there, restarts nothing in another. The
+// held locks are a stand-in /proc/locks, so no lock elsewhere on the
+// machine, and no page of the real file, can move a count.
 func TestEveryTeamCarriesTheSlotsAndItsOwnBoss(t *testing.T) {
 	t.Parallel()
-	if _, err := os.Stat(testslots.ProcLocks); err != nil {
-		t.Skipf("no %s: %v", testslots.ProcLocks, err)
-	}
 	locks := t.TempDir()
 	gate0, gate1 := filepath.Join(locks, "gate.0.lock"), filepath.Join(locks, "gate.1.lock")
-	release := hold(t, gate0)
+	for _, f := range []string{gate0, gate1} {
+		require.NoError(t, os.WriteFile(f, nil, 0o600))
+	}
+	standIn := filepath.Join(locks, "proc-locks")
+	replaceFile(t, standIn, lockLine(t, 1, 200, gate0))
 	th := newTeamHerdr(t)
 	everyTeam(th)
+	th.setProcs("wJ:p1", agentProc(1001, "claude"))
+	th.setProcs("w14:p1", agentProc(1010, "claude"))
 	// alpha's boss tab runs no agent yet.
 	swapPane(th, "w14:p1", tabPane("w14:p1", "w14", "w14:t1", "", "unknown", nil))
 	nameAgent(th, "w14:p1", "")
 	c := &clock{now: t0}
 	dir := shortDir(t)
 	o := teamOpts(t, dir, th, configDir(t, everyTeamConfig+fmt.Sprintf("[tests]\nlocks = [%q, %q]\n", gate0, gate1)))
+	o.Team = new(daemon.WithProc(daemon.WithProcLocks(*o.Team, standIn), t.TempDir()))
+	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 1001: 4200, 1010: 9000}}).startTime
 	o.Now = c.Now
 	run(t, o)
 	sock := socketPath(t, dir, th.path)
@@ -308,35 +396,35 @@ func TestEveryTeamCarriesTheSlotsAndItsOwnBoss(t *testing.T) {
 		assert.Equal(t, &snapshot.Slots{Used: 1, Total: 2}, s.Project.Slots, "team %s carries the slots", p)
 	}
 	assert.Nil(t, servedTeam(t, sock, "alpha", at(t0)).Boss, "alpha has no boss yet")
-	spaces := servedTeam(t, sock, "agentisan", at(t0))
-	require.NotNil(t, spaces.Boss.StartedAt)
-	assert.Equal(t, t0, *spaces.Boss.StartedAt)
+	spaces := servedTeam(t, sock, "agentisan", func(s snapshot.Snapshot) bool {
+		return at(t0)(s) && s.Boss != nil && s.Boss.StartedAt != nil
+	})
+	assert.Equal(t, boot.Add(42*time.Second), *spaces.Boss.StartedAt, "the spaces' boss agent's start")
 
-	// t1: alpha's boss starts, alpha's coder moves on to review, and the
-	// held slot is let go.
+	// The held slot is let go, then the clock moves to t1 and alpha's boss
+	// starts and alpha's coder moves on to review.
+	replaceFile(t, standIn, "")
 	c.advance(3 * time.Second)
 	t1 := t0.Add(3 * time.Second)
 	swapPane(th, "w14:p1", tabPane("w14:p1", "w14", "w14:t1", "claude", "working", nil))
 	nameAgent(th, "w14:p1", "al-boss")
 	swapPane(th, "w14:p3", tabPane("w14:p3", "w14", "w14:t3", "claude", "working", map[string]string{"ctx": "50", "item": "NERD-5285", "stage": "review"}))
-	release()
 
 	alpha := servedTeam(t, sock, "alpha", func(s snapshot.Snapshot) bool {
-		return s.At.Equal(t1) && s.Boss != nil && s.Boss.Status == "working" && s.Groups[0].Agents[0].Stage == "review"
+		return at(t1)(s) && s.Boss != nil && s.Boss.Status == "working" && s.Boss.StartedAt != nil && s.Groups[0].Agents[0].Stage == "review"
 	})
-	require.NotNil(t, alpha.Boss.StartedAt)
-	assert.Equal(t, t1, *alpha.Boss.StartedAt, "alpha's boss runtime is its own pane's")
+	assert.Equal(t, boot.Add(90*time.Second), *alpha.Boss.StartedAt, "alpha's boss runtime is its own agent's")
 	require.NotNil(t, alpha.Groups[0].Agents[0].StageStartedAt)
 	assert.Equal(t, t1, *alpha.Groups[0].Agents[0].StageStartedAt, "alpha's coder's stage restarted")
 	spaces = servedTeam(t, sock, "agentisan", at(t1))
 	require.NotNil(t, spaces.Boss.StartedAt)
-	assert.Equal(t, t0, *spaces.Boss.StartedAt, "the spaces' boss keeps its own start")
+	assert.Equal(t, boot.Add(42*time.Second), *spaces.Boss.StartedAt, "the spaces' boss keeps its own start")
 	require.NotNil(t, spaces.Groups[0].Agents[0].StageStartedAt)
 	assert.Equal(t, t0, *spaces.Groups[0].Agents[0].StageStartedAt, "the spaces' coder keeps its stage start")
-	// A poll stamped t1 can see both swaps and still count the locks before
-	// release(), so each team waits for the freed slot itself.
 	for _, p := range teams {
-		servedTeam(t, sock, p, func(s snapshot.Snapshot) bool { return at(t1)(s) && slotsAre(0, 2)(s) })
+		s := servedTeam(t, sock, p, at(t1))
+		require.NotNil(t, s.Project, p)
+		assert.Equal(t, &snapshot.Slots{Used: 0, Total: 2}, s.Project.Slots, "team %s at t1 counts the slot freed", p)
 	}
 }
 
