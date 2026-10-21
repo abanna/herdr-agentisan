@@ -11,7 +11,7 @@ workflow from evidence (ADR-001 item 12, A32). It ships with the plugin:
 
 It reads the trail, the daemon's log, the project's repo and Linear. Its
 launch allows nothing else, so it changes nothing, unless the repo's
-checked-in settings or managed policy allow more (see "Launching it"). The
+`.claude/settings.json` or managed policy allow more (see "Launching it"). The
 `events` commands work for anyone with the env file below: a person, the
 boss, or the debugger.
 
@@ -97,12 +97,14 @@ from the project's repo. The parts of the launch:
   WebFetch and WebSearch. A redirect such as `> file` is checked as an Edit,
   so it is denied too. The launch refuses a repo or daemon directory that
   holds the env file, such as your home directory, and needs `env_file` set.
-- **`--setting-sources project`:** only the repo's checked-in settings load,
+- **`--setting-sources project`:** only the repo's `.claude/settings.json`
+  loads, tracked or not (here it is the Agentisan bundle, installed out of
+  band and gitignored),
   so the "don't ask again" rules that pile up in `.claude/settings.local.json`
   and your own `~/.claude/settings.json` never widen it. Your statusline and
-  hooks do not run in it either, so its pane shows no `ctx`. The repo's
-  checked-in settings and managed policy still apply: an allow rule there
-  widens the debugger too.
+  hooks do not run in it either, so its pane shows no `ctx`. That file and
+  managed policy still apply: an allow rule in either widens the debugger
+  too, so check the file, not only what git tracks.
 - **The environment:** `HERDR_PLUGIN_CONFIG_DIR`, so `events` finds the env
   file. There is no URL and no key in it.
 
