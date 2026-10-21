@@ -35,8 +35,8 @@ import (
 // a bare integer from 0 to 100 on a pane herdr detects an agent in (A27) and
 // left out otherwise; item and stage are the tokens; the stage's start comes
 // from clock, and an agent's rest from idle (A37), either of which may be
-// nil. The tab is herdr's. The model is left out: the daemon does not know
-// it.
+// nil. The tab is herdr's. The model is left out: the daemon fills it from
+// each pane's processes (FillModels, A39).
 func Snapshot(m Model, project string, at time.Time, clock *StageClock, idle *IdleClock) snapshot.Snapshot {
 	s := snapshot.Snapshot{V: snapshot.Version, At: at.UTC(), Team: project, Groups: []snapshot.Group{}}
 	i := slices.IndexFunc(m.Projects, func(p Project) bool { return p.Name == project })

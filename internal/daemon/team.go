@@ -84,6 +84,8 @@ type teamPoll struct {
 	// header is each project's GitHub state, which the collector keeps
 	// (A29).
 	header *headerCache
+	// models are each agent pane's launch model (A39).
+	models *launchModels
 	// descriptions are each project's group descriptions, re-read when the
 	// shared file changes (A36).
 	descriptions *groupDescriptions
@@ -158,7 +160,8 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 	o.Logger.Info().Str("project", cfg.spaces.Project).Str("color", cfg.spaces.Color).Strs("tabs_teams", tabs).Msg("team poll running")
 	tp := teamPoll{
 		cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, idle: idle, cache: cache, header: header,
-		descriptions: newGroupDescriptions(o.Team.ConfigDir), slots: o.newSlotCounter(), bind: &binder{ready: ready},
+		models: newLaunchModels(), descriptions: newGroupDescriptions(o.Team.ConfigDir),
+		slots: o.newSlotCounter(), bind: &binder{ready: ready},
 		notices: o.newNotices(),
 	}
 	onServer := o.onServer(ident)
@@ -220,6 +223,8 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 // failed push is logged and the others go on. It returns ErrHerdrGone, and
 // pushes nothing more, once a call finds the socket no longer names the
 // daemon's server.
+// Each row carries its pane's launch model, which herdr is asked for only
+// when the pane changed (A39).
 // The model it returns is nil when a pane, workspace or tab list failed and
 // no model was built; agent names change neither which panes it holds nor
 // their statuses, so a failed agent list still gives the status events their
@@ -258,10 +263,11 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 		}
 	}
 	l := team.Layout{Workspaces: workspaces, Panes: panes, Agents: agents, Tabs: tabs}
+	pp := paneProcesses{} // one process_info ask per pane this poll
 	// A candidate pane can be the one herdr names a worker by, so a failed
 	// agent list proves and loses nothing this poll.
 	if rowsErr == nil && agentsErr == nil {
-		if rows, err = o.reconcile(ctx, c, st, tp.bind, l, rows); err != nil {
+		if rows, err = o.reconcile(ctx, c, pp, st, tp.bind, l, rows); err != nil {
 			return nil, "", err
 		}
 	}
@@ -273,6 +279,10 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	tp.notices.observe(m, agents, agentsErr == nil, now)
 	if agentsErr == nil {
 		tp.stages.Observe(m, now)
+		models, err := tp.models.refresh(ctx, c, pp, agentPanes(m, panes), o.Hooks.StartTime, now, o.Logger)
+		if err != nil {
+			return nil, "", err
+		}
 		// The held locks are read once for every team, so a list that
 		// changes mid-poll cannot give two teams two counts; each team
 		// counts its own project's lock files (A40).
@@ -280,6 +290,7 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 		fill := func(project string, s *snapshot.Snapshot) {
 			tp.header.fill(project, s, now)
 			setSlots(s, slots(project))
+			team.FillModels(s, models)
 			team.Describe(s, tp.descriptions.of(project))
 		}
 		if err := tp.cache.store(m, tp.cfg.spaces.Project, now, tp.stages, tp.idle, fill); err != nil {

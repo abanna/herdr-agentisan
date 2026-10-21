@@ -46,6 +46,9 @@ type teamHerdr struct {
 	// pane with none answers herdr's null. infoFails fails it for a pane.
 	shells    map[string]uint32
 	infoFails map[string]bool
+	// procs are pane.process_info's foreground processes, by pane; a pane
+	// with none runs no foreground job.
+	procs map[string][]map[string]any
 	// onCall, when set, runs before each request is answered.
 	onCall func(method string)
 	// prompt, when set, answers agent.prompt (messages_test.go).
@@ -108,8 +111,12 @@ func (th *teamHerdr) serveTeam(normal herdrtest.Handler) herdrtest.Handler {
 			if th.infoFails[params.PaneID] {
 				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "server_unavailable", Message: "busy"}}
 			}
+			procs := th.procs[params.PaneID]
+			if procs == nil {
+				procs = []map[string]any{}
+			}
 			return herdrtest.Reply{Result: map[string]any{"type": "pane_process_info", "process_info": map[string]any{
-				"pane_id": params.PaneID, "shell_pid": th.shells[params.PaneID], "foreground_process_group_id": 0, "foreground_processes": []any{},
+				"pane_id": params.PaneID, "shell_pid": th.shells[params.PaneID], "foreground_process_group_id": 0, "foreground_processes": slices.Clone(procs),
 			}}}
 		case "pane.report_metadata":
 			var params struct {

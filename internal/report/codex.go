@@ -33,9 +33,9 @@ const (
 )
 
 var (
-	// ErrSubagent means the hook fired inside a Codex subagent, whose
-	// transcript is not the pane's session.
-	ErrSubagent = errors.New("codex hook fired inside a subagent")
+	// ErrSubagent means the hook fired inside a Codex or Claude subagent,
+	// whose transcript and text are not the pane's session.
+	ErrSubagent = errors.New("hook fired inside a subagent")
 	// ErrCodexDaemon means a Codex app-server is among the reporting
 	// process's ancestors: the session runs in a shared server, not in the
 	// pane's own Codex. The hook then carries that server's environment and
@@ -72,20 +72,9 @@ type CodexHook struct {
 // broken pipe on a hook's stdin counts as written.) Fields other than
 // transcript_path and agent_id are Codex's to add or change, and ignored.
 func ParseCodexHook(r io.Reader) (CodexHook, error) {
-	// Run by hand in a pane, stdin is the terminal: reading it would wait
-	// for Ctrl-D with nothing on screen to say so.
-	if isCharDevice(r) {
-		return CodexHook{}, fmt.Errorf("%w: stdin is a terminal or other character device, not a piped codex hook payload", ErrMalformed)
-	}
-	raw, err := io.ReadAll(io.LimitReader(r, MaxCodexHookBytes+1))
+	raw, err := readHook(r, MaxCodexHookBytes)
 	if err != nil {
-		return CodexHook{}, fmt.Errorf("%w: read: %w", ErrMalformed, err)
-	}
-	if len(raw) > MaxCodexHookBytes {
-		// Codex closes stdin once the payload is written and kills a hook
-		// that outlives its timeout, so draining ends.
-		_, _ = io.Copy(io.Discard, r)
-		return CodexHook{}, fmt.Errorf("%w: hook payload exceeds %d bytes", ErrMalformed, MaxCodexHookBytes)
+		return CodexHook{}, err
 	}
 	var in struct {
 		TranscriptPath *string `json:"transcript_path"`
@@ -102,6 +91,28 @@ func ParseCodexHook(r io.Reader) (CodexHook, error) {
 		h.AgentID = *in.AgentID
 	}
 	return h, nil
+}
+
+// readHook reads a hook payload of at most limit bytes from r, and reads r
+// to its end whatever it finds, so the agent's write of the payload always
+// completes rather than meeting a closed pipe.
+func readHook(r io.Reader, limit int) ([]byte, error) {
+	// Run by hand in a pane, stdin is the terminal: reading it would wait
+	// for Ctrl-D with nothing on screen to say so.
+	if isCharDevice(r) {
+		return nil, fmt.Errorf("%w: stdin is a terminal or other character device, not a piped hook payload", ErrMalformed)
+	}
+	raw, err := io.ReadAll(io.LimitReader(r, int64(limit)+1))
+	if err != nil {
+		return nil, fmt.Errorf("%w: read: %w", ErrMalformed, err)
+	}
+	if len(raw) > limit {
+		// The agent closes stdin once the payload is written and kills a
+		// hook that outlives its timeout, so draining ends.
+		_, _ = io.Copy(io.Discard, r)
+		return nil, fmt.Errorf("%w: hook payload exceeds %d bytes", ErrMalformed, limit)
+	}
+	return raw, nil
 }
 
 // CheckCodexHost returns nil only when every process of the lineage was

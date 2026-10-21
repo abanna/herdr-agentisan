@@ -210,6 +210,33 @@ func FlushNotices(o Options, b *notice.Batcher, s notice.Sink) {
 	o.flushNotices(context.Background(), &notices{batch: b, sink: s})
 }
 
+// LaunchModels is the team poll's launch models (A39), driven one poll at a
+// time.
+type LaunchModels struct{ m *launchModels }
+
+// NewLaunchModels is a cache with nothing in it.
+func NewLaunchModels() LaunchModels { return LaunchModels{m: newLaunchModels()} }
+
+// Refresh is one poll's look at panes, each a team's agent pane, with no
+// process_info reply held from earlier in the poll.
+func (l LaunchModels) Refresh(ctx context.Context, c herdr.Client, panes []herdr.PaneInfo, startTime func(int) (uint64, error), now time.Time, log zerolog.Logger) (map[string]string, error) {
+	return l.m.refresh(ctx, c, paneProcesses{}, panes, startTime, now, log)
+}
+
+// PaneProcesses are one poll's process_info replies.
+type PaneProcesses struct{ pp paneProcesses }
+
+// NewPaneProcesses holds no reply yet.
+func NewPaneProcesses() PaneProcesses { return PaneProcesses{pp: paneProcesses{}} }
+
+// Ask is pane's reply this poll, asking herdr only the first time.
+func (p PaneProcesses) Ask(ctx context.Context, c herdr.Client, pane string) (herdr.ProcessInfo, error) {
+	return p.pp.ask(ctx, c, pane)
+}
+
+// AgentPanes are the panes of m's teams where herdr detects an agent.
+var AgentPanes = agentPanes
+
 // ViewSync is the agent view's state between the goroutines that feed it and
 // syncView (A28 addendum, A49), for tests of its bookkeeping.
 type ViewSync struct{ v *viewSync }
