@@ -36,6 +36,13 @@ var LinearReadTools = []string{
 // setting allows: a deny rule wins over every allow rule.
 var deniedTools = []string{"Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"}
 
+// FenceSettings is the launch's --settings: Claude Code's file tools refuse
+// reads outside the working directories in every permission mode, and its
+// file-reading Bash commands then ask, which dontAsk denies (Claude Code
+// 2.1.257 or later). Without it, its built-in read-only commands, such as
+// cat and grep, read any file the user can, with no allow rule.
+const FenceSettings = `{"permissions":{"blockReadsOutsideWorkingDirectories":true}}`
+
 // Launch is what a debugger's launch is built from: the plugin's checkout
 // (Root) and binary (Bin), the project's repo it runs in, the daemon's
 // directory for this herdr server (ServerDir, holding daemon.log; "" when
@@ -51,9 +58,12 @@ type Launch struct {
 	KeyFiles  []string
 }
 
-// Command is the debugger's agent invocation: the arguments after claude,
-// and the environment its process needs.
+// Command is the debugger's agent invocation: the directory it starts in,
+// the arguments after claude, and the environment its process needs. Dir is
+// part of the fence: claude has no flag for its working directory, and the
+// one it starts in is a working directory, readable like the repo.
 type Command struct {
+	Dir  string            `json:"dir"`
 	Args []string          `json:"args"`
 	Env  map[string]string `json:"env"`
 }
@@ -62,12 +72,14 @@ type Command struct {
 // written; a second, short prompt gives the paths only the launch knows.
 // In dontAsk mode a tool with no allow rule is denied without asking: the
 // debugger reads the repo (not its .env files) and the daemon's directory,
-// runs `<Bin> events`, and reads Linear. Only the project's settings load
+// runs `<Bin> events`, and reads Linear. Its reads are fenced to its
+// working directories, the repo it starts in (Dir) and the daemon's
+// directory (--add-dir), by FenceSettings. Only the project's settings load
 // (D12's bundle), so the allow rules that pile up in the user's and the
 // repo's local settings never widen it; the repo's .claude/settings.json,
-// tracked by git or not, and managed policy still apply. Each key file is denied to Read, and neither
-// the repo nor the daemon's directory may hold one. It carries no --model
-// or --name: the workforce sets those.
+// tracked by git or not, and managed policy still apply. Each key file is
+// denied to Read, and neither the repo nor the daemon's directory may hold
+// one. It carries no --model or --name: the workforce sets those.
 func (l Launch) Command() (Command, error) {
 	if len(l.KeyFiles) == 0 {
 		return Command{}, fmt.Errorf("%w: no env file holds the trail's key", ErrInvalid)
@@ -105,17 +117,21 @@ func (l Launch) Command() (Command, error) {
 	}
 	deny = append(deny, deniedTools...)
 
-	args := make([]string, 0, 10+len(allow)+len(deny))
+	args := make([]string, 0, 14+len(allow)+len(deny))
 	args = append(args,
 		"--append-system-prompt-file", filepath.Join(l.Root, RoleFile),
 		"--append-system-prompt", l.facts(),
 		"--setting-sources", "project",
 		"--permission-mode", "dontAsk",
-		"--allowedTools")
+		"--settings", FenceSettings)
+	if l.ServerDir != "" {
+		args = append(args, "--add-dir", l.ServerDir)
+	}
+	args = append(args, "--allowedTools")
 	args = append(args, allow...)
 	args = append(args, "--disallowedTools")
 	args = append(args, deny...)
-	return Command{Args: args, Env: map[string]string{trail.ConfigDirEnv: l.ConfigDir}}, nil
+	return Command{Dir: l.Repo, Args: args, Env: map[string]string{trail.ConfigDirEnv: l.ConfigDir}}, nil
 }
 
 // holds reports whether dir is path or one of its ancestors. Both are

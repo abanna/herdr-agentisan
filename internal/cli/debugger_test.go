@@ -46,7 +46,8 @@ func writeEnvFileSetting(t *testing.T, config, envFile string) {
 
 // TestDebuggerArgsPrintsTheLaunch: `debugger args` prints the launch the
 // workforce will build, for this binary: as JSON, and as one shell line
-// whose quoting a shell reads back into exactly that argv.
+// that a shell runs as exactly that launch: in the repo, with that
+// environment and that argv. A stand-in claude on PATH reports all three.
 func TestDebuggerArgsPrintsTheLaunch(t *testing.T) {
 	t.Parallel()
 	root, repo, server, config := launchDirs(t)
@@ -59,30 +60,47 @@ func TestDebuggerArgsPrintsTheLaunch(t *testing.T) {
 	out, err := runIn(ctx, "debugger", "args", "--root", root, "--repo", repo, "--server-dir", server, "--json")
 	require.NoError(t, err)
 	var got struct {
+		Dir  string            `json:"dir"`
 		Env  map[string]string `json:"env"`
 		Argv []string          `json:"argv"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	assert.Equal(t, repo, got.Dir)
 	assert.Equal(t, append([]string{"claude"}, want.Args...), got.Argv)
 	assert.Equal(t, want.Env, got.Env)
 
 	out, err = runIn(ctx, "debugger", "args", "--root", root, "--repo", repo, "--server-dir", server)
 	require.NoError(t, err)
-	line := strings.TrimSuffix(out, "\n")
-	prefix := "HERDR_PLUGIN_CONFIG_DIR=" + config + " "
-	require.True(t, strings.HasPrefix(line, prefix), line)
-	words, err := exec.CommandContext(t.Context(), "sh", "-c", `eval "set -- $1"; for a in "$@"; do printf '%s\n' "$a"; done`,
-		"sh", strings.TrimPrefix(line, prefix)).Output()
+	stub := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(stub, "claude"),
+		[]byte("#!/bin/sh\npwd\nprintf '%s\\n' \"$HERDR_PLUGIN_CONFIG_DIR\"\nfor a; do printf '%s\\n' \"$a\"; done\n"), 0o700)) //nolint:gosec // an executable stand-in
+	sh := exec.CommandContext(t.Context(), "sh", "-c", out)
+	sh.Dir = t.TempDir()
+	sh.Env = []string{"PATH=" + stub + ":/usr/bin:/bin"}
+	ran, err := sh.Output()
 	require.NoError(t, err)
-	assert.Equal(t, got.Argv, strings.Split(strings.TrimSuffix(string(words), "\n"), "\n"), "the shell reads back the argv")
+	lines := strings.Split(strings.TrimSuffix(string(ran), "\n"), "\n")
+	require.Greater(t, len(lines), 2, string(ran))
+	assert.Equal(t, repo, lines[0], "the line starts claude in the repo, wherever it is run from")
+	assert.Equal(t, config, lines[1], "with the config dir in its environment")
+	assert.Equal(t, want.Args, lines[2:], "the shell reads back the argv")
 }
 
-// TestDebuggerArgsNeedsItsInputs: no role under the root, or no config dir,
+// TestDebuggerArgsNeedsItsInputs: no role under the root, no config dir, or
+// a server dir that is not a directory (claude's --add-dir would refuse it)
 // is refused with what to pass; HERDR_PLUGIN_ROOT is the root when herdr
 // set it.
 func TestDebuggerArgsNeedsItsInputs(t *testing.T) {
 	t.Parallel()
 	root, repo, _, config := launchDirs(t)
+
+	notDir := filepath.Join(t.TempDir(), "daemon.log")
+	require.NoError(t, os.WriteFile(notDir, nil, 0o600))
+	for name, server := range map[string]string{"missing": filepath.Join(t.TempDir(), "srv-gone"), "a file": notDir} {
+		_, err := runIn(envCtx(t, map[string]string{"HERDR_PLUGIN_CONFIG_DIR": config}), "debugger", "args", "--root", root, "--repo", repo, "--server-dir", server)
+		require.Error(t, err, name)
+		assert.Contains(t, err.Error(), "is not a directory; pass the daemon's", name)
+	}
 
 	_, err := runIn(envCtx(t, map[string]string{"HERDR_PLUGIN_CONFIG_DIR": config}), "debugger", "args", "--root", t.TempDir(), "--repo", repo)
 	require.Error(t, err)

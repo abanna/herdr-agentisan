@@ -27,9 +27,10 @@ func newDebuggerCmd() *cobra.Command {
 	return c
 }
 
-// launchLine is `debugger args`' JSON: the environment to set and the argv
-// to run, claude first.
+// launchLine is `debugger args`' JSON: the directory to start in, the
+// environment to set and the argv to run, claude first.
 type launchLine struct {
+	Dir  string            `json:"dir"`
 	Env  map[string]string `json:"env"`
 	Argv []string          `json:"argv"`
 }
@@ -40,8 +41,9 @@ func newDebuggerArgsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "args",
 		Short: "Print the command that starts the debugger, for a launch by hand",
-		Long: "args prints the claude command line, with the environment it needs, that starts\n" +
-			"the debugger read-only in --repo. `worker spawn --group debugger` builds the same.",
+		Long: "args prints the shell line that starts the debugger in --repo: a cd into the repo,\n" +
+			"then claude with the environment it needs, its reads fenced to the repo and --server-dir.\n" +
+			"`worker spawn --group debugger` builds the same.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			lookup := lookupEnvFrom(cmd.Context())
@@ -54,6 +56,13 @@ func newDebuggerArgsCmd() *cobra.Command {
 			}
 			if _, err := os.Stat(filepath.Join(root, debugger.RoleFile)); err != nil {
 				return fmt.Errorf("debugger args: no %s under %q; pass --root, the plugin's checkout: %w", debugger.RoleFile, root, err)
+			}
+			// claude's --add-dir refuses a server dir that is not a
+			// directory; say so before printing a launch that cannot start.
+			if serverDir != "" {
+				if fi, err := os.Stat(serverDir); err != nil || !fi.IsDir() {
+					return fmt.Errorf("debugger args: --server-dir %q is not a directory; pass the daemon's srv-… directory", serverDir)
+				}
 			}
 			if configDir == "" {
 				configDir, _ = lookup(trail.ConfigDirEnv)
@@ -72,9 +81,12 @@ func newDebuggerArgsCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("debugger args: %w", err)
 			}
-			line := launchLine{Env: launch.Env, Argv: append([]string{"claude"}, launch.Args...)}
+			line := launchLine{Dir: launch.Dir, Env: launch.Env, Argv: append([]string{"claude"}, launch.Args...)}
 			return render(cmd.OutOrStdout(), asJSON, line, func(w io.Writer) error {
-				words := make([]string, 0, len(line.Env)+len(line.Argv))
+				// The line starts in the repo: the directory claude starts in
+				// is one its read fence admits.
+				words := make([]string, 0, 3+len(line.Env)+len(line.Argv))
+				words = append(words, "cd", shellQuote(line.Dir), "&&")
 				for _, k := range slices.Sorted(maps.Keys(line.Env)) {
 					words = append(words, k+"="+shellQuote(line.Env[k]))
 				}

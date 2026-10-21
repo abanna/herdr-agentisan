@@ -224,7 +224,8 @@ exempts whatever is later added under that name.
   (`testdata/worker-trail.json`).
 - `internal/debugger/` and `roles/debugger.md` — the debugger agent that
   ships with the plugin (item 12, A32): its role, and its launch as data,
-  claude with `--permission-mode dontAsk` and a read-only allow list.
+  claude with `--permission-mode dontAsk`, a read-only allow list and its
+  reads fenced to the repo it starts in and the daemon's directory.
   `herdr-agentisan events` and `debugger args` are its commands;
   `TestRoleMatchesTheLaunch` keeps the role, the CLI and the launch in step.
 - `.devcontainer/` — the reproducible dev environment: Go 1.26.10 plus the

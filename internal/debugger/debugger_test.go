@@ -1,6 +1,7 @@
 package debugger_test
 
 import (
+	"encoding/json"
 	"slices"
 	"strings"
 	"testing"
@@ -24,8 +25,10 @@ var launch = debugger.Launch{
 // TestCommand: the launch, exactly. The role comes from the plugin root, a
 // second prompt gives the paths, and dontAsk denies every tool with no
 // allow rule: the debugger reads the repo and the daemon's directory, runs
-// `events`, reads Linear, and does nothing else. The env names the config
-// dir, where `events` finds its env file, and never a URL or a key.
+// `events`, reads Linear, and does nothing else. Its reads are fenced to
+// its working directories: the repo it starts in and the daemon's
+// directory. The env names the config dir, where `events` finds its env
+// file, and never a URL or a key.
 func TestCommand(t *testing.T) {
 	t.Parallel()
 	got, err := launch.Command()
@@ -38,6 +41,8 @@ func TestCommand(t *testing.T) {
 			"daemon.log is /home/u/.local/state/herdr/plugins/agentisan/srv-0123456789ab/daemon.log (rotated to daemon.log.1).",
 		"--setting-sources", "project",
 		"--permission-mode", "dontAsk",
+		"--settings", `{"permissions":{"blockReadsOutsideWorkingDirectories":true}}`,
+		"--add-dir", "/home/u/.local/state/herdr/plugins/agentisan/srv-0123456789ab",
 		"--allowedTools",
 		"Read(//home/u/src/assay/**)",
 		"Read(//home/u/.local/state/herdr/plugins/agentisan/srv-0123456789ab/**)",
@@ -48,6 +53,8 @@ func TestCommand(t *testing.T) {
 		"Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch",
 	}, got.Args)
 	assert.Equal(t, map[string]string{"HERDR_PLUGIN_CONFIG_DIR": launch.ConfigDir}, got.Env)
+	assert.Equal(t, launch.Repo, got.Dir, "it starts in the repo: the directory it starts in is a working directory")
+	assertFenced(t, got.Args)
 
 	require.NoError(t, settings.CheckAgentCommand(append([]string{"claude"}, got.Args...)), "D12: claude, the repo's bundle still loads")
 	for _, flag := range []string{"--model", "-m", "--name", "-n", "--bare", "--dangerously-skip-permissions"} {
@@ -66,15 +73,33 @@ func TestCommand(t *testing.T) {
 	assert.Contains(t, got.Args, "Read(//run/user/1000/op/local.env)")
 }
 
+// assertFenced checks that args turn on the read fence, by the setting's
+// exact name: Claude Code ignores a key it does not know, so a misspelled
+// one would leave the reads unfenced without a word.
+func assertFenced(t *testing.T, args []string) {
+	t.Helper()
+	i := slices.Index(args, "--settings")
+	require.GreaterOrEqual(t, i, 0, "the launch passes --settings")
+	require.Less(t, i+1, len(args))
+	var s struct {
+		Permissions map[string]any `json:"permissions"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(args[i+1]), &s))
+	assert.Equal(t, map[string]any{"blockReadsOutsideWorkingDirectories": true}, s.Permissions)
+}
+
 // TestCommandWithoutTheServerDir: a launch that does not know the daemon's
-// directory still starts, says so in its facts, and allows reading the
-// repo alone.
+// directory still starts, says so in its facts, and allows and fences
+// reading the repo alone: no allow rule and no working directory for it.
 func TestCommandWithoutTheServerDir(t *testing.T) {
 	t.Parallel()
 	l := launch
 	l.ServerDir = ""
 	got, err := l.Command()
 	require.NoError(t, err)
+	assertFenced(t, got.Args)
+	assert.NotContains(t, got.Args, "--add-dir", "the repo, the directory it starts in, is its only working directory")
+	assert.Equal(t, l.Repo, got.Dir)
 	assert.Contains(t, got.Args, "Read(//home/u/src/assay/**)")
 	assert.False(t, slices.ContainsFunc(got.Args, func(a string) bool { return strings.Contains(a, "srv-") }))
 	assert.True(t, slices.ContainsFunc(got.Args, func(a string) bool {

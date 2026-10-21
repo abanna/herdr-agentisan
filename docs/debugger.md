@@ -10,10 +10,11 @@ workflow from evidence (ADR-001 item 12, A32). It ships with the plugin:
   debugger` will start it (item 4).
 
 It reads the trail, the daemon's log, the project's repo and Linear. Its
-launch allows nothing else, so it changes nothing, unless the repo's
-`.claude/settings.json` or managed policy allow more (see "Launching it"). The
-`events` commands work for anyone with the env file below: a person, the
-boss, or the debugger.
+tools write nothing, and its reads are fenced to the repo and the daemon's
+directory. What still reaches past that, the Linear tools' free-text
+arguments, the repo's hooks, mods and managed policy, is listed under
+"Launching it". The `events` commands work for anyone with the env file
+below: a person, the boss, or the debugger.
 
 ## `herdr-agentisan events`
 
@@ -73,8 +74,10 @@ launch for a start by hand:
 herdr-agentisan debugger args --repo ~/src/project --server-dir <the daemon's srv-… dir> [--config-dir <dir>] [--json]
 ```
 
-That prints one shell line: `HERDR_PLUGIN_CONFIG_DIR=… claude …`. Run it
-from the project's repo. The parts of the launch:
+That prints one shell line, `cd <repo> && HERDR_PLUGIN_CONFIG_DIR=… claude …`,
+which you can run from anywhere: it starts claude in the repo, because the
+directory claude starts in is one its read fence admits. `--json` prints the
+same as `dir`, `env` and `argv`. The parts of the launch:
 
 - **The role,** appended from the plugin checkout with
   `--append-system-prompt-file <root>/roles/debugger.md`. `--root` defaults to
@@ -97,17 +100,42 @@ from the project's repo. The parts of the launch:
   WebFetch and WebSearch. A redirect such as `> file` is checked as an Edit,
   so it is denied too. The launch refuses a repo or daemon directory that
   holds the env file, such as your home directory, and needs `env_file` set.
-- **`--setting-sources project`:** only the repo's `.claude/settings.json`
-  loads, whether git tracks it or not (here it does: it is the repo's own
-  config, not the Agentisan bundle's),
-  so the "don't ask again" rules that pile up in `.claude/settings.local.json`
-  and your own `~/.claude/settings.json` never widen it. Your statusline and
-  hooks do not run in it either, so its pane shows no `ctx`. That file and
-  managed policy still apply: an allow rule in either widens the debugger
-  too, so check the file, not only what git tracks.
+- **The read fence:** `--settings
+  '{"permissions":{"blockReadsOutsideWorkingDirectories":true}}'`, and
+  `--add-dir <the daemon's directory>`. Without it, Claude Code's built-in
+  read-only commands, such as `cat` and `grep`, would read any file you can,
+  with no allow rule. With it, the file tools refuse a read outside the
+  working directories (the repo and the daemon's directory), and a
+  file-reading command outside them asks, which `dontAsk` denies. It needs
+  Claude Code 2.1.257 or later. Inside the fence, a command that reads
+  without naming a file, such as `grep -r` run from a directory, is not
+  checked against the deny rules, so the env file must stay outside both
+  directories, which the launch enforces.
+- **`--setting-sources project`:** of the settings files, only the repo's
+  `.claude/settings.json` loads, as it stands in the working tree, whatever
+  git tracks, so the "don't ask again" rules that pile up in
+  `.claude/settings.local.json` and your own `~/.claude/settings.json` never
+  widen it. Your statusline and hooks do not run in it either, so its pane
+  shows no `ctx`.
 - **The environment:** `HERDR_PLUGIN_CONFIG_DIR`, so `events` finds the env
   file. There is no URL and no key in it.
 
 It is still Claude in the project's repo, so D12 holds and the repo's
 Agentisan bundle loads. With no allow rule its skills cannot run, which is
 intended.
+
+What still reaches past the allow list and the fence:
+
+- **The Linear tools' free-text arguments.** These are `get_issue`'s id,
+  `list_issues`' query and `list_comments`' issue id. Anything the debugger
+  has read (the trail, the repo, `daemon.log`) can leave the machine in one,
+  so a prompt injection in any of those can send to Linear what the fence
+  admits. The role tells it to pass only ids and your own words.
+- **The repo's hooks.** Its `.claude/settings.json` hooks run in every
+  debugger session. In this repo git tracks `{}`, while the working tree
+  holds the Agentisan bundle's hooks; their SessionStart hook rewrites
+  `.claude/hooks/.handoff-dirty` and `.handoff-attempts` at each start.
+- **Mods, managed policy and that file's allow rules.** A mod you installed
+  can still approve a call `dontAsk` would deny, and an allow rule in
+  managed policy or the repo's `.claude/settings.json` widens the debugger
+  too, so check the file, not only what git tracks.

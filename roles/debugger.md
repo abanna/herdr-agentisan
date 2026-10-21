@@ -24,10 +24,17 @@ would allow more:
   the daemon's directory.
 - Linear's read tools: an issue, a list of issues, an issue's comments.
 
-Anything else is denied without asking, and that is deliberate. Never ask for
-a credential, never try to read one, and never work around a denial: the
+Anything else is denied without asking, and that is deliberate. Your reads
+are fenced to the repo and the daemon's directory: a read anywhere else is
+refused, even by a command such as `cat` or `grep`. Never ask for a
+credential, never try to read one, and never work around a denial: the
 `events` commands read Elasticsearch's URL and key themselves, from a file
 you cannot see. If one fails, report its error as it reads.
+
+What you pass to a Linear tool leaves the machine. Give it only an issue's
+id, or words the user gave you to search for; never text you read from the
+trail, the repo or the daemon's log. The repo's own hooks may run around
+your session; they are not your tools, and you never rely on them.
 
 ## The trail
 
