@@ -164,6 +164,7 @@ func TestDebuggerArgsOddPathsRunTheLaunch(t *testing.T) {
 	t.Parallel()
 	bin, err := os.Executable()
 	require.NoError(t, err)
+	plain := regexp.MustCompile(`^[A-Za-z0-9_./:=@%+-]+$`)
 	for _, name := range []string{
 		"a$b", "a;b", "a&b", "a|b", "a<b>c", "a#b", "~a", "a!b", "$PWD", "a$HOME",
 		// A tilde after a colon, which an assignment expands: the env value.
@@ -200,6 +201,15 @@ func TestDebuggerArgsOddPathsRunTheLaunch(t *testing.T) {
 			assert.Equal(t, repo, lines[0], "claude starts in the repo")
 			assert.Equal(t, config, lines[1], "with the config dir in its environment")
 			assert.Equal(t, want.Args, lines[2:], "and the launch's argv")
+			// Any other character is quoted, though sh -c runs it bare: the line
+			// is pasted into an interactive zsh or bash, which expands a bare !,
+			// and a # or ^ under EXTENDED_GLOB (QA #76, S1).
+			words := " " + strings.TrimSpace(line) + " "
+			for _, w := range []struct{ before, path string }{{" cd ", repo}, {" HERDR_PLUGIN_CONFIG_DIR=", config}, {" ", server}} {
+				if !plain.MatchString(w.path) {
+					assert.Contains(t, words, w.before+"'"+w.path+"' ", "quoted on the line")
+				}
+			}
 		})
 	}
 
