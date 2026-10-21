@@ -47,11 +47,20 @@ thresholds = [55, 65, 75]
 
 # Each group is a worker type: coder, precheck, qa, review (Codex), research,
 # librarian or debugger. workers is how many `team up` starts, slots is the
-# cap the boss can scale to (slots >= workers >= 0). boss is not a type: the
-# boss has its own tab.
+# cap the boss can scale to (64 >= slots >= workers >= 0). boss is not a
+# type: the boss has its own tab.
+#
+# A group's own agent (ADR-001 A23), which `worker spawn` launches (it lands
+# in a later part of NERD-5254; the key resolves now): with a command of its
+# own, a type runs that command and that model only, never the [agent] model
+# above. Without one, review runs codex --no-daemon (A22), and every other
+# type [agent]'s command, with the group's model or [agent]'s. The command
+# runs claude or codex (D12) and carries no --model, -m, --name or -n: the
+# workforce sets them.
 [groups.precheck]
 workers = 1
 slots = 1
+agent = { model = "sonnet" }
 
 [groups.librarian]
 workers = 1
@@ -63,6 +72,31 @@ slots = 1
 
 [integrations.github]
 token = { env = "GITHUB_TOKEN" }
+
+# How `worker spawn` waits for a new tab's shell before it starts the agent
+# there (ADR-001 A23; spawn lands in a later part of NERD-5254, the keys
+# resolve now). herdr only checks that the shell has the terminal, so a shell
+# asking a question at startup (oh-my-zsh's update prompt, say) would get the
+# agent's command line typed into it.
+#
+#   shell_prompt         a regular expression one line of your prompt
+#                        matches; spawn waits for it. Unset, spawn does not.
+#                        herdr matches it with Rust's regex syntax; resolve
+#                        compiles it with Go's, a first check only, so a
+#                        construct Rust lacks (a literal {, \Q…\E, a nested
+#                        [) passes here and fails the spawn.
+#   shell_ready_keys     keys sent once when the shell is still not ready
+#                        after shell_ready_after_s and a program (a password
+#                        prompt, say) has the terminal. Default none.
+#                        WARNING: a key is typed into whatever prompt is up:
+#                        "enter" answers Y to a [Y/n] question. Leave it
+#                        empty unless you know which prompt it will answer.
+#   shell_ready_after_s  default 3, at most 60.
+#
+# Once spawn lands, a worker's shell will have HERDR_AGENTISAN_WORKER set to
+# its logical id, so your shell profile can skip its questions there instead.
+[spawn]
+shell_prompt = '❯\s*$'
 
 # The project today's ◆ group spaces belong to (ADR-001 A17): the daemon
 # pushes $team to each "◆ <group>" workspace and files its panes under this
