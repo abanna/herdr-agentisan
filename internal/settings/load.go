@@ -248,7 +248,7 @@ func loadRepoFile(path string) (*source, error) {
 	if err := s.checkNoDescriptions(); err != nil {
 		return nil, err
 	}
-	if err := s.checkUserOnlyKeys(); err != nil {
+	if err := s.checkRepoFileKeys(); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -269,29 +269,30 @@ func (s *source) checkNoDescriptions() error {
 	return nil
 }
 
-// userOnlyKeys are the keys a repo file cannot set (ADR-001 A46), each with
-// what it is: what runs or is typed in the user's terminals, and where a
-// secret is read and sent. A repo file is committed, so whoever can commit to
-// the repo would choose them, and every workforce op reads it with the
-// project's profile. They come only from the user's own layers: the shared
-// file, its project tables and --set. A * stands for any one name.
-var userOnlyKeys = []struct{ path, what string }{
-	{"agent.command", "an agent command"},
-	{"groups.*.agent.command", "an agent command"},
-	{"integrations.*.*", "an integration's URL or secret"},
-	{"spawn.*", "what spawn types or waits for in a new tab"},
-	{"verify", "a command to run"},
+// repoFileKeys are the only keys a repo file may set (ADR-001 A46): what
+// neither runs, nor is typed in the user's terminals, nor says where a secret
+// is read or sent. A repo file is committed, so whoever can commit to the
+// repo would choose anything else in it, and every workforce op reads it with
+// the project's profile. Every other key comes only from the user's own
+// layers, the shared file, its project tables and --set, and so does a key the
+// schema gains later until it is listed here. A * stands for any one name.
+var repoFileKeys = []string{
+	"agent.model",
+	"color",
+	"github",
+	"groups.*.agent.model",
+	"groups.*.slots",
+	"groups.*.workers",
+	"rotation.thresholds",
 }
 
-// checkUserOnlyKeys refuses a repo file that sets any of userOnlyKeys,
-// whatever the value: an empty list still replaces the user's own. The first
-// such key in path order is the one reported.
-func (s *source) checkUserOnlyKeys() error {
+// checkRepoFileKeys refuses a repo file that sets any key outside
+// repoFileKeys, whatever the value: an empty list still replaces the user's
+// own. The first such key in path order is the one reported.
+func (s *source) checkRepoFileKeys() error {
 	for _, path := range leafPaths(s.values, "") {
-		for _, k := range userOnlyKeys {
-			if matchPath(k.path, path) {
-				return fmt.Errorf("%s: %w: a repo file is committed, so it cannot set %s; set it in %s or with --set", s.at(path), ErrInvalid, k.what, FileName)
-			}
+		if !slices.ContainsFunc(repoFileKeys, func(k string) bool { return matchPath(k, path) }) {
+			return fmt.Errorf("%s: %w: a repo file is committed, so it sets only color, github, a group's workers and slots, models and rotation; set it in %s or with --set", s.at(path), ErrInvalid, FileName)
 		}
 	}
 	return nil

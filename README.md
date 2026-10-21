@@ -240,10 +240,12 @@ lost after a herdr live handoff, is listed under `unbound` (ADR-001 A35).
 Just after the daemon starts, the command waits for its first poll.
 
 Each command resolves the project's profile with its repo's committed
-`.herdr-agentisan.toml`. So that file cannot set what runs or is typed in
-your terminals, or where a secret goes (ADR-001 A46). Agent commands,
-`[spawn]`, `verify` and `[integrations]` belong in `herdr-agentisan.toml` or
-`--set`. A repo file that sets one is refused, and names the key.
+`.herdr-agentisan.toml`. So that file sets only `color`, `github`, a
+group's `workers` and `slots`, models and `rotation.thresholds` (ADR-001
+A46). Agent commands, `[spawn]`, `verify`, `[integrations]` and every other
+key belong in `herdr-agentisan.toml` or `--set`. A repo file that sets one
+is refused, and names the key. A model, from any layer, is a letter or
+digit, then letters, digits and `. _ - : / @ [ ]`, such as `opus[1m]`.
 ## The dashboard
 
 `herdr-agentisan dashboard` draws a team from the daemon (ADR-001 D5,

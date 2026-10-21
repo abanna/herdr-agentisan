@@ -1,6 +1,11 @@
 package settings_test
 
 import (
+	"errors"
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -210,4 +215,133 @@ func TestRepoFileNamesCannotSplitAPath(t *testing.T) {
 		require.ErrorIs(t, err, settings.ErrInvalid, name)
 		assert.Contains(t, err.Error(), "a name must match", name)
 	}
+}
+
+// TestEveryProfileKeyIsClassified: a key the profile schema gains must be
+// placed by hand on one side of A46, repo-settable or the user's alone, and
+// until it is listed in repoFileKeys a repo file that sets it is refused.
+// Every key on the user's side is refused from a repo file, whatever its
+// kind, so the allowlist alone decides.
+func TestEveryProfileKeyIsClassified(t *testing.T) {
+	t.Parallel()
+	repoSettable := []string{"agent.model", "color", "github", "groups.*.agent.model", "groups.*.slots", "groups.*.workers", "rotation.thresholds"}
+	usersOnly := []string{
+		"agent.command", "groups.*.agent.command", "groups.*.description",
+		"integrations.*.token", "integrations.*.url", "repo",
+		"spawn.shell_prompt", "spawn.shell_ready_after_s", "spawn.shell_ready_keys", "verify",
+	}
+	keys := settings.ProfileKeys()
+	assert.Equal(t, repoSettable, settings.RepoFileKeys, "a repo file sets exactly these")
+	assert.ElementsMatch(t, append(slices.Clone(repoSettable), usersOnly...), slices.Collect(maps.Keys(keys)),
+		"every profile key is placed: a new one goes in usersOnly, or in repoFileKeys and repoSettable with A46 amended")
+
+	sample := map[string]string{
+		"string": `"x"`, "int": "1", "strings": `["x"]`, "ints": "[1]", "argvs": `[["x"]]`, "secret": `{ env = "X" }`,
+	}
+	for _, key := range usersOnly {
+		path := strings.ReplaceAll(key, "*", "x")
+		repo, dir := newRepo(t), t.TempDir()
+		writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n", repo)
+		writeFile(t, repo, settings.RepoFileName, "schema_version = 1\n"+path+" = "+sample[keys[key]]+"\n", repo)
+
+		_, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
+		require.Error(t, err, path)
+		assert.True(t, errors.Is(err, settings.ErrInvalid) || errors.Is(err, settings.ErrUnknownKey), "%s: %v", path, err)
+		assert.Contains(t, err.Error(), path+" (repo, ")
+	}
+}
+
+// tomlString is s as a TOML basic string.
+func tomlString(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch {
+		case r == '"' || r == '\\':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case r < 0x20 || r == 0x7f:
+			fmt.Fprintf(&b, `\u%04X`, r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// TestModelsAreSafeToPass: a model is a letter or digit, then letters,
+// digits and . _ - : / @ [ ], at most 128 bytes, in every layer that sets one
+// (ADR-001 A46). herdr types it into the pane's shell inside POSIX single
+// quotes, which fish reads differently, so a quote, a backslash, whitespace,
+// a shell metacharacter or a leading - is refused, with the key and its layer
+// and never the model.
+func TestModelsAreSafeToPass(t *testing.T) {
+	t.Parallel()
+	const app = "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n"
+	layers := map[string]struct {
+		shared, repoFile string
+		set              func(model string) []string
+		path             string
+	}{
+		"shared":    {shared: "[agent]\nmodel = %s\n", path: "agent.model (shared, "},
+		"a project": {shared: "[projects.app.groups.qa]\nworkers = 1\nslots = 1\nagent = { model = %s }\n", path: "groups.qa.agent.model (project, "},
+		"repo file": {repoFile: "[groups.qa]\nworkers = 1\nslots = 1\nagent = { model = %s }\n", path: "groups.qa.agent.model (repo, "},
+		"--set":     {set: func(m string) []string { return []string{"agent.model=" + tomlString(m)} }, path: "agent.model (flag, "},
+	}
+	load := func(t *testing.T, layer string, model string) error {
+		t.Helper()
+		l := layers[layer]
+		repo, dir := newRepo(t), t.TempDir()
+		shared := app
+		if l.shared != "" {
+			shared += fmt.Sprintf(l.shared, tomlString(model))
+		}
+		writeFile(t, dir, settings.FileName, shared, repo)
+		if l.repoFile != "" {
+			writeFile(t, repo, settings.RepoFileName, "schema_version = 1\n"+fmt.Sprintf(l.repoFile, tomlString(model)), repo)
+		}
+		var set []string
+		if l.set != nil {
+			set = l.set(model)
+		}
+		_, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", Set: set, LookupEnv: envOf(nil)})
+		return err
+	}
+
+	for _, model := range []string{
+		"opus", "o3", "opus[1m]", "claude-opus-5-5", "gpt-5.1-codex", "4o",
+		"us.anthropic.claude-3-7-sonnet-20250219-v1:0", "claude-3-5-sonnet@20240620", "openrouter/anthropic/claude-3.5",
+		"a" + strings.Repeat("b", 127),
+	} {
+		for layer := range layers {
+			require.NoError(t, load(t, layer, model), "%s from %s", model, layer)
+		}
+	}
+	require.NoError(t, load(t, "shared", ""), "an empty model is none")
+
+	for _, model := range []string{
+		"-zq", "--zq-skip-permissions", "zq'", `zq\x`, `\';echo zq;#`, "zq 4", "zq\t", "zq\n", "zq\u0007",
+		";zq", "zq;id", "$(zq)", "`zq`", "zq|b", "zq&b", "zq>b", "zq<b", "zq!", "zq#", "zq*", "zq?", "~zq",
+		"zq\"", "zq,b", "zq=b", "zq%b", "zq+b", "zqó", ".zq", "_zq", "/zq", "[zq]",
+		"zq" + strings.Repeat("b", 127),
+	} {
+		for layer, l := range layers {
+			err := load(t, layer, model)
+			require.ErrorIs(t, err, settings.ErrInvalid, "%q from %s", model, layer)
+			assert.Contains(t, err.Error(), l.path, "%q from %s", model, layer)
+			assert.Contains(t, err.Error(), "at most 128 bytes")
+			assert.NotContains(t, err.Error(), "zq", "never the model")
+		}
+	}
+}
+
+// TestCheckModel: the check spawn also runs on a requested --model.
+func TestCheckModel(t *testing.T) {
+	t.Parallel()
+	require.NoError(t, settings.CheckModel(""))
+	require.NoError(t, settings.CheckModel("opus[1m]"))
+	err := settings.CheckModel("--dangerously-skip-permissions")
+	require.ErrorIs(t, err, settings.ErrInvalid)
+	assert.NotContains(t, err.Error(), "dangerously")
 }
