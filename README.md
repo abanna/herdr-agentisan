@@ -26,6 +26,18 @@ task plugin:unlink
 `herdr plugin link` never builds, which is why `task plugin:link` does. The
 binary also runs by hand: `task run:cli -- version --json`.
 
+herdr's startup hook runs `daemon start`, and the `daemon-restart` action
+`daemon restart`. Each waits for the daemon to answer health, for up to 13 s,
+and then says one of three things (ADR-001 A48):
+
+- `daemon running (pid N)`;
+- `daemon starting (pid N) but not answering health yet`, exit 0, since it
+  may still come up;
+- an error, exit non-zero, when the daemon exited before it answered.
+
+`herdr plugin log list --plugin nerdsrun.agentisan` shows which, and the
+`daemon.log` the message names says why.
+
 Requires Go 1.26.10+ and [Task](https://taskfile.dev). Linters and scanners are
 pinned in `go.mod` under the `tool` directive — nothing to install globally.
 
