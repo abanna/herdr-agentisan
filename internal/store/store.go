@@ -23,6 +23,7 @@ import (
 	"os"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"modernc.org/sqlite" // the pure-Go "sqlite" driver: no cgo (A1)
@@ -104,6 +105,17 @@ type Focus struct {
 // file, even a fresh one, all succeed: each migration runs once, under the
 // write lock. A lock another connection holds is waited for up to
 // BusyTimeout, then is ErrOpen.
+//
+// One exception keeps racing openers succeeding on a slow disk (NERD-5364):
+// every commit under synchronous=FULL is an fsync, and an opener waiting
+// behind another's switch to WAL and migrations can run out BusyTimeout while
+// that opener is still making progress. A step whose wait ran out runs once
+// more if, during that wait, the file switched to WAL (once per Open) or the
+// schema version advanced (at most once per migration). A lock held by
+// anything else, such as a person's sqlite3, makes neither change and is
+// ErrOpen after BusyTimeout as before. In production the exception never
+// applies: one daemon opens state.db, under daemon.lock's flock, so no other
+// opener exists to switch or migrate the file while it waits.
 func Open(ctx context.Context, path string) (*Store, error) {
 	sub, err := fs.Sub(embedded, "migrations")
 	if err != nil {
@@ -148,15 +160,15 @@ func open(ctx context.Context, path string, migrations fs.FS) (*Store, error) {
 }
 
 func (s *Store) init(ctx context.Context, path string, set []migration) error {
-	if err := s.db.PingContext(ctx); err != nil {
+	if err := retryOnSwitch(path, func() error { return s.db.PingContext(ctx) }); err != nil {
 		return fmt.Errorf("%w: %s: %w", ErrOpen, path, err)
 	}
 	// A database a newer build migrated is refused before anything writes
 	// to it: the switch to WAL below rewrites the file's header.
-	if err := checkVersion(ctx, s.db, len(set)); err != nil {
+	if err := retryOnSwitch(path, func() error { return checkVersion(ctx, s.db, len(set)) }); err != nil {
 		return err
 	}
-	if err := enableWAL(ctx, s.db); err != nil {
+	if err := retryOnSwitch(path, func() error { return enableWAL(ctx, s.db) }); err != nil {
 		return fmt.Errorf("%w: %s: %w", ErrOpen, path, err)
 	}
 	if err := verifyPragmas(ctx, s.db); err != nil {
@@ -168,6 +180,38 @@ func (s *Store) init(ctx context.Context, path string, set []migration) error {
 	}
 	s.version = v
 	return nil
+}
+
+// retryOnSwitch runs step, one of Open's steps before the migrations, and
+// runs it once more if its busy wait ran out while another opener switched
+// the file to WAL (see Open). A file switches to WAL once, so of those steps
+// only the one waiting when it happens runs again.
+func retryOnSwitch(path string, step func() error) error {
+	wasWAL := walRecorded(path)
+	err := step()
+	if err != nil && busy(err) && !wasWAL && walRecorded(path) {
+		return step()
+	}
+	return err
+}
+
+// walRecorded reports whether the database file's header records WAL: bytes
+// 18 and 19, the file format's write and read versions, are 2. It reads the
+// file itself, since a query would wait behind the lock the switch holds.
+// O_NONBLOCK keeps a named pipe at path from blocking the open, as a
+// read-only open of one would until a writer came; reading one then fails.
+func walRecorded(path string) bool {
+	// #nosec G304 -- path is the daemon's own state.db under the plugin state dir herdr names.
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return false
+	}
+	defer f.Close() //nolint:errcheck // read-only; the read's error is what matters
+	var h [20]byte
+	if _, err := f.ReadAt(h[:], 0); err != nil {
+		return false
+	}
+	return h[18] == 2 && h[19] == 2
 }
 
 // dsn is the driver's name for path with the per-connection settings A1
