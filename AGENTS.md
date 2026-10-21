@@ -178,8 +178,10 @@ exempts whatever is later added under that name.
 - `internal/testslots/` — the dashboard header's test slots (ADR-001 A31):
   which of `[tests] locks` some process holds a lock on, read from the
   kernel's `/proc/locks` every team poll without opening or locking a lock
-  file. Tests hold real locks on temp files and read them back; the parser
-  is tested on its own against written lines.
+  file, three times with staggered pages, since a page can skip a line
+  while other locks change. Tests hold real locks on temp files and read
+  them back, the parser is tested on its own against written lines, and a
+  page-at-a-time stand-in (`seqfile_test.go`) forces the skip.
 - `internal/snapshot/` — the versioned snapshot contract (ADR-001 D5/D6,
   A18): the groups and agents, the boss, and the project's PRs, issues and
   test slots. Decoding is strict: exact keys, closed enums, RFC 3339 times.
