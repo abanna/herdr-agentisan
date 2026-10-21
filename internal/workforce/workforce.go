@@ -287,5 +287,14 @@ func groupOrder(names, order []string) []string {
 	return append(out, rest...)
 }
 
-// configured is the profile's group names.
-func configured(p *settings.Profile) []string { return slices.Sorted(maps.Keys(p.Groups)) }
+// configured is the profile's worker types, by name: every group but one
+// that only describes, which is no worker type (A36).
+func configured(p *settings.Profile) []string {
+	var out []string
+	for _, name := range slices.Sorted(maps.Keys(p.Groups)) {
+		if !p.Groups[name].DescribesOnly {
+			out = append(out, name)
+		}
+	}
+	return out
+}

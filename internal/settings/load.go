@@ -105,6 +105,9 @@ func Load(opts LoadOptions) (Resolved, error) {
 	}
 	m := merge(slices.Concat(layers, []*source{repoFile}, flags)...)
 	m.values["repo"] = repo
+	if err := m.checkDescribers(); err != nil {
+		return Resolved{}, err
+	}
 	if err := m.checkFields(); err != nil {
 		return Resolved{}, err
 	}

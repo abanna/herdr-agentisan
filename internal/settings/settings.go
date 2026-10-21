@@ -110,7 +110,7 @@ type Agent struct {
 // boss can scale to, and the group's own agent, when it sets one (see
 // Profile.AgentFor). A group that sets only a description describes a group
 // of the team's layout, such as a ◆ space, and starts no worker: its Workers
-// and Slots are zero (ADR-001 A36).
+// and Slots are zero, and it is DescribesOnly (ADR-001 A36).
 type Group struct {
 	Workers int
 	Slots   int
@@ -118,6 +118,11 @@ type Group struct {
 	// Description is the group's one-line purpose, drawn under its title on
 	// the dashboard; "" when unset.
 	Description string
+	// DescribesOnly is set when no layer sets either count and one sets a
+	// description, even "": the group is no worker type, so nothing lists it
+	// as configured or starts a worker of it. Both counts set to 0 are
+	// still a worker type, one that starts none.
+	DescribesOnly bool
 }
 
 // MaxDescriptionChars caps a group's description, in Unicode characters
