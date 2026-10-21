@@ -271,6 +271,8 @@ url = "https://linear.app/nerds-run"
 			"linear": {URL: "https://linear.app/nerds-run"},
 		},
 		Rotation: settings.Rotation{Thresholds: []int{55, 65, 75}},
+		// 3 s by value: the sample and A23 document "default 3".
+		Spawn: settings.Spawn{ShellReadyAfter: 3 * time.Second},
 	}, *got.Profile)
 	l, ok := leaf(t, got, "repo")
 	require.True(t, ok)
@@ -621,6 +623,14 @@ func TestLoadErrors(t *testing.T) {
 		"slots below workers": {
 			shared:  app + "[projects.app.groups.coders]\nworkers = 3\nslots = 2\n",
 			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.slots", settings.LayerProject},
+		},
+		"slots one past the bound": {
+			shared:  app + "[projects.app.groups.coders]\nworkers = 1\nslots = 65\n",
+			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.slots", "above 64"},
+		},
+		"slots past every int a count could hold": {
+			shared:  app + "[projects.app.groups.coders]\nworkers = 9223372036854775807\nslots = 9223372036854775807\n",
+			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.slots"},
 		},
 		"negative workers": {
 			shared:  app + "[projects.app.groups.coders]\nworkers = -1\nslots = 2\n",
