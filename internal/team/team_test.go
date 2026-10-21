@@ -214,7 +214,8 @@ func TestRebuildAfterARestartIsEqual(t *testing.T) {
 // id: a name for a pane outside the model, or the empty name of an unnamed
 // agent, names nothing, and a pane listed twice takes the lowest name, so
 // the model does not depend on herdr's order. pane.list gives the label and
-// the ctx, item and stage tokens, as written.
+// the ctx, item and stage tokens, as written, but ctx only from a pane herdr
+// detects an agent in (ADR-001 A27).
 func TestBuildReadsNamesLabelsAndTokens(t *testing.T) {
 	t.Parallel()
 
@@ -226,7 +227,7 @@ func TestBuildReadsNamesLabelsAndTokens(t *testing.T) {
 				Tokens: map[string]string{"ctx": "38", "item": "NERD-5255", "stage": "build_test", "other": "x"},
 			},
 			{PaneID: "wN:p2", WorkspaceID: "wN", Agent: "codex", AgentStatus: "idle"},
-			{PaneID: "wN:p3", WorkspaceID: "wN", AgentStatus: "unknown", Label: "notes"},
+			{PaneID: "wN:p3", WorkspaceID: "wN", AgentStatus: "unknown", Label: "notes", Tokens: map[string]string{"ctx": "61", "item": "NERD-5318"}},
 		},
 		Agents: []herdr.AgentInfo{
 			{PaneID: "wN:p1", Name: "pee02"},
@@ -238,7 +239,7 @@ func TestBuildReadsNamesLabelsAndTokens(t *testing.T) {
 	want := []team.Pane{
 		{ID: "wN:p1", Name: "pee01", Label: "left", Agent: "claude", Status: team.StatusWorking, Ctx: "38", Item: "NERD-5255", Stage: "build_test"},
 		{ID: "wN:p2", Agent: "codex", Status: team.StatusIdle},
-		{ID: "wN:p3", Label: "notes", Status: team.StatusUnknown},
+		{ID: "wN:p3", Label: "notes", Status: team.StatusUnknown, Item: "NERD-5318"},
 	}
 	for name, layout := range map[string]team.Layout{"as listed": l, "listed in reverse": reversed(l)} {
 		t.Run(name, func(t *testing.T) {

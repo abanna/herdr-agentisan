@@ -26,7 +26,7 @@ task plugin:unlink
 `herdr plugin link` never builds, which is why `task plugin:link` does. The
 binary also runs by hand: `task run:cli -- version --json`.
 
-Requires Go 1.26.9+ and [Task](https://taskfile.dev). Linters and scanners are
+Requires Go 1.26.10+ and [Task](https://taskfile.dev). Linters and scanners are
 pinned in `go.mod` under the `tool` directive — nothing to install globally.
 
 ## Report `$ctx` from Claude's statusline
@@ -91,8 +91,9 @@ its hooks run, so the token lasts 24 h, set again by every report: an idle
 Codex agent keeps its `ctx`. PostCompact reports after a compaction, but may
 still read the count from before it; the next turn corrects it. Nothing
 clears `ctx` when Codex exits, cleanly or not: the last value stays until the
-TTL runs out or the next Codex in the pane reports. ADR-001 A22 and A27 have
-the details.
+TTL runs out or the next Codex in the pane reports. The daemon ignores it
+meanwhile: the sidebar, the dashboard and `team status` read `ctx` only from
+a pane where herdr detects an agent. ADR-001 A22 and A27 have the details.
 
 ## Report `$item` and `$stage` from agentisan
 
@@ -154,7 +155,7 @@ description = "Agentisan: back to the previous pane"
 This takes prefix+b from herdr's default `toggle_sidebar`; see
 [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml).
 
-## `$team` and the ctx display in the sidebar
+## `$team`, the ctx display and the focused team in the sidebar
 
 The daemon pushes each `◆ <group>` workspace, and each team's workspace, its
 `$team` token every 3 s: `4 agents · 0 working · 1 ready`, with
@@ -167,6 +168,11 @@ so they clear themselves within 9 s of the daemon stopping. `◆ boss` and
 `◆ herdr` get no `$team`. `[spaces] project` in `herdr-agentisan.toml` names
 the project the spaces belong to; with no config file they belong to one
 unnamed project. See ADR-001 A17 and A28.
+
+The agents panel shows the team you are in: the daemon sets herdr's agent
+view to its workspaces and any blocked agent, labelled with the project
+(`◆ spaces` when `[spaces] project` names none), in the team's order. Outside
+every team, and when it stops cleanly, it clears the view (A28 addendum).
 
 herdr plugins cannot ship config: to show them, put the rows in
 [`docs/config/herdr-sidebar.example.toml`](docs/config/herdr-sidebar.example.toml)
@@ -223,12 +229,17 @@ lost after a herdr live handoff, is listed under `unbound` (ADR-001 A35).
 Just after the daemon starts, the command waits for its first poll.
 ## The dashboard
 
-`herdr-agentisan dashboard` draws the team from the daemon (ADR-001 D5,
-A18). Once a second it asks the daemon socket for a snapshot, which the
-daemon answers from the team model its 3 s poll already builds, so drawing
-never calls herdr. Enter or a click jumps to an agent, or to a shell by its
-pane. With no daemon, the footer says `daemon not running` and the dashboard
-keeps asking.
+`herdr-agentisan dashboard` draws a team from the daemon (ADR-001 D5,
+A18, A24): the team whose workspace the dashboard's own pane is in, so a
+dashboard opened in any team's workspace shows that team, with nothing
+configured per team. Once a second it asks the daemon socket for that team's
+snapshot, which the daemon answers from the team model its 3 s poll already
+builds, so drawing never calls herdr; every 10 seconds the dashboard asks
+herdr which pane runs it, two calls once it has found its pane. Outside every
+team it draws no board and the footer says so; `--project <name>` shows that
+project's team instead. Enter or a click jumps to an agent, or to a shell by
+its pane. With no daemon, the footer says `daemon not running` and the
+dashboard keeps asking.
 
 herdr runs it as the plugin's `dashboard` pane, a split beside the focused
 pane. Plugins cannot ship key bindings, so replace the `dashboard-tab.sh`
@@ -265,8 +276,19 @@ daemon with; without it, `daemon.log` says so and the header shows no PRs.
 The daemon reads the repos when it starts, so run the `daemon-restart`
 action after changing them.
 
-herdr-status.sh, herdr's `tab_bar_right`, also shows the test slots, which
-the header gains in a later change. Keep it until then.
+### Test slots and the boss's runtime in the header
+
+The header shows `slots used/total` for the lock files `[tests] locks`
+names in the shared `herdr-agentisan.toml` (ADR-001 A31): a slot is in use
+while some process holds a lock on its file, as `/proc/locks` lists them,
+counted every poll. Give absolute paths on tmpfs or ext4; agentisan's gate
+keeps one per slot in `$XDG_RUNTIME_DIR/agentisan/gate.<n>.lock`. Without
+`[tests]`, or off Linux, no slots are shown. The boss's `up 2h14m` counts
+from when this daemon first saw the boss's pane, so a handoff or a daemon
+restart starts it again.
+
+With both in the header, herdr-status.sh, herdr's `tab_bar_right`, can be
+retired.
 
 ## Gates
 
@@ -297,7 +319,7 @@ See the Layout section of [AGENTS.md](AGENTS.md).
 
 ## Dev container
 
-`.devcontainer/` builds the local workflow into one image: Go 1.26.9, Task, uv
+`.devcontainer/` builds the local workflow into one image: Go 1.26.10, Task, uv
 (which is how `uvx pre-commit` runs).
 Everything `go tool` already resolves — golangci-lint, gosec, govulncheck,
 modernize, gitleaks — is deliberately absent; go.mod is where those are pinned.
