@@ -112,9 +112,17 @@ func TestStageColourWhenCut(t *testing.T) {
 func TestDataAge(t *testing.T) {
 	t.Parallel()
 
-	const hints = "enter jump · ↑↓ move · ? help · q quit"
+	// hints are the footer's keys with an agent to act on, bare its keys
+	// with none, as a frame with no snapshot has.
+	const (
+		hints = "enter jump · ↑↓ move · ? help · q quit"
+		bare  = "? help · q quit"
+	)
+	// aged has one agent, so its frames' hints are the full ones.
 	aged := func(d time.Duration) *snapshot.Snapshot {
-		return &snapshot.Snapshot{V: 1, At: at.Add(-d), Team: "t"}
+		return &snapshot.Snapshot{V: 1, At: at.Add(-d), Team: "t", Groups: []snapshot.Group{{Name: "g", Agents: []snapshot.Agent{
+			{Name: "a", PaneID: "w1:p1", Status: snapshot.StatusIdle},
+		}}}}
 	}
 	tests := map[string]struct {
 		frame dashboard.Frame
@@ -126,9 +134,9 @@ func TestDataAge(t *testing.T) {
 		"16 s old":                      {frame: dashboard.Frame{Snapshot: aged(16 * time.Second), Now: at}, want: " data 16s old · " + hints},
 		"an hour old is still seconds":  {frame: dashboard.Frame{Snapshot: aged(time.Hour), Now: at}, want: " data 3600s old · " + hints},
 		"a snapshot from the future":    {frame: dashboard.Frame{Snapshot: aged(-time.Hour), Now: at}, want: " " + hints},
-		"no snapshot":                   {frame: dashboard.Frame{Now: at}, want: " " + hints},
-		"no team here":                  {frame: dashboard.Frame{Now: at, NoTeam: true}, want: " " + hints},
-		"a snapshot that reports no at": {frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t"}, Now: at}, want: " " + hints},
+		"no snapshot":                   {frame: dashboard.Frame{Now: at}, want: " " + bare},
+		"no team here":                  {frame: dashboard.Frame{Now: at, NoTeam: dashboard.ErrNotATeamsWorkspace}, want: " " + bare},
+		"a snapshot that reports no at": {frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t"}, Now: at}, want: " " + bare},
 		"before the errors and the note": {
 			frame: dashboard.Frame{Snapshot: aged(20 * time.Second), Now: at, Note: "focus off", Errors: []error{errors.New("e1")}},
 			want:  " data 20s old · ✖ e1 · focus off · " + hints,
