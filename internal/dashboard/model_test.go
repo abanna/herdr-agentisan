@@ -767,6 +767,45 @@ func TestSourceErrorKeepsTheLastGoodFrame(t *testing.T) {
 	assert.Equal(t, 3, src.count())
 }
 
+// TestAStalledSourceShowsTheDataAge: while polls fail, the dashboard keeps
+// drawing the last good snapshot and its clock runs on, so once that
+// snapshot is more than 15 s old the footer says how old (ADR-001 A38). The
+// next good poll clears it.
+func TestAStalledSourceShowsTheDataAge(t *testing.T) {
+	t.Parallel()
+
+	full := fixture(t, "full") // taken at `at`
+	fresh := *full
+	fresh.At = at.Add(20 * time.Second)
+	src := &script{steps: []func() (snapshot.Snapshot, error){
+		serve(full),
+		fail(fmt.Errorf("%w: connection refused", snapshot.ErrUnavailable)),
+		serve(&fresh),
+	}}
+	var mu sync.Mutex
+	now := at
+	cfg := config(src, &recorder{})
+	cfg.Interval = time.Millisecond
+	cfg.Now = func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return now
+	}
+	m, tick := startedPolling(t, cfg, 120, 40)
+	assert.NotContains(t, m.View().Content, "s old")
+
+	mu.Lock()
+	now = at.Add(20 * time.Second)
+	mu.Unlock()
+	m, tick = pollOnce(t, m, tick)
+	frame := m.View().Content
+	assert.Contains(t, frame, "data 20s old")
+	assert.Contains(t, frame, "connection refused")
+
+	m, _ = pollOnce(t, m, tick)
+	assert.NotContains(t, m.View().Content, "s old", "a fresh snapshot clears it")
+}
+
 // startedPolling is started, also returning the tick the first answer
 // scheduled.
 func startedPolling(t *testing.T, cfg dashboard.Config, w, h int) (dashboard.Model, tea.Cmd) {
