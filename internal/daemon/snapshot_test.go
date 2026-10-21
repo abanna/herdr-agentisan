@@ -103,14 +103,15 @@ func fullTeam() ([]herdr.WorkspaceInfo, []map[string]any, []map[string]any) {
 //go:fix inline
 
 // wantFullTeam is fullTeam's snapshot at t0, by hand: the groups in v12's
-// order, then the rest by name; the rows by pane id; every stage first seen
-// at t0, and every agent at rest first seen resting at t0 (A37).
+// order, then the rest by name; the rows by pane id; every stage, and the
+// boss, first seen at t0, and every agent at rest first seen resting at t0
+// (A37).
 func wantFullTeam() snapshot.Snapshot {
 	return snapshot.Snapshot{
 		V: 1, At: t0, Team: "agentisan", Project: &snapshot.Project{Color: "#7c3aed"},
 		Boss: &snapshot.Boss{Agent: snapshot.Agent{
 			Name: "boss", PaneID: "wJ:p1", Status: "working", Ctx: new(23), Item: "#867", Stage: "review", StageStartedAt: new(t0),
-		}},
+		}, StartedAt: new(t0)},
 		Groups: []snapshot.Group{
 			{Name: "coders", Agents: []snapshot.Agent{
 				{Name: "pee01", PaneID: "wN:p1", Status: "working", Ctx: new(40), Item: "NERD-5255", Stage: "build_test", StageStartedAt: new(t0)},
@@ -191,6 +192,44 @@ func TestSnapshotOpServesTheTeam(t *testing.T) {
 	assert.NotContains(t, string(data), `"elsewhere"`, "a pane outside the ◆ spaces is not the team's")
 	assert.NotContains(t, string(data), `"w12:p1"`, "◆ herdr is not the team's")
 	assert.NotContains(t, string(data), `"Agentisan dashboard"`, "a shell in ◆ boss is not the boss")
+}
+
+// TestNoCtxWithoutADetectedAgent is A27's rule on a herdrtest team: a pane
+// agent.list names but herdr detects no agent in, carrying the ctx a Codex
+// left behind, gets no ctx in the snapshot and "ctx  --" in the sidebar,
+// while an agent's pane with the same token gets it in both.
+func TestNoCtxWithoutADetectedAgent(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	ws, _, _ := fullTeam()
+	th.layout(ws, []map[string]any{
+		teamPane("wN:p1", "wN", "codex", "idle", "", map[string]string{"ctx": "45"}),
+		teamPane("wN:p2", "wN", "", "unknown", "", map[string]string{"ctx": "45"}),
+	}, []map[string]any{named("wN:p1", "pee01"), named("wN:p2", "pee02")})
+	dir := shortDir(t)
+	o := teamOpts(t, dir, th, projectConfig(t))
+	o.Now = func() time.Time { return t0 }
+	run(t, o)
+
+	got := served(t, socketPath(t, dir, th.path), anySnapshot)
+	i := slices.IndexFunc(got.Groups, func(g snapshot.Group) bool { return g.Name == "coders" })
+	require.GreaterOrEqual(t, i, 0)
+	assert.Equal(t, []snapshot.Agent{
+		{Name: "pee01", PaneID: "wN:p1", Status: "idle", Ctx: new(45), IdleSince: new(t0)},
+		{Name: "pee02", PaneID: "wN:p2", Status: "unknown"},
+	}, got.Groups[i].Agents)
+
+	polled(t, th.srv, 1)
+	for pane, want := range map[string]string{"wN:p1": "ctx 45%", "wN:p2": "ctx  --"} {
+		params := panePushes(t, th.srv)[pane]
+		require.NotEmpty(t, params, pane)
+		var push struct {
+			Tokens map[string]string `json:"tokens"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(params[len(params)-1]), &push))
+		bands := map[string]string{"ctx_ok": push.Tokens["ctx_ok"], "ctx_warn": push.Tokens["ctx_warn"], "ctx_hot": push.Tokens["ctx_hot"]}
+		assert.Equal(t, map[string]string{"ctx_ok": want, "ctx_warn": "", "ctx_hot": ""}, bands, pane)
+	}
 }
 
 // TestSnapshotOpBeforeTheFirstPoll: until the team poll has built a
@@ -756,13 +795,13 @@ func everyTeam(th *teamHerdr) {
 }
 
 // wantTeams is everyTeam's snapshot of each team at t0, by hand: each team in
-// its own resolver's group order and colour.
+// its own resolver's group order and colour, each boss first seen at t0.
 func wantTeams() map[string]snapshot.Snapshot {
 	return map[string]snapshot.Snapshot{
 		"agentisan": wantFullTeam(),
 		"alpha": {
 			V: 1, At: t0, Team: "alpha", Project: &snapshot.Project{Color: "#16a34a"},
-			Boss: &snapshot.Boss{Agent: snapshot.Agent{Name: "al-boss", PaneID: "w14:p1", TabID: "w14:t1", Status: "working"}},
+			Boss: &snapshot.Boss{Agent: snapshot.Agent{Name: "al-boss", PaneID: "w14:p1", TabID: "w14:t1", Status: "working"}, StartedAt: new(t0)},
 			Groups: []snapshot.Group{
 				{Name: "coder", Agents: []snapshot.Agent{
 					{Name: "al-coder-1", PaneID: "w14:p3", TabID: "w14:t3", Status: "working", Ctx: new(50), Item: "NERD-5285", Stage: "build_test", StageStartedAt: new(t0)},

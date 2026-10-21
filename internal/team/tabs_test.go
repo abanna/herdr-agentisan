@@ -255,11 +255,11 @@ func TestTabsTeamsResolveExactly(t *testing.T) {
 			Groups: []team.Group{{Name: "coders", Targets: []team.Target{wN}, Workers: []team.Worker{worker("wN:p1", "wN", "wN:t1", team.StatusWorking, "claude", false)}}},
 		},
 		{
-			Name: "assay", Workspaces: []string{"w20"}, Order: order, Target: team.Target{WorkspaceID: "w20"},
+			Name: "assay", Short: "as", Workspaces: []string{"w20"}, Order: order, Target: team.Target{WorkspaceID: "w20"},
 			Boss: []team.Worker{{ID: "w20:p1", Pane: team.Pane{ID: "w20:p1", TabID: "w20:t1", Agent: "claude", Status: team.StatusIdle}}},
 		},
 		{
-			Name: "herdr-agentisan", Color: "#7c3aed", Workspaces: []string{"w14"}, Order: order, Target: w14,
+			Name: "herdr-agentisan", Short: "ha", Color: "#7c3aed", Workspaces: []string{"w14"}, Order: order, Target: w14,
 			Boss: []team.Worker{
 				{ID: "w14:p1", Pane: team.Pane{ID: "w14:p1", TabID: "w14:t1", Agent: "claude", Status: team.StatusWorking}},
 				{ID: "w14:pD", Pane: team.Pane{ID: "w14:pD", TabID: "w14:t1", Status: team.StatusUnknown}},
