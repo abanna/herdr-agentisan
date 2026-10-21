@@ -155,7 +155,7 @@ func TestOpenMigratesAndIsIdempotent(t *testing.T) {
 
 	s, err := store.Open(t.Context(), path)
 	require.NoError(t, err)
-	assert.Equal(t, 2, store.SchemaVersion(), "0001 and 0002, messaging's inbox")
+	assert.Equal(t, 3, store.SchemaVersion(), "0001, 0002, messaging's inbox, and 0003, the workers' identity")
 	assert.Equal(t, store.SchemaVersion(), s.UserVersion())
 	assert.Equal(t, []string{"table:focus", "table:handoffs", "table:messages", "table:workers", "trigger:focus_cap"}, objects(t, store.DB(s)))
 	at := time.Date(2026, 10, 9, 12, 0, 0, 123456789, time.UTC)
@@ -839,27 +839,34 @@ func TestSchemaConstraints(t *testing.T) {
 
 	const worker = "INSERT INTO workers (logical_id, project, grp, pane_id, generation, status, created_at, retired_at) VALUES "
 	const handoff = "INSERT INTO handoffs (logical_id, old_pane, new_pane, state, created_at, updated_at) VALUES "
+	const worker5 = "INSERT INTO workers (logical_id, project, grp, pane_id, generation, status, created_at, terminal_id, shell_pid, shell_start) VALUES "
 	tests := map[string]struct {
 		sql string
 		ok  bool
 	}{
-		"a worker":                          {sql: worker + "('w2', 'p', 'g', 'w1:p2', 0, 'active', 1, NULL)", ok: true},
-		"a retired worker":                  {sql: worker + "('w2', 'p', 'g', 'w1:p2', 3, 'retired', 1, 2)", ok: true},
-		"a worker without an id":            {sql: worker + "('', 'p', 'g', 'w1:p2', 0, 'active', 1, NULL)"},
-		"a worker without a pane":           {sql: worker + "('w2', 'p', 'g', NULL, 0, 'active', 1, NULL)"},
-		"a duplicate worker":                {sql: worker + "('w', 'p', 'g', 'w1:p2', 0, 'active', 1, NULL)"},
-		"a negative generation":             {sql: worker + "('w2', 'p', 'g', 'w1:p2', -1, 'active', 1, NULL)"},
-		"retired before it was created":     {sql: worker + "('w2', 'p', 'g', 'w1:p2', 0, 'retired', 5, 4)"},
-		"a time that is text":               {sql: worker + "('w2', 'p', 'g', 'w1:p2', 0, 'active', 'yesterday', NULL)"},
-		"a handoff":                         {sql: handoff + "('w', 'w1:p1', 'w1:p2', 'pending', 1, 1)", ok: true},
-		"a handoff for no worker":           {sql: handoff + "('nobody', 'w1:p1', 'w1:p2', 'pending', 1, 1)"},
-		"a handoff in an unknown state":     {sql: handoff + "('w', 'w1:p1', 'w1:p2', 'done', 1, 1)"},
-		"a handoff state in another case":   {sql: handoff + "('w', 'w1:p1', 'w1:p2', 'PENDING', 1, 1)"},
-		"a handoff without a new pane":      {sql: handoff + "('w', 'w1:p1', NULL, 'pending', 1, 1)"},
-		"a handoff updated before creation": {sql: handoff + "('w', 'w1:p1', 'w1:p2', 'pending', 5, 4)"},
-		"a focus without a pane":            {sql: "INSERT INTO focus (pane_id, focused_at) VALUES ('', 1)"},
-		"a focus without a time":            {sql: "INSERT INTO focus (pane_id, focused_at) VALUES ('w1:p1', NULL)"},
-		"a message without its fields":      {sql: "INSERT INTO messages (body) VALUES ('hi')"},
+		"a worker":                           {sql: worker + "('w2', 'p', 'g', 'w1:p2', 0, 'active', 1, NULL)", ok: true},
+		"a retired worker":                   {sql: worker + "('w2', 'p', 'g', 'w1:p2', 3, 'retired', 1, 2)", ok: true},
+		"a worker without an id":             {sql: worker + "('', 'p', 'g', 'w1:p2', 0, 'active', 1, NULL)"},
+		"a worker without a pane":            {sql: worker + "('w2', 'p', 'g', NULL, 0, 'active', 1, NULL)"},
+		"a duplicate worker":                 {sql: worker + "('w', 'p', 'g', 'w1:p2', 0, 'active', 1, NULL)"},
+		"a negative generation":              {sql: worker + "('w2', 'p', 'g', 'w1:p2', -1, 'active', 1, NULL)"},
+		"retired before it was created":      {sql: worker + "('w2', 'p', 'g', 'w1:p2', 0, 'retired', 5, 4)"},
+		"a time that is text":                {sql: worker + "('w2', 'p', 'g', 'w1:p2', 0, 'active', 'yesterday', NULL)"},
+		"a handoff":                          {sql: handoff + "('w', 'w1:p1', 'w1:p2', 'pending', 1, 1)", ok: true},
+		"a handoff for no worker":            {sql: handoff + "('nobody', 'w1:p1', 'w1:p2', 'pending', 1, 1)"},
+		"a handoff in an unknown state":      {sql: handoff + "('w', 'w1:p1', 'w1:p2', 'done', 1, 1)"},
+		"a handoff state in another case":    {sql: handoff + "('w', 'w1:p1', 'w1:p2', 'PENDING', 1, 1)"},
+		"a handoff without a new pane":       {sql: handoff + "('w', 'w1:p1', NULL, 'pending', 1, 1)"},
+		"a handoff updated before creation":  {sql: handoff + "('w', 'w1:p1', 'w1:p2', 'pending', 5, 4)"},
+		"a worker with its shell":            {sql: worker5 + "('w2', 'p', 'g', 'w1:p2', 0, 'active', 1, 'term_2', 7, 0)", ok: true},
+		"a shell pid of 0":                   {sql: worker5 + "('w2', 'p', 'g', 'w1:p2', 0, 'active', 1, 'term_2', 0, 1)"},
+		"a shell start without its pid":      {sql: worker5 + "('w2', 'p', 'g', 'w1:p2', 0, 'active', 1, 'term_2', NULL, 1)"},
+		"a shell pid without its start":      {sql: worker5 + "('w2', 'p', 'g', 'w1:p2', 0, 'active', 1, 'term_2', 7, NULL)"},
+		"a negative shell start":             {sql: worker5 + "('w2', 'p', 'g', 'w1:p2', 0, 'active', 1, 'term_2', 7, -1)"},
+		"a handoff at a negative generation": {sql: "INSERT INTO handoffs (logical_id, old_pane, new_pane, generation, created_at, updated_at) VALUES ('w', 'w1:p1', 'w1:p2', -1, 1, 1)"},
+		"a focus without a pane":             {sql: "INSERT INTO focus (pane_id, focused_at) VALUES ('', 1)"},
+		"a focus without a time":             {sql: "INSERT INTO focus (pane_id, focused_at) VALUES ('w1:p1', NULL)"},
+		"a message without its fields":       {sql: "INSERT INTO messages (body) VALUES ('hi')"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -912,7 +919,7 @@ func TestClosedStoreFails(t *testing.T) {
 		},
 		"Message":         func() error { _, err := s.Message(ctx, "m"); return err },
 		"PruneMessages":   func() error { _, err := s.PruneMessages(ctx, time.Now()); return err },
-		"BeginHandoff":    func() error { _, err := s.BeginHandoff(ctx, "w", "w1:p2", time.Now()); return err },
+		"BeginHandoff":    func() error { _, err := s.BeginHandoff(ctx, "w", "w1:p2", "term_w1:p2", time.Now()); return err },
 		"CompleteHandoff": func() error { return s.CompleteHandoff(ctx, 1, time.Now()) },
 		"FailHandoff":     func() error { return s.FailHandoff(ctx, 1, time.Now()) },
 	} {

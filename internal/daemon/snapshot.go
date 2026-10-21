@@ -16,7 +16,8 @@ import (
 // The snapshot op's refusal codes.
 const (
 	// codeNotReady is the snapshot op's answer before the team poll has
-	// built a snapshot of the team asked for.
+	// built a snapshot of the team asked for, and a workforce op's before it
+	// has reconciled the workers rows (ErrNotReady).
 	codeNotReady = "not_ready"
 	// codeNoTeam is its answer for a team the model does not hold (A24).
 	codeNoTeam = "no_team"
@@ -27,11 +28,13 @@ const (
 const maxSnapshot = maxMessage - 1024
 
 var (
-	// ErrNotReady means the daemon has no snapshot of the team asked for
-	// yet: its team poll has not finished a poll with agent names, or is
-	// off, or the team's snapshot has never fit one answer line. A daemon
+	// ErrNotReady means the daemon cannot answer yet. For the snapshot op,
+	// it has no snapshot of the team asked for: its team poll has not
+	// finished a poll with agent names, or is off, or the team's snapshot
+	// has never fit one answer line. For a workforce op, its team poll has
+	// not reconciled the workers rows since it started (A35). A daemon
 	// refusal with code not_ready matches it.
-	ErrNotReady = errors.New("the daemon has no snapshot yet")
+	ErrNotReady = errors.New("the daemon is not ready yet")
 	// ErrNoTeam means the team model holds no team the snapshot op was
 	// asked for: no project of that name, no team that workspace belongs
 	// to, or, asked for neither, no ◆ space (A24). A daemon refusal with
