@@ -360,6 +360,22 @@ func TestTurnLandsOnTheReportingPane(t *testing.T) {
 	}
 }
 
+// TestTurnRefusesATerminal: run by hand in a pane, stdin is the terminal,
+// which is refused unread, since reading it would wait for Ctrl-D; /dev/null
+// stands in for it, and only the reason tells the refusal from an empty read.
+func TestTurnRefusesATerminal(t *testing.T) {
+	t.Parallel()
+	dev, err := os.Open(os.DevNull)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = dev.Close() })
+	srv := herdrtest.Start(t, okReply)
+
+	_, err = report.Turn(t.Context(), herdr.Client{SocketPath: srv.Path}, report.Pane{SocketPath: srv.Path, PaneID: "w14:p1"}, dev)
+	require.ErrorIs(t, err, report.ErrMalformed)
+	assert.ErrorContains(t, err, "character device")
+	assert.Empty(t, srv.Requests())
+}
+
 // TestTurnDrainsStdin: a payload bigger than a pipe buffer is read to its end
 // on a path that reports nothing, so the agent's write completes.
 func TestTurnDrainsStdin(t *testing.T) {
