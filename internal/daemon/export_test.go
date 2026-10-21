@@ -126,6 +126,21 @@ func DefaultStartTime() func(pid int) (uint64, error) {
 	return Options{}.withDefaults().Hooks.StartTime
 }
 
+// GroupDescriptions is the team poll's reader of the group descriptions
+// (A36), driven one poll at a time.
+type GroupDescriptions struct{ d *groupDescriptions }
+
+// NewGroupDescriptions reads the shared file in dir; "" reads nothing.
+func NewGroupDescriptions(dir string) GroupDescriptions {
+	return GroupDescriptions{d: newGroupDescriptions(dir)}
+}
+
+// Refresh is one poll's look at the file.
+func (g GroupDescriptions) Refresh(log zerolog.Logger) { g.d.refresh(log) }
+
+// Of is project's descriptions, by group.
+func (g GroupDescriptions) Of(project string) map[string]string { return g.d.of(project) }
+
 // WorkforceCode is the refusal code a workforce op answers err with.
 var WorkforceCode = workforceCode
 

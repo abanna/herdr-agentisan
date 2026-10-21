@@ -125,14 +125,16 @@ exempts whatever is later added under that name.
   and every agent pane's ctx display (`team.go`, A28) and caches every team's
   snapshot, with the workspaces each holds, which the `snapshot` op serves
   by project or workspace, so the op never calls herdr (A18, A24,
-  `snapshot.go`, with `SnapshotSource`, the dashboard's client), and sends
-  each status change since the last poll as a workflow event
-  (`events.go`). It keeps herdr's agent view on the focused team, which
-  focus events and the poll feed it, and clears it outside every team and
-  on a clean stop (`view.go`, the A28 addendum). `daemon start` spawns a
-  detached `daemon run`; herdr's `[[startup]]` hook runs it, and the
-  `daemon-restart` action covers linking. Tests run daemons in process
-  against herdrtest and a scratch state dir, never the real ones.
+  `snapshot.go`, with `SnapshotSource`, the dashboard's client), each group
+  with its description, re-read when the shared file changes
+  (`descriptions.go`, A36), and sends each status change since the last
+  poll as a workflow event (`events.go`). It keeps herdr's agent view on the
+  focused team, which focus events and the poll feed it, and clears it
+  outside every team and on a clean stop (`view.go`, the A28 addendum).
+  `daemon start` spawns a detached `daemon run`; herdr's `[[startup]]` hook
+  runs it, and the `daemon-restart` action covers linking. Tests run
+  daemons in process against herdrtest and a scratch state dir, never the
+  real ones.
 - `internal/team/` — the team domain model (ADR-001 D5, A17): project → group
   → logical worker → current pane, built from `pane.list`, `workspace.list`,
   `tab.list`, `agent.list` and `state.db`'s `workers` rows, joined by
@@ -152,9 +154,9 @@ exempts whatever is later added under that name.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
   references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check,
-  and each project's test-slot lock files, which the daemon reads once at
-  start (`tests.go`, A40). Sample in
-  `docs/config/herdr-agentisan.example.toml`.
+  each group's one-line description (A36), never from a repo file, and each
+  project's test-slot lock files, which the daemon reads once at start
+  (`tests.go`, A40). Sample in `docs/config/herdr-agentisan.example.toml`.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
   embedded from `migrations/` and tracked by `user_version`. The daemon holds
