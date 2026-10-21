@@ -277,14 +277,14 @@ func TestBindWorkerLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, live)
 
-	again := store.Worker{LogicalID: "ha-coder-2", Project: "herdr-agentisan", Group: "coder", PaneID: "w14:pA", TerminalID: "term_c"}
+	again := store.Worker{LogicalID: "ha-coder-2", Project: "assay", Group: "qa", PaneID: "w14:pA", TerminalID: "term_c"}
 	gen, err = s.BindWorker(ctx, again, t0.Add(time.Hour))
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), gen)
 	row, err = s.WorkerRow(ctx, "ha-coder-2")
 	require.NoError(t, err)
 	again.Generation, again.Status = 1, store.StatusStarting
-	assert.Equal(t, store.Row{Worker: again, CreatedAt: t0}, row.InUTC(), "the row keeps its first creation")
+	assert.Equal(t, store.Row{Worker: again, CreatedAt: t0}, row.InUTC(), "the new project and group, the row's first creation")
 	require.ErrorIs(t, s.SetWorkerStatus(ctx, w, store.StatusRetired, t0.Add(2*time.Hour)), store.ErrNoWorker,
 		"a write planned on generation 0 never ends generation 1")
 }

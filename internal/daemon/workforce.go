@@ -35,6 +35,17 @@ const (
 // that answered not_ready.
 const notReadyRetry = 100 * time.Millisecond
 
+// opBudgets is each workforce op's budget given its args, the one table the
+// server and its client both read.
+var opBudgets = map[string]func(json.RawMessage) time.Duration{
+	OpTeamStatus:   fixed(StatusBudget),
+	OpWorkerRetire: retireBudget,
+}
+
+func fixed(d time.Duration) func(json.RawMessage) time.Duration {
+	return func(json.RawMessage) time.Duration { return d }
+}
+
 // The refusal codes of the workforce ops, one per workforce sentinel.
 var workforceCodes = []struct {
 	err  error
@@ -72,18 +83,15 @@ func workforceCode(err error) string {
 // daemon started (A35): before that, a worker a live handoff re-keyed reads
 // as a pane no row binds.
 func workforceOps(svc *workforce.Service, ready *atomic.Bool) map[string]op {
-	fixed := func(d time.Duration) func(json.RawMessage) time.Duration {
-		return func(json.RawMessage) time.Duration { return d }
-	}
 	ops := map[string]op{
-		OpTeamStatus: {budget: fixed(StatusBudget), code: workforceCode, run: func(ctx context.Context, args json.RawMessage) (any, error) {
+		OpTeamStatus: {code: workforceCode, run: func(ctx context.Context, args json.RawMessage) (any, error) {
 			var req workforce.StatusRequest
 			if err := decodeArgs(args, &req); err != nil {
 				return nil, err
 			}
 			return svc.Status(ctx, req)
 		}},
-		OpWorkerRetire: {budget: retireBudget, code: workforceCode, run: func(ctx context.Context, args json.RawMessage) (any, error) {
+		OpWorkerRetire: {code: workforceCode, run: func(ctx context.Context, args json.RawMessage) (any, error) {
 			var req workforce.RetireRequest
 			if err := decodeArgs(args, &req); err != nil {
 				return nil, err
@@ -92,6 +100,7 @@ func workforceOps(svc *workforce.Service, ready *atomic.Bool) map[string]op {
 		}},
 	}
 	for name, o := range ops {
+		o.budget = opBudgets[name]
 		run := o.run
 		o.run = func(ctx context.Context, args json.RawMessage) (any, error) {
 			if !ready.Load() {
@@ -118,11 +127,8 @@ func retireBudget(args json.RawMessage) time.Duration {
 // OpBudget is how long op may run; zero for an op that is not a workforce
 // op. A client waits that long, and an exchange more.
 func OpBudget(op string, args json.RawMessage) time.Duration {
-	switch op {
-	case OpTeamStatus:
-		return StatusBudget
-	case OpWorkerRetire:
-		return retireBudget(args)
+	if b, ok := opBudgets[op]; ok {
+		return b(args)
 	}
 	return 0
 }

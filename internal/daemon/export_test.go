@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -108,6 +109,12 @@ var StartTimeFrom = startTimeFrom
 // DefaultStartTime is the StartTime hook a daemon has when none is injected.
 func DefaultStartTime() func(pid int) (uint64, error) {
 	return Options{}.withDefaults().Hooks.StartTime
+}
+
+// ServedBudget is the budget the daemon's own op map gives op with args,
+// which the server enforces; OpBudget is the client's copy.
+func ServedBudget(op string, args json.RawMessage) time.Duration {
+	return workforceOps(&workforce.Service{}, new(atomic.Bool))[op].budget(args)
 }
 
 // WorkforceCode is the refusal code a workforce op answers err with.

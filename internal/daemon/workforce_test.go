@@ -437,12 +437,23 @@ func TestWorkforceCodes(t *testing.T) {
 }
 
 // TestOpBudgets: team status and retire get 10 s, and retire
-// --after-handoff 1,500 s; any other op none of its own.
+// --after-handoff 1,500 s, both in the client's wait and in the budget the
+// daemon's op map enforces; any other op none of its own.
 func TestOpBudgets(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, 10*time.Second, daemon.OpBudget(daemon.OpTeamStatus, nil))
-	assert.Equal(t, 10*time.Second, daemon.OpBudget(daemon.OpWorkerRetire, json.RawMessage(`{"target":"x"}`)))
-	assert.Equal(t, 1500*time.Second, daemon.OpBudget(daemon.OpWorkerRetire, json.RawMessage(`{"target":"x","after_handoff":true}`)))
-	assert.Equal(t, 10*time.Second, daemon.OpBudget(daemon.OpWorkerRetire, json.RawMessage(`not json`)))
+	for _, tc := range []struct {
+		op   string
+		args string
+		want time.Duration
+	}{
+		{daemon.OpTeamStatus, ``, 10 * time.Second},
+		{daemon.OpWorkerRetire, `{"target":"x"}`, 10 * time.Second},
+		{daemon.OpWorkerRetire, `{"target":"x","after_handoff":true}`, 1500 * time.Second},
+		{daemon.OpWorkerRetire, `not json`, 10 * time.Second},
+	} {
+		args := json.RawMessage(tc.args)
+		assert.Equal(t, tc.want, daemon.OpBudget(tc.op, args), "the client's wait: %s %s", tc.op, tc.args)
+		assert.Equal(t, tc.want, daemon.ServedBudget(tc.op, args), "the budget the daemon enforces: %s %s", tc.op, tc.args)
+	}
 	assert.Zero(t, daemon.OpBudget("health", nil))
 }

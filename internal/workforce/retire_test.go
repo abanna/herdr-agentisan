@@ -234,11 +234,30 @@ func TestRetireAWorkerRetiredMeanwhile(t *testing.T) {
 	assert.Equal(t, store.StatusRetired, f.row(t, w.ID).Status)
 }
 
+// polling returns a channel closed once the fake answers its second
+// pane.list: a lone retire has read the layout and its handoff wait has
+// begun.
+func polling(h *fakeHerdr) <-chan struct{} {
+	began := make(chan struct{})
+	lists := 0
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.onCall = func(method string) { // under the fake's lock
+		if method == "pane.list" {
+			if lists++; lists == 2 {
+				close(began)
+			}
+		}
+	}
+	return began
+}
+
 // TestRetireAfterHandoff: the pane closes once it carries a handoff token,
 // and not before; one that goes while waited for is the worker gone; one
 // with no handoff in time stays open, ErrHandoffTimeout.
 func TestRetireAfterHandoff(t *testing.T) {
 	t.Parallel()
+	assert.Equal(t, 2*time.Second, workforce.DefaultHandoffPoll, "the daemon polls every 2 s (A23)")
 	t.Run("handoff written", func(t *testing.T) {
 		t.Parallel()
 		f := newFixture(t, teamConfig)
@@ -278,12 +297,13 @@ func TestRetireAfterHandoff(t *testing.T) {
 		f := newFixture(t, teamConfig)
 		w := f.worker(t, "ha-coder-1", "coder")
 		other := f.worker(t, "ha-qa-1", "qa")
+		waiting := polling(f.h)
 		done := make(chan error, 1)
 		go func() {
 			_, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID, AfterHandoff: true})
 			done <- err
 		}()
-		time.Sleep(50 * time.Millisecond) // the wait is polling
+		<-waiting
 
 		type answer struct {
 			res workforce.RetireResult
@@ -318,12 +338,13 @@ func TestRetireAfterHandoff(t *testing.T) {
 			res workforce.RetireResult
 			err error
 		}
+		waiting := polling(f.h)
 		done := make(chan answer, 1)
 		go func() {
 			res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID, AfterHandoff: true})
 			done <- answer{res, err}
 		}()
-		time.Sleep(50 * time.Millisecond) // the wait is polling
+		<-waiting
 		f.h.srv.Close()
 		time.Sleep(100 * time.Millisecond) // it polls a herdr that is not there
 		f.h.setPane(w.PaneID, func(p *fakePane) { p.tokens = map[string]string{team.HandoffKey: "⟳ READY"} })
@@ -337,12 +358,16 @@ func TestRetireAfterHandoff(t *testing.T) {
 		t.Parallel()
 		f := newFixture(t, teamConfig)
 		w := f.worker(t, "ha-coder-1", "coder")
+		waiting := polling(f.h)
 		go func() {
-			time.Sleep(50 * time.Millisecond)
+			<-waiting
 			assert.NoError(t, f.h.client().ClosePane(context.Background(), w.PaneID))
 		}()
+		// A regression that waits on fails here, not at the suite's timeout.
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		defer cancel()
 
-		res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID, AfterHandoff: true})
+		res, err := f.svc.Retire(ctx, workforce.RetireRequest{Target: w.ID, AfterHandoff: true})
 		require.NoError(t, err)
 		assert.Equal(t, workforce.RetireResult{ID: w.ID, PaneID: w.PaneID, Changed: true, Outcome: workforce.OutcomeGone}, res)
 		assert.Equal(t, store.StatusGone, f.row(t, w.ID).Status)
