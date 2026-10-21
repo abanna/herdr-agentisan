@@ -321,6 +321,45 @@ func TestTurnSurfacesHerdrErrors(t *testing.T) {
 	}
 }
 
+// TestTurnLandsOnTheReportingPane: a turn report goes to the pane the hook's
+// own lineage runs in, never to the pane a stale or reissued HERDR_PANE_ID
+// now names (NERD-5268: never report for another pane), and nowhere when no
+// pane runs it.
+func TestTurnLandsOnTheReportingPane(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		panes []fakePane
+		want  []string
+		err   error
+	}{
+		"the id reissued to another pane": {
+			panes: []fakePane{{id: "wZ:p1", shell: 700, pgid: 701}, {id: "wN:p2", shell: 600}},
+			want:  []string{"wN:p2"},
+		},
+		"no pane runs the hook": {
+			panes: []fakePane{{id: "wZ:p1", shell: 700, pgid: 701}},
+			err:   report.ErrPaneUnresolved,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, fakeHerdr(tc.panes))
+			lineage := report.ReadLineage(5000, newProcTable(oursProcs()).stat).WithCmdline(argv(claudeArgv))
+			pane := report.Pane{SocketPath: srv.Path, PaneID: "wZ:p1", Lineage: lineage}
+
+			got, err := report.Turn(t.Context(), herdr.Client{SocketPath: srv.Path}, pane, strings.NewReader(claudeStop("BOSS: done")))
+			if tc.err != nil {
+				require.ErrorIs(t, err, tc.err)
+				assert.Empty(t, reportedTo(t, srv.Requests()), "no pane gets the report")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.want[0], got.PaneID)
+			assert.Equal(t, tc.want, reportedTo(t, srv.Requests()))
+		})
+	}
+}
+
 // TestTurnDrainsStdin: a payload bigger than a pipe buffer is read to its end
 // on a path that reports nothing, so the agent's write completes.
 func TestTurnDrainsStdin(t *testing.T) {
