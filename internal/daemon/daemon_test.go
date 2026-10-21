@@ -250,13 +250,19 @@ func restarted(o daemon.Options) daemon.Options {
 type running struct {
 	cancel context.CancelFunc
 	done   chan error
+	// exited is closed once Run has returned, as a spawned process's
+	// Spawned.Exited is once it has exited.
+	exited chan struct{}
 }
 
 func run(t *testing.T, o daemon.Options) *running {
 	t.Helper()
 	ctx, cancel := context.WithCancel(t.Context())
-	r := &running{cancel: cancel, done: make(chan error, 1)}
-	go func() { r.done <- daemon.Run(ctx, o) }()
+	r := &running{cancel: cancel, done: make(chan error, 1), exited: make(chan struct{})}
+	go func() {
+		defer close(r.exited)
+		r.done <- daemon.Run(ctx, o)
+	}()
 	t.Cleanup(func() {
 		cancel()
 		select {
@@ -720,15 +726,16 @@ func TestRunProtocolPin(t *testing.T) {
 }
 
 // spawnInProcess stands in for exec'ing `daemon run`: it runs the daemon in a
-// goroutine and reports this process's pid.
-func spawnInProcess(t *testing.T, o daemon.Options, spawned *[]*running, mu *sync.Mutex) func(context.Context) (int, error) {
+// goroutine and reports this process's pid, and the daemon's return as its
+// exit.
+func spawnInProcess(t *testing.T, o daemon.Options, spawned *[]*running, mu *sync.Mutex) func(context.Context) (daemon.Spawned, error) {
 	t.Helper()
-	return func(context.Context) (int, error) {
+	return func(context.Context) (daemon.Spawned, error) {
 		r := run(t, o)
 		mu.Lock()
 		*spawned = append(*spawned, r)
 		mu.Unlock()
-		return os.Getpid(), nil
+		return daemon.Spawned{PID: os.Getpid(), Exited: r.exited}, nil
 	}
 }
 
@@ -748,6 +755,51 @@ func TestStartClasses(t *testing.T) {
 		assert.Equal(t, daemon.StartResult{PID: os.Getpid(), Healthy: true}, res)
 		assert.Len(t, spawned, 1)
 	})
+	// A fresh state.db under fsync load has taken 5.3 s to open, and a live
+	// handoff waits up to a poll for the old daemon to let go (A48): the
+	// default wait outlasts both.
+	t.Run("a daemon slower than 3 s to answer still counts as started", func(t *testing.T) {
+		t.Parallel()
+		h := newHerdr(t, 22)
+		o := opts(t, shortDir(t), h)
+		o.StartWait = 0 // the default
+		var slow *time.Timer
+		o.Hooks.Spawn = func(context.Context) (daemon.Spawned, error) {
+			slow = time.AfterFunc(4*time.Second, func() { run(t, o) })
+			return daemon.Spawned{PID: os.Getpid()}, nil
+		}
+		t.Cleanup(func() { slow.Stop() })
+
+		res, err := daemon.Start(t.Context(), o)
+		require.NoError(t, err)
+		assert.Equal(t, daemon.StartResult{PID: os.Getpid(), Healthy: true}, res)
+	})
+	// The old daemon lets go of the lock only once its poll notices the
+	// replaced socket, up to PollInterval after the handoff (A3, A48).
+	t.Run("a live handoff whose old daemon lets go after 4 s still counts as started", func(t *testing.T) {
+		t.Parallel()
+		h := newHerdr(t, 22)
+		dir := shortDir(t)
+		old := opts(t, dir, h)
+		old.Poll = time.Hour // it lets go below, when the test says
+		oldRun := run(t, old)
+		healthy(t, dir, h)
+		h.restart()
+		notices := time.AfterFunc(4*time.Second, oldRun.cancel)
+		t.Cleanup(func() { notices.Stop() })
+
+		o := restarted(opts(t, dir, h))
+		o.StartWait = 0 // the default
+		o.LockWait = ready
+		var spawned []*running
+		var mu sync.Mutex
+		o.Hooks.Spawn = spawnInProcess(t, o, &spawned, &mu)
+
+		res, err := daemon.Start(t.Context(), o)
+		require.NoError(t, err)
+		assert.Equal(t, daemon.StartResult{PID: os.Getpid(), Healthy: true}, res)
+		assert.False(t, oldRun.alive(), "the new server's daemon answered only once the old one let go")
+	})
 	t.Run("already running for this herdr: spawns nothing", func(t *testing.T) {
 		t.Parallel()
 		h := newHerdr(t, 22)
@@ -755,9 +807,9 @@ func TestStartClasses(t *testing.T) {
 		o := opts(t, dir, h)
 		run(t, o)
 		healthy(t, dir, h)
-		o.Hooks.Spawn = func(context.Context) (int, error) {
+		o.Hooks.Spawn = func(context.Context) (daemon.Spawned, error) {
 			t.Error("Start spawned a second daemon")
-			return 0, nil
+			return daemon.Spawned{}, nil
 		}
 
 		res, err := daemon.Start(t.Context(), o)
@@ -798,7 +850,9 @@ func TestStartClasses(t *testing.T) {
 		t.Parallel()
 		h := newHerdr(t, 22)
 		o := opts(t, shortDir(t), h)
-		o.Hooks.Spawn = func(context.Context) (int, error) { return 0, errors.New("exec: no such file") }
+		o.Hooks.Spawn = func(context.Context) (daemon.Spawned, error) {
+			return daemon.Spawned{}, errors.New("exec: no such file")
+		}
 
 		_, err := daemon.Start(t.Context(), o)
 		require.ErrorIs(t, err, daemon.ErrSpawn)
@@ -808,24 +862,215 @@ func TestStartClasses(t *testing.T) {
 		h := newHerdr(t, 22)
 		o := opts(t, shortDir(t), h)
 		o.StartWait = 200 * time.Millisecond
-		o.Hooks.Spawn = func(context.Context) (int, error) { return 4242, nil }
+		o.Hooks.Spawn = func(context.Context) (daemon.Spawned, error) { return daemon.Spawned{PID: 4242}, nil }
 
 		res, err := daemon.Start(t.Context(), o)
 		require.NoError(t, err)
 		assert.Equal(t, daemon.StartResult{PID: 4242}, res)
+	})
+	t.Run("a start whose context ends while it waits is that error", func(t *testing.T) {
+		t.Parallel()
+		h := newHerdr(t, 22)
+		o := opts(t, shortDir(t), h)
+		ctx, cancel := context.WithCancel(t.Context())
+		o.Hooks.Spawn = func(context.Context) (daemon.Spawned, error) {
+			time.AfterFunc(100*time.Millisecond, cancel)
+			return daemon.Spawned{PID: 4242}, nil
+		}
+
+		res, err := daemon.Start(ctx, o)
+		require.ErrorIs(t, err, context.Canceled)
+		assert.Equal(t, daemon.StartResult{PID: 4242}, res)
+	})
+	// Before A48 this waited out StartWait and read as still starting.
+	t.Run("a spawned daemon that exits before it answers is an error", func(t *testing.T) {
+		t.Parallel()
+		h := newHerdr(t, 22)
+		o := opts(t, shortDir(t), h)
+		gone := make(chan struct{})
+		close(gone)
+		o.Hooks.Spawn = func(context.Context) (daemon.Spawned, error) {
+			return daemon.Spawned{PID: 4242, Exited: gone}, nil
+		}
+
+		res, err := daemon.Start(t.Context(), o)
+		require.ErrorIs(t, err, daemon.ErrDaemonExited)
+		assert.Equal(t, daemon.StartResult{PID: 4242}, res)
+	})
+	// A concurrent start's daemon took the lock first, so this start's own
+	// spawn exited (ErrAlreadyRunning): the daemon to wait on is the holder.
+	t.Run("a spawn that loses the lock to another start waits on the holder", func(t *testing.T) {
+		t.Parallel()
+		h := newHerdr(t, 22)
+		o := opts(t, shortDir(t), h)
+		pinged, release := holdPing(t, h)
+		gone := make(chan struct{})
+		close(gone)
+		o.Hooks.Spawn = func(context.Context) (daemon.Spawned, error) {
+			run(t, o)
+			awaitPing(t, pinged) // it holds the lock and has not answered health
+			time.AfterFunc(300*time.Millisecond, release)
+			return daemon.Spawned{PID: 4242, Exited: gone}, nil
+		}
+
+		res, err := daemon.Start(t.Context(), o)
+		require.NoError(t, err)
+		assert.Equal(t, daemon.StartResult{PID: os.Getpid(), Healthy: true}, res)
+	})
+	// The new daemon gave up waiting for the lock (ErrLockTimeout) while the
+	// old server's daemon still holds it: a live holder, of another server.
+	t.Run("a spawn that gives up on an old server's lock is an error", func(t *testing.T) {
+		t.Parallel()
+		h := newHerdr(t, 22)
+		dir := shortDir(t)
+		old := opts(t, dir, h)
+		old.Poll = time.Hour
+		run(t, old)
+		healthy(t, dir, h)
+		h.restart()
+		o := opts(t, dir, h) // the old daemon reads as alive: same pid, same start
+		gone := make(chan struct{})
+		close(gone)
+		o.Hooks.Spawn = func(context.Context) (daemon.Spawned, error) {
+			return daemon.Spawned{PID: 4242, Exited: gone}, nil
+		}
+
+		res, err := daemon.Start(t.Context(), o)
+		require.ErrorIs(t, err, daemon.ErrDaemonExited)
+		assert.Equal(t, daemon.StartResult{PID: 4242}, res)
+	})
+	t.Run("a holder still starting at StartWait is reported by its pid, not an error", func(t *testing.T) {
+		t.Parallel()
+		h := newHerdr(t, 22)
+		o := opts(t, shortDir(t), h)
+		o.StartWait = 300 * time.Millisecond
+		pinged, _ := holdPing(t, h)
+		gone := make(chan struct{})
+		close(gone)
+		o.Hooks.Spawn = func(context.Context) (daemon.Spawned, error) {
+			run(t, o)
+			awaitPing(t, pinged)
+			return daemon.Spawned{PID: 4242, Exited: gone}, nil
+		}
+
+		res, err := daemon.Start(t.Context(), o)
+		require.NoError(t, err)
+		assert.Equal(t, daemon.StartResult{PID: os.Getpid()}, res)
+	})
+	// During `daemon restart` the old daemon has let go of the lock but may
+	// still be exiting, and its record names it: it is waited on until it
+	// is gone, and then the spawn that exited is what failed.
+	t.Run("a spawn that exits after the old daemon lets go names the spawn", func(t *testing.T) {
+		t.Parallel()
+		h := newHerdr(t, 22)
+		dir := shortDir(t)
+		o := opts(t, dir, h)
+		table := &procs{start: map[int]uint64{os.Getpid(): 77}}
+		o.Hooks.StartTime = table.startTime
+		old := run(t, o)
+		healthy(t, dir, h)
+		old.cancel()
+		<-old.exited // it let go; its record names it, still alive
+		awaitLockFree(t, dir, h)
+		gone := make(chan struct{})
+		close(gone)
+		o.Hooks.Spawn = func(context.Context) (daemon.Spawned, error) {
+			time.AfterFunc(300*time.Millisecond, func() { table.set(os.Getpid(), 78) }) // the old process exits
+			return daemon.Spawned{PID: 4242, Exited: gone}, nil
+		}
+
+		res, err := daemon.Start(t.Context(), o)
+		require.ErrorIs(t, err, daemon.ErrDaemonExited)
+		assert.Equal(t, daemon.StartResult{PID: 4242}, res, "the spawn, not the old daemon")
+	})
+	t.Run("a daemon already starting that exits before it answers is an error", func(t *testing.T) {
+		t.Parallel()
+		h := newHerdr(t, 22)
+		o := opts(t, shortDir(t), h)
+		table := &procs{start: map[int]uint64{os.Getpid(): 77}}
+		o.Hooks.StartTime = table.startTime
+		pinged, _ := holdPing(t, h)
+		holder := run(t, o)
+		awaitPing(t, pinged)
+		o.Hooks.Spawn = func(context.Context) (daemon.Spawned, error) {
+			t.Error("Start spawned beside a live holder")
+			return daemon.Spawned{}, nil
+		}
+		time.AfterFunc(300*time.Millisecond, func() {
+			holder.cancel()
+			<-holder.exited
+			table.set(os.Getpid(), 78) // its pid is gone, or another process's
+		})
+
+		res, err := daemon.Start(t.Context(), o)
+		require.ErrorIs(t, err, daemon.ErrDaemonExited)
+		assert.Equal(t, daemon.StartResult{PID: os.Getpid(), AlreadyRunning: true}, res)
 	})
 	t.Run("no herdr: an error, nothing spawned", func(t *testing.T) {
 		t.Parallel()
 		h := newHerdr(t, 22)
 		h.stop()
 		o := opts(t, shortDir(t), h)
-		o.Hooks.Spawn = func(context.Context) (int, error) {
+		o.Hooks.Spawn = func(context.Context) (daemon.Spawned, error) {
 			t.Error("spawned with no herdr")
-			return 0, nil
+			return daemon.Spawned{}, nil
 		}
 		_, err := daemon.Start(t.Context(), o)
 		require.ErrorIs(t, err, daemon.ErrHerdrGone)
 	})
+}
+
+// awaitLockFree waits, up to ready, until nothing holds the daemon lock of h
+// in stateDir, taking the free lock for an instant to see, and leaves its
+// record as it is. A child forked while a daemon held the lock keeps a copy
+// until it execs (NERD-5335); once the lock is free, no one else has it.
+func awaitLockFree(t *testing.T, stateDir string, h *fakeHerdr) {
+	t.Helper()
+	p, err := daemon.PathsFor(stateDir, h.path)
+	require.NoError(t, err)
+	f, err := os.OpenFile(p.Lock, os.O_RDWR, 0)
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+	require.Eventually(t, func() bool {
+		if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+			return false
+		}
+		return syscall.Flock(int(f.Fd()), syscall.LOCK_UN) == nil
+	}, ready, 5*time.Millisecond, "the old daemon's lock was never let go")
+}
+
+// holdPing makes h hold every ping until release is called, so a daemon that
+// has taken its lock waits there before it serves. pinged receives once a
+// ping is held. The test's cleanup releases it.
+func holdPing(t *testing.T, h *fakeHerdr) (pinged <-chan struct{}, release func()) {
+	t.Helper()
+	gate := make(chan struct{})
+	once := sync.OnceFunc(func() { close(gate) })
+	seen := make(chan struct{}, 1)
+	h.mu.Lock()
+	h.before = func(method string) {
+		if method != "ping" {
+			return
+		}
+		select {
+		case seen <- struct{}{}:
+		default:
+		}
+		<-gate
+	}
+	h.mu.Unlock()
+	t.Cleanup(once)
+	return seen, once
+}
+
+// awaitPing waits, up to ready, for a ping holdPing holds.
+func awaitPing(t *testing.T, pinged <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-pinged:
+	case <-time.After(ready):
+		t.Error("the daemon never pinged herdr")
+	}
 }
 
 // TestTwoConcurrentStartsLeaveOneDaemon is I6 through the start path: both
@@ -1231,9 +1476,9 @@ func TestUnwritableStateDir(t *testing.T) {
 	require.NoError(t, os.Chmod(dir, 0o500))
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 	o := opts(t, dir, h)
-	o.Hooks.Spawn = func(context.Context) (int, error) {
+	o.Hooks.Spawn = func(context.Context) (daemon.Spawned, error) {
 		t.Error("spawned into an unwritable state dir")
-		return 0, nil
+		return daemon.Spawned{}, nil
 	}
 
 	require.ErrorIs(t, daemon.Run(t.Context(), o), os.ErrPermission)

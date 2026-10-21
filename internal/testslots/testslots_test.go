@@ -151,6 +151,8 @@ func TestCountFailures(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chmod(shut, 0o700) })
 	notDir := filepath.Join(dir, "file")
 	require.NoError(t, os.WriteFile(notDir, nil, 0o600))
+	unreadable := filepath.Join(dir, "unreadable")
+	require.NoError(t, os.WriteFile(unreadable, nil, 0o000))
 
 	tests := map[string]struct {
 		procLocks string
@@ -162,12 +164,14 @@ func TestCountFailures(t *testing.T) {
 		"a directory as the list":   {procLocks: dir, paths: []string{good}, wantErr: testslots.ErrLocks},
 		"a list past the cap":       {procLocks: big, paths: []string{good}, wantErr: testslots.ErrLocks},
 		"a list at the cap":         {procLocks: atTheCap, paths: []string{good}, want: snapshot.Slots{Total: 1}},
+		"a list it may not read":    {procLocks: unreadable, paths: []string{good}, wantErr: testslots.ErrLocks},
 		"a line it cannot read":     {procLocks: bad, paths: []string{good}, wantErr: testslots.ErrLocks},
 		"a lock file under a file":  {procLocks: good, paths: []string{filepath.Join(notDir, "gate.lock")}, wantErr: testslots.ErrLockFile},
 		"a lock file it cannot see": {procLocks: good, paths: []string{filepath.Join(shut, "in", "gate.lock")}, wantErr: testslots.ErrLockFile},
 	}
 	if os.Geteuid() == 0 {
 		delete(tests, "a lock file it cannot see") // root searches it anyway
+		delete(tests, "a list it may not read")    // and reads it
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

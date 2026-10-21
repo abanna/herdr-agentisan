@@ -158,6 +158,12 @@ func TestDecodeAcceptsEveryContractValue(t *testing.T) {
 		"an unnamed agent": agent(`"status":"unknown","unnamed":true`),
 		"unnamed false":    agent(`"status":"idle","unnamed":false`),
 		"an unnamed boss":  boss(`"unnamed":true`),
+		// shell marks a pane no agent runs in (ADR-001 A38): absent and
+		// false both mean an agent row, and a shell is always unnamed.
+		"a shell":                 agent(`"status":"unknown","unnamed":true,"shell":true`),
+		"a shell with a handoff":  agent(`"status":"ready","unnamed":true,"shell":true`),
+		"shell false":             agent(`"status":"idle","shell":false`),
+		"a boss with shell false": boss(`"shell":false`),
 		// tab_id and idle_since are optional (ADR-001 A37): absent, empty
 		// and null all mean not reported.
 		"a tab id":                       agent(`"status":"idle","tab_id":"w2:t1"`),
@@ -239,6 +245,10 @@ func TestDecodeRefuses(t *testing.T) {
 		"status in another case":       {in: agent(`"name":"a","status":"Idle"`), want: snapshot.ErrInvalid, contains: []string{`"Idle"`}},
 		"unnamed is not a bool":        {in: agent(`"name":"a","status":"idle","unnamed":"yes"`), want: snapshot.ErrInvalid},
 		"unnamed in another case":      {in: agent(`"name":"a","status":"idle","Unnamed":true`), want: snapshot.ErrInvalid, contains: []string{`"Unnamed"`}},
+		"a named shell":                {in: agent(`"name":"a","status":"unknown","shell":true`), want: snapshot.ErrInvalid, contains: []string{`"a"`, "shell"}},
+		"a shell for the boss":         {in: boss(`"unnamed":true,"shell":true`), want: snapshot.ErrInvalid, contains: []string{"never the boss"}},
+		"shell is not a bool":          {in: agent(`"name":"a","status":"idle","unnamed":true,"shell":1`), want: snapshot.ErrInvalid},
+		"shell in another case":        {in: agent(`"name":"a","status":"idle","unnamed":true,"Shell":true`), want: snapshot.ErrInvalid, contains: []string{`"Shell"`}},
 		"tab_id is not a string":       {in: agent(`"name":"a","status":"idle","tab_id":7`), want: snapshot.ErrInvalid},
 		"tab_id is an object":          {in: agent(`"name":"a","status":"idle","tab_id":{"id":"w2:t1"}`), want: snapshot.ErrInvalid},
 		"tab_id in another case":       {in: agent(`"name":"a","status":"idle","tabId":"w2:t1"`), want: snapshot.ErrInvalid, contains: []string{`"tabId"`}},
@@ -623,6 +633,35 @@ func TestUnnamedIsLeftOutUnlessSet(t *testing.T) {
 	got, err := snapshot.Decode(bytes.NewReader(raw))
 	require.NoError(t, err)
 	assert.True(t, got.Groups[0].Agents[0].Unnamed)
+}
+
+// TestShellIsLeftOutUnlessSet: a writer leaves shell out for an agent's row,
+// so every snapshot written before the key existed still means what it
+// meant (ADR-001 A38); set, it survives a round trip.
+func TestShellIsLeftOutUnlessSet(t *testing.T) {
+	t.Parallel()
+
+	agent, err := json.Marshal(snapshot.Agent{Name: "scratch", Unnamed: true, PaneID: "w2:p1", Status: snapshot.StatusIdle})
+	require.NoError(t, err)
+	assert.NotContains(t, string(agent), "shell")
+
+	doc := snapshot.Snapshot{V: snapshot.Version, Team: "t", Groups: []snapshot.Group{{Name: "g", Agents: []snapshot.Agent{
+		{Name: "notes", PaneID: "w2:p3", Status: snapshot.StatusUnknown, Unnamed: true, Shell: true},
+	}}}}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"shell":true`)
+	got, err := snapshot.Decode(bytes.NewReader(raw))
+	require.NoError(t, err)
+	assert.True(t, got.Groups[0].Agents[0].Shell)
+
+	old, err := snapshot.Decode(strings.NewReader(valid))
+	require.NoError(t, err)
+	for _, g := range old.Groups {
+		for _, a := range g.Agents {
+			assert.False(t, a.Shell, "a document without the key has no shells")
+		}
+	}
 }
 
 // TestTabAndIdleAreLeftOutUnlessSet: a writer leaves tab_id and idle_since
