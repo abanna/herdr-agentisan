@@ -3,6 +3,7 @@ package herdrtest_test
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"net"
 	"runtime"
 	"strings"
@@ -137,6 +138,38 @@ func TestSettleWhileTheServerCloses(t *testing.T) {
 		srv.Close() // returns once the first Close has
 		assert.Equal(t, settled, srv.Requests(), "a request landed after Settle")
 	}
+}
+
+// TestCloseStopsAcceptingBeforeTheStreamsEnd: a subscriber whose stream
+// ends because the server closes finds the server gone when it dials again,
+// as it would a herdr that exited, never a server that still accepts,
+// acknowledges a new stream and ends it at once (NERD-5346). Close is held
+// between its steps, standing in for a socket file slow to unlink: under
+// load that window let the daemon's focus collector resubscribe to a closing
+// server again and again, each time sending the agent view anew.
+func TestCloseStopsAcceptingBeforeTheStreamsEnd(t *testing.T) {
+	t.Parallel()
+	lines := make(chan []byte)
+	srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
+		return herdrtest.Reply{Result: herdrtest.SubscriptionStarted(), Stream: lines}
+	})
+	herdrtest.HoldStreamsOpen(srv, func() { time.Sleep(200 * time.Millisecond) })
+	conn := dial(t, srv)
+	_, err := conn.Write([]byte(`{"id":"1","method":"events.subscribe","params":{}}` + "\n"))
+	require.NoError(t, err)
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(5*time.Second)))
+	r := bufio.NewReader(conn)
+	_, err = r.ReadBytes('\n')
+	require.NoError(t, err, "the subscription is acknowledged")
+
+	go srv.Close()
+	_, err = r.ReadByte()
+	require.ErrorIs(t, err, io.EOF, "Close ends the stream")
+	again, err := net.Dial("unix", srv.Path)
+	if err == nil {
+		_ = again.Close()
+	}
+	require.Error(t, err, "once its stream has ended, the server accepts nothing")
 }
 
 // TestSettleIsNotARequest: Settle's own connection never reaches the handler
