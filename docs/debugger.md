@@ -13,7 +13,7 @@ a person, the boss, or the debugger.
 | Command | What it answers |
 | --- | --- |
 | `events worker <id> [--since 1h] [--json]` | Every status change of one worker or pane in the window, oldest first: at most the newest 1,000, and it says when it cut older ones. `<id>` is a logical id or a pane id: the id matches either, because a worker's events carry its pane id until a worker row binds it. `--since` takes whole minutes, from 1m to 168h |
-| `events query '<ES\|QL>' [--json]` | Any ES\|QL read of the trail. It must start `FROM logs-agentisan.otel-*`, followed by a pipe or nothing: no second source |
+| `events query '<ES\|QL>' [--json]` | Any ES\|QL read of the trail. It must start `FROM logs-agentisan.otel-*`, followed by a pipe or nothing: no second source, and the words `LOOKUP` and `ENRICH` nowhere. The read key's privileges bound everything else |
 
 `events worker w14:p8` prints one line per change, such as
 `2026-10-20T11:29:10.415Z  w14:p8  done → working  coder  unbound`: the time,
@@ -39,7 +39,8 @@ env_file = "~/.config/nerdsrun/local.env"
 - **What is taken from it.** Only those two names. Every other line,
   another secret included, is passed over.
 - **The key never enters an agent's environment.** It is read when a query
-  runs, sent only to that file's URL, and printed nowhere.
+  runs, sent only to that file's URL, never after a redirect, and printed
+  nowhere.
 - **No flag can redirect it.** No flag of `events` names a URL, a variable or
   a file, so an agent allowed to run them cannot send the key anywhere else.
   `TestEventsFlagsNameNoDestination` fails on any new flag.

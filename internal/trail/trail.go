@@ -105,10 +105,14 @@ func NewClient(rawURL, key string, hc *http.Client) (*Client, error) {
 	if hc == nil {
 		// The key goes to the env file's URL and nowhere else: never through
 		// a proxy the environment names (HTTP_PROXY), which would read it in
-		// clear over http.
+		// clear over http, and never after a redirect, which Go follows with
+		// Authorization kept to the same host name on any port or scheme.
 		tr := http.DefaultTransport.(*http.Transport).Clone()
 		tr.Proxy = nil
-		hc = &http.Client{Timeout: QueryTimeout, Transport: tr}
+		hc = &http.Client{
+			Timeout: QueryTimeout, Transport: tr,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}
 	}
 	return &Client{url: u.Scheme + "://" + u.Host, key: key, http: hc}, nil
 }
@@ -143,6 +147,8 @@ func (c *Client) Query(ctx context.Context, esql string) (Table, error) {
 		return Table{}, fmt.Errorf("%w (%d)", ErrUnauthorized, resp.StatusCode)
 	case resp.StatusCode == http.StatusBadRequest:
 		return Table{}, fmt.Errorf("%w: %s", ErrBadQuery, reason(data))
+	case resp.StatusCode/100 == 3:
+		return Table{}, fmt.Errorf("%w: HTTP %d, a redirect, which the key never follows", ErrUnavailable, resp.StatusCode)
 	case resp.StatusCode/100 != 2:
 		return Table{}, fmt.Errorf("%w: HTTP %d", ErrUnavailable, resp.StatusCode)
 	}

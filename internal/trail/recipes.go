@@ -35,12 +35,20 @@ const RowLimit = 1000
 // source (a comma, with or without spaces) nor METADATA can.
 var fromTrail = regexp.MustCompile(`(?i)^\s*FROM\s+logs-agentisan\.otel-\*\s*(\||$)`)
 
-// CheckQuery refuses an ES|QL query that does not start FROM the trail.
-// The read key bounds what any query can reach; this keeps the debugger's
-// ad-hoc queries on the trail.
+// secondSource matches LOOKUP JOIN and ENRICH, which read another index, as
+// words anywhere: ES|QL takes a comment wherever it takes a space, so even a
+// name holding either word is refused, which only ever refuses too much.
+var secondSource = regexp.MustCompile(`(?i)\b(LOOKUP|ENRICH)\b`)
+
+// CheckQuery refuses an ES|QL query that does not start FROM the trail, or
+// that reads a second index. The read key bounds what any query can reach;
+// this keeps the debugger's ad-hoc queries on the trail.
 func CheckQuery(esql string) error {
 	if !fromTrail.MatchString(esql) {
 		return fmt.Errorf("%w: a trail query starts FROM %s", ErrInvalid, Source)
+	}
+	if secondSource.MatchString(esql) {
+		return fmt.Errorf("%w: a trail query reads no second index, so LOOKUP and ENRICH appear nowhere in it", ErrInvalid)
 	}
 	return nil
 }

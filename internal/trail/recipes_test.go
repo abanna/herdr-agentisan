@@ -87,6 +87,13 @@ func TestCheckQuery(t *testing.T) {
 		"ROW a = 1": false,
 		"SHOW INFO": false,
 		"":          false,
+
+		// LOOKUP JOIN and ENRICH read a second index, a comment or not.
+		"FROM logs-agentisan.otel-* | LOOKUP JOIN other ON x":         false,
+		"FROM logs-agentisan.otel-*\n|lookup join other on x":         false,
+		"FROM logs-agentisan.otel-* | ENRICH policy ON x":             false,
+		"FROM logs-agentisan.otel-* | /* c */ LOOKUP JOIN other ON x": false,
+		"FROM logs-agentisan.otel-* |// c\nENRICH p ON x":             false,
 	} {
 		err := trail.CheckQuery(q)
 		if ok {

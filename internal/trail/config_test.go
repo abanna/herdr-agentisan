@@ -1,6 +1,8 @@
 package trail_test
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -67,4 +69,38 @@ func TestFromConfig(t *testing.T) {
 			assert.Equal(t, "trail.Client(http://es:9200)", c.String(), "the file's URL, not the environment's")
 		})
 	}
+}
+
+// TestFromConfigReadsNoEnvironmentButHOME: ELASTIC_URL and ELASTIC_API_KEY
+// in the process environment, or in the lookup, never reach the client: the
+// key sent is the env file's, to the env file's URL, and a file without the
+// key is not configured, whatever the environment holds. Not parallel: it
+// sets the process environment.
+func TestFromConfigReadsNoEnvironmentButHOME(t *testing.T) {
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("the environment's URL was dialled")
+	}))
+	t.Cleanup(elsewhere.Close)
+	srv, req, _ := esStandIn(t, http.StatusOK, recorded(t))
+	t.Setenv(trail.URLVar, elsewhere.URL)
+	t.Setenv(trail.KeyVar, "env-key-never-read")
+	home := t.TempDir()
+	env := map[string]string{"HOME": home, trail.URLVar: elsewhere.URL, trail.KeyVar: "lookup-key-never-read"}
+	lookup := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
+
+	good := filepath.Join(home, "local.env")
+	require.NoError(t, os.WriteFile(good, []byte("ELASTIC_URL="+srv.URL+"\n"+keyEq+probeKey+"\n"), 0o600))
+	c, err := trail.FromConfig(t.Context(), configDir(t, good), lookup, time.Second)
+	require.NoError(t, err)
+	_, err = c.Query(t.Context(), "FROM logs-agentisan.otel-*")
+	require.NoError(t, err)
+	assert.Equal(t, "ApiKey "+probeKey, req.Header.Get("Authorization"), "the file's key, not the environment's")
+
+	noKey := filepath.Join(home, "nokey.env")
+	require.NoError(t, os.WriteFile(noKey, []byte("ELASTIC_URL="+srv.URL+"\n"), 0o600))
+	_, err = trail.FromConfig(t.Context(), configDir(t, noKey), lookup, time.Second)
+	require.ErrorIs(t, err, trail.ErrNotConfigured, "the environment's key is no fallback")
+
+	_, err = trail.FromConfig(t.Context(), configDir(t, ""), lookup, time.Second)
+	require.ErrorIs(t, err, trail.ErrNotConfigured, "no env_file, whatever the environment holds")
 }

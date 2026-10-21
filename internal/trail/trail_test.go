@@ -204,6 +204,26 @@ func TestNewClientNeverUsesAProxy(t *testing.T) {
 	assert.NotSame(t, http.DefaultTransport, tr)
 }
 
+// TestQueryFollowsNoRedirect: Go keeps Authorization on a redirect to the
+// same host name, whatever the port or scheme, so an answer that redirects
+// is an error, and its target is never asked.
+func TestQueryFollowsNoRedirect(t *testing.T) {
+	t.Parallel()
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("the redirect was followed")
+	}))
+	t.Cleanup(target.Close)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/_query", http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(srv.Close)
+	c, err := trail.NewClient(srv.URL, probeKey, nil)
+	require.NoError(t, err)
+	_, err = c.Query(t.Context(), "FROM logs-agentisan.otel-*")
+	require.ErrorIs(t, err, trail.ErrUnavailable)
+	assert.Contains(t, err.Error(), "HTTP 307, a redirect")
+}
+
 // TestClientNeverPrintsTheKey: a client formatted by mistake, in any verb,
 // shows its URL and never its key.
 func TestClientNeverPrintsTheKey(t *testing.T) {
