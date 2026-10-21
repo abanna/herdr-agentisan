@@ -46,6 +46,9 @@ var (
 	// read, which herdr lists elsewhere: nothing was closed, and a retry
 	// reads the panes afresh.
 	ErrPaneChanged = errors.New("the pane changed since it was read")
+	// ErrHandoffPending means retire would end a row whose handoff is still
+	// pending, which would strand the handoff and hold the worker's inbox.
+	ErrHandoffPending = errors.New("the worker's handoff is pending")
 	// ErrHandoffTimeout means the worker wrote no handoff in time; its pane
 	// stays open.
 	ErrHandoffTimeout = errors.New("no handoff in time")

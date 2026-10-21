@@ -59,6 +59,7 @@ var workforceCodes = []struct {
 	{workforce.ErrUnknownWorker, "unknown_worker"},
 	{workforce.ErrNotAWorker, "not_a_worker"},
 	{workforce.ErrPaneChanged, "pane_changed"},
+	{workforce.ErrHandoffPending, "handoff_pending"},
 	{workforce.ErrHandoffTimeout, "handoff_timeout"},
 	{ErrHerdrGone, "herdr_gone"},
 	{workforce.ErrHerdr, codeHerdrFailed},

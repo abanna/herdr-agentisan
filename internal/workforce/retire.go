@@ -192,6 +192,9 @@ func (s *Service) resolveTarget(ctx context.Context, name string) (target, *Reti
 		if p, ok := byTerminal(l.Panes, r.TerminalID); ok && bound[r.TerminalID] == name {
 			return target{id: name, paneID: p.PaneID, terminal: p.TerminalID, row: r}, nil, nil
 		}
+		if r.HandoffPending {
+			return target{}, nil, fmt.Errorf("%w: %s is bound to no pane while its handoff is pending; retire it once the handoff completes or fails", ErrHandoffPending, name)
+		}
 		if err := s.endRow(ctx, r, store.StatusRetired); err != nil {
 			return target{}, nil, err
 		}

@@ -426,6 +426,7 @@ func TestWorkforceCodes(t *testing.T) {
 		workforce.ErrUnknownWorker:                                               "unknown_worker",
 		workforce.ErrNotAWorker:                                                  "not_a_worker",
 		workforce.ErrPaneChanged:                                                 "pane_changed",
+		workforce.ErrHandoffPending:                                              "handoff_pending",
 		workforce.ErrHandoffTimeout:                                              "handoff_timeout",
 		fmt.Errorf("%w: %w", workforce.ErrHerdr, daemon.ErrHerdrGone):            "herdr_gone",
 		workforce.ErrHerdr:                                                       "herdr_failed",

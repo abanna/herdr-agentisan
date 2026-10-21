@@ -129,6 +129,23 @@ func TestRetireARowBoundToNoPane(t *testing.T) {
 	assert.NotNil(t, f.h.tabByLabel(lost.ID), "a lost row's old pane is no proven pane of its")
 }
 
+// TestRetireRefusesAPendingHandoff: a row bound to no pane while its handoff
+// is pending is refused with ErrHandoffPending and left live, since ending it
+// would strand the handoff (NERD-5261).
+func TestRetireRefusesAPendingHandoff(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	f.bindRow(t, "ha-coder-1", "coder", "w10:p99")
+	f.exec(t, "UPDATE workers SET terminal_id = 'term_away' WHERE logical_id = 'ha-coder-1'")
+	_, err := f.st.BeginHandoff(t.Context(), "ha-coder-1", "w10:p98", "term_next", time.Now())
+	require.NoError(t, err)
+
+	_, err = f.svc.Retire(t.Context(), workforce.RetireRequest{Target: "ha-coder-1"})
+	require.ErrorIs(t, err, workforce.ErrHandoffPending)
+	assert.Equal(t, store.StatusActive, f.row(t, "ha-coder-1").Status)
+	assert.True(t, f.row(t, "ha-coder-1").RetiredAt.IsZero(), "still live")
+}
+
 // TestRetireClosesOnlyTheRowsTerminal: retire closes the pane herdr lists
 // with the row's terminal, at whatever id it has now, and never the pane at
 // the row's pane id once herdr has given that id to another terminal.
