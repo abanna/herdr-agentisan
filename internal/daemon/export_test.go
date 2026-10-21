@@ -156,6 +156,14 @@ func NewGroupDescriptions(dir string) GroupDescriptions {
 	return GroupDescriptions{d: newGroupDescriptions(dir)}
 }
 
+// NewGroupDescriptionsReading is NewGroupDescriptions with read standing in
+// for settings.Teams.
+func NewGroupDescriptionsReading(dir string, read func(dir string) ([]settings.Team, error)) GroupDescriptions {
+	d := newGroupDescriptions(dir)
+	d.read = read
+	return GroupDescriptions{d: d}
+}
+
 // Refresh is one poll's look at the file.
 func (g GroupDescriptions) Refresh(log zerolog.Logger) { g.d.refresh(log) }
 

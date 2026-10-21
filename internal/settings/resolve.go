@@ -159,11 +159,10 @@ func (m merged) checkGroups() error {
 				return m.invalidf("groups."+name+".description", "%v", err)
 			}
 		}
-		workers, ok := g["workers"].(int)
-		_, hasSlots := g["slots"].(int)
-		if !ok && !hasSlots && described {
+		if describesOnly(g) {
 			continue // it describes a group and starts no worker (A36)
 		}
+		workers, ok := g["workers"].(int)
 		if !ok {
 			return m.invalidf(workersPath, "every group needs workers")
 		}
@@ -179,6 +178,39 @@ func (m merged) checkGroups() error {
 		}
 		if slots > MaxSlots {
 			return m.invalidf(slotsPath, "slots %d is above %d", slots, MaxSlots)
+		}
+	}
+	return nil
+}
+
+// describesOnly reports whether a merged group table only describes: it sets
+// a description, even "", and neither count (A36).
+func describesOnly(g map[string]any) bool {
+	_, hasWorkers := g["workers"].(int)
+	_, hasSlots := g["slots"].(int)
+	_, described := g["description"].(string)
+	return described && !hasWorkers && !hasSlots
+}
+
+// checkDescribers refuses an agent on every group that only describes, which
+// never launches (A36): any key of its agent table, the command first, but a
+// model of "", which is none, from whichever layer sets it. Only a project's
+// whole merge can tell that a group only describes, since a later layer, the
+// repo file included, may give it counts; so Load runs this on that merge
+// alone, never on the partial ones checkFields also lints.
+func (m merged) checkDescribers() error {
+	v, _ := m.get("groups")
+	groups, _ := v.(map[string]any)
+	for _, name := range slices.Sorted(maps.Keys(groups)) {
+		g, _ := groups[name].(map[string]any)
+		if !describesOnly(g) {
+			continue
+		}
+		agent, _ := g[agentKey].(map[string]any)
+		for _, key := range slices.Sorted(maps.Keys(agent)) {
+			if agent[key] != "" {
+				return m.invalidf("groups."+name+"."+agentKey+"."+key, "the group only describes, so it starts no worker and takes no agent; give it workers and slots, or leave the agent out")
+			}
 		}
 	}
 	return nil
@@ -302,7 +334,7 @@ func buildProfile(name string, values map[string]any) *Profile {
 			workers, _ := g["workers"].(int)
 			slots, _ := g["slots"].(int)
 			description, _ := g["description"].(string)
-			p.Groups[n] = Group{Workers: workers, Slots: slots, Agent: groupAgent(g), Description: description}
+			p.Groups[n] = Group{Workers: workers, Slots: slots, Agent: groupAgent(g), Description: description, DescribesOnly: describesOnly(g)}
 		}
 	}
 	if v, ok := lookup(values, "integrations"); ok {
