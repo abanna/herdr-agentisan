@@ -92,11 +92,24 @@ func TestStatusLineAsksForTheTeam(t *testing.T) {
 				Op   string          `json:"op"`
 				Args json.RawMessage `json:"args"`
 			}
-			require.NoError(t, json.Unmarshal([]byte(<-asked), &req))
+			require.NoError(t, json.Unmarshal([]byte(received(t, asked)), &req))
 			assert.Equal(t, "snapshot", req.Op)
 			assert.JSONEq(t, tc.asked, string(req.Args))
 			assert.Zero(t, herdrCalls.Load(), "the line comes from the daemon's cache, never from herdr")
 		})
+	}
+}
+
+// received is the request line the fake daemon read, failing the test at
+// once if none comes, rather than at the package's timeout.
+func received(t *testing.T, asked <-chan string) string {
+	t.Helper()
+	select {
+	case line := <-asked:
+		return line
+	case <-time.After(5 * time.Second):
+		t.Fatal("no request reached the daemon")
+		return ""
 	}
 }
 
@@ -276,6 +289,7 @@ func TestTabBarSnippet(t *testing.T) {
 	require.Len(t, commands, 1)
 	c := commands[0]
 	// herdr hides an entry outside these (src/config/tab_bar.rs:3-7).
+	assert.Equal(t, int64(5), c.IntervalSeconds, "A41: the line follows a workspace switch within 5 s")
 	assert.GreaterOrEqual(t, c.IntervalSeconds, int64(1))
 	assert.LessOrEqual(t, c.IntervalSeconds, int64(31_536_000))
 	assert.GreaterOrEqual(t, c.TimeoutSeconds, int64(1))
@@ -309,7 +323,7 @@ func TestTabBarSnippet(t *testing.T) {
 			stdout, stderr, err := runOut(t, lookup, words[1:]...)
 			require.NoError(t, err, stderr)
 			assert.Equal(t, "PRs #886✓ · slots 1/2 · issues 4\n", stdout)
-			assert.Contains(t, <-asked, `"args":{"workspace_id":"w14"}`, "the focused workspace's team")
+			assert.Contains(t, received(t, asked), `"args":{"workspace_id":"w14"}`, "the focused workspace's team")
 		})
 	}
 }
