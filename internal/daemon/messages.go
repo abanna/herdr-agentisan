@@ -1,0 +1,404 @@
+package daemon
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+	"unicode"
+
+	"github.com/rs/zerolog"
+
+	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/store"
+	"github.com/abanna/herdr-agentisan/internal/team"
+)
+
+// The dispatcher (ADR-001 D8, A2, A30) types each queued message into its
+// recipient with agent.prompt, by the name herdr knows the recipient's agent
+// by: a worker's logical id, a boss's <short>-boss, or boss for the ◆ spaces
+// (A35, UQ2). herdr resolves the name to a pane and types in one step, so a
+// pane id herdr reissued is never typed into. The team poll's last model is
+// what proves the name is where it should be (B2); the store's claim holds
+// what must wait: a handoff, a lost or starting worker, an ended binding.
+
+// spacesBoss is the name of the ◆ spaces' boss agent (A7).
+const spacesBoss = "boss"
+
+// recoveredReason is why a message a crash left dispatching failed.
+const recoveredReason = "the daemon stopped mid-dispatch"
+
+// settleTimeout bounds the write that records how a dispatch ended.
+const settleTimeout = store.BusyTimeout
+
+// refusals are herdr's agent.prompt codes that refuse before any byte
+// reaches the pane (0.9.5 validate_agent_prompt).
+var refusals = map[string]bool{
+	"empty_agent_prompt": true, "agent_not_found": true, "agent_target_ambiguous": true,
+	"agent_blocked": true, "agent_not_ready": true,
+}
+
+// notSent is the refusal of a prompt that reached no herdr at all.
+const notSent = "not_sent"
+
+// refusal is the code of a prompt that certainly typed nothing, or "" for
+// one that may have: any other failure, one herdr does not name included,
+// is taken as maybe typed (A2).
+func refusal(err error) string {
+	if errors.Is(err, herdr.ErrNotSent) {
+		return notSent
+	}
+	var apiErr *herdr.APIError
+	if errors.As(err, &apiErr) && refusals[apiErr.Code] {
+		return apiErr.Code
+	}
+	return ""
+}
+
+// inbox is what the team poll gives the dispatcher: the model its last poll
+// built, which every target is checked against, each configured team's
+// boss, and a wake.
+type inbox struct {
+	mu    sync.Mutex
+	model *team.Model
+	// bosses is each configured project's boss, by the agent name herdr
+	// knows it by.
+	bosses map[string]string
+	wake   chan struct{}
+}
+
+func newInbox() *inbox { return &inbox{wake: make(chan struct{}, 1)} }
+
+// configure records each team's boss: <short>-boss for a tabs team, boss for
+// the ◆ spaces (UQ2).
+func (in *inbox) configure(c teamConfig) {
+	bosses := map[string]string{c.spaces.Project: spacesBoss}
+	for _, t := range c.tabs {
+		bosses[t.Project] = t.BossTab()
+	}
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.bosses = bosses
+}
+
+// polled replaces the model with a poll's, nil when the poll built none, and
+// wakes the dispatcher. Every poll replaces it, so a list that fails holds
+// every message until it answers again: a model built without agent.list
+// names no agent, and one built without the workers rows binds no worker.
+// A model that binds and names a worker is one whose poll reconciled the
+// rows first, so no worker is prompted before the first reconcile since the
+// daemon started (B1): a row a herdr restart left behind still names a
+// terminal no pane has.
+func (in *inbox) polled(m *team.Model) {
+	in.mu.Lock()
+	in.model = m
+	in.mu.Unlock()
+	in.Wake()
+}
+
+// Wake asks the dispatcher for a pass. It never blocks, and wakes that come
+// before the pass starts are one.
+func (in *inbox) Wake() {
+	select {
+	case in.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (in *inbox) view() (*team.Model, map[string]string) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return in.model, in.bosses
+}
+
+// dispatcher delivers state.db's queued messages, one prompt in flight at a
+// time (Q2). Only its goroutine touches it.
+type dispatcher struct {
+	st  *store.Store
+	c   herdr.Client
+	in  *inbox
+	log zerolog.Logger
+	now func() time.Time
+	// warned is, by recipient, why its messages last waited: logged at warn
+	// when it begins, then at debug while it lasts (Q3), until the reason
+	// changes or the recipient has nothing queued.
+	warned map[store.Address]string
+}
+
+// newDispatcher is the dispatcher of a daemon run with o, which the team
+// poll feeds through in. It prompts through the daemon's client of its own
+// server (forServer), so no prompt reaches a replacement (A3), with that
+// client's Timeout bounding each.
+func (o Options) newDispatcher(st *store.Store, in *inbox) *dispatcher {
+	c, _ := o.Herdr.(herdr.Client)
+	return &dispatcher{
+		st: st, c: c, in: in, log: o.Logger, now: o.Now,
+		warned: map[store.Address]string{},
+	}
+}
+
+// run makes a pass now and at each wake until ctx ends: after every poll,
+// so a refused message is tried again once a poll (Q4), and after whatever
+// queues a message. A pass under way when ctx ends finishes the prompt in
+// flight first.
+func (d *dispatcher) run(ctx context.Context) {
+	for {
+		d.pass(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-d.in.wake:
+		}
+	}
+}
+
+// pass returns every ended binding's queue to its boss, then serves each
+// recipient with a message queued, the one waiting longest first, whose
+// target the poll's model proves. With no model it does nothing: there are
+// no lists to check a target against.
+func (d *dispatcher) pass(ctx context.Context) {
+	m, bosses := d.in.view()
+	if m == nil {
+		return
+	}
+	kept := d.sweep(ctx, bosses)
+	queued, err := d.st.QueuedRecipients(ctx)
+	if err != nil {
+		d.warnUnlessStopping(ctx, err, "messages: read the queued recipients")
+		return
+	}
+	d.forget(queued)
+	for _, to := range queued {
+		if kept[to] {
+			continue // sent to a binding that ended; the sweep said why
+		}
+		target, held := targetOf(*m, bosses, to)
+		if held != "" {
+			d.note(to, held, held, nil)
+			continue
+		}
+		if !d.serve(ctx, to, target) {
+			return
+		}
+	}
+}
+
+// targetOf is the name to prompt to by, from the poll's model m (B2): a
+// worker's logical id, when an agent of that name is on the pane its workers
+// row binds; a boss's name, when an agent of that name is on a pane in its
+// team's boss place. Otherwise it says why to's messages wait.
+func targetOf(m team.Model, bosses map[string]string, to store.Address) (target, held string) {
+	switch to.Kind {
+	case store.KindWorker:
+		for _, p := range m.Projects {
+			for _, g := range p.Groups {
+				for _, w := range g.Workers {
+					if w.Bound && w.ID == to.ID && w.Pane.Name == to.ID {
+						return to.ID, ""
+					}
+				}
+			}
+		}
+		return "", "messages wait: no agent of the worker's name is on the pane its row binds"
+	case store.KindBoss:
+		known := false
+		for project, boss := range bosses {
+			if boss != to.ID {
+				continue
+			}
+			known = true
+			for _, p := range m.Projects {
+				if p.Name != project {
+					continue
+				}
+				for _, b := range p.Boss {
+					if b.Pane.Name == to.ID {
+						return to.ID, ""
+					}
+				}
+			}
+		}
+		if !known {
+			return "", "messages wait: no configured team has this boss"
+		}
+		return "", "messages wait: no agent of the boss's name is in its team's boss place"
+	}
+	return "", "messages wait: a pane recipient is not delivered to yet"
+}
+
+// serve delivers to's messages, oldest first, while they land. A refusal or
+// a failure ends to's turn this pass, so neither a refused recipient nor a
+// stuck pane holds up the others. It reports false once the daemon is
+// stopping, which ends the pass.
+func (d *dispatcher) serve(ctx context.Context, to store.Address, target string) bool {
+	for ctx.Err() == nil {
+		m, ok, err := d.st.Claim(ctx, to, d.now())
+		if err != nil {
+			d.warnUnlessStopping(ctx, err, "messages: claim "+to.ID+"'s next message")
+			return true
+		}
+		if !ok || !d.deliver(ctx, m, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// deliver prompts target with m's text and records how it ended: delivered;
+// queued again after a refusal that typed nothing, for the next pass; or
+// failed, with a notice to its sender, after anything that may have typed it
+// (A2). Once m is claimed a stop cuts short neither the prompt nor the write
+// after it, each bounded on its own, so a stop never turns a deliverable
+// message into a failure; a cancelled context would also interrupt the
+// write's statement (NERD-5355). It reports whether m landed.
+func (d *dispatcher) deliver(ctx context.Context, m store.Message, target string) bool {
+	ctx = context.WithoutCancel(ctx)
+	_, err := d.c.PromptAgent(ctx, target, cleanText(textOf(m)))
+	sctx, cancel := context.WithTimeout(ctx, settleTimeout)
+	defer cancel()
+	log := d.log.With().Str("message", m.ID).Str("recipient", m.To.ID).Str("kind", m.To.Kind).Int("attempts", m.Attempts).Logger()
+	if err == nil {
+		d.settled(log, d.st.Delivered(sctx, m.ID, d.now()), "delivered")
+		return true
+	}
+	if code := refusal(err); code != "" {
+		d.settled(log, d.st.Requeue(sctx, m.ID, err.Error(), d.now()), "queued again")
+		d.note(m.To, code, "messages wait: herdr refused the prompt before typing it", err)
+		return false
+	}
+	log.Warn().Err(err).Msg("messages: the prompt may have been typed; the message is failed and its sender told, never retried (A2)")
+	d.settled(log, d.st.Fail(sctx, m.ID, err.Error(), d.now()), "failed")
+	return false
+}
+
+// settled logs a write recording how a dispatch ended that failed. It
+// leaves the message dispatching, which holds its recipient's queue, until
+// the next daemon start fails it: never typed twice.
+func (d *dispatcher) settled(log zerolog.Logger, err error, what string) {
+	if err != nil {
+		log.Error().Err(err).Msg("messages: record the message " + what + "; it stays dispatching until the daemon restarts and fails it")
+	}
+}
+
+// sweep returns every ended binding's queue to its project's boss (Q7): a
+// worker retired, failed or gone, or its id bound again at a later
+// generation. A project no team is configured for keeps its queue; it
+// returns the workers it kept one for.
+func (d *dispatcher) sweep(ctx context.Context, bosses map[string]string) (kept map[store.Address]bool) {
+	ended, err := d.st.EndedQueues(ctx)
+	if err != nil {
+		d.warnUnlessStopping(ctx, err, "messages: read the ended queues")
+		return nil
+	}
+	for _, q := range ended {
+		boss, ok := bosses[q.Project]
+		if !ok {
+			to := store.Address{Kind: store.KindWorker, ID: q.Worker}
+			why := "messages wait: their binding ended, and no team is configured for its project " + q.Project
+			d.note(to, why, why, nil)
+			if kept == nil {
+				kept = map[store.Address]bool{}
+			}
+			kept[to] = true
+			continue
+		}
+		n, err := d.st.ReturnToBoss(ctx, q.Worker, q.Project, store.Address{Kind: store.KindBoss, ID: boss}, d.now())
+		if err != nil {
+			d.warnUnlessStopping(ctx, err, "messages: return "+q.Worker+"'s queue to "+boss)
+			continue
+		}
+		if n > 0 {
+			d.log.Info().Str("worker", q.Worker).Str("boss", boss).Int64("messages", n).
+				Msg("messages: an ended worker's queue is returned to its boss")
+		}
+	}
+	return kept
+}
+
+// note logs why to's messages wait: at warn when key is new for to, then at
+// debug while it lasts.
+func (d *dispatcher) note(to store.Address, key, msg string, err error) {
+	ev := d.log.Debug()
+	if d.warned[to] != key {
+		d.warned[to] = key
+		ev = d.log.Warn()
+	}
+	ev.Err(err).Str("recipient", to.ID).Str("kind", to.Kind).Msg(msg)
+}
+
+// forget drops what was noted for a recipient with nothing queued now, so a
+// wait that ends and begins again is logged again.
+func (d *dispatcher) forget(queued []store.Address) {
+	still := make(map[store.Address]bool, len(queued))
+	for _, to := range queued {
+		still[to] = true
+	}
+	for to := range d.warned {
+		if !still[to] {
+			delete(d.warned, to)
+		}
+	}
+}
+
+// warnUnlessStopping logs err unless the daemon is stopping, which ends
+// every read in flight.
+func (d *dispatcher) warnUnlessStopping(ctx context.Context, err error, msg string) {
+	if ctx.Err() == nil {
+		d.log.Warn().Err(err).Msg(msg)
+	}
+}
+
+// textOf is what m is typed as (Q9, B5): a message the daemon sent as its
+// body, which starts [agentisan and invites no reply; any other as
+// [msg <id> from <sender>] <body>, which the recipient can reply to. A
+// message returned to the boss says whom it was for.
+func textOf(m store.Message) string {
+	switch {
+	case m.From.Kind == store.KindDaemon && m.ReturnedFrom == "":
+		return m.Body
+	case m.From.Kind == store.KindDaemon:
+		return "[agentisan] originally to " + m.ReturnedFrom + ": " + m.Body
+	case m.ReturnedFrom != "":
+		return fmt.Sprintf("[msg %s from %s, originally to %s] %s", m.ID, m.From.ID, m.ReturnedFrom, m.Body)
+	}
+	return fmt.Sprintf("[msg %s from %s] %s", m.ID, m.From.ID, m.Body)
+}
+
+// cleanText is text as it is typed (B6). CRLF and CR become LF, LF and TAB
+// stay, and every other control character, C0, DEL and C1, ESC among them,
+// is dropped: herdr types the text as one bracketed paste where the agent
+// enabled it, and raw otherwise, so a body could end the paste early and
+// press keys. Format characters stay, so an emoji joined by ZWJ stays whole.
+// The store keeps the text as sent.
+func cleanText(text string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r == '\r':
+			return '\n'
+		case r == '\n', r == '\t':
+			return r
+		case unicode.IsControl(r):
+			return -1
+		}
+		return r
+	}, strings.ReplaceAll(text, "\r\n", "\n"))
+}
+
+// recoverDispatching fails every message a crash left dispatching, and tells
+// their senders, before anything can claim one: such a dispatch may or may
+// not have reached its pane, so it is never redelivered (A2). It runs
+// whether or not the team poll does. A failure is logged: the rows stay
+// dispatching, which holds their recipients' queues, until a start that
+// recovers them.
+func (o Options) recoverDispatching(ctx context.Context, st *store.Store) {
+	n, err := st.RecoverDispatching(ctx, recoveredReason, o.Now())
+	switch {
+	case err != nil:
+		o.Logger.Error().Err(err).Msg("messages: fail the dispatches the last daemon did not finish; their recipients' queues wait for the next start")
+	case n > 0:
+		o.Logger.Warn().Int64("messages", n).
+			Msg("messages: the last daemon stopped mid-dispatch; those messages are failed and their senders told, never retried (A2)")
+	}
+}

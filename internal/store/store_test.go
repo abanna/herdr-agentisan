@@ -914,7 +914,7 @@ func TestClosedStoreFails(t *testing.T) {
 		"Fail":               func() error { return s.Fail(ctx, "m", "", time.Now()) },
 		"RecoverDispatching": func() error { _, err := s.RecoverDispatching(ctx, "", time.Now()); return err },
 		"ReturnToBoss": func() error {
-			_, err := s.ReturnToBoss(ctx, "w", store.Address{Kind: store.KindBoss, ID: "b"}, time.Now())
+			_, err := s.ReturnToBoss(ctx, "w", "p", store.Address{Kind: store.KindBoss, ID: "b"}, time.Now())
 			return err
 		},
 		"Message":         func() error { _, err := s.Message(ctx, "m"); return err },
