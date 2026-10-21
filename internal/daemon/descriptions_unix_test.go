@@ -21,11 +21,12 @@ import (
 // TestGroupDescriptionsRefreshClasses walks what one poll can find at the
 // shared file, one poll at a time (A36): nothing; a regular file, read once
 // until it changes; a rename that keeps its time and size, seen by the file;
-// a change that keeps time, size and file, not seen until the next; a
-// directory, an empty file, a FIFO and an unreadable file, each keeping the
-// last good descriptions, logged once and read again after the next change;
-// a parent that cannot be searched, likewise; a symlink, followed, and
-// retargeted; a dangling one, which is no file.
+// a change that keeps time, size and file, not seen until the next; a change
+// of size alone, seen, as is one written through a hard link; a directory, an empty file, a FIFO and an unreadable
+// file, each keeping the last good descriptions, logged once and read again
+// after the next change; a parent that cannot be searched, likewise, and
+// logged again once the file was looked at in between, found or gone; a
+// symlink, followed, and retargeted; a dangling one, which is no file.
 func TestGroupDescriptionsRefreshClasses(t *testing.T) {
 	t.Parallel()
 	if os.Geteuid() == 0 {
@@ -77,6 +78,21 @@ func TestGroupDescriptionsRefreshClasses(t *testing.T) {
 	poll("two", "a change that keeps time, size and file is not seen")
 	write(path, config("six"), false)
 	poll("six", "until the next change")
+
+	before, err := os.Stat(path)
+	require.NoError(t, err)
+	write(path, config("sixty"), true)
+	after, err := os.Stat(path)
+	require.NoError(t, err)
+	require.True(t, os.SameFile(before, after), "the same file")
+	require.True(t, before.ModTime().Equal(after.ModTime()), "the same time")
+	require.NotEqual(t, before.Size(), after.Size(), "another size")
+	poll("sixty", "a change of size alone is seen")
+	alias := filepath.Join(dir, "alias.toml")
+	require.NoError(t, os.Link(path, alias))
+	write(alias, config("six"), true)
+	poll("six", "and back, written through a hard link to the file")
+	require.NoError(t, os.Remove(alias))
 	reads := count("group descriptions read")
 
 	require.NoError(t, os.Remove(path))
@@ -114,6 +130,10 @@ func TestGroupDescriptionsRefreshClasses(t *testing.T) {
 	poll("seven", "read once it changes")
 	assert.Equal(t, 1, count("cannot be looked at"), "not logged again")
 	assert.Equal(t, reads+1, count("group descriptions read"))
+	require.NoError(t, os.Chmod(dir, 0o000))
+	poll("seven", "a parent that cannot be searched again keeps the last ones")
+	require.NoError(t, os.Chmod(dir, 0o700)) //nolint:gosec // the test's own temp dir, searchable again
+	assert.Equal(t, 2, count("cannot be looked at"), "logged again: the file was found in between")
 
 	target := filepath.Join(dir, "real.toml")
 	write(target, config("eight"), false)
@@ -132,6 +152,15 @@ func TestGroupDescriptionsRefreshClasses(t *testing.T) {
 	poll("", "a dangling symlink is no file: none")
 	poll("", "still none")
 	assert.Equal(t, 1, count("is gone"), "logged once")
+	require.NoError(t, os.Chmod(dir, 0o000))
+	poll("", "a parent that cannot be searched, with no file")
+	require.NoError(t, os.Chmod(dir, 0o700)) //nolint:gosec // the test's own temp dir, searchable again
+	poll("", "the file is still gone")
+	require.NoError(t, os.Chmod(dir, 0o000))
+	poll("", "and the parent cannot be searched again")
+	require.NoError(t, os.Chmod(dir, 0o700)) //nolint:gosec // the test's own temp dir, searchable again
+	assert.Equal(t, 4, count("cannot be looked at"), "logged again: the file was found gone in between")
+	assert.Equal(t, 1, count("is gone"), "still logged once")
 
 	write(other, config("ten"), false)
 	poll("ten", "a file that comes back is read")

@@ -13,12 +13,16 @@ import (
 
 // groupDescriptions are every configured project's group descriptions, which
 // the team poll re-reads whenever the shared file changes (ADR-001 A36): the
-// one setting the daemon picks up without a restart, as v12 picked up an edit
-// to its descriptions file. The teams themselves, their colours included,
-// are still read once at start. Only the poll's goroutine uses it.
+// one setting the team poll picks up without a restart, as v12 picked up an
+// edit to its descriptions file. Everything else the poll uses, the teams
+// and their colours included, is still read once at start; the workforce ops
+// read the whole file afresh on each op (A23). Only the poll's goroutine uses
+// it.
 type groupDescriptions struct {
 	// dir is the plugin config directory; "" reads nothing.
 	dir string
+	// read reads the teams from dir: settings.Teams, but for a test.
+	read func(dir string) ([]settings.Team, error)
 	// looked is set once the file has been looked at.
 	looked bool
 	// seen is the file as last looked at; nil when it was missing.
@@ -30,7 +34,9 @@ type groupDescriptions struct {
 	byProject map[string]map[string]string
 }
 
-func newGroupDescriptions(dir string) *groupDescriptions { return &groupDescriptions{dir: dir} }
+func newGroupDescriptions(dir string) *groupDescriptions {
+	return &groupDescriptions{dir: dir, read: settings.Teams}
+}
 
 // refresh re-reads the descriptions when the shared file changed since it
 // last looked: another modification time, size or file, as when an editor
@@ -70,7 +76,7 @@ func (d *groupDescriptions) refresh(log zerolog.Logger) {
 		return
 	}
 	d.looked, d.seen = true, fi
-	teams, err := settings.Teams(d.dir)
+	teams, err := d.read(d.dir)
 	if err != nil {
 		log.Warn().Err(err).Msg("group descriptions: herdr-agentisan.toml does not resolve; the last ones stay until it is fixed")
 		return
