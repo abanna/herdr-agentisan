@@ -433,6 +433,16 @@ A description is one line of at most 80 printable characters, and a repo's
 whenever the file changes, so an edit needs no `daemon-restart`; a file that
 does not resolve keeps the last ones, and `daemon.log` says why.
 
+### The model column
+
+Each row shows the model its agent was started with: Claude's `--model`, or
+Codex's `-m` or `--model`, read from the pane's processes through herdr
+(ADR-001 A39). The daemon asks herdr again only when a pane's agent
+restarted or changed, and a pane where it finds no agent process once a
+minute. It is the launch model: a `/model` switch shows once the agent
+restarts, and an agent started without the flag, such as a Codex that takes
+its model from `config.toml`, shows none.
+
 ### A group's view
 
 Press 1-9, or click a group's title, to open that group's view (ADR-001

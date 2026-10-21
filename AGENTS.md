@@ -131,8 +131,9 @@ exempts whatever is later added under that name.
   own. Every poll it also reconciles `state.db`'s `workers` rows with
   herdr's panes (`bind.go`, A35), rebuilds the team model, pushes `$team`
   and every agent pane's ctx display (`team.go`, A28) and caches every team's
-  snapshot, with the workspaces each holds, which the `snapshot` op serves
-  by project or workspace, so the op never calls herdr (A18, A24,
+  snapshot, each row with its agent's launch model from the pane's processes
+  (`models.go`, A39), with the workspaces each holds, which the `snapshot` op
+  serves by project or workspace, so the op never calls herdr (A18, A24,
   `snapshot.go`, with `SnapshotSource`, the dashboard's client), each group
   with its description, re-read when the shared file changes
   (`descriptions.go`, A36), and sends each status change since the last
