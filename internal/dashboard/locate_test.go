@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -503,6 +504,7 @@ func TestTeamSourceOutsideEveryTeam(t *testing.T) {
 	c.advance(10 * time.Second)
 	_, err = src.Snapshot(t.Context())
 	require.ErrorIs(t, err, dashboard.ErrNoTeamHere)
+	require.ErrorIs(t, err, dashboard.ErrNotATeamsWorkspace)
 	require.ErrorIs(t, err, daemon.ErrNoTeam)
 	assert.Equal(t, "this workspace (w9) is not a team's; pass --project", err.Error())
 	lists, _ = h.asked()
@@ -656,4 +658,96 @@ func TestTeamSourceKeepsTheDaemonsLines(t *testing.T) {
 	require.ErrorIs(t, err, daemon.ErrUnavailable)
 	assert.NotErrorIs(t, err, dashboard.ErrNoTeamHere)
 	assert.Contains(t, err.Error(), "daemon not running: ")
+}
+
+// TestNoTeamBodies: with no team to show there is no board, and the body
+// says only what is true. "no team in this workspace" is A24's body for a
+// workspace that is no team's; --project naming a team herdr does not show,
+// no pane running the dashboard, and herdr unable to say where it runs have
+// no workspace to speak of, and read "no team to show". The footer says
+// why in each case.
+func TestNoTeamBodies(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		src    func(t *testing.T) *dashboard.TeamSource
+		body   string
+		footer string
+	}{
+		"a workspace that is no team's": {
+			src: func(t *testing.T) *dashboard.TeamSource {
+				h := newPaneHerdr(t)
+				h.pane("w9:p1", "w9", pid, pid)
+				return &dashboard.TeamSource{Socket: newFakeTeams(t, map[string]string{"w1": "alpha"}).sock, Locator: h.locator("w9:p1", "")}
+			},
+			body:   "no team in this workspace",
+			footer: "✖ this workspace (w9) is not a team's; pass --project",
+		},
+		"--project naming a team herdr does not show": {
+			src: func(t *testing.T) *dashboard.TeamSource {
+				return &dashboard.TeamSource{Socket: newFakeTeams(t, map[string]string{"w1": "alpha"}).sock, Project: "delta"}
+			},
+			body:   "no team to show",
+			footer: "✖ herdr shows no team delta",
+		},
+		"no pane running the dashboard": {
+			src: func(t *testing.T) *dashboard.TeamSource {
+				h := newPaneHerdr(t)
+				h.pane("w2:p1", "w2", 11, 11)
+				return &dashboard.TeamSource{Socket: newFakeTeams(t, map[string]string{"w2": "beta"}).sock, Locator: h.locator("w2:p1", "w2")}
+			},
+			body:   "no team to show",
+			footer: "✖ this dashboard runs in no herdr pane; pass --project",
+		},
+		"herdr gone, and no HERDR_WORKSPACE_ID": {
+			src: func(t *testing.T) *dashboard.TeamSource {
+				l := &dashboard.Locator{Herdr: herdr.Client{SocketPath: filepath.Join(shortDir(t), "gone.sock")}, PID: pid}
+				return &dashboard.TeamSource{Socket: newFakeTeams(t, map[string]string{"w2": "beta"}).sock, Locator: l}
+			},
+			body:   "no team to show",
+			footer: "✖ herdr cannot say where this dashboard runs, and HERDR_WORKSPACE_ID is unset; pass --project",
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			m, _ := startedPolling(t, config(tc.src(t), nil), 120, 24)
+			out := ansi.Strip(m.View().Content)
+			assert.Contains(t, out, " "+tc.body+"\n")
+			for _, other := range []string{"no team in this workspace", "no team to show"} {
+				if other != tc.body {
+					assert.NotContains(t, out, other)
+				}
+			}
+			assert.Contains(t, lines(out)[23], tc.footer)
+			assert.Nil(t, m.Frame().Snapshot)
+		})
+	}
+}
+
+// TestAHangingHerdrLeavesTheDaemonItsTime: a herdr that never answers
+// while the dashboard finds itself uses at most half of the poll's time,
+// so the daemon is still asked within it. The team of HERDR_WORKSPACE_ID
+// is drawn, and the footer names herdr, not the daemon.
+func TestAHangingHerdrLeavesTheDaemonItsTime(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+	hung := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
+		<-release
+		return herdrtest.Reply{Silent: true}
+	})
+	t.Cleanup(func() { close(release) }) // before the server's own cleanup
+	d := newFakeTeams(t, map[string]string{"w2": "beta"})
+	l := &dashboard.Locator{Herdr: herdr.Client{SocketPath: hung.Path}, PID: pid, WorkspaceID: "w2"}
+	cfg := config(&dashboard.TeamSource{Socket: d.sock, Locator: l}, nil)
+	cfg.FetchTimeout = 2 * time.Second
+
+	m, _ := startedPolling(t, cfg, 120, 24)
+	out := ansi.Strip(m.View().Content)
+	require.NotNil(t, m.Frame().Snapshot, "the daemon answered: %s", lines(out)[23])
+	assert.Equal(t, "beta", m.Frame().Snapshot.Team)
+	assert.Contains(t, lines(out)[23], "herdr not answering: the team of HERDR_WORKSPACE_ID (w2)")
+	assert.NotContains(t, out, "✖", "nothing failed but herdr, and the note says so")
+	assert.Equal(t, []daemon.Selector{{WorkspaceID: "w2"}}, d.asked())
 }

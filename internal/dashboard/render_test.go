@@ -116,7 +116,7 @@ func TestRenderGolden(t *testing.T) {
 		// says why.
 		"no_team_here_80x24": {
 			frame: func(*testing.T) dashboard.Frame {
-				return dashboard.Frame{Now: at, Btop: true, NoTeam: true, Errors: []error{errors.New("this workspace (w9) is not a team's; pass --project")}}
+				return dashboard.Frame{Now: at, Btop: true, NoTeam: dashboard.ErrNotATeamsWorkspace, Errors: []error{errors.New("this workspace (w9) is not a team's; pass --project")}}
 			},
 			w: 80, h: 24,
 		},
@@ -1021,35 +1021,65 @@ func TestRenderFooter(t *testing.T) {
 	t.Parallel()
 
 	const hints = "enter jump · ↑↓ move · ? help · q quit"
+	// one is a board with an agent to jump to.
+	one := &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "g", Agents: []snapshot.Agent{{Name: "a", Status: snapshot.StatusIdle}}}}}
 	tests := map[string]struct {
 		frame dashboard.Frame
 		want  string
 	}{
-		"hints alone": {frame: dashboard.Frame{Now: at}, want: " " + hints},
+		"hints alone": {frame: dashboard.Frame{Snapshot: one, Now: at}, want: " " + hints},
 		// ctrl-b m is herdr's popup key for btop in this setup; it is only
 		// advertised where herdr is reachable.
-		"the btop hint with herdr": {frame: dashboard.Frame{Now: at, Btop: true}, want: " enter jump · ↑↓ move · ctrl-b m btop · ? help · q quit"},
+		"the btop hint with herdr": {frame: dashboard.Frame{Snapshot: one, Now: at, Btop: true}, want: " enter jump · ↑↓ move · ctrl-b m btop · ? help · q quit"},
 		"a note leads the hints": {
-			frame: dashboard.Frame{Now: at, Note: "focus off"},
+			frame: dashboard.Frame{Snapshot: one, Now: at, Note: "focus off"},
 			want:  " focus off · " + hints,
 		},
 		"errors lead the note": {
-			frame: dashboard.Frame{Now: at, Note: "focus off", Errors: []error{errors.New("e1"), nil, errors.New("e2")}},
+			frame: dashboard.Frame{Snapshot: one, Now: at, Note: "focus off", Errors: []error{errors.New("e1"), nil, errors.New("e2")}},
 			want:  " ✖ e1 · ✖ e2 · focus off · " + hints,
 		},
 		"a long error is cut to one line": {
-			frame: dashboard.Frame{Now: at, Errors: []error{errors.New(strings.Repeat("x", 200))}},
+			frame: dashboard.Frame{Snapshot: one, Now: at, Errors: []error{errors.New(strings.Repeat("x", 200))}},
 			want:  " ✖ " + strings.Repeat("x", 75) + "…",
 		},
 		"an error's newlines stay on one line": {
-			frame: dashboard.Frame{Now: at, Errors: []error{errors.New("a\nb")}},
+			frame: dashboard.Frame{Snapshot: one, Now: at, Errors: []error{errors.New("a\nb")}},
 			want:  " ✖ a b · " + hints,
 		},
 		// A workspace id from herdr or HERDR_WORKSPACE_ID reaches the footer
 		// as it came: its escapes cannot drive the terminal.
 		"escapes in an error and a note are drawn inert": {
-			frame: dashboard.Frame{Now: at, Note: "(w\x1b]0;x\x07)", Errors: []error{errors.New("(w\x1b[2J9)")}},
+			frame: dashboard.Frame{Snapshot: one, Now: at, Note: "(w\x1b]0;x\x07)", Errors: []error{errors.New("(w\x1b[2J9)")}},
 			want:  " ✖ (w [2J9) · (w ]0;x ) · " + hints,
+		},
+		// Enter and the arrows act on an agent: with none on the screen they
+		// do nothing, and are not offered, so help and quit fit.
+		"no board yet":   {frame: dashboard.Frame{Now: at}, want: " ? help · q quit"},
+		"no board, btop": {frame: dashboard.Frame{Now: at, Btop: true}, want: " ctrl-b m btop · ? help · q quit"},
+		"no team here": {
+			frame: dashboard.Frame{Now: at, NoTeam: dashboard.ErrNotATeamsWorkspace, Errors: []error{errors.New("this workspace (w9) is not a team's; pass --project")}},
+			want:  " ✖ this workspace (w9) is not a team's; pass --project · ? help · q quit",
+		},
+		"a team with no agents": {
+			frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "g"}}}, Now: at},
+			want:  " ? help · q quit",
+		},
+		"a query that matches no agent": {
+			frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t"}, Now: at, Search: true, Query: "zz"},
+			want:  " /zz▏ · esc clear",
+		},
+		"a query that matches one": {
+			frame: dashboard.Frame{Snapshot: one, Now: at, Search: true, Query: "a"},
+			want:  " /a▏ · enter jump · ↑↓ move · esc clear",
+		},
+		"a group's view with no agents": {
+			frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "g"}}}, Now: at, Group: "g"},
+			want:  " esc back · ? help · q quit",
+		},
+		"a group's view with one": {
+			frame: dashboard.Frame{Snapshot: one, Now: at, Group: "g"},
+			want:  " enter jump · ↑↓ move · esc back · ? help · q quit",
 		},
 		"the agents out of view, on the right": {
 			frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "g", Agents: slices.Repeat([]snapshot.Agent{{Name: "a", Status: snapshot.StatusIdle}}, 40)}}}, Now: at},

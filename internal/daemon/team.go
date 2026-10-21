@@ -167,9 +167,13 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 		// once instead.
 		err := onServer()
 		var built *team.Model
+		focused := ""
 		tp.descriptions.refresh(o.Logger)
+		// Read before the panes are listed, so a focus event the collector
+		// records meanwhile wins over the list (A49).
+		seen := views.focusSeen()
 		if err == nil {
-			built, err = o.pushTeam(ctx, c, st, tp)
+			built, focused, err = o.pushTeam(ctx, c, st, tp)
 		}
 		if err != nil {
 			o.Logger.Info().Err(err).Msg("team poll stops: the daemon's herdr server is gone or was replaced")
@@ -180,7 +184,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 				o.Team.emitTransitions(ctx, *last, *built)
 			}
 			last = built
-			views.built(*built)
+			views.polled(*built, focused, seen)
 		}
 		select {
 		case <-ctx.Done():
@@ -206,8 +210,9 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 // The model it returns is nil when a pane, workspace or tab list failed and
 // no model was built; agent names change neither which panes it holds nor
 // their statuses, so a failed agent list still gives the status events their
-// model.
-func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, tp teamPoll) (*team.Model, error) {
+// model. With the model it returns the workspace of the pane the list had
+// focused, "" for none, which the agent view takes as focus (A49).
+func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, tp teamPoll) (*team.Model, string, error) {
 	// The rows are read before the panes: the workforce commands write a
 	// row only once its pane exists, so every row read is one whose pane,
 	// unless it closed, the list after holds, and the reconcile never takes
@@ -220,23 +225,23 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	}
 	panes, err := c.ListPanes(ctx)
 	if err != nil {
-		return nil, o.teamCallFailed(ctx, err, "team poll: list panes")
+		return nil, "", o.teamCallFailed(ctx, err, "team poll: list panes")
 	}
 	workspaces, err := c.ListWorkspaces(ctx)
 	if err != nil {
-		return nil, o.teamCallFailed(ctx, err, "team poll: list workspaces")
+		return nil, "", o.teamCallFailed(ctx, err, "team poll: list workspaces")
 	}
 	var tabs []herdr.TabInfo
 	if len(tp.cfg.tabs) > 0 {
 		if tabs, err = c.ListTabs(ctx); err != nil {
-			return nil, o.teamCallFailed(ctx, err, "team poll: list tabs")
+			return nil, "", o.teamCallFailed(ctx, err, "team poll: list tabs")
 		}
 	}
 	o.warnIgnored(tp.cfg.tabs, workspaces, tp.warned)
 	agents, agentsErr := c.ListAgents(ctx)
 	if agentsErr != nil {
 		if err := o.teamCallFailed(ctx, agentsErr, "team poll: list agents; the snapshot keeps its last names"); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
 	l := team.Layout{Workspaces: workspaces, Panes: panes, Agents: agents, Tabs: tabs}
@@ -244,7 +249,7 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	// agent list proves and loses nothing this poll.
 	if rowsErr == nil && agentsErr == nil {
 		if rows, err = o.reconcile(ctx, c, st, tp.bind, l, rows); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
 	m := team.Build(l, tp.cfg.resolver(), rows)
@@ -275,16 +280,17 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 			TTLMillis:   uint64(team.TTL / time.Millisecond),
 		})
 		if errors.Is(err, ErrHerdrGone) {
-			return nil, fmt.Errorf("push $team to %s: %w", t.Target.WorkspaceID, err)
+			return nil, "", fmt.Errorf("push $team to %s: %w", t.Target.WorkspaceID, err)
 		}
 		if err != nil && ctx.Err() == nil {
 			o.Logger.Warn().Err(err).Str("workspace", t.Target.WorkspaceID).Msg("push $team")
 		}
 	}
 	if err := o.pushCtx(ctx, c, m, l); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return &m, nil
+	focused, _ := focusedPane(panes)
+	return &m, focused.WorkspaceID, nil
 }
 
 // pushCtx pushes every agent pane in l its ctx display (A28) and, when a
