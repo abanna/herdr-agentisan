@@ -394,18 +394,23 @@ func TestWorkforceRetriesNotReady(t *testing.T) {
 // ask after a not_ready refusal is that refusal, not a daemon gone. The
 // daemon answered, so `team status` must not tell the boss to restart it
 // (QA #48, N2b; NERD-5344's review). So is a cancel. A daemon that goes
-// after a refusal is gone.
+// after a refusal is gone, and a deadline with no refusal yet is no answer.
 func TestWorkforceKeepsNotReadyPastTheDeadline(t *testing.T) {
 	t.Parallel()
 	for name, end := range map[string]string{
-		"the deadline cuts the next ask short": "deadline",
-		"a cancel cuts the next ask short":     "cancel",
-		"the daemon goes after it":             "gone",
+		"the deadline cuts the next ask short":  "deadline",
+		"a cancel cuts the next ask short":      "cancel",
+		"the daemon goes after it":              "gone",
+		"the deadline cuts the first ask short": "first",
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			gone := end == "gone"
-			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			wait := 2 * time.Second
+			if end == "first" {
+				wait = 300 * time.Millisecond
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), wait)
 			defer cancel()
 			sock := shortDir(t) + "/d.sock"
 			ln, err := net.Listen("unix", sock)
@@ -429,7 +434,7 @@ func TestWorkforceKeepsNotReadyPastTheDeadline(t *testing.T) {
 						return
 					}
 					_, _ = bufio.NewReader(conn).ReadString('\n')
-					if asks.Add(1) > 1 {
+					if asks.Add(1) > 1 || end == "first" {
 						held <- conn // never answered: the deadline or a cancel ends this ask
 						if end == "cancel" {
 							cancel()
@@ -445,6 +450,12 @@ func TestWorkforceKeepsNotReadyPastTheDeadline(t *testing.T) {
 			}()
 			start := time.Now()
 			_, err = daemon.Workforce(ctx, sock, daemon.OpTeamStatus, struct{}{})
+			if end == "first" {
+				require.ErrorIs(t, err, daemon.ErrUnavailable, "no answer, not a success")
+				assert.ErrorIs(t, err, context.DeadlineExceeded)
+				assert.Equal(t, int32(1), asks.Load())
+				return
+			}
 			if gone {
 				require.ErrorIs(t, err, daemon.ErrUnavailable)
 				assert.NotErrorIs(t, err, daemon.ErrNotReady, "gone, not still not ready")
