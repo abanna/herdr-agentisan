@@ -27,7 +27,8 @@ type TeamOptions struct {
 	// ConfigDir holds herdr-agentisan.toml (HERDR_PLUGIN_CONFIG_DIR). The
 	// poll reads every project's team from it once, when it starts (A19): a
 	// team added later is found after a daemon restart. The workforce ops
-	// read it afresh each time (A23).
+	// read it afresh each time (A23), and group descriptions alone are
+	// read again whenever the file changes (A36).
 	ConfigDir string
 	// Events receive each status change between two polls (D10, A21); nil
 	// emits none. `daemon run` builds them with SetupEvents.
@@ -85,6 +86,9 @@ type teamPoll struct {
 	header *headerCache
 	// models are each agent pane's launch model (A39).
 	models *launchModels
+	// descriptions are each project's group descriptions, re-read when the
+	// shared file changes (A36).
+	descriptions *groupDescriptions
 	// slots counts the test slots (A31).
 	slots *slotCounter
 	// bind keeps the workers rows bound to their panes (A35).
@@ -119,7 +123,9 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 // stops: every push carries team.TTL, so they expire within about 9 s, after
 // a crash just as after a clean stop.
 //
-// The teams, with the ◆ spaces' project and its colour, are read once, here.
+// The teams, with the ◆ spaces' project and its colour, are read once, here;
+// only the group descriptions are read again, at a poll that finds the file
+// changed (A36).
 // A configuration that does not resolve is logged, the spaces fall back to
 // the unnamed project, with no colour, and no tabs team is found: the
 // spaces' `$team` does not depend on the project, and a typo in the file
@@ -145,7 +151,8 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 	o.Logger.Info().Str("project", cfg.spaces.Project).Str("color", cfg.spaces.Color).Strs("tabs_teams", tabs).Msg("team poll running")
 	tp := teamPoll{
 		cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, idle: idle, cache: cache, header: header,
-		models: newLaunchModels(), slots: o.newSlotCounter(), bind: &binder{ready: ready},
+		models: newLaunchModels(), descriptions: newGroupDescriptions(o.Team.ConfigDir),
+		slots: o.newSlotCounter(), bind: &binder{ready: ready},
 	}
 	onServer := o.onServer(ident)
 	c := herdr.Client{SocketPath: o.HerdrSocket, Dialed: onServer}
@@ -163,6 +170,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 		// once instead.
 		err := onServer()
 		var built *team.Model
+		tp.descriptions.refresh(o.Logger)
 		if err == nil {
 			built, err = o.pushTeam(ctx, c, st, tp)
 		}
@@ -187,17 +195,17 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 
 // pushTeam is one poll: it reads state.db's workers rows; lists panes,
 // workspaces, with a tabs team configured tabs, and agents; reconciles the
-// rows with the panes (A35), unless the rows or the agents could not be
-// read; builds the model with the rows; caches every team's snapshot, each
-// with its project's GitHub header (A29) and the test slots, counted once
-// for the poll (A31), and the workspaces each team holds (A24); pushes each
-// group target and tabs team its `$team`; and pushes every agent pane its
-// ctx display. A failed pane, workspace or tab list costs the poll; a failed
-// agent list costs only the snapshots, which `$team` does not need, so the
-// last ones built with names stay served, teams and index alike, and the ctx
-// display of a pane herdr knows only by name; a failed push is logged and
-// the others go on. It returns ErrHerdrGone, and pushes nothing more, once a
-// call finds the socket no longer names the daemon's server.
+// rows with the panes (A35), unless the rows or the agents could not be read;
+// builds the model with the rows; caches every team's snapshot, each with its
+// project's GitHub header (A29), the test slots, counted once for the poll
+// (A31), and group descriptions (A36), and the workspaces each team holds
+// (A24); pushes each group target and tabs team its `$team`; and pushes every
+// agent pane its ctx display. A failed pane, workspace or tab list costs the
+// poll; a failed agent list costs only the snapshots, which `$team` does not
+// need, so the last ones built with names stay served, teams and index alike,
+// and the ctx display of a pane herdr knows only by name; a failed push is
+// logged and the others go on. It returns ErrHerdrGone, and pushes nothing
+// more, once a call finds the socket no longer names the daemon's server.
 // Each row carries its pane's launch model, which herdr is asked for only
 // when the pane changed (A39).
 // The model it returns is nil when a pane, workspace or tab list failed and
@@ -262,6 +270,7 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 			tp.header.fill(project, s, now)
 			setSlots(s, slots)
 			team.FillModels(s, models)
+			team.Describe(s, tp.descriptions.of(project))
 		}
 		if err := tp.cache.store(m, tp.cfg.spaces.Project, now, tp.stages, tp.idle, fill); err != nil {
 			o.Logger.Error().Err(err).Msg("team poll: cache the snapshots; a team too large to serve keeps its last one")
