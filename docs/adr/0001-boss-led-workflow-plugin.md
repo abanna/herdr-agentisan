@@ -375,7 +375,7 @@ Every generation passes the same gates. Live checks never restart the user's Her
 ### Gates for every generation
 
 1. Tests come first: each acceptance criterion and invariant is a test against herdrtest before implementation.
-2. Run `GOTOOLCHAIN=go1.26.9 task check`, `task tidy` and `task modernize`.
+2. Run `GOTOOLCHAIN=go1.26.10 task check`, `task tidy` and `task modernize`.
 3. Run `task tdaddy:impact`.
 4. go-review: run Job 1 yourself, then Jobs 2 and 3 through a subagent.
 5. validate-workflow passes, then the PR is opened.
