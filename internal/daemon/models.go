@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -75,9 +74,11 @@ func agentPanes(m team.Model, panes []herdr.PaneInfo) []herdr.PaneInfo {
 
 // refresh is one poll's look at panes, each a team's agent pane, and returns
 // each pane's model, for the panes that have one. A pane whose entry still
-// holds is not asked. Any other pane is asked with pane.process_info, all of
-// them within ModelBudget, and a pane the budget leaves out has no model
-// until a later poll. A miss is asked again ModelRetry after it was asked.
+// holds is not asked. Any other pane is asked with pane.process_info through
+// pp, the poll's replies, so a pane whose shell the reconcile read this poll
+// is not asked again; the asks are all within ModelBudget, and a pane the
+// budget leaves out has no model until a later poll. A miss is asked again
+// ModelRetry after it was asked.
 //
 // A failed ask leaves its pane no model, keeps nothing and is asked again at
 // the next poll; it is logged once until an ask succeeds, unless the pane
@@ -87,7 +88,7 @@ func agentPanes(m team.Model, panes []herdr.PaneInfo) []herdr.PaneInfo {
 //
 // startTime reads a process's start time; nil, off Linux and darwin, keeps
 // an entry until its pane's terminal or agent changes.
-func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, panes []herdr.PaneInfo, startTime func(pid int) (uint64, error), now time.Time, log zerolog.Logger) (map[string]string, error) {
+func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProcesses, panes []herdr.PaneInfo, startTime func(pid int) (uint64, error), now time.Time, log zerolog.Logger) (map[string]string, error) {
 	deadline := time.Now().Add(ModelBudget)
 	ask, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
@@ -110,9 +111,9 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, panes []her
 			left = true
 			continue
 		}
-		info, err := c.PaneProcessInfo(ask, p.PaneID)
+		info, err := pp.ask(ask, c, p.PaneID)
 		if errors.Is(err, ErrHerdrGone) {
-			return nil, fmt.Errorf("read pane %s's processes: %w", p.PaneID, err)
+			return nil, err
 		}
 		if err != nil {
 			if spent() {

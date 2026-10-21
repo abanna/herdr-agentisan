@@ -160,9 +160,21 @@ type LaunchModels struct{ m *launchModels }
 // NewLaunchModels is a cache with nothing in it.
 func NewLaunchModels() LaunchModels { return LaunchModels{m: newLaunchModels()} }
 
-// Refresh is one poll's look at panes, each a team's agent pane.
+// Refresh is one poll's look at panes, each a team's agent pane, with no
+// process_info reply held from earlier in the poll.
 func (l LaunchModels) Refresh(ctx context.Context, c herdr.Client, panes []herdr.PaneInfo, startTime func(int) (uint64, error), now time.Time, log zerolog.Logger) (map[string]string, error) {
-	return l.m.refresh(ctx, c, panes, startTime, now, log)
+	return l.m.refresh(ctx, c, paneProcesses{}, panes, startTime, now, log)
+}
+
+// PaneProcesses are one poll's process_info replies.
+type PaneProcesses struct{ pp paneProcesses }
+
+// NewPaneProcesses holds no reply yet.
+func NewPaneProcesses() PaneProcesses { return PaneProcesses{pp: paneProcesses{}} }
+
+// Ask is pane's reply this poll, asking herdr only the first time.
+func (p PaneProcesses) Ask(ctx context.Context, c herdr.Client, pane string) (herdr.ProcessInfo, error) {
+	return p.pp.ask(ctx, c, pane)
 }
 
 // AgentPanes are the panes of m's teams where herdr detects an agent.

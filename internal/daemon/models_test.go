@@ -426,3 +426,81 @@ func TestAgentPanes(t *testing.T) {
 	assert.Equal(t, []herdr.PaneInfo{panes[0], panes[2], panes[4]}, daemon.AgentPanes(m, panes))
 	assert.Empty(t, daemon.AgentPanes(team.Model{}, panes))
 }
+
+// TestOneProcessInfoAskPerPanePerPoll: on a poll where a worker's shell and
+// its agent's model are both new, as after a spawn or a live handoff, the
+// reconcile's shell read (A35) and the model (A39) share the pane's one
+// pane.process_info reply, and later polls ask it nothing.
+func TestOneProcessInfoAskPerPanePerPoll(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	withTeam(th)
+	dir := shortDir(t)
+	seedRow(t, dir, th, "ha-coder-1", "w14:p2", "term_w14:p2", 0, 0)
+	th.setShell("w14:p2", 4242, false)
+	th.mu.Lock()
+	th.procs = map[string][]map[string]any{
+		"w14:p1": {agentProc(1001, "claude", "--model", "opus")},
+		"w14:p2": {agentProc(1002, "claude", "--model", "claude-opus-5-5")},
+	}
+	th.mu.Unlock()
+	o := teamOpts(t, dir, th, workforceConfig(t))
+	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 4242: 9, 1001: 1, 1002: 2}}).startTime
+	run(t, o)
+	sock := socketPath(t, dir, th.path)
+
+	eventually(t, dir, th, "ha-coder-1", workerRow{Pane: "w14:p2", Terminal: "term_w14:p2", Status: "active", ShellPID: 4242, ShellStart: 9})
+	servedTeam(t, sock, "ha", func(s snapshot.Snapshot) bool {
+		for _, g := range s.Groups {
+			for _, a := range g.Agents {
+				if a.PaneID == "w14:p2" {
+					return a.Model == "claude-opus-5-5"
+				}
+			}
+		}
+		return false
+	})
+	polled(t, th.srv, 3)
+	asks := processAsks(th.srv)
+	assert.Equal(t, 1, asks["w14:p2"], "the coder's pane is asked once for its shell and its model")
+	for pane, n := range asks {
+		assert.Equal(t, 1, n, "pane %s: one ask, then none while nothing changes", pane)
+	}
+}
+
+// TestPaneProcessesAskOncePerPoll: within a poll a pane is asked once, a
+// failed answer included, and a socket that names another server is never
+// held, so each caller sees it and the poll ends.
+func TestPaneProcessesAskOncePerPoll(t *testing.T) {
+	t.Parallel()
+	ph := newProcHerdr(t)
+	c := herdr.Client{SocketPath: ph.srv.Path}
+	ph.set("w1:p1", agentProc(101, "claude", "--model", "opus"))
+	ph.refuse("w1:p2", "server_error")
+	pp := daemon.NewPaneProcesses()
+
+	for range 2 {
+		info, err := pp.Ask(t.Context(), c, "w1:p1")
+		require.NoError(t, err)
+		require.Len(t, info.ForegroundProcesses, 1)
+		assert.Equal(t, []string{"claude", "--model", "opus"}, info.ForegroundProcesses[0].Argv)
+		_, err = pp.Ask(t.Context(), c, "w1:p2")
+		require.ErrorIs(t, err, herdr.ErrAPI)
+		assert.Contains(t, err.Error(), "w1:p2")
+	}
+	assert.Equal(t, map[string]int{"w1:p1": 1, "w1:p2": 1}, processAsks(ph.srv), "one ask each, the failed one too")
+	_, err := daemon.NewPaneProcesses().Ask(t.Context(), c, "w1:p1")
+	require.NoError(t, err)
+	assert.Equal(t, 2, processAsks(ph.srv)["w1:p1"], "the next poll asks again")
+
+	dials := 0
+	gone := herdr.Client{SocketPath: ph.srv.Path, Dialed: func() error {
+		dials++
+		return daemon.ErrHerdrGone
+	}}
+	for range 2 {
+		_, err := pp.Ask(t.Context(), gone, "w1:p3")
+		require.ErrorIs(t, err, daemon.ErrHerdrGone)
+	}
+	assert.Equal(t, 2, dials, "a reply that ends the poll is not held")
+}

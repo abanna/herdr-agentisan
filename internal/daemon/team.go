@@ -245,10 +245,11 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 		}
 	}
 	l := team.Layout{Workspaces: workspaces, Panes: panes, Agents: agents, Tabs: tabs}
+	pp := paneProcesses{} // one process_info ask per pane this poll
 	// A candidate pane can be the one herdr names a worker by, so a failed
 	// agent list proves and loses nothing this poll.
 	if rowsErr == nil && agentsErr == nil {
-		if rows, err = o.reconcile(ctx, c, st, tp.bind, l, rows); err != nil {
+		if rows, err = o.reconcile(ctx, c, pp, st, tp.bind, l, rows); err != nil {
 			return nil, err
 		}
 	}
@@ -259,7 +260,7 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	tp.idle.Observe(m, now)
 	if agentsErr == nil {
 		tp.stages.Observe(m, now)
-		models, err := tp.models.refresh(ctx, c, agentPanes(m, panes), o.Hooks.StartTime, now, o.Logger)
+		models, err := tp.models.refresh(ctx, c, pp, agentPanes(m, panes), o.Hooks.StartTime, now, o.Logger)
 		if err != nil {
 			return nil, err
 		}

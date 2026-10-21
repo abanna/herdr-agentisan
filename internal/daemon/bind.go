@@ -35,8 +35,9 @@ type binder struct {
 // row the workforce commands changed meanwhile is left to the next poll.
 //
 // It returns the rows to build the model with, read again when it wrote any,
-// and stops only on ErrHerdrGone.
-func (o Options) reconcile(ctx context.Context, c herdr.Client, st *store.Store, b *binder, l team.Layout, rows []store.Worker) ([]store.Worker, error) {
+// and stops only on ErrHerdrGone. The shells it reads are asked through pp,
+// the poll's process_info replies.
+func (o Options) reconcile(ctx context.Context, c herdr.Client, pp paneProcesses, st *store.Store, b *binder, l team.Layout, rows []store.Worker) ([]store.Worker, error) {
 	if !b.warnedNoTerminal {
 		for _, p := range l.Panes {
 			if p.TerminalID == "" {
@@ -48,7 +49,7 @@ func (o Options) reconcile(ctx context.Context, c herdr.Client, st *store.Store,
 	}
 	wrote := false
 	for _, ck := range team.Reconcile(l, rows) {
-		w, err := o.reconcileRow(ctx, c, st, ck)
+		w, err := o.reconcileRow(ctx, c, pp, st, ck)
 		if err != nil {
 			return nil, err
 		}
@@ -67,7 +68,7 @@ func (o Options) reconcile(ctx context.Context, c herdr.Client, st *store.Store,
 }
 
 // reconcileRow does ck's work, and reports whether it wrote the row.
-func (o Options) reconcileRow(ctx context.Context, c herdr.Client, st *store.Store, ck team.Check) (bool, error) {
+func (o Options) reconcileRow(ctx context.Context, c herdr.Client, pp paneProcesses, st *store.Store, ck team.Check) (bool, error) {
 	r := ck.Row
 	log := o.Logger.With().Str("worker", r.LogicalID).Int64("generation", r.Generation).Logger()
 	wrote := false
@@ -76,7 +77,7 @@ func (o Options) reconcileRow(ctx context.Context, c herdr.Client, st *store.Sto
 		wrote = true
 	}
 	if ck.NeedsShell() && o.Hooks.StartTime != nil {
-		sh, err := o.shellOf(ctx, c, log, ck.Pane)
+		sh, err := o.shellOf(ctx, c, pp, log, ck.Pane)
 		if err != nil {
 			return wrote, err
 		}
@@ -89,7 +90,7 @@ func (o Options) reconcileRow(ctx context.Context, c herdr.Client, st *store.Sto
 	}
 	unverified := false
 	for _, p := range ck.Candidates {
-		sh, err := o.shellOf(ctx, c, log, p.PaneID)
+		sh, err := o.shellOf(ctx, c, pp, log, p.PaneID)
 		if err != nil {
 			return wrote, err
 		}
@@ -143,10 +144,11 @@ type shell struct {
 	known bool
 }
 
-// shellOf reads pane's shell: its pid from herdr, its start time from the
-// process table. It fails only with ErrHerdrGone.
-func (o Options) shellOf(ctx context.Context, c herdr.Client, log zerolog.Logger, pane string) (shell, error) {
-	info, err := c.PaneProcessInfo(ctx, pane)
+// shellOf reads pane's shell: its pid from herdr, through the poll's replies
+// pp, its start time from the process table. It fails only with
+// ErrHerdrGone.
+func (o Options) shellOf(ctx context.Context, c herdr.Client, pp paneProcesses, log zerolog.Logger, pane string) (shell, error) {
+	info, err := pp.ask(ctx, c, pane)
 	if errors.Is(err, ErrHerdrGone) {
 		return shell{}, fmt.Errorf("team poll: read the shell of %s: %w", pane, err)
 	}
