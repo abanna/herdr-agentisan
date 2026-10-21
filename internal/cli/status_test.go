@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -200,8 +201,7 @@ func shortTemp(t *testing.T) string {
 }
 
 // tabBarEntry is one tab_bar_right entry, with herdr 0.9.3's
-// TabBarRightEntryConfig fields only (src/config/tab_bar.rs, which denies
-// unknown fields).
+// TabBarRightEntryConfig fields (src/config/tab_bar.rs).
 type tabBarEntry struct {
 	Type            string `toml:"type"`
 	Command         string `toml:"command"`
@@ -211,11 +211,36 @@ type tabBarEntry struct {
 	Text            string `toml:"text"`
 }
 
+// tabBarKeys are the keys each entry type takes. herdr denies the others
+// (TabBarRightEntryConfig is tagged by type, with deny_unknown_fields), so a
+// stray key fails herdr's config check.
+var tabBarKeys = map[string][]string{
+	"zoom":     {"type"},
+	"hostname": {"type"},
+	"datetime": {"type", "format"},
+	"text":     {"type", "text"},
+	"command":  {"type", "command", "interval_seconds", "timeout_seconds"},
+}
+
+// shellWords is command as /bin/sh splits and expands it, with env its
+// whole environment: herdr runs a tab-bar command through /bin/sh -lc.
+func shellWords(t *testing.T, command string, env ...string) []string {
+	t.Helper()
+	sh := exec.CommandContext(t.Context(), "/bin/sh", "-c", "set -- "+command+`; printf '%s\0' "$@"`) //nolint:gosec // the snippet's own command line is what this test checks
+	sh.Env = env
+	out, err := sh.Output()
+	require.NoError(t, err)
+	return strings.Split(strings.TrimSuffix(string(out), "\x00"), "\x00")
+}
+
 // TestTabBarSnippet keeps docs/config/herdr-tab-bar.example.toml working
-// (A41): one command entry, within herdr's bounds, whose timeout leaves the
-// command's budget room, and whose command line, as /bin/sh would expand
-// it, prints the focused team's line from the daemon under the plugin's
-// state directory, with no HERDR_PLUGIN_STATE_DIR set.
+// (A41): entries herdr accepts, one command entry within herdr's bounds,
+// whose timeout leaves the command's budget room, and whose command line,
+// as /bin/sh expands it, prints the focused team's line from the daemon
+// under the plugin's state directory, with no HERDR_PLUGIN_STATE_DIR set.
+// herdr's state directory is $XDG_STATE_HOME/herdr when XDG_STATE_HOME is
+// set, else $HOME/.local/state/herdr (src/config/io.rs:37-42,88-94), and
+// the plugin's is plugins/<id> under it (src/plugin_paths.rs:21-25).
 func TestTabBarSnippet(t *testing.T) {
 	t.Parallel()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "config", "herdr-tab-bar.example.toml"))
@@ -229,6 +254,19 @@ func TestTabBarSnippet(t *testing.T) {
 	dec := toml.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	require.NoError(t, dec.Decode(&cfg))
+	var keys struct {
+		UI struct {
+			TabBarRight []map[string]any `toml:"tab_bar_right"`
+		} `toml:"ui"`
+	}
+	require.NoError(t, toml.Unmarshal(raw, &keys))
+	for i, entry := range keys.UI.TabBarRight {
+		allowed, ok := tabBarKeys[cfg.UI.TabBarRight[i].Type]
+		require.True(t, ok, "entry %d: herdr has no type %q", i, cfg.UI.TabBarRight[i].Type)
+		for k := range entry {
+			assert.Contains(t, allowed, k, "entry %d", i)
+		}
+	}
 	var commands []tabBarEntry
 	for _, e := range cfg.UI.TabBarRight {
 		if e.Type == "command" {
@@ -244,21 +282,34 @@ func TestTabBarSnippet(t *testing.T) {
 	assert.LessOrEqual(t, c.TimeoutSeconds, int64(3_600))
 	assert.Greater(t, time.Duration(c.TimeoutSeconds)*time.Second, dashboard.TabBarBudget, "the line is printed before herdr kills the command")
 
-	home := shortTemp(t)
-	line := strings.ReplaceAll(c.Command, "$HOME", home)
-	require.NotContains(t, line, "$", "HOME is the only variable the snippet needs")
-	words := strings.Fields(strings.ReplaceAll(line, `"`, ""))
-	require.NotEmpty(t, words)
-	require.Equal(t, "herdr-agentisan", words[0])
-	stateDir := filepath.Join(home, ".local", "state", "herdr", "plugins", plugin.ID)
-	require.Contains(t, words, stateDir, "herdr's state directory for this plugin (src/plugin_paths.rs:21-25)")
+	tests := map[string]struct {
+		xdg       bool // XDG_STATE_HOME is set
+		stateHome func(home string) string
+	}{
+		"XDG_STATE_HOME unset": {stateHome: func(home string) string { return filepath.Join(home, ".local", "state") }},
+		"XDG_STATE_HOME set":   {xdg: true, stateHome: func(home string) string { return filepath.Join(home, "xdg") }},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			home := shortTemp(t)
+			env := []string{"HOME=" + home}
+			if tc.xdg {
+				env = append(env, "XDG_STATE_HOME="+filepath.Join(home, "xdg"))
+			}
+			words := shellWords(t, c.Command, env...)
+			require.NotEmpty(t, words)
+			require.Equal(t, "herdr-agentisan", words[0])
+			stateDir := filepath.Join(tc.stateHome(home), "herdr", "plugins", plugin.ID)
+			require.Contains(t, words, stateDir, "herdr's state directory for this plugin")
 
-	e := daemonEnv{herdrSock: filepath.Join(home, "h.sock"), stateDir: stateDir}
-	asked := fakeDaemon(t, e, statusSnapshot)
-	env := map[string]string{"HERDR_SOCKET_PATH": e.herdrSock, "HERDR_ACTIVE_WORKSPACE_ID": "w14"}
-	lookup := func(k string) (string, bool) { v, ok := env[k]; return v, ok }
-	stdout, stderr, err := runOut(t, lookup, words[1:]...)
-	require.NoError(t, err, stderr)
-	assert.Equal(t, "PRs #886✓ · slots 1/2 · issues 4\n", stdout)
-	assert.Contains(t, <-asked, `"args":{"workspace_id":"w14"}`, "the focused workspace's team")
+			e := daemonEnv{herdrSock: filepath.Join(home, "h.sock"), stateDir: stateDir}
+			asked := fakeDaemon(t, e, statusSnapshot)
+			lookup := e.lookup(map[string]string{"HERDR_PLUGIN_STATE_DIR": "", "HERDR_ACTIVE_WORKSPACE_ID": "w14"})
+			stdout, stderr, err := runOut(t, lookup, words[1:]...)
+			require.NoError(t, err, stderr)
+			assert.Equal(t, "PRs #886✓ · slots 1/2 · issues 4\n", stdout)
+			assert.Contains(t, <-asked, `"args":{"workspace_id":"w14"}`, "the focused workspace's team")
+		})
+	}
 }

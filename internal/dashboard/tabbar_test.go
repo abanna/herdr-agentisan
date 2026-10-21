@@ -22,7 +22,6 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 )
 
-
 // prs are PRs numbered nums, every one with the states of pr.
 func prs(pr snapshot.PR, nums ...int) []snapshot.PR {
 	out := make([]snapshot.PR, 0, len(nums))

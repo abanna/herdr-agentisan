@@ -303,7 +303,8 @@ Put the `[ui]` keys of
 [`docs/config/herdr-tab-bar.example.toml`](docs/config/herdr-tab-bar.example.toml)
 in herdr's config, in place of herdr-status.sh's entry, and reload herdr's
 config. herdr gives a tab-bar command no `HERDR_PLUGIN_STATE_DIR`, so the
-command names the plugin's state directory with `--state-dir`. Retire
+command names the plugin's state directory with `--state-dir`, which the
+shell works out from `XDG_STATE_HOME` or `HOME`, as herdr does. Retire
 herdr-status.sh by hand after a live check; for the agentisan-skills team,
 only once each project counts its own test slots.
 
