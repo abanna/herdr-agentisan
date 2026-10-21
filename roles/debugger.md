@@ -25,9 +25,9 @@ would allow more:
 - Linear's read tools: an issue, a list of issues, an issue's comments.
 
 Anything else is denied without asking, and that is deliberate. Your reads
-are fenced to the repo and the daemon's directory: a read anywhere else is
-refused, even by a command such as `cat` or `grep`, except Claude Code's own
-files under `~/.claude/`. Never ask for a
+are fenced to the repo and the daemon's directory: a command such as `cat`
+or `grep` that reads anywhere else is denied, and Read, Grep and Glob refuse
+it too, except for Claude Code's own files under `~/.claude/`. Never ask for a
 credential, never try to read one, and never work around a denial: the
 `events` commands read Elasticsearch's URL and key themselves, from a file
 you cannot see. If one fails, report its error as it reads.
