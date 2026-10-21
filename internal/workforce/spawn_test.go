@@ -16,6 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
 	"github.com/abanna/herdr-agentisan/internal/preflight"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
@@ -532,6 +534,30 @@ func TestSpawnReadiness(t *testing.T) {
 	}
 }
 
+// TestSpawnRereadsABusyPane: a busy pane is re-read before each retry, and
+// one herdr reissued to another terminal meanwhile gets no command and stays
+// open (QA #78, F3.3).
+func TestSpawnRereadsABusyPane(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	f.h.busy = 1
+	f.h.onCall = func(method string) {
+		if method != "agent.start" {
+			return
+		}
+		for _, p := range f.h.panes {
+			p.terminal = "term-stranger"
+		}
+	}
+
+	_, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1})
+	require.ErrorIs(t, err, workforce.ErrSpawnFailed)
+	assert.Contains(t, err.Error(), "is no longer ha-coder-1's pane")
+	assert.Len(t, f.h.params("agent.start"), 1, "nothing typed into another terminal")
+	assert.NotNil(t, f.h.tabByLabel("ha-coder-1"), "another terminal's pane is left open")
+	assert.Equal(t, store.StatusFailed, f.row(t, "ha-coder-1").Status)
+}
+
 // TestSpawnTimesOut: an agent that never reports ready, or a shell whose
 // prompt never shows, fails the spawn when the op's budget ends, and is
 // cleaned up even so. A Claude that settles in unknown is not ready,
@@ -922,4 +948,229 @@ func TestSpawnWarnsOfCodexHooks(t *testing.T) {
 			assert.Equal(t, tc.group == "review", asked)
 		})
 	}
+}
+
+// wrapHerdr points the service at a server in front of f's fake that answers
+// through h; next is the fake's own answer.
+func wrapHerdr(t *testing.T, f *fixture, h func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply) *herdrtest.Server {
+	t.Helper()
+	srv := herdrtest.Start(t, func(r herdrtest.Request) herdrtest.Reply {
+		return h(r, func() herdrtest.Reply { return f.h.handle(r) })
+	})
+	f.svc.Herdr = herdr.Client{SocketPath: srv.Path}
+	return srv
+}
+
+func countCalls(srv *herdrtest.Server, method string) int {
+	n := 0
+	for _, r := range srv.Requests() {
+		if r.Method == method {
+			n++
+		}
+	}
+	return n
+}
+
+// TestSpawnPollsAFailedAgentGet: an agent.get herdr refuses, the name not yet
+// registered, or one whose connection drops, is polled again, not failed
+// (QA #78).
+func TestSpawnPollsAFailedAgentGet(t *testing.T) {
+	t.Parallel()
+	for name, fail := range map[string]herdrtest.Reply{
+		"agent_not_found":      {Error: &herdrtest.ErrorBody{Code: "agent_not_found", Message: "agent_not_found"}},
+		"a dropped connection": {Silent: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, teamConfig)
+			var mu sync.Mutex
+			n := 0
+			srv := wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+				if r.Method == "agent.get" {
+					mu.Lock()
+					n++
+					k := n
+					mu.Unlock()
+					if k <= 3 {
+						return fail
+					}
+				}
+				return next()
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+
+			res, err := f.svc.Spawn(ctx, workforce.SpawnRequest{Group: "coder", Count: 1})
+			require.NoError(t, err)
+			require.Len(t, res.Workers, 1)
+			assert.Equal(t, store.StatusActive, f.row(t, "ha-coder-1").Status)
+			assert.GreaterOrEqual(t, countCalls(srv, "agent.get"), 4)
+		})
+	}
+}
+
+// TestSpawnStartTimeoutFollowsTheDeadline: agent.start's timeout is the time
+// the op has left, at most 90 s and never below herdr's 3,001 ms (QA #78).
+func TestSpawnStartTimeoutFollowsTheDeadline(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		budget   time.Duration
+		min, max float64
+	}{
+		"less than herdr's floor left": {budget: 2900 * time.Millisecond, min: 3001, max: 3001},
+		"less than 90 s left":          {budget: 60 * time.Second, min: 45000, max: 60000},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, teamConfig)
+			ctx, cancel := context.WithTimeout(t.Context(), tc.budget)
+			defer cancel()
+
+			_, err := f.svc.Spawn(ctx, workforce.SpawnRequest{Group: "coder", Count: 1})
+			require.NoError(t, err)
+			starts := f.h.params("agent.start")
+			require.Len(t, starts, 1)
+			ms, _ := starts[0]["timeout_ms"].(float64)
+			assert.GreaterOrEqual(t, ms, tc.min)
+			assert.LessOrEqual(t, ms, tc.max)
+		})
+	}
+}
+
+// TestSpawnRetriesOnlyABusyPane: only a busy pane is retried;
+// agent_name_taken fails the worker on the first answer (QA #78).
+func TestSpawnRetriesOnlyABusyPane(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	f.h.fail["agent.start"] = "agent_name_taken"
+
+	_, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1})
+	require.ErrorIs(t, err, workforce.ErrSpawnFailed)
+	assert.Contains(t, err.Error(), "agent_name_taken")
+	assert.Len(t, f.h.params("agent.start"), 1, "a taken name is not retried")
+}
+
+// TestSpawnWaitsForACodexStillStarting: a Codex still launching reports
+// unknown and not interactive_ready; it is waited for, not taken as ready
+// (QA #78).
+func TestSpawnWaitsForACodexStillStarting(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	f.h.readyAfter = 3
+
+	res, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "review", Count: 1})
+	require.NoError(t, err)
+	require.Len(t, res.Workers, 1)
+	assert.GreaterOrEqual(t, len(f.h.params("agent.get")), 4, "polled until herdr settles it")
+}
+
+// TestSpawnWaitsOutAnIdlePendingLaunch: an agent idle but not yet interactive
+// while its launch is pending is still starting, not exited (QA #78).
+func TestSpawnWaitsOutAnIdlePendingLaunch(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	f.h.readyAfter = 3
+	f.h.onCall = func(method string) {
+		if method != "agent.get" {
+			return
+		}
+		for _, p := range f.h.panes {
+			if p.name == "ha-coder-1" && p.pending {
+				p.status = "idle"
+			}
+		}
+	}
+
+	_, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1})
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusActive, f.row(t, "ha-coder-1").Status)
+}
+
+// TestSpawnTakesDoneAndReadyAsUp: an agent herdr reports done and
+// interactive_ready is up (QA #78).
+func TestSpawnTakesDoneAndReadyAsUp(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+		rep := next()
+		if r.Method == "agent.get" {
+			if m, ok := rep.Result.(map[string]any); ok {
+				if a, ok := m["agent"].(map[string]any); ok && a["agent_status"] == "idle" {
+					a["agent_status"] = "done"
+				}
+			}
+		}
+		return rep
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+
+	_, err := f.svc.Spawn(ctx, workforce.SpawnRequest{Group: "coder", Count: 1})
+	require.NoError(t, err)
+}
+
+// TestSpawnKeysWaitForShellReadyAfter: the keys wait shell_ready_after_s; a
+// pane freed before then never gets them, and one still busy at the window's
+// end gets none either, as A23 says (QA #78).
+func TestSpawnKeysWaitForShellReadyAfter(t *testing.T) {
+	t.Parallel()
+	cfg := strings.Replace(teamConfig, "layout = \"tabs\"\n", "layout = \"tabs\"\n\n[projects.herdr-agentisan.spawn]\nshell_ready_keys = [\"enter\"]\nshell_ready_after_s = 2\n", 1)
+	f := newFixture(t, cfg)
+	f.h.fgProgram = true
+	f.svc.BusyWindow = 300 * time.Millisecond
+
+	_, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1})
+	require.ErrorIs(t, err, workforce.ErrSpawnFailed)
+	assert.Empty(t, f.h.keys, "not due within the busy window")
+}
+
+// TestSpawnSendsNoKeysWithoutAShellPID: a pane whose shell pid herdr does not
+// know gets no keys: spawn cannot tell whether the shell itself has the
+// terminal (QA #78).
+func TestSpawnSendsNoKeysWithoutAShellPID(t *testing.T) {
+	t.Parallel()
+	cfg := strings.Replace(teamConfig, "layout = \"tabs\"\n", "layout = \"tabs\"\n\n[projects.herdr-agentisan.spawn]\nshell_ready_keys = [\"enter\"]\nshell_ready_after_s = 0\n", 1)
+	f := newFixture(t, cfg)
+	f.h.fgProgram = true
+	f.svc.BusyWindow = 300 * time.Millisecond
+	wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+		rep := next()
+		if r.Method == "pane.process_info" {
+			if m, ok := rep.Result.(map[string]any); ok {
+				if pi, ok := m["process_info"].(map[string]any); ok {
+					pi["shell_pid"] = 0
+				}
+			}
+		}
+		return rep
+	})
+
+	_, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1})
+	require.ErrorIs(t, err, workforce.ErrSpawnFailed)
+	assert.Empty(t, f.h.keys)
+}
+
+// TestSpawnSeesTheHookReviewByItsTrustLine: Codex's hook review is told by
+// either of its lines (QA #78).
+func TestSpawnSeesTheHookReviewByItsTrustLine(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	f.h.screen = "Trust all and continue"
+
+	_, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "review", Count: 1})
+	require.ErrorIs(t, err, workforce.ErrSpawnFailed)
+	assert.Contains(t, err.Error(), "is at Codex's hook review")
+}
+
+// TestSpawnRefusesABadModelBeforeThePreflight: a --model A46 refuses never
+// runs the preflight, as A23 says (QA #78).
+func TestSpawnRefusesABadModelBeforeThePreflight(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	called := false
+	f.svc.Preflight = func(context.Context, string) error { called = true; return nil }
+
+	_, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1, Model: "-x"})
+	require.ErrorIs(t, err, workforce.ErrBadRequest)
+	assert.False(t, called)
 }

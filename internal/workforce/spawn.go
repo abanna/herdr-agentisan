@@ -423,6 +423,15 @@ func (s *Service) start(ctx context.Context, w opened, keys *keySender) error {
 			if err := sleep(ctx, orDefault(s.ReadyPoll, DefaultReadyPoll)); err != nil {
 				return fmt.Errorf("%s's shell never took the agent: %w", w.paneID, err)
 			}
+			// agent.start takes only a pane id, which herdr can reissue, so
+			// the pane is re-read before each retry, as herdr's CLI does.
+			p, err := s.Herdr.GetPane(ctx, w.paneID)
+			switch {
+			case err != nil:
+				return herdrFailed("re-read "+w.id+"'s pane", err)
+			case p.TerminalID != w.terminalID:
+				return fmt.Errorf("%s is no longer %s's pane", w.paneID, w.id)
+			}
 		default:
 			return herdrFailed("start "+w.id, err)
 		}

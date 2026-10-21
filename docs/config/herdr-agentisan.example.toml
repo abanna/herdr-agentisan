@@ -97,6 +97,11 @@ token = { env = "GITHUB_TOKEN" }
 #
 #   shell_prompt         a regular expression one line of your prompt
 #                        matches; spawn waits for it. Unset, spawn does not.
+#                        herdr trims each line's trailing white space, so
+#                        '\$ $' never matches (write '\$$'), and the first
+#                        line from the top that matches ends the wait: a
+#                        prompt drawn before a startup question (an instant
+#                        prompt) ends it at once.
 #                        herdr matches it with Rust's regex syntax; resolve
 #                        compiles it with Go's, a first check only, so a
 #                        construct Rust lacks (a literal {, \Q…\E, a nested
