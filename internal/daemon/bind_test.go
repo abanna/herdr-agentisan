@@ -329,11 +329,13 @@ func TestWorkforceOpsWaitForTheFirstReconcile(t *testing.T) {
 	polled(t, th.srv, 1)
 	sock := socketPath(t, dir, th.path)
 
-	_, err := daemon.CallWith(t.Context(), sock, daemon.OpTeamStatus, json.RawMessage(`{"project":"ha"}`), 10*time.Second)
-	var re *daemon.RequestError
-	require.ErrorAs(t, err, &re)
-	assert.Equal(t, "not_ready", re.Code)
-	require.ErrorIs(t, err, daemon.ErrNotReady)
+	for op, args := range map[string]string{daemon.OpTeamStatus: `{"project":"ha"}`, daemon.OpWorkerRetire: `{"target":"ha-coder-1"}`} {
+		_, err := daemon.CallWith(t.Context(), sock, op, json.RawMessage(args), 10*time.Second)
+		var re *daemon.RequestError
+		require.ErrorAs(t, err, &re, op)
+		assert.Equal(t, "not_ready", re.Code, op)
+		require.ErrorIs(t, err, daemon.ErrNotReady)
+	}
 
 	time.AfterFunc(100*time.Millisecond, func() {
 		th.mu.Lock()
@@ -354,7 +356,7 @@ func TestWorkforceRetriesNotReady(t *testing.T) {
 	serve := func(n int32, then func(int32)) (string, *atomic.Int32) {
 		var calls atomic.Int32
 		sock := shortDir(t) + "/d.sock"
-		closeOp, err := daemon.ServeOp(t.Context(), sock, daemon.OpTeamStatus, time.Second, func(context.Context) (any, error) {
+		closeOp, err := daemon.ServeOp(t.Context(), sock, daemon.OpTeamStatus, "not_ready", time.Second, func(context.Context) (any, error) {
 			c := calls.Add(1)
 			then(c)
 			if c <= n {

@@ -91,6 +91,9 @@ func TestWorkforceOpsOverTheSocket(t *testing.T) {
 		"an unknown arg":             {op: daemon.OpTeamStatus, args: map[string]any{"projekt": "ha"}, code: "bad_request"},
 		"args that are no obj":       {op: daemon.OpTeamStatus, args: []int{1}, code: "bad_request"},
 		"a caller pane not a string": {op: daemon.OpTeamStatus, args: map[string]any{"caller_pane": 7}, code: "bad_request"},
+		"retire with no name":        {op: daemon.OpWorkerRetire, args: map[string]any{}, code: "bad_request"},
+		"retire the boss":            {op: daemon.OpWorkerRetire, args: map[string]any{"target": "w14:p1"}, code: "not_a_worker"},
+		"retire nobody":              {op: daemon.OpWorkerRetire, args: map[string]any{"target": "ha-coder-9"}, code: "unknown_worker"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -183,9 +186,7 @@ func TestTheDaemonsWorkforce(t *testing.T) {
 func TestAnOpGetsItsBudget(t *testing.T) {
 	t.Parallel()
 	sock := filepath.Join(shortDir(t), "d.sock")
-	finished := make(chan struct{})
-	stop, err := daemon.ServeOp(t.Context(), sock, "slow", 8*time.Second, func(ctx context.Context) (any, error) {
-		defer close(finished)
+	stop, err := daemon.ServeOp(t.Context(), sock, "slow", "failed", 8*time.Second, func(ctx context.Context) (any, error) {
 		select {
 		case <-time.After(5500 * time.Millisecond):
 			return map[string]string{"done": "yes"}, nil
@@ -202,7 +203,7 @@ func TestAnOpGetsItsBudget(t *testing.T) {
 
 	short := filepath.Join(shortDir(t), "e.sock")
 	ended := make(chan error, 1)
-	stopShort, err := daemon.ServeOp(t.Context(), short, "slow", 3*time.Second, func(ctx context.Context) (any, error) {
+	stopShort, err := daemon.ServeOp(t.Context(), short, "slow", "failed", 3*time.Second, func(ctx context.Context) (any, error) {
 		select {
 		case <-time.After(500 * time.Millisecond):
 			ended <- nil
@@ -222,7 +223,67 @@ func TestAnOpGetsItsBudget(t *testing.T) {
 	case <-time.After(ready):
 		t.Fatal("the op did not finish after its client went")
 	}
-	<-finished
+}
+
+// TestDaemonStopEndsAHandoffWait: a retire waiting out a handoff does not
+// hold the daemon's stop, whether it is stopped or its herdr crashed (a
+// crashed herdr leaves the wait polling a socket nothing answers): the op
+// ends, refused, and Run returns.
+func TestDaemonStopEndsAHandoffWait(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct {
+		stop    func(*running, *teamHerdr)
+		wantErr error
+	}{
+		"the daemon is stopped": {stop: func(r *running, _ *teamHerdr) { r.cancel() }},
+		"its herdr crashes":     {stop: func(_ *running, th *teamHerdr) { th.crash() }, wantErr: daemon.ErrHerdrGone},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			th := newTeamHerdr(t)
+			withTeam(th)
+			stateDir := shortDir(t)
+			r := run(t, teamOpts(t, stateDir, th, workforceConfig(t)))
+			healthy(t, stateDir, th.fakeHerdr)
+
+			done := make(chan error, 1)
+			go func() {
+				_, err := daemon.Workforce(context.Background(), socketPath(t, stateDir, th.path), daemon.OpWorkerRetire, workforce.RetireRequest{Target: "ha-coder-1", AfterHandoff: true})
+				done <- err
+			}()
+			// The op reads the config, herdr and state.db first; a second is
+			// ample for that, and the handoff wait itself has 1,500 s.
+			time.Sleep(time.Second)
+			select {
+			case err := <-done:
+				t.Fatalf("the retire ended before the stop: %v", err)
+			default:
+			}
+			tc.stop(r, th)
+			select {
+			case err := <-r.done:
+				r.done <- err // for run's cleanup, which waits for it too
+				if tc.wantErr == nil {
+					require.NoError(t, err)
+				} else {
+					require.ErrorIs(t, err, tc.wantErr)
+				}
+			case <-time.After(ready):
+				t.Fatal("the daemon's stop waited for the handoff")
+			}
+			select {
+			case err := <-done:
+				if re, ok := errors.AsType[*daemon.RequestError](err); ok {
+					assert.Equal(t, "handoff_timeout", re.Code)
+				} else {
+					require.ErrorIs(t, err, daemon.ErrUnavailable)
+				}
+			case <-time.After(ready):
+				t.Fatal("the client never heard back")
+			}
+		})
+	}
 }
 
 // TestAClientWaitsOutItsOpsBudget: a client waits an op's own budget, past
@@ -275,35 +336,47 @@ func TestAClientWaitsOutItsOpsBudget(t *testing.T) {
 	assert.Equal(t, "ha", st.Project)
 }
 
-// TestAnOpPastItsBudgetIsATimeout: an op whose own budget ends answers
-// timeout, whatever its own code for the error, and says what it waited on;
-// a deadline of an inner call, the op's budget still running, keeps the op's
-// own code.
+// TestAnOpPastItsBudgetIsATimeout: an op whose own budget ends while a call
+// fails answers timeout, saying what it waited on; a code that says more
+// than that a call failed stands, and a deadline of an inner call, the
+// budget still running, keeps the op's own code.
 func TestAnOpPastItsBudgetIsATimeout(t *testing.T) {
 	t.Parallel()
-	sock := filepath.Join(shortDir(t), "d.sock")
-	stop, err := daemon.ServeOp(t.Context(), sock, "wait", 200*time.Millisecond, func(ctx context.Context) (any, error) {
+	waitThenFail := func(ctx context.Context) (any, error) {
 		<-ctx.Done()
 		return nil, fmt.Errorf("list panes: %w", ctx.Err())
-	})
-	require.NoError(t, err)
-	t.Cleanup(stop)
-	_, err = daemon.CallWith(t.Context(), sock, "wait", json.RawMessage(`{}`), ready)
-	var re *daemon.RequestError
-	require.ErrorAs(t, err, &re)
-	assert.Equal(t, "timeout", re.Code)
-	assert.Contains(t, re.Message, "wait ran past its 200ms budget")
-	assert.Contains(t, re.Message, "list panes")
+	}
+	for name, tc := range map[string]struct {
+		code   string
+		budget time.Duration
+		run    func(context.Context) (any, error)
+		want   string
+	}{
+		"a call that failed":    {code: "herdr_failed", budget: 200 * time.Millisecond, run: waitThenFail, want: "timeout"},
+		"an error with no code": {code: "failed", budget: 200 * time.Millisecond, run: waitThenFail, want: "timeout"},
+		"a handoff not written": {code: "handoff_timeout", budget: 200 * time.Millisecond, run: waitThenFail, want: "handoff_timeout"},
+		"a replaced herdr":      {code: "herdr_gone", budget: 200 * time.Millisecond, run: waitThenFail, want: "herdr_gone"},
+		"an inner call's deadline": {code: "herdr_failed", budget: time.Minute, run: func(context.Context) (any, error) {
+			return nil, fmt.Errorf("list panes: %w", context.DeadlineExceeded)
+		}, want: "herdr_failed"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			sock := filepath.Join(shortDir(t), "d.sock")
+			stop, err := daemon.ServeOp(t.Context(), sock, "op", tc.code, tc.budget, tc.run)
+			require.NoError(t, err)
+			t.Cleanup(stop)
 
-	inner := filepath.Join(shortDir(t), "e.sock")
-	stopInner, err := daemon.ServeOp(t.Context(), inner, "call", time.Minute, func(context.Context) (any, error) {
-		return nil, fmt.Errorf("list panes: %w", context.DeadlineExceeded)
-	})
-	require.NoError(t, err)
-	t.Cleanup(stopInner)
-	_, err = daemon.CallWith(t.Context(), inner, "call", json.RawMessage(`{}`), ready)
-	require.ErrorAs(t, err, &re)
-	assert.Equal(t, "failed", re.Code, "the op's own code: its budget had not ended")
+			_, err = daemon.CallWith(t.Context(), sock, "op", json.RawMessage(`{}`), ready)
+			var re *daemon.RequestError
+			require.ErrorAs(t, err, &re)
+			assert.Equal(t, tc.want, re.Code)
+			assert.Contains(t, re.Message, "list panes")
+			if tc.want == "timeout" {
+				assert.Contains(t, re.Message, "op ran past its 200ms budget")
+			}
+		})
+	}
 }
 
 // TestAnOpEndsWithTheDaemon: an op runs under the context the daemon's
@@ -315,7 +388,7 @@ func TestAnOpEndsWithTheDaemon(t *testing.T) {
 	started := make(chan struct{})
 	// Only the cancel can end the op in time; its budget, longer than the
 	// wait below, still bounds a regression, which then fails, not hangs.
-	stop, err := daemon.ServeOp(ctx, sock, "wait", 2*ready, func(ctx context.Context) (any, error) {
+	stop, err := daemon.ServeOp(ctx, sock, "wait", "failed", 2*ready, func(ctx context.Context) (any, error) {
 		close(started)
 		<-ctx.Done()
 		return nil, ctx.Err()
@@ -350,6 +423,11 @@ func TestWorkforceCodes(t *testing.T) {
 		workforce.ErrUnknownProject:                                              "unknown_project",
 		fmt.Errorf("%w: %w", workforce.ErrConfig, settings.ErrBypassesAgentisan): "bypasses_agentisan",
 		workforce.ErrConfig:                                                      "config_invalid",
+		workforce.ErrUnknownWorker:                                               "unknown_worker",
+		workforce.ErrNotAWorker:                                                  "not_a_worker",
+		workforce.ErrPaneChanged:                                                 "pane_changed",
+		workforce.ErrHandoffPending:                                              "handoff_pending",
+		workforce.ErrHandoffTimeout:                                              "handoff_timeout",
 		fmt.Errorf("%w: %w", workforce.ErrHerdr, daemon.ErrHerdrGone):            "herdr_gone",
 		workforce.ErrHerdr:                                                       "herdr_failed",
 		store.ErrStore:                                                           "store_failed",
@@ -359,10 +437,28 @@ func TestWorkforceCodes(t *testing.T) {
 	}
 }
 
-// TestOpBudgets: team status gets 10 s; any other op none of its own.
+// TestOpBudgets: team status and retire get 10 s, and retire
+// --after-handoff 1,500 s, both in the client's wait and in the budget the
+// daemon's op map enforces; any other op none of its own.
 func TestOpBudgets(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, 10*time.Second, daemon.OpBudget(daemon.OpTeamStatus, nil))
-	assert.Equal(t, 10*time.Second, daemon.OpBudget(daemon.OpTeamStatus, json.RawMessage(`not json`)))
+	for _, tc := range []struct {
+		op   string
+		args string
+		want time.Duration
+	}{
+		{daemon.OpTeamStatus, ``, 10 * time.Second},
+		{daemon.OpWorkerRetire, `{"target":"x"}`, 10 * time.Second},
+		{daemon.OpWorkerRetire, `{"target":"x","after_handoff":true}`, 1500 * time.Second},
+		{daemon.OpWorkerRetire, `not json`, 10 * time.Second},
+	} {
+		args := json.RawMessage(tc.args)
+		assert.Equal(t, tc.want, daemon.OpBudget(tc.op, args), "the client's wait: %s %s", tc.op, tc.args)
+		assert.Equal(t, tc.want, daemon.ServedBudget(tc.op, args), "the budget the daemon enforces: %s %s", tc.op, tc.args)
+	}
 	assert.Zero(t, daemon.OpBudget("health", nil))
+	assert.Equal(t, []string{daemon.OpTeamStatus, daemon.OpWorkerRetire}, daemon.WorkforceOpNames())
+	for _, op := range daemon.WorkforceOpNames() {
+		assert.Positive(t, daemon.ServedBudget(op, nil), "%s has a budget in the table, not a nil one", op)
+	}
 }

@@ -147,9 +147,11 @@ exempts whatever is later added under that name.
   in the resolver's group order, with the in-memory stage clock (A18) and
   idle clock (A23).
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
-  `team status` so far: each group's counts and members on a tabs team or
-  the ◆ spaces, with idle times from the daemon's clock and the rows no pane
-  is bound to (A35). The daemon runs them; `internal/cli` only asks it.
+  `team status` and `worker retire` so far: each group's counts and members
+  on a tabs team or the ◆ spaces, with idle times from the daemon's clock and
+  the rows no pane is bound to (A35), and closing the pane a worker's row is
+  bound to, after its handoff when asked, with the row retired. The daemon
+  runs them; `internal/cli` only asks it.
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
@@ -184,8 +186,10 @@ exempts whatever is later added under that name.
 - `internal/testslots/` — the dashboard header's test slots (ADR-001 A31):
   which of `[tests] locks` some process holds a lock on, read from the
   kernel's `/proc/locks` every team poll without opening or locking a lock
-  file. Tests hold real locks on temp files and read them back; the parser
-  is tested on its own against written lines.
+  file, three times with staggered pages, since a page can skip a line
+  while other locks change. Tests hold real locks on temp files and read
+  them back, the parser is tested on its own against written lines, and a
+  page-at-a-time stand-in (`seqfile_test.go`) forces the skip.
 - `internal/snapshot/` — the versioned snapshot contract (ADR-001 D5/D6,
   A18): the groups and agents, the boss, and the project's PRs, issues and
   test slots. Decoding is strict: exact keys, closed enums, RFC 3339 times.
