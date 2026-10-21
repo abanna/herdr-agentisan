@@ -53,6 +53,9 @@ type resolveOutput struct {
 	Sources  map[string]string `json:"sources"`
 	Projects []string          `json:"projects"`
 	Secrets  []secretOutput    `json:"secrets,omitempty"`
+	// RoutingPolicy is the version of the routing policy [routing] makes
+	// (A50).
+	RoutingPolicy string `json:"routing_policy"`
 }
 
 type secretOutput struct {
@@ -99,13 +102,17 @@ func newConfigResolveCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("config resolve: %w", err)
 			}
+			policy, err := res.Policy()
+			if err != nil {
+				return fmt.Errorf("config resolve: %w", err)
+			}
 			var statuses []settings.SecretStatus
 			var secretsErr error
 			if checkSecrets {
 				statuses, secretsErr = settings.CheckSecrets(ctx, res, lookup, opReadFrom(ctx))
 			}
-			if err := render(cmd.OutOrStdout(), asJSON, resolveJSON(res, statuses, checkSecrets), func(w io.Writer) error {
-				return writeResolved(w, res, statuses)
+			if err := render(cmd.OutOrStdout(), asJSON, resolveJSON(res, policy.Version(), statuses, checkSecrets), func(w io.Writer) error {
+				return writeResolved(w, res, policy.Version(), statuses)
 			}); err != nil {
 				return err
 			}
@@ -125,8 +132,8 @@ func newConfigResolveCmd() *cobra.Command {
 	return c
 }
 
-func resolveJSON(res settings.Resolved, statuses []settings.SecretStatus, checked bool) resolveOutput {
-	out := resolveOutput{Values: res.Values, Sources: res.Sources, Projects: res.Projects}
+func resolveJSON(res settings.Resolved, policy string, statuses []settings.SecretStatus, checked bool) resolveOutput {
+	out := resolveOutput{Values: res.Values, Sources: res.Sources, Projects: res.Projects, RoutingPolicy: policy}
 	if res.Project != "" {
 		out.Project = &res.Project
 	}
@@ -143,11 +150,12 @@ func resolveJSON(res settings.Resolved, statuses []settings.SecretStatus, checke
 	return out
 }
 
-func writeResolved(w io.Writer, res settings.Resolved, statuses []settings.SecretStatus) error {
+func writeResolved(w io.Writer, res settings.Resolved, policy string, statuses []settings.SecretStatus) error {
 	var b strings.Builder
 	for _, l := range res.Leaves() {
 		fmt.Fprintf(&b, "%s = %s  # %s\n", l.Path, settings.FormatValue(l.Value), l.Layer)
 	}
+	fmt.Fprintf(&b, "routing policy: %s\n", policy)
 	if res.Project == "" {
 		names := "(none)"
 		if len(res.Projects) > 0 {

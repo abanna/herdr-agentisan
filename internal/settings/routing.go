@@ -97,6 +97,16 @@ func (s *source) checkNoRoutingOverrides() error {
 // checked it against the rules.
 func (r Resolved) Routing() routing.Deployment { return deploymentOf(r.Values) }
 
+// Policy is the policy the resolved [routing] makes of the rules: what a
+// spawn decides by, named by its version.
+func (r Resolved) Policy() (routing.Policy, error) {
+	p, err := routing.New(routing.V1(), r.Routing())
+	if err != nil {
+		return routing.Policy{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	return p, nil
+}
+
 // deploymentOf reads [routing] out of a resolved tree.
 func deploymentOf(values map[string]any) routing.Deployment {
 	var d routing.Deployment

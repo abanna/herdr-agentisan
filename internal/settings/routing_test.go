@@ -142,3 +142,24 @@ func TestRoutingOffKeepsTheModelKeys(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, res.Profile.Agent.Model, "routing on with no model key resolves")
 }
+
+// TestResolvedPolicy: the resolved [routing] makes the policy a spawn
+// decides by, named by a version that follows the deployment; a deployment
+// Load never checked is refused, not decided by.
+func TestResolvedPolicy(t *testing.T) {
+	t.Parallel()
+	res, err := loadRouting(t, "[routing.bindings.claude_mid]\nmodel_id = \"claude-sonnet-5-6\"\n", "", nil, false)
+	require.NoError(t, err)
+	p, err := res.Policy()
+	require.NoError(t, err)
+	want, err := routing.New(routing.V1(), res.Routing())
+	require.NoError(t, err)
+	assert.Equal(t, want.Version(), p.Version())
+	plain, err := routing.New(routing.V1(), routing.Deployment{})
+	require.NoError(t, err)
+	assert.NotEqual(t, plain.Version(), p.Version(), "the model id is in the version")
+
+	_, err = settings.Resolved{Values: map[string]any{"routing": map[string]any{"overrides": map[string]any{"boss": "claude_premium"}}}}.Policy()
+	require.ErrorIs(t, err, settings.ErrInvalid)
+	require.ErrorIs(t, err, routing.ErrOverrideRefused)
+}

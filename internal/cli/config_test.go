@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/abanna/herdr-agentisan/internal/cli"
+	"github.com/abanna/herdr-agentisan/internal/routing"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 )
 
@@ -78,6 +79,14 @@ short = "al"
 	return dir, repo
 }
 
+// defaultPolicy is the routing policy's version with no [routing] set.
+func defaultPolicy(t *testing.T) string {
+	t.Helper()
+	p, err := routing.New(routing.V1(), routing.Deployment{})
+	require.NoError(t, err)
+	return p.Version()
+}
+
 func TestConfigResolveText(t *testing.T) {
 	t.Parallel()
 	dir, repo := configFixture(t)
@@ -91,6 +100,7 @@ integrations.linear.token = { op = "`+linearRef+`" }  # project
 repo = "`+repo+`"  # project
 rotation.thresholds = [55, 65, 75]  # default
 short = "app"  # project
+routing policy: `+defaultPolicy(t)+`
 `, out)
 }
 
@@ -103,6 +113,7 @@ func TestConfigResolveWithoutAProjectListsThem(t *testing.T) {
 	assert.Equal(t, `agent.command = ["claude"]  # default
 integrations.github.token = { env = "GITHUB_TOKEN" }  # shared
 rotation.thresholds = [55, 65, 75]  # default
+routing policy: `+defaultPolicy(t)+`
 projects: alpha, app
 `, out)
 
@@ -110,8 +121,23 @@ projects: alpha, app
 	require.NoError(t, err, "no shared file: the defaults alone")
 	assert.Equal(t, `agent.command = ["claude"]  # default
 rotation.thresholds = [55, 65, 75]  # default
+routing policy: `+defaultPolicy(t)+`
 projects: (none)
 `, out)
+}
+
+// TestConfigResolveShowsThePolicyVersion: the routing policy's version
+// follows [routing], from whichever layer sets it (A50).
+func TestConfigResolveShowsThePolicyVersion(t *testing.T) {
+	t.Parallel()
+	dir, _ := configFixture(t)
+	on, err := routing.New(routing.V1(), routing.Deployment{Enabled: true})
+	require.NoError(t, err)
+	require.NotEqual(t, defaultPolicy(t), on.Version())
+
+	out, err := runCtx(configCtx(t, nil, nil), "config", "resolve", "--config-dir", dir, "--set", "routing.enabled=true")
+	require.NoError(t, err)
+	assert.Contains(t, out, "routing.enabled = true  # flag\nrouting policy: "+on.Version()+"\n")
 }
 
 // TestConfigResolveSetKeepsCommas: --set is a string array, so a TOML list
@@ -157,6 +183,7 @@ func TestConfigResolveJSON(t *testing.T) {
 					"short":                     settings.LayerProject,
 				}, got["sources"])
 				assert.Equal(t, []any{"alpha", "app"}, got["projects"])
+				assert.Equal(t, defaultPolicy(t), got["routing_policy"])
 				assert.NotContains(t, got, "secrets", "secrets appear only with --check-secrets")
 			},
 		},
@@ -403,7 +430,7 @@ func TestConfigResolveRendersAnyValue(t *testing.T) {
 			out, err := runCtx(configCtx(t, nil, nil), args...)
 			require.NoError(t, err)
 			assert.Contains(t, out, tc.wantText+"\n")
-			assert.Len(t, strings.Split(strings.TrimSuffix(out, "\n"), "\n"), 8, "one line per leaf: %q", out)
+			assert.Len(t, strings.Split(strings.TrimSuffix(out, "\n"), "\n"), 9, "one line per leaf, then the routing policy: %q", out)
 
 			out, err = runCtx(configCtx(t, nil, nil), append(args, "--json")...)
 			require.NoError(t, err)

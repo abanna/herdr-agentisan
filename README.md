@@ -280,8 +280,10 @@ reasoning effort each worker starts with, by its type's role (ADR-001 A50).
 the deployment: `enabled` (off by default, and while it is on no
 `agent.model` key may be set), each binding's real `model_id`, efforts and
 `enabled`, and `[routing.overrides]`, the user's standing choice for a role
-and the only way to a premium binding. `worker spawn` asks routing from
-NERD-5289 part 1b on; until then the keys resolve and nothing reads them.
+and the only way to a premium binding. `config resolve` shows each key with
+its layer, then `routing policy:`, the version a decision records.
+`worker spawn` asks routing from NERD-5289 part 1b on; until then the keys
+resolve and nothing reads them.
 
 ## The dashboard
 
