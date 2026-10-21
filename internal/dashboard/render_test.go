@@ -33,7 +33,7 @@ var plain = dashboard.Options{Profile: colorprofile.NoTTY}
 var attrs = dashboard.Options{Profile: colorprofile.ASCII}
 
 // fixtures are every snapshot in testdata.
-var fixtures = []string{"full", "empty", "blocked", "crowd", "wide", "shells"}
+var fixtures = []string{"full", "empty", "blocked", "crowd", "wide", "group", "shells"}
 
 // fixture loads testdata/<name>.json through the same source the CLI uses.
 func fixture(t *testing.T, name string) *snapshot.Snapshot {

@@ -4,21 +4,21 @@
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
 ╭─ CODERS · 9 ✔1 ◐4 ●2 ⚠1 ⟳1 ──────────────────────────────────────────────────╮
-│ write the code                                                               │
-│ ◐ pee01      wo╭ help ─────────────────────────────────────╮             12m │
-│ ◐ pee02      wo│ ↑ ↓       move through the agents         │ued          21m │
-│ ● pee03      id│ enter     jump: focus and zoom            │           1h39m │
-│ ◐ pee04      wo│ click     jump: focus and zoom            │              3m │
-│ ⚠ pee05      bl│ /         search name, group, item, stage │n boss     1h09m │
-│ ● pee06      id│ [ btop ]  btop in a herdr popup           │                 │
-│ ✔ pee07      do│ ?         close this help                 │           2d08h │
-│ ⟳ pee08      re│ q         quit                            │ead           0m │
-│ ◐ pee09      wo│ ◐ working   ● idle                        │ tdaddy …        │
-╰────────────────│ ⚠ blocked   ✔ done                        │─────────────────╯
-╭─ PRECHECK · 2 ◐│ ⟳ ready     ? unknown                     │─────────────────╮
-│ ◐ precheck   wo│ ▸ shell                                   │              8m │
-│ ● precheck2  id╰───────────────────────────────────────────╯                 │
-╰──────────────────────────────────────────────────────────────────────────────╯
+│ write the code ╭ help ─────────────────────────────────────╮                 │
+│ ◐ pee01      wo│ ↑ ↓       move through the agents         │             12m │
+│ ◐ pee02      wo│ enter     jump: focus and zoom            │ued          21m │
+│ ● pee03      id│ click     jump; a title opens its group   │           1h39m │
+│ ◐ pee04      wo│ 1-9       open that group's view          │              3m │
+│ ⚠ pee05      bl│ esc ←     back from a group's view        │n boss     1h09m │
+│ ● pee06      id│ /         search name, group, item, stage │                 │
+│ ✔ pee07      do│ [ btop ]  btop in a herdr popup           │           2d08h │
+│ ⟳ pee08      re│ ?         close this help                 │ead           0m │
+│ ◐ pee09      wo│ q         quit                            │ tdaddy …        │
+╰────────────────│ ◐ working   ● idle                        │─────────────────╯
+╭─ PRECHECK · 2 ◐│ ⚠ blocked   ✔ done                        │─────────────────╮
+│ ◐ precheck   wo│ ⟳ ready     ? unknown                     │              8m │
+│ ● precheck2  id│ ▸ shell                                   │                 │
+╰────────────────╰───────────────────────────────────────────╯─────────────────╯
 ╭─ QA · 1 ✔1 ──────────────────────────────────────────────────────────────────╮
 │ ✔ qa         done     son   ▓░░░░  12%             queue empty         3h19m │
  enter jump · ↑↓ move · ctrl-b m btop · ? help · q quit                      ↓3

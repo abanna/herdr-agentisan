@@ -36,10 +36,10 @@ var (
 	// buttonStyle is the btop button: bold on the accent, never reverse
 	// video, which marks the selected agent alone.
 	buttonStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#282a36")).Background(colAccent)
-	// readyStyle and redStyle are a stage's READY and RED, v12's bold green
-	// and bold red.
-	readyStyle = lipgloss.NewStyle().Bold(true).Foreground(colGreen)
-	redStyle   = lipgloss.NewStyle().Bold(true).Foreground(colRed)
+	// stageReadyStyle and stageRedStyle are a stage's READY and RED, v12's
+	// bold green and bold red.
+	stageReadyStyle = lipgloss.NewStyle().Bold(true).Foreground(colGreen)
+	stageRedStyle   = lipgloss.NewStyle().Bold(true).Foreground(colRed)
 )
 
 // stageStyle is a stage's colour, v12's rules made case-insensitive and
@@ -59,9 +59,9 @@ func stageStyle(stage string) lipgloss.Style {
 	}
 	switch {
 	case has("ready"):
-		return readyStyle
+		return stageReadyStyle
 	case has("red", "blocked"):
-		return redStyle
+		return stageRedStyle
 	case has("waiting", "queued"):
 		return noteStyle
 	default:
