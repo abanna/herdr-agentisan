@@ -23,6 +23,32 @@ type binder struct {
 	// warnedNoTerminal is set once a pane listed with no terminal id has
 	// been logged; herdr 0.9.3 lists every pane with one.
 	warnedNoTerminal bool
+	// warned holds the warnings that would repeat every reconcile while
+	// their condition lasts: each is logged once. A reconcile keeps only
+	// those it raised again, so one whose condition cleared is logged again
+	// if it comes back; a poll that skips the reconcile keeps them all.
+	// raised collects this reconcile's.
+	warned, raised map[warning]bool
+}
+
+// warning is a repeating warning's kind and subject.
+type warning struct{ kind, worker, pane string }
+
+// warnOnce reports whether w should be logged now: not when this reconcile
+// or the last one already raised it, since it was logged when it began and
+// has lasted since.
+func (b *binder) warnOnce(w warning) bool {
+	if b.raised == nil {
+		b.raised = map[warning]bool{}
+	}
+	first := !b.warned[w] && !b.raised[w]
+	b.raised[w] = true
+	return first
+}
+
+// endPoll forgets the warnings this reconcile did not raise again.
+func (b *binder) endPoll() {
+	b.warned, b.raised = b.raised, nil
 }
 
 // reconcile keeps every live workers row bound to its own pane, from one
@@ -48,12 +74,13 @@ func (o Options) reconcile(ctx context.Context, c herdr.Client, st *store.Store,
 	}
 	wrote := false
 	for _, ck := range team.Reconcile(l, rows) {
-		w, err := o.reconcileRow(ctx, c, st, ck)
+		w, err := o.reconcileRow(ctx, c, st, b, ck)
 		if err != nil {
 			return nil, err
 		}
 		wrote = wrote || w
 	}
+	b.endPoll()
 	b.ready.Store(true)
 	if !wrote {
 		return rows, nil
@@ -67,7 +94,7 @@ func (o Options) reconcile(ctx context.Context, c herdr.Client, st *store.Store,
 }
 
 // reconcileRow does ck's work, and reports whether it wrote the row.
-func (o Options) reconcileRow(ctx context.Context, c herdr.Client, st *store.Store, ck team.Check) (bool, error) {
+func (o Options) reconcileRow(ctx context.Context, c herdr.Client, st *store.Store, b *binder, ck team.Check) (bool, error) {
 	r := ck.Row
 	log := o.Logger.With().Str("worker", r.LogicalID).Int64("generation", r.Generation).Logger()
 	wrote := false
@@ -76,7 +103,7 @@ func (o Options) reconcileRow(ctx context.Context, c herdr.Client, st *store.Sto
 		wrote = true
 	}
 	if ck.NeedsShell() && o.Hooks.StartTime != nil {
-		sh, err := o.shellOf(ctx, c, log, ck.Pane)
+		sh, err := o.shellOf(ctx, c, b, ck.Pane)
 		if err != nil {
 			return wrote, err
 		}
@@ -89,7 +116,7 @@ func (o Options) reconcileRow(ctx context.Context, c herdr.Client, st *store.Sto
 	}
 	unverified := false
 	for _, p := range ck.Candidates {
-		sh, err := o.shellOf(ctx, c, log, p.PaneID)
+		sh, err := o.shellOf(ctx, c, b, p.PaneID)
 		if err != nil {
 			return wrote, err
 		}
@@ -104,7 +131,9 @@ func (o Options) reconcileRow(ctx context.Context, c herdr.Client, st *store.Sto
 			}
 			return wrote, nil
 		default:
-			log.Warn().Str("pane", p.PaneID).Msg("team poll: a pane that may hold the worker runs another shell")
+			if b.warnOnce(warning{kind: "another shell", worker: r.LogicalID, pane: p.PaneID}) {
+				log.Warn().Str("pane", p.PaneID).Msg("team poll: a pane that may hold the worker runs another shell")
+			}
 		}
 	}
 	if unverified || r.HandoffPending {
@@ -145,14 +174,27 @@ type shell struct {
 
 // shellOf reads pane's shell: its pid from herdr, its start time from the
 // process table. It fails only with ErrHerdrGone.
-func (o Options) shellOf(ctx context.Context, c herdr.Client, log zerolog.Logger, pane string) (shell, error) {
+//
+// The pane is read by the id pane.list gave with the terminal the caller
+// judged, not by that terminal: herdr has no process_info by terminal. A
+// pane closed, and its id given to another, between the two calls would
+// answer with that other pane's shell, which the poll could record or prove
+// a re-key with. herdr gives a pane id again only once its whole workspace
+// has closed (A35), so that takes a workspace closed and another opened at
+// its number within the milliseconds between two calls. The poll accepts
+// that window, as A35 does for retire's close, rather than list the panes
+// again on every shell read (NERD-5344, N4b).
+//
+// A pane herdr cannot describe is logged once while it lasts, by the pane:
+// every row that may be in it stays unverified.
+func (o Options) shellOf(ctx context.Context, c herdr.Client, b *binder, pane string) (shell, error) {
 	info, err := c.PaneProcessInfo(ctx, pane)
 	if errors.Is(err, ErrHerdrGone) {
 		return shell{}, fmt.Errorf("team poll: read the shell of %s: %w", pane, err)
 	}
 	if err != nil {
-		if ctx.Err() == nil {
-			log.Warn().Err(err).Str("pane", pane).Msg("team poll: read a pane's shell; the worker stays unverified until the next poll")
+		if ctx.Err() == nil && b.warnOnce(warning{kind: "shell unread", pane: pane}) {
+			o.Logger.Warn().Err(err).Str("pane", pane).Msg("team poll: read a pane's shell; the workers it may hold stay unverified until herdr describes it")
 		}
 		return shell{}, nil
 	}
