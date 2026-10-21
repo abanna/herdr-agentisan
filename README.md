@@ -258,7 +258,14 @@ with `q`. Add `--direction down` to split below the focused pane instead.
 See [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml).
 
 `herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json`
-draws a snapshot file instead, outside herdr too.
+draws a snapshot file instead, outside herdr too. A fixture's time is fixed,
+so its footer always reads `data Ns old`.
+
+The dashboard keeps v12's cues (ADR-001 A38). A stage that says READY is
+bold green, RED or blocked bold red, and waiting or queued yellow, matched
+by whole word in any case. The footer says `data Ns old` once the snapshot
+drawn is more than 15 s old, so a stalled daemon never passes for a live
+one. A plain shell is drawn as `▸ shell`.
 
 ### PRs and issues in the header
 

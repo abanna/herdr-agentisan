@@ -45,7 +45,8 @@ var (
 	// ErrInvalid means the snapshot breaks the contract: malformed JSON, an
 	// unknown or re-cased field, a value outside its domain (an unknown
 	// status or PR state, a ctx outside 0..100, a negative count, a time that
-	// is not RFC 3339), or an empty agent or group name.
+	// is not RFC 3339), an empty agent or group name, or a shell that is
+	// named or is the boss.
 	ErrInvalid = errors.New("invalid snapshot")
 	// ErrUnavailable means the source could not be read at all.
 	ErrUnavailable = errors.New("snapshot source is unavailable")
@@ -87,9 +88,13 @@ type Agent struct {
 	// src/app/terminal_targets.rs:74-104), so a jump goes by PaneID.
 	// Left out, it is false: every snapshot written before the key existed
 	// means what it meant (ADR-001 A18).
-	Unnamed bool   `json:"unnamed,omitempty"`
-	PaneID  string `json:"pane_id"`
-	Status  Status `json:"status"`
+	Unnamed bool `json:"unnamed,omitempty"`
+	// Shell is set when no agent runs in the pane: herdr detects none and
+	// knows none by name (ADR-001 A38). A shell has no agent name, so it is
+	// always Unnamed, and it is never the boss. Left out, it is false.
+	Shell  bool   `json:"shell,omitempty"`
+	PaneID string `json:"pane_id"`
+	Status Status `json:"status"`
 	// Model is the model as the agent reports it, e.g. "claude-opus-4-1";
 	// empty, and left out, when it is not reported.
 	Model string `json:"model,omitempty"`
@@ -106,7 +111,9 @@ type Agent struct {
 type Boss struct {
 	Agent
 	// Watchers is how many watchers (background monitors) the boss runs.
-	// Nil means not reported.
+	// Nil means not reported. Nothing writes it, and the dashboard does not
+	// draw it (ADR-001 A38); it stays so that every v1 document holding it
+	// still decodes.
 	Watchers *int `json:"watchers,omitempty"`
 	// StartedAt is when the daemon first saw the boss's pane run an agent in
 	// the boss's place (ADR-001 A31), not the session's own start, which
@@ -235,8 +242,9 @@ type Snapshot struct {
 
 // Validate checks the rules JSON decoding cannot: every status and PR state
 // is known, every ctx is within 0..100, no count is negative, slots never
-// exceed their total, the colour is #rrggbb, and every agent and group has a
-// name. The RFC 3339 form of times is checked by Decode, on the text.
+// exceed their total, the colour is #rrggbb, every agent and group has a
+// name, and a shell is unnamed and is not the boss. The RFC 3339 form of
+// times is checked by Decode, on the text.
 func (s Snapshot) Validate() error {
 	if s.V != Version {
 		return fmt.Errorf("%w: v %d, this build reads v%d", ErrUnsupportedVersion, s.V, Version)
@@ -279,6 +287,8 @@ func (a Agent) validate() error {
 		return fmt.Errorf("%w: %q has unknown status %q", errAgent, a.Name, a.Status)
 	case a.Ctx != nil && (*a.Ctx < 0 || *a.Ctx > MaxCtx):
 		return fmt.Errorf("%w: %q has ctx %d, outside 0..%d", errAgent, a.Name, *a.Ctx, MaxCtx)
+	case a.Shell && !a.Unnamed:
+		return fmt.Errorf("%w: %q is a shell with an agent name; a shell is unnamed", errAgent, a.Name)
 	default:
 		return nil
 	}
@@ -287,6 +297,9 @@ func (a Agent) validate() error {
 func (b Boss) validate() error {
 	if err := b.Agent.validate(); err != nil {
 		return err
+	}
+	if b.Shell {
+		return fmt.Errorf("%w: %q is a shell, and a shell is never the boss", errAgent, b.Name)
 	}
 	if b.Watchers != nil && *b.Watchers < 0 {
 		return fmt.Errorf("%w: %q has watchers %d", errAgent, b.Name, *b.Watchers)
@@ -391,7 +404,7 @@ type shape struct {
 
 var (
 	timeShape  = &shape{time: true}
-	agentKeys  = map[string]*shape{"name": nil, "unnamed": nil, "pane_id": nil, "status": nil, "model": nil, "ctx": nil, "item": nil, "stage": nil, "stage_started_at": timeShape}
+	agentKeys  = map[string]*shape{"name": nil, "unnamed": nil, "shell": nil, "pane_id": nil, "status": nil, "model": nil, "ctx": nil, "item": nil, "stage": nil, "stage_started_at": timeShape}
 	agentShape = &shape{keys: agentKeys}
 	bossShape  = &shape{keys: union(agentKeys, map[string]*shape{"watchers": nil, "started_at": timeShape})}
 	groupShape = &shape{keys: map[string]*shape{

@@ -117,14 +117,14 @@ func wantFullTeam() snapshot.Snapshot {
 				{Name: "pee02", PaneID: "wN:p2", Status: "ready", Ctx: new(61)},
 				{Name: "pee03", PaneID: "wN:p3", Status: "blocked", Ctx: new(78), Item: "NERD-5247", Stage: "waiting on boss", StageStartedAt: new(t0)},
 				{Name: "scratch", Unnamed: true, PaneID: "wN:p4", Status: "idle"},
-				{Name: "wN:p5", Unnamed: true, PaneID: "wN:p5", Status: "unknown"},
+				{Name: "wN:p5", Unnamed: true, Shell: true, PaneID: "wN:p5", Status: "unknown"},
 			}},
 			{Name: "precheck", Agents: []snapshot.Agent{
 				{Name: "wP:p1", Unnamed: true, PaneID: "wP:p1", Status: "working", Ctx: new(100), Stage: "running", StageStartedAt: new(t0)},
 			}},
 			{Name: "qa", Agents: []snapshot.Agent{{Name: "qa", PaneID: "wQ:p1", Status: "idle"}}},
 			{Name: "research", Agents: []snapshot.Agent{}},
-			{Name: "zeta", Agents: []snapshot.Agent{{Name: "notes", Unnamed: true, PaneID: "wZ:p1", Status: "unknown"}}},
+			{Name: "zeta", Agents: []snapshot.Agent{{Name: "notes", Unnamed: true, Shell: true, PaneID: "wZ:p1", Status: "unknown"}}},
 		},
 	}
 }

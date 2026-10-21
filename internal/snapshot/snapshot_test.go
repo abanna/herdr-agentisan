@@ -155,12 +155,18 @@ func TestDecodeAcceptsEveryContractValue(t *testing.T) {
 		"many PRs":                   manyPRs(500),
 		// unnamed marks a row herdr knows by no agent name (ADR-001 A18):
 		// absent and false both mean Name is an agent name.
-		"an unnamed agent":    agent(`"status":"unknown","unnamed":true`),
-		"unnamed false":       agent(`"status":"idle","unnamed":false`),
-		"an unnamed boss":     boss(`"unnamed":true`),
-		"no model":            `{"v":1,"team":"t","groups":[{"name":"g","agents":[{"name":"a","pane_id":"w1:p1","status":"idle"}]}]}`,
-		"an empty team name":  `{"v":1,"team":"","groups":[]}`,
-		"an empty agent list": `{"v":1,"team":"t","groups":[{"name":"g","agents":[]}]}`,
+		"an unnamed agent": agent(`"status":"unknown","unnamed":true`),
+		"unnamed false":    agent(`"status":"idle","unnamed":false`),
+		"an unnamed boss":  boss(`"unnamed":true`),
+		// shell marks a pane no agent runs in (ADR-001 A38): absent and
+		// false both mean an agent row, and a shell is always unnamed.
+		"a shell":                 agent(`"status":"unknown","unnamed":true,"shell":true`),
+		"a shell with a handoff":  agent(`"status":"ready","unnamed":true,"shell":true`),
+		"shell false":             agent(`"status":"idle","shell":false`),
+		"a boss with shell false": boss(`"shell":false`),
+		"no model":                `{"v":1,"team":"t","groups":[{"name":"g","agents":[{"name":"a","pane_id":"w1:p1","status":"idle"}]}]}`,
+		"an empty team name":      `{"v":1,"team":"","groups":[]}`,
+		"an empty agent list":     `{"v":1,"team":"t","groups":[{"name":"g","agents":[]}]}`,
 	}
 	for name, in := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -228,6 +234,10 @@ func TestDecodeRefuses(t *testing.T) {
 		"status in another case":       {in: agent(`"name":"a","status":"Idle"`), want: snapshot.ErrInvalid, contains: []string{`"Idle"`}},
 		"unnamed is not a bool":        {in: agent(`"name":"a","status":"idle","unnamed":"yes"`), want: snapshot.ErrInvalid},
 		"unnamed in another case":      {in: agent(`"name":"a","status":"idle","Unnamed":true`), want: snapshot.ErrInvalid, contains: []string{`"Unnamed"`}},
+		"a named shell":                {in: agent(`"name":"a","status":"unknown","shell":true`), want: snapshot.ErrInvalid, contains: []string{`"a"`, "shell"}},
+		"a shell for the boss":         {in: boss(`"unnamed":true,"shell":true`), want: snapshot.ErrInvalid, contains: []string{"never the boss"}},
+		"shell is not a bool":          {in: agent(`"name":"a","status":"idle","unnamed":true,"shell":1`), want: snapshot.ErrInvalid},
+		"shell in another case":        {in: agent(`"name":"a","status":"idle","unnamed":true,"Shell":true`), want: snapshot.ErrInvalid, contains: []string{`"Shell"`}},
 		"v negative":                   {in: `{"v":-1}`, want: snapshot.ErrUnsupportedVersion},
 		"v past int64":                 {in: `{"v":99999999999999999999,"team":"t","groups":[]}`, want: snapshot.ErrInvalid},
 		"v not an integer":             {in: `{"v":1.0,"team":"t","groups":[]}`, want: snapshot.ErrInvalid},
@@ -598,4 +608,33 @@ func TestUnnamedIsLeftOutUnlessSet(t *testing.T) {
 	got, err := snapshot.Decode(bytes.NewReader(raw))
 	require.NoError(t, err)
 	assert.True(t, got.Groups[0].Agents[0].Unnamed)
+}
+
+// TestShellIsLeftOutUnlessSet: a writer leaves shell out for an agent's row,
+// so every snapshot written before the key existed still means what it
+// meant (ADR-001 A38); set, it survives a round trip.
+func TestShellIsLeftOutUnlessSet(t *testing.T) {
+	t.Parallel()
+
+	agent, err := json.Marshal(snapshot.Agent{Name: "scratch", Unnamed: true, PaneID: "w2:p1", Status: snapshot.StatusIdle})
+	require.NoError(t, err)
+	assert.NotContains(t, string(agent), "shell")
+
+	doc := snapshot.Snapshot{V: snapshot.Version, Team: "t", Groups: []snapshot.Group{{Name: "g", Agents: []snapshot.Agent{
+		{Name: "notes", PaneID: "w2:p3", Status: snapshot.StatusUnknown, Unnamed: true, Shell: true},
+	}}}}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"shell":true`)
+	got, err := snapshot.Decode(bytes.NewReader(raw))
+	require.NoError(t, err)
+	assert.True(t, got.Groups[0].Agents[0].Shell)
+
+	old, err := snapshot.Decode(strings.NewReader(valid))
+	require.NoError(t, err)
+	for _, g := range old.Groups {
+		for _, a := range g.Agents {
+			assert.False(t, a.Shell, "a document without the key has no shells")
+		}
+	}
 }

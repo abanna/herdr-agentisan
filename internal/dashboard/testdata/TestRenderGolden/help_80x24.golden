@@ -5,18 +5,18 @@
 
 ╭─ CODERS · 9 ✔1 ◐4 ●2 ⚠1 ⟳1 ──────────────────────────────────────────────────╮
 │ write the code                                                               │
-│ ◐ pee01      working  opus  ▓▓░░░  38%  r2         J1 re-run             12m │
-│ ◐ pee02      wo╭ help ─────────────────────────────────────╮ued          21m │
-│ ● pee03      id│ ↑ ↓       move through the agents         │           1h39m │
-│ ◐ pee04      wo│ enter     jump: focus and zoom            │              3m │
-│ ⚠ pee05      bl│ click     jump: focus and zoom            │n boss     1h09m │
-│ ● pee06      id│ /         search name, group, item, stage │                 │
-│ ✔ pee07      do│ [ btop ]  btop in a herdr popup           │           2d08h │
-│ ⟳ pee08      re│ ?         close this help                 │ead           0m │
-│ ◐ pee09      wo│ q         quit                            │ tdaddy …        │
-╰────────────────│ ◐ working   ● idle                        │─────────────────╯
-╭─ PRECHECK · 2 ◐│ ⚠ blocked   ✔ done                        │─────────────────╮
-│ ◐ precheck   wo│ ⟳ ready     ? unknown                     │              8m │
+│ ◐ pee01      wo╭ help ─────────────────────────────────────╮             12m │
+│ ◐ pee02      wo│ ↑ ↓       move through the agents         │ued          21m │
+│ ● pee03      id│ enter     jump: focus and zoom            │           1h39m │
+│ ◐ pee04      wo│ click     jump: focus and zoom            │              3m │
+│ ⚠ pee05      bl│ /         search name, group, item, stage │n boss     1h09m │
+│ ● pee06      id│ [ btop ]  btop in a herdr popup           │                 │
+│ ✔ pee07      do│ ?         close this help                 │           2d08h │
+│ ⟳ pee08      re│ q         quit                            │ead           0m │
+│ ◐ pee09      wo│ ◐ working   ● idle                        │ tdaddy …        │
+╰────────────────│ ⚠ blocked   ✔ done                        │─────────────────╯
+╭─ PRECHECK · 2 ◐│ ⟳ ready     ? unknown                     │─────────────────╮
+│ ◐ precheck   wo│ ▸ shell                                   │              8m │
 │ ● precheck2  id╰───────────────────────────────────────────╯                 │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ QA · 1 ✔1 ──────────────────────────────────────────────────────────────────╮

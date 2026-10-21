@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A29 and A31 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A29, A31 and A38 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -854,3 +854,26 @@ Budget: an agent pane a team places carries 8 keys, and a push sets 4.
 - **The boss's runtime.** `boss.started_at` is when this daemon first saw the boss's pane run an agent in the boss's place, held in memory beside the stage clock (A18). It holds while that pane stays the boss, whatever its stage. A handoff to another pane, an agent started again after the pane was a shell, and a daemon restart each start it again. So the runtime is the boss session as this daemon has seen it, not the session's own start, which herdr does not report. Workers carry none.
 - **No contract change.** `project.slots` and `boss.started_at` have been in snapshot v1 since item 8, and the dashboard already draws `slots u/t` and `up 2h14m`.
 - **Cutover.** With part b in, herdr-status.sh shows nothing the header lacks. Retire it, and herdr's `tab_bar_right` command, after the live check.
+
+### A38. The dashboard's v12 cues
+
+*Adds to:* D5, A18 and the snapshot contract. Recorded with NERD-5320, G2 of the parity inventory: the small cues v12's dashboard has and the plugin's lacked.
+
+- **Stage colours.** v12's rules, made case-insensitive and word-bounded, and tried in v12's order:
+  1. a word `ready` is bold green;
+  2. otherwise a word `red` or `blocked` is bold red;
+  3. otherwise a word `waiting` or `queued` is yellow;
+  4. anything else stays dim, where v12 drew it white.
+
+  A word is a run of letters, marks and digits. So `ready_to_merge` is ready and `already` is not, and `restored` and `unblocked`, which v12's substring test drew red, are not red. By v12's order, `blocked until ready` is green. The colour comes from the whole stage, so a stage cut to its column keeps it. It applies to agent rows and, beyond v12, to the boss line's stage.
+- **Data age.** When the drawn snapshot's `at` is more than 15 whole seconds older than the dashboard's clock, the footer shows `data Ns old` in yellow, always in seconds (an hour reads `data 3600s old`). It comes after a search query and before the errors, the note and the hints, and the footer is cut from the right, so a long error cannot push it off. Nothing is shown with no snapshot, or with an `at` that is after the clock or is the zero time.
+  - The daemon polls every 3 s, so against the daemon the age appears only when the poll stops. A fixture always reads stale.
+  - There is no `r` refresh key: the dashboard already asks the daemon every second.
+- **A new optional key, `shell`.** It is set on a row whose pane runs no agent: herdr detects none and knows none by name. Absent means false, as for `unnamed` (A18), so every snapshot written before it means what it meant.
+  - A shell has no agent name, so it is always `unnamed`; and a shell is never the boss (A18). The decoder refuses a document that breaks either.
+  - The dashboard draws a shell whose status is `unknown` as `▸` with the state word `shell`, counts it as `▸N` in its group's title, and names it in the help.
+  - A shell with another status keeps that status's glyph. The one case is `ready` from a handoff token, which `$team` counts as ready too.
+  - An unnamed agent is not a shell, so an agent herdr cannot classify yet keeps `?`. The key is what tells the two apart: from `unnamed` and `unknown` alone they look the same.
+  - **Version skew.** A dashboard started before this build refuses a newer daemon's `shell` key (strict v1) until it is reopened, as with `unnamed`. After `daemon-restart`, reopen any open dashboard.
+- **Watchers.** The boss line no longer draws `watchers`. Nothing counts them: the daemon cannot see a session's background monitors. The v1 key stays, decoded and range-checked, so every v1 document that carries it still decodes.
+- **Short model names.** Fable is `fab`, beside `opus`, `son` and `hai`, and a model whose name says `codex` is `cdx`. Any other model is still its first word, cut to four cells.

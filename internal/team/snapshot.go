@@ -29,8 +29,9 @@ import (
 //
 // Each row is named by agent.list's name, else the pane's label, else its
 // pane id, as v12 names it; a row named any way but the first is Unnamed, so
-// a jump goes by pane id. Its status is herdr's, "ready" when it carries a
-// handoff token, and "unknown" for a plain shell. ctx is the token when it is
+// a jump goes by pane id. A plain shell, a pane no agent runs in, is marked
+// Shell (A38). Its status is herdr's, "ready" when it carries a handoff
+// token, and "unknown" for a plain shell. ctx is the token when it is
 // a bare integer from 0 to 100 on a pane herdr detects an agent in (A27) and
 // left out otherwise; item and stage are
 // the tokens; the stage's start comes from clock, which may be nil. The
@@ -86,7 +87,7 @@ func rank(order []string, name string) int {
 
 // row is one pane as a snapshot row.
 func row(p Pane, clock *StageClock) snapshot.Agent {
-	a := snapshot.Agent{Name: p.Name, PaneID: p.ID, Status: rowStatus(p), Item: p.Item, Stage: p.Stage}
+	a := snapshot.Agent{Name: p.Name, PaneID: p.ID, Status: rowStatus(p), Item: p.Item, Stage: p.Stage, Shell: !p.IsAgent()}
 	if a.Name == "" {
 		a.Unnamed = true
 		a.Name = p.ID

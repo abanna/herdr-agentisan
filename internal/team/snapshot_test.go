@@ -78,63 +78,63 @@ func TestSnapshotRowNames(t *testing.T) {
 		},
 		"a labelled shell": {
 			pane: labelled(pane("wN:p3", "", "", "unknown", nil), "notes"),
-			want: snapshot.Agent{Name: "notes", Unnamed: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
+			want: snapshot.Agent{Name: "notes", Unnamed: true, Shell: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
 		},
 		"an unlabelled shell": {
 			pane: pane("wN:p3", "", "", "unknown", nil),
-			want: snapshot.Agent{Name: "wN:p3", Unnamed: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
+			want: snapshot.Agent{Name: "wN:p3", Unnamed: true, Shell: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
 		},
 		// A label of white space alone would draw as a blank name.
 		"a blank label is no label": {
 			pane: labelled(pane("wN:p3", "", "", "unknown", nil), " \t"),
-			want: snapshot.Agent{Name: "wN:p3", Unnamed: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
+			want: snapshot.Agent{Name: "wN:p3", Unnamed: true, Shell: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
 		},
 		// The label is kept as the user wrote it; the dashboard makes text
 		// safe to draw.
 		"a non-ASCII label with a control character": {
 			pane: labelled(pane("wN:p3", "", "", "unknown", nil), "メモ\x1b[2J"),
-			want: snapshot.Agent{Name: "メモ\x1b[2J", Unnamed: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
+			want: snapshot.Agent{Name: "メモ\x1b[2J", Unnamed: true, Shell: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
 		},
 		// Nothing normalises, trims or re-encodes a label: the bytes the
 		// user gave herdr are the name. Encoding the snapshot as JSON makes
 		// invalid UTF-8 valid (TestSnapshotDecodesStrictly).
 		"a label with invalid UTF-8": {
 			pane: labelled(pane("wN:p3", "", "", "unknown", nil), "no\xfftes"),
-			want: snapshot.Agent{Name: "no\xfftes", Unnamed: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
+			want: snapshot.Agent{Name: "no\xfftes", Unnamed: true, Shell: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
 		},
 		"a label with a truncated multibyte": {
 			pane: labelled(pane("wN:p3", "", "", "unknown", nil), "notes\xe2\x82"),
-			want: snapshot.Agent{Name: "notes\xe2\x82", Unnamed: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
+			want: snapshot.Agent{Name: "notes\xe2\x82", Unnamed: true, Shell: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
 		},
 		"a NUL in a label": {
 			pane: labelled(pane("wN:p3", "", "", "unknown", nil), "no\x00tes"),
-			want: snapshot.Agent{Name: "no\x00tes", Unnamed: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
+			want: snapshot.Agent{Name: "no\x00tes", Unnamed: true, Shell: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
 		},
 		"a byte-order mark before a label": {
 			pane: labelled(pane("wN:p3", "", "", "unknown", nil), "\xef\xbb\xbfnotes"),
-			want: snapshot.Agent{Name: "\xef\xbb\xbfnotes", Unnamed: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
+			want: snapshot.Agent{Name: "\xef\xbb\xbfnotes", Unnamed: true, Shell: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
 		},
 		"an NFD label is kept as written": {
 			pane: labelled(pane("wN:p3", "", "", "unknown", nil), "cafe\xcc\x81"),
-			want: snapshot.Agent{Name: "cafe\xcc\x81", Unnamed: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
+			want: snapshot.Agent{Name: "cafe\xcc\x81", Unnamed: true, Shell: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
 		},
 		"an option-like label": {
 			pane: labelled(pane("wN:p3", "", "", "unknown", nil), "--help"),
-			want: snapshot.Agent{Name: "--help", Unnamed: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
+			want: snapshot.Agent{Name: "--help", Unnamed: true, Shell: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
 		},
 		"a label with a line break": {
 			pane: labelled(pane("wN:p3", "", "", "unknown", nil), "a\r\nb"),
-			want: snapshot.Agent{Name: "a\r\nb", Unnamed: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
+			want: snapshot.Agent{Name: "a\r\nb", Unnamed: true, Shell: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
 		},
 		"a label of line breaks alone is no label": {
 			pane: labelled(pane("wN:p3", "", "", "unknown", nil), "\r\n"),
-			want: snapshot.Agent{Name: "wN:p3", Unnamed: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
+			want: snapshot.Agent{Name: "wN:p3", Unnamed: true, Shell: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
 		},
 		// A label equal to another agent's name is still a label: the row
 		// is unnamed, so a jump goes by its own pane id.
 		"a label that looks like an agent name": {
 			pane: labelled(pane("wN:p3", "", "", "unknown", nil), "pee01"),
-			want: snapshot.Agent{Name: "pee01", Unnamed: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
+			want: snapshot.Agent{Name: "pee01", Unnamed: true, Shell: true, PaneID: "wN:p3", Status: snapshot.StatusUnknown},
 		},
 	}
 	for name, tc := range tests {
@@ -184,6 +184,39 @@ func TestSnapshotRowStatus(t *testing.T) {
 		assert.Equal(t, snapshot.StatusWorking, oneRow(t, pane("wN:p1", "", "", "working", nil), "pee01").Status,
 			"agent.list names only agent terminals, so a name makes the pane an agent")
 	})
+}
+
+// TestSnapshotRowShell: a row is a shell exactly when no agent runs in its
+// pane, herdr detecting none and knowing none by name (ADR-001 A38). An
+// unnamed agent is not one, so the dashboard can tell the two apart.
+func TestSnapshotRowShell(t *testing.T) {
+	t.Parallel()
+
+	handoff := map[string]string{"handoff": "x"}
+	tests := map[string]struct {
+		pane       herdr.PaneInfo
+		name       string
+		shell      bool
+		wantStatus snapshot.Status
+	}{
+		"a named agent":                          {pane: pane("wN:p1", "", "claude", "working", nil), name: "pee01", wantStatus: snapshot.StatusWorking},
+		"a named agent herdr detects not":        {pane: pane("wN:p1", "", "", "working", nil), name: "pee01", wantStatus: snapshot.StatusWorking},
+		"an unnamed agent":                       {pane: pane("wN:p2", "", "claude", "idle", nil), wantStatus: snapshot.StatusIdle},
+		"an unnamed agent herdr cannot classify": {pane: pane("wN:p2", "", "claude", "unknown", nil), wantStatus: snapshot.StatusUnknown},
+		"a plain shell":                          {pane: pane("wN:p3", "", "", "unknown", nil), shell: true, wantStatus: snapshot.StatusUnknown},
+		"a shell herdr calls idle":               {pane: pane("wN:p3", "", "", "idle", nil), shell: true, wantStatus: snapshot.StatusUnknown},
+		"a shell with a handoff":                 {pane: pane("wN:p3", "", "", "unknown", handoff), shell: true, wantStatus: snapshot.StatusReady},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			row := oneRow(t, tc.pane, tc.name)
+			assert.Equal(t, tc.shell, row.Shell)
+			assert.Equal(t, tc.wantStatus, row.Status)
+			doc := snapshot.Snapshot{V: snapshot.Version, Team: "t", Groups: []snapshot.Group{{Name: "coders", Agents: []snapshot.Agent{row}}}}
+			assert.NoError(t, doc.Validate(), "a shell row is unnamed, as the contract requires")
+		})
+	}
 }
 
 // TestSnapshotRowCtx: ctx is the token as `report statusline` writes it, a
