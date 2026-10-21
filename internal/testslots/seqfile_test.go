@@ -55,8 +55,8 @@ func (r *seqReader) Read(p []byte) (int, error) {
 	var fill []byte
 	for r.index < len(r.lines) {
 		line := r.lines[r.index]
-		if len(fill) > 0 && len(fill)+len(line) > r.l.page {
-			break // the page is full
+		if len(fill) > 0 && len(fill)+len(line) >= r.l.page {
+			break // the page is full: a fill that reaches the page's size is an overflow (seq_has_overflowed)
 		}
 		fill = append(fill, line...)
 		r.index++
@@ -76,7 +76,9 @@ func (r *seqReader) Read(p []byte) (int, error) {
 }
 
 // lockLine is a /proc/locks line for an exclusive flock on inode, 64 bytes
-// with its newline, so a 4096-byte page holds 64 of them.
+// with its newline, so a 4096-byte page holds 63 of them: the kernel takes a
+// fill that reaches the page's size as an overflow and leaves that line for
+// the next.
 func lockLine(id int, inode uint64) string {
 	line := fmt.Sprintf("%d: FLOCK  ADVISORY  WRITE 4242 00:2a:%d 0 EOF", id, inode)
 	return line + strings.Repeat(" ", 63-len(line)) + "\n"
@@ -97,9 +99,9 @@ func TestReadHeldSurvivesASkippedPage(t *testing.T) {
 		l.lines = append(l.lines, lockLine(i+1, uint64(1000+i)))
 	}
 	require.Len(t, l.lines[0], 64)
-	held := testslots.File{Major: 0, Minor: 0x2a, Inode: 1064} // line 65, the second page's first
+	held := testslots.File{Major: 0, Minor: 0x2a, Inode: 1063} // line 64, the second page's first
 	l.drop = func(lines []string) []string {
-		i := slices.IndexFunc(lines, func(line string) bool { return !strings.Contains(line, ":1064 ") })
+		i := slices.IndexFunc(lines, func(line string) bool { return !strings.Contains(line, ":1063 ") })
 		return slices.Delete(slices.Clone(lines), i, i+1)
 	}
 

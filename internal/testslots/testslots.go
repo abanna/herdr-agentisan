@@ -184,8 +184,9 @@ func readHeld(name string, open func() (io.ReadCloser, error), page int) (map[Fi
 	return held, nil
 }
 
-// readChunk is how much each read() after the first asks for: more than a
-// page, which is all /proc/locks gives a call.
+// readChunk is how much each read() after the first asks for: at least a
+// page on every page size Linux uses, 4 KiB to 64 KiB, and a page is all
+// /proc/locks gives a call.
 const readChunk = 64 << 10
 
 // readWhole reads what open opens to its end, its first read() call asking
