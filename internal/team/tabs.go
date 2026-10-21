@@ -88,7 +88,7 @@ func (t Tabs) Resolve(l Layout) Resolution {
 			byTab[p.TabID] = append(byTab[p.TabID], p)
 		}
 	}
-	out := Resolution{Sites: []Site{{Project: t.Project, Color: t.Color, Workspaces: []string{id}, Order: TypeOrder(), Target: target}}}
+	out := Resolution{Sites: []Site{{Project: t.Project, Short: t.Short, Color: t.Color, Workspaces: []string{id}, Order: TypeOrder(), Target: target}}}
 	seen := map[string]bool{}
 	for _, tab := range l.Tabs {
 		if tab.WorkspaceID != id || seen[tab.TabID] {

@@ -61,6 +61,9 @@ type Model struct {
 // names none.
 type Project struct {
 	Name string
+	// Short is a tabs team's short code, which starts its tab labels; ""
+	// for the spaces.
+	Short string
 	// Color is the project's configured colour as #rrggbb; "" when unset.
 	Color string
 	// Workspaces are the ids of the workspaces the team occupies, sorted,
@@ -128,7 +131,8 @@ type Pane struct {
 	// Handoff is true when the pane carries a non-empty handoff token.
 	Handoff bool
 	// Ctx, Item and Stage are the pane's ctx, item and stage tokens as
-	// their writers left them (ADR-001 token contract); "" when absent.
+	// their writers left them (ADR-001 token contract); "" when absent, and
+	// Ctx "" too when herdr detects no agent in the pane (A27).
 	Ctx, Item, Stage string
 }
 
@@ -167,6 +171,7 @@ type Place struct {
 // not it places any pane there. See Project for the fields.
 type Site struct {
 	Project    string
+	Short      string
 	Color      string
 	Workspaces []string
 	Order      []string
@@ -234,7 +239,7 @@ func Build(l Layout, r Resolver, workers []store.Worker) Model {
 	res := r.Resolve(l)
 	for _, s := range res.Sites {
 		pr := project(s.Project)
-		pr.Color, pr.Order, pr.Target = s.Color, s.Order, s.Target
+		pr.Short, pr.Color, pr.Order, pr.Target = s.Short, s.Color, s.Order, s.Target
 		pr.Workspaces = append(pr.Workspaces, s.Workspaces...)
 	}
 	for _, pl := range res.Places {
@@ -291,7 +296,7 @@ func worker(p herdr.PaneInfo, t Target, ids, names map[string]string) Worker {
 	w := Worker{ID: p.PaneID, Target: t, Pane: Pane{
 		ID: p.PaneID, Name: names[p.PaneID], Label: p.Label, Agent: p.Agent,
 		Status: statusOf(p.AgentStatus), Handoff: p.Tokens[HandoffKey] != "",
-		Ctx: p.Tokens[report.CtxKey], Item: p.Tokens[report.ItemKey], Stage: p.Tokens[report.StageKey],
+		Ctx: ctxOf(p), Item: p.Tokens[report.ItemKey], Stage: p.Tokens[report.StageKey],
 	}}
 	if id, ok := ids[p.PaneID]; ok {
 		w.ID, w.Bound = id, true

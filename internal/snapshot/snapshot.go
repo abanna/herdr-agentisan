@@ -109,8 +109,10 @@ type Boss struct {
 	// Watchers is how many watchers (background monitors) the boss runs.
 	// Nil means not reported.
 	Watchers *int `json:"watchers,omitempty"`
-	// StartedAt is when the boss's session started; its runtime counts from
-	// it. Nil means not reported.
+	// StartedAt is when the daemon first saw the boss's pane run an agent in
+	// the boss's place (ADR-001 A31), not the session's own start, which
+	// herdr does not report; its runtime counts from it. Nil means not
+	// reported.
 	StartedAt *time.Time `json:"started_at,omitempty"`
 }
 
