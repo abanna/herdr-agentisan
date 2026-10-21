@@ -4,12 +4,12 @@
 ╰──────────────────────────────────────────────────────────────────────────────╯
 
 ╭─ CODERS · 9 ✔1 ◐4 ●2 ⚠1 ⟳1 ──────────────────────────────────────────────────╮
-│ write the code                                                               │
-│ ◐ pee01      working  opus  ▓▓░░░  38%  r2         J1 re-run             12m │
-│ ◐ pee02      wo╭ help ─────────────────────────────────────╮ued          21m │
-│ ● pee03      id│ ↑ ↓       move through the agents         │           1h39m │
-│ ◐ pee04      wo│ enter     jump: focus and zoom            │              3m │
-│ ⚠ pee05      bl│ click     jump: focus and zoom            │n boss     1h09m │
+│ write the code ╭ help ─────────────────────────────────────╮                 │
+│ ◐ pee01      wo│ ↑ ↓       move through the agents         │             12m │
+│ ◐ pee02      wo│ enter     jump: focus and zoom            │ued          21m │
+│ ● pee03      id│ click     jump; a title opens its group   │           1h39m │
+│ ◐ pee04      wo│ 1-9       open that group's view          │              3m │
+│ ⚠ pee05      bl│ esc ←     back from a group's view        │n boss     1h09m │
 │ ● pee06      id│ /         search name, group, item, stage │                 │
 │ ✔ pee07      do│ [ btop ]  btop in a herdr popup           │           2d08h │
 │ ⟳ pee08      re│ ?         close this help                 │ead           0m │
@@ -17,8 +17,8 @@
 ╰────────────────│ ◐ working   ● idle                        │─────────────────╯
 ╭─ PRECHECK · 2 ◐│ ⚠ blocked   ✔ done                        │─────────────────╮
 │ ◐ precheck   wo│ ⟳ ready     ? unknown                     │              8m │
-│ ● precheck2  id╰───────────────────────────────────────────╯                 │
-╰──────────────────────────────────────────────────────────────────────────────╯
+│ ● precheck2  id│ ▸ shell                                   │                 │
+╰────────────────╰───────────────────────────────────────────╯─────────────────╯
 ╭─ QA · 1 ✔1 ──────────────────────────────────────────────────────────────────╮
 │ ✔ qa         done     son   ▓░░░░  12%             queue empty         3h19m │
  enter jump · ↑↓ move · ctrl-b m btop · ? help · q quit                      ↓3

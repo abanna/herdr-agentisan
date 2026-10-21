@@ -1,0 +1,40 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ agentisan · PRs none · issues 14                                                                            [ btop ] │
+│ boss ▸ ◐ working · #867 release · review · ctx ▓▓░░░░░░ 23%                                                    17:19 │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ ◀ back  CODERS · 6 ✔1 ◐1 ●1 ⚠1 ⟳1 ▸1
+ write the code
+╭─ ◐ pee01 · working ─────────────────────────────────────╮  ╭─ ⟳ pee02 · ready ───────────────────────────── ⟳ READY ─╮
+│ opus  ctx ▓▓▓▓░░░░░░ 38%                                │  │ opus  ctx ▓▓▓▓▓▓░░░░ 61%                                │
+│ NERD-5255                                               │  │                                                         │
+│ go-review                                               │  │ handoff read                                            │
+│                                                         │  │                                                         │
+│ in stage 12m                                            │  │ in stage 4m · idle 3m                                   │
+│ pane w2:p1 · tab w2:t1                                  │  │ pane w2:p2 · tab w2:t2                                  │
+╰─────────────────────────────────────────────────────────╯  ╰─────────────────────────────────────────────────────────╯
+╭─ ▸ scratch · shell ─────────────────────────────────────╮  ╭─ ● pee04 · idle ────────────────────────────────────────╮
+│ ctx ░░░░░░░░░░ --                                       │  │ ctx ▓▓░░░░░░░░ 22%                                      │
+│                                                         │  │ PR3a                                                    │
+│ no stage reported                                       │  │ no stage reported                                       │
+│                                                         │  │                                                         │
+│                                                         │  │ idle 39m                                                │
+│ pane w2:p3 · tab w2:t3                                  │  │ pane w2:p4 · tab w2:t4                                  │
+╰─────────────────────────────────────────────────────────╯  ╰─────────────────────────────────────────────────────────╯
+╭─ ⚠ pee05 · blocked ─────────────────────────────────────╮  ╭─ ✔ pee06 · done ────────────────────────────────────────╮
+│ opus  ctx ▓▓▓▓▓▓▓▓░░ 78%                                │  │ son  ctx ▓▓▓▓▓░░░░░ 47%                                 │
+│ NERD-5247                                               │  │ NERD-5268                                               │
+│ waiting on boss: the review loop wants a size waiver    │  │ precheck: tdaddy impact on the stale pane id resolver,  │
+│ for the generation                                      │  │ then the 7b enumeration for every changed function, th… │
+│ in stage 1h09m                                          │  │ in stage 2h19m · idle 2d08h                             │
+│ pane w2:p5 · tab w2:t5                                  │  │ pane w2:p6 · tab w2:t6                                  │
+╰─────────────────────────────────────────────────────────╯  ╰─────────────────────────────────────────────────────────╯
+
+
+
+
+
+
+
+
+ enter jump · ↑↓ move · esc back · ctrl-b m btop · ? help · q quit

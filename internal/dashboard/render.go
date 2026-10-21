@@ -99,10 +99,11 @@ type Frame struct {
 	// Snapshot is nil until the first snapshot arrives.
 	Snapshot  *snapshot.Snapshot
 	Selection Selection
-	// Scroll is the first line of the groups the previous frame showed. The
-	// groups stay there unless the selection would leave the screen, so the
-	// view does not jump while the selection moves within it. The model
-	// keeps the value Render settles on (see Model).
+	// Scroll is the first line of the groups the previous frame showed, or
+	// of the boxes in a group's view. They stay there unless the selection
+	// would leave the screen, so the view does not jump while the selection
+	// moves within it. The model keeps the value Render settles on (see
+	// Model).
 	Scroll int
 	// Now is the clock: drawn in the header (HH:MM, in Now's location) and
 	// the end of every stage time and of the boss's runtime.
@@ -124,6 +125,10 @@ type Frame struct {
 	Search bool
 	// Query is the search query as typed.
 	Query string
+	// Group names the group whose view is open (ADR-001 A37); "" is the
+	// overview. A name no group of Snapshot has, or a query being typed,
+	// draws the overview.
+	Group string
 }
 
 // Render draws f for a w x h terminal: exactly h lines, none wider than w,
@@ -152,6 +157,8 @@ func Render(f Frame, w, h int, opts Options) string {
 		canvas[l.top] = line{{" ", plainStyle}, {noMatches, dimStyle}}
 	case len(l.groups) == 0:
 		canvas[l.top] = line{{" ", plainStyle}, {noTeam, dimStyle}}
+	case l.view != nil:
+		l.drawView(canvas, th)
 	default:
 		for i := range l.avail {
 			if l.offset+i >= len(l.rows) {
@@ -234,6 +241,9 @@ type layout struct {
 	cols         columns
 	now          time.Time
 	btop         span
+	// view is the open group's view, nil on the overview. offset is then
+	// its first line.
+	view *groupView
 }
 
 // plan lays f out on a w x h terminal. The header gives way as h shrinks:
@@ -266,6 +276,11 @@ func plan(f Frame, w, h int) layout {
 
 	l.groups = f.Snapshot.Groups
 	l.sel, l.selOK = f.Selection, validSelection(l.groups, f.Selection)
+	if g := groupIndex(l.groups, f.Group); f.Group != "" && !f.Search && g >= 0 {
+		l.view = planView(l, g, f.Scroll)
+		l.offset = l.view.offset
+		return l
+	}
 	l.cols = planColumns(l.groups, f.Now, rowWidth(w))
 	selRow, groupTop, groupBottom := -1, 0, 0
 	for g, grp := range l.groups {
@@ -338,26 +353,45 @@ const (
 	hitNothing target = iota
 	hitAgent
 	hitBtop
+	// hitGroup is a group's title on the overview; its Selection names the
+	// group alone.
+	hitGroup
+	// hitBack is a group view's ◀ back.
+	hitBack
 )
 
 // hit maps a cell to what is drawn there: an agent's row inside its box's
-// borders, the btop button, or nothing.
+// borders, a group's title, the btop button, a group view's ◀ back or one
+// of its boxes, or nothing.
 func (l layout) hit(x, y int) (target, Selection) {
 	if l.btop.ok && y == l.btop.y && x >= l.btop.x0 && x < l.btop.x1 {
 		return hitBtop, Selection{}
 	}
-	if y < l.top || y >= l.top+l.avail || x < 1 || x > l.w-2 {
+	if l.view != nil {
+		return l.view.hit(x, y)
+	}
+	if y < l.top || y >= l.top+l.avail || x < 0 || x > l.w-1 {
 		return hitNothing, Selection{}
 	}
 	i := l.offset + y - l.top
-	if i >= len(l.rows) || l.rows[i].kind != rowAgent {
+	if i >= len(l.rows) {
 		return hitNothing, Selection{}
 	}
-	return hitAgent, Selection{Group: l.rows[i].group, Agent: l.rows[i].agent}
+	switch r := l.rows[i]; {
+	case r.kind == rowTop:
+		return hitGroup, Selection{Group: r.group}
+	case r.kind == rowAgent && x >= 1 && x <= l.w-2:
+		return hitAgent, Selection{Group: r.group, Agent: r.agent}
+	default:
+		return hitNothing, Selection{}
+	}
 }
 
 // outOfView counts the agents above and below what is drawn.
 func (l layout) outOfView() (above, below int) {
+	if l.view != nil {
+		return l.view.outOfView()
+	}
 	for i, r := range l.rows {
 		switch {
 		case r.kind != rowAgent:
@@ -526,10 +560,11 @@ func joinParts(parts []line) line {
 	return out
 }
 
-// bossLine is "boss ▸ ◐ working · #867 release · review · watchers 4 · ctx
-// ▓▓░░░░░░ 23% · up 2h14m", with the clock at the right, width cells in
-// all. Watchers give way first, then the runtime, the stage and the item;
-// the boss's state and ctx stay.
+// bossLine is "boss ▸ ◐ working · #867 release · review · ctx ▓▓░░░░░░ 23%
+// · up 2h14m", with the clock at the right, width cells in all. The runtime
+// gives way first, then the stage and the item; the boss's state and ctx
+// stay. The stage is coloured as a row's is. Watchers are not drawn: nothing
+// counts them (ADR-001 A38).
 func bossLine(f Frame, width int, th Thresholds) line {
 	if width <= 0 {
 		return nil
@@ -556,12 +591,11 @@ const (
 	partFixed bossPart = iota // never dropped
 	partItem
 	partStage
-	partWatchers
 	partRuntime
 )
 
 // bossDropOrder is the order the boss line's parts give way.
-var bossDropOrder = []bossPart{partWatchers, partRuntime, partStage, partItem}
+var bossDropOrder = []bossPart{partRuntime, partStage, partItem}
 
 // piece is one part of the boss line and what kind of part it is.
 type piece struct {
@@ -599,10 +633,7 @@ func bossParts(f Frame, th Thresholds) parts {
 		out = append(out, piece{partItem, line{{item, plainStyle}}.truncate(bossItemCap)})
 	}
 	if stage := clean(b.Stage); stage != "" {
-		out = append(out, piece{partStage, line{{stage, dimStyle}}.truncate(bossStageCap)})
-	}
-	if b.Watchers != nil {
-		out = append(out, piece{partWatchers, line{{"watchers " + strconv.Itoa(*b.Watchers), plainStyle}}})
+		out = append(out, piece{partStage, line{{stage, stageStyle(stage)}}.truncate(bossStageCap)})
 	}
 	ctx := slices.Concat(line{{"ctx ", dimStyle}}, bar(b.Ctx, bossBarCells, th), line{{" ", plainStyle}, pct(b.Ctx, 0, th)})
 	out = append(out, piece{partFixed, ctx})
@@ -618,37 +649,47 @@ var titleOrder = []snapshot.Status{
 	snapshot.StatusBlocked, snapshot.StatusReady, snapshot.StatusUnknown,
 }
 
-// groupTitle is "CODERS · 9 ✔1 ◐4 ●2 ⚠1": the name, the agent count, and
-// each status some agent has.
+// groupTitle is "CODERS · 9 ✔1 ◐4 ●2 ⚠1 ▸1": the name, the agent count,
+// each status some agent has, and then the plain shells, each counted with
+// the glyph its row draws.
 func groupTitle(g snapshot.Group) line {
 	out := line{{strings.ToUpper(clean(g.Name)), boldStyle}, {sep + strconv.Itoa(len(g.Agents)), plainStyle}}
-	counts := statusCounts(g.Agents)
+	counts, shells := statusCounts(g.Agents)
 	for _, st := range titleOrder {
 		if c := counts[st]; c > 0 {
 			out = append(out, seg{" ", plainStyle}, seg{StatusIcon(st) + strconv.Itoa(c), statusStyle(st)})
 		}
 	}
+	if shells > 0 {
+		out = append(out, seg{" ", plainStyle}, seg{shellIcon + strconv.Itoa(shells), statusStyle(snapshot.StatusUnknown)})
+	}
 	return out
 }
 
-// statusCounts counts agents by status; an invalid status counts as unknown.
-func statusCounts(agents []snapshot.Agent) map[snapshot.Status]int {
-	counts := map[snapshot.Status]int{}
+// statusCounts counts agents by status, and the plain shells apart from
+// them; an invalid status counts as unknown.
+func statusCounts(agents []snapshot.Agent) (counts map[snapshot.Status]int, shells int) {
+	counts = map[snapshot.Status]int{}
 	for _, a := range agents {
+		if isShell(a) {
+			shells++
+			continue
+		}
 		st := a.Status
 		if !st.Valid() {
 			st = snapshot.StatusUnknown
 		}
 		counts[st]++
 	}
-	return counts
+	return counts, shells
 }
 
 // borderStyle is a group's box: red when an agent in it is blocked, the
 // accent when it holds the selection, dim otherwise.
 func (l layout) borderStyle(g int) lipgloss.Style {
+	counts, _ := statusCounts(l.groups[g].Agents)
 	switch {
-	case statusCounts(l.groups[g].Agents)[snapshot.StatusBlocked] > 0:
+	case counts[snapshot.StatusBlocked] > 0:
 		return errorStyle
 	case l.selOK && l.sel.Group == g:
 		return accentStyle
@@ -734,7 +775,7 @@ func planColumns(groups []snapshot.Group, now time.Time, inner int) columns {
 	for _, g := range groups {
 		for _, a := range g.Agents {
 			c.name = max(c.name, ansi.StringWidth(clean(a.Name)))
-			c.width[colState] = max(c.width[colState], ansi.StringWidth(statusLabel(a.Status)))
+			c.width[colState] = max(c.width[colState], ansi.StringWidth(rowLabel(a)))
 			c.width[colModel] = max(c.width[colModel], ansi.StringWidth(ShortModel(a.Model)))
 			c.width[colItem] = max(c.width[colItem], ansi.StringWidth(clean(a.Item)))
 			c.width[colTime] = max(c.width[colTime], ansi.StringWidth(Elapsed(a.StageStartedAt, now)))
@@ -762,12 +803,14 @@ func planColumns(groups []snapshot.Group, now time.Time, inner int) columns {
 }
 
 // row is one agent's line: "◐ pee04  working  opus  ▓▓▓░░  61%  NERD-5255
-// go-review  3m", each column cut with "…" to its width.
+// go-review  3m", each column cut with "…" to its width. The stage is
+// coloured by what the whole of it says (stageStyle), so a cut stage keeps
+// its colour.
 func (c columns) row(a snapshot.Agent, now time.Time, th Thresholds) line {
 	gap := seg{strings.Repeat(" ", colGap), plainStyle}
-	out := slices.Concat(line{{StatusIcon(a.Status), statusStyle(a.Status)}, {" ", plainStyle}}, cell(clean(a.Name), boldStyle, c.name))
+	out := slices.Concat(line{{rowIcon(a), statusStyle(a.Status)}, {" ", plainStyle}}, cell(clean(a.Name), boldStyle, c.name))
 	if w := c.width[colState]; w > 0 {
-		out = slices.Concat(out, line{gap}, cell(statusLabel(a.Status), statusStyle(a.Status), w))
+		out = slices.Concat(out, line{gap}, cell(rowLabel(a), statusStyle(a.Status), w))
 	}
 	if w := c.width[colModel]; w > 0 {
 		out = slices.Concat(out, line{gap}, cell(ShortModel(a.Model), plainStyle, w))
@@ -777,7 +820,8 @@ func (c columns) row(a snapshot.Agent, now time.Time, th Thresholds) line {
 		out = slices.Concat(out, line{gap}, cell(clean(a.Item), plainStyle, w))
 	}
 	if w := c.width[colStage]; w > 0 {
-		out = slices.Concat(out, line{gap}, cell(clean(a.Stage), dimStyle, w))
+		stage := clean(a.Stage)
+		out = slices.Concat(out, line{gap}, cell(stage, stageStyle(stage), w))
 	}
 	if w := c.width[colTime]; w > 0 {
 		out = slices.Concat(out, line{gap, {padLeft(Elapsed(a.StageStartedAt, now), w), dimStyle}})
@@ -841,11 +885,11 @@ func padLeft(s string, width int) string {
 	return strings.Repeat(" ", max(0, width-ansi.StringWidth(s))) + s
 }
 
-// footer is the errors, then the note, then the key hints, on one line, and
-// at its right the count of agents out of view when the groups scroll.
+// footer is footerParts on one line, and at its right the count of agents
+// out of view when the groups scroll.
 func footer(f Frame, l layout) line {
 	left := line{{" ", plainStyle}}
-	for _, s := range footerParts(f) {
+	for _, s := range footerParts(f, l.view != nil) {
 		if len(left) > 1 {
 			left = append(left, seg{sep, dimStyle})
 		}
@@ -872,6 +916,14 @@ func footer(f Frame, l layout) line {
 // searchHints are the keys that work while a query is typed.
 const searchHints = "enter jump · ↑↓ move · esc clear"
 
+// viewHints are the keys that work in a group's view, as hints names them.
+func viewHints(btop bool) string {
+	if btop {
+		return "enter jump · ↑↓ move · esc back · ctrl-b m btop · ? help · q quit"
+	}
+	return "enter jump · ↑↓ move · esc back · ? help · q quit"
+}
+
 // hints are the keys that work, as the footer names them. ctrl-b m is
 // herdr's own popup key for btop in this setup, named only where herdr is
 // reachable.
@@ -882,11 +934,38 @@ func hints(btop bool) string {
 	return "enter jump · ↑↓ move · ? help · q quit"
 }
 
-func footerParts(f Frame) []seg {
+// staleAfter is the age, in whole seconds, past which the footer says how
+// old the drawn snapshot is: v12's 15.
+const staleAfter = 15
+
+// dataAge is "data 42s old" when the frame draws a snapshot more than
+// staleAfter whole seconds older than its clock, as v12 counts it
+// (ADR-001 A38), so a frozen view never passes for a live one. It is false
+// with no snapshot, with one whose time is after the clock or is the zero
+// time, which reports no time at all, and while the snapshot is fresh.
+func dataAge(f Frame) (string, bool) {
+	if f.Snapshot == nil || f.Snapshot.At.IsZero() {
+		return "", false
+	}
+	secs := int64(f.Now.Sub(f.Snapshot.At) / time.Second)
+	if secs <= staleAfter {
+		return "", false
+	}
+	return "data " + strconv.FormatInt(secs, 10) + "s old", true
+}
+
+// footerParts are the footer's parts, first to last: the search query, the
+// data age, the errors, the note, then the key hints, which are the group
+// view's when view is set. The footer is cut from the right, so the age
+// stays when an error is long.
+func footerParts(f Frame, view bool) []seg {
 	var parts []seg
 	if f.Search {
 		// The query leads, so errors never push it off the line.
 		parts = append(parts, seg{"/" + clean(f.Query) + "▏", boldStyle})
+	}
+	if age, ok := dataAge(f); ok {
+		parts = append(parts, seg{age, noteStyle})
 	}
 	for _, err := range f.Errors {
 		if err != nil {
@@ -896,10 +975,14 @@ func footerParts(f Frame) []seg {
 	if f.Note != "" {
 		parts = append(parts, seg{clean(f.Note), noteStyle})
 	}
-	if f.Search {
+	switch {
+	case f.Search:
 		return append(parts, seg{searchHints, dimStyle})
+	case view:
+		return append(parts, seg{viewHints(f.Btop), dimStyle})
+	default:
+		return append(parts, seg{hints(f.Btop), dimStyle})
 	}
-	return append(parts, seg{hints(f.Btop), dimStyle})
 }
 
 // helpRows are the help overlay's keys and what they do: only keys that
@@ -908,7 +991,9 @@ func helpRows(btop bool) [][2]string {
 	rows := [][2]string{
 		{"↑ ↓", "move through the agents"},
 		{keyEnter, "jump: focus and zoom"},
-		{"click", "jump: focus and zoom"},
+		{"click", "jump; a title opens its group"},
+		{"1-9", "open that group's view"},
+		{"esc ←", "back from a group's view"},
 		{"/", "search name, group, item, stage"},
 	}
 	if btop {
@@ -917,15 +1002,28 @@ func helpRows(btop bool) [][2]string {
 	return append(rows, [2]string{"?", "close this help"}, [2]string{"q", "quit"})
 }
 
-// helpLegend is the help overlay's status key, two statuses to a row.
-var helpLegend = [][2]snapshot.Status{
-	{snapshot.StatusWorking, snapshot.StatusIdle},
-	{snapshot.StatusBlocked, snapshot.StatusDone},
-	{snapshot.StatusReady, snapshot.StatusUnknown},
+// glyph is one entry of the help's key: a row's glyph, what it means, and
+// its style.
+type glyph struct {
+	icon, label string
+	style       lipgloss.Style
+}
+
+func statusGlyph(s snapshot.Status) glyph {
+	return glyph{StatusIcon(s), statusLabel(s), statusStyle(s)}
+}
+
+// helpLegend is the help overlay's glyph key, two to a row: every status,
+// then the plain shell.
+var helpLegend = [][]glyph{
+	{statusGlyph(snapshot.StatusWorking), statusGlyph(snapshot.StatusIdle)},
+	{statusGlyph(snapshot.StatusBlocked), statusGlyph(snapshot.StatusDone)},
+	{statusGlyph(snapshot.StatusReady), statusGlyph(snapshot.StatusUnknown)},
+	{{shellIcon, shellLabel, statusStyle(snapshot.StatusUnknown)}},
 }
 
 // overlayHelp draws the help box centred over the groups: the keys, then
-// what each status glyph means.
+// what each glyph means.
 func overlayHelp(canvas []line, l layout, btop bool) {
 	const keyCells = 10
 	const legendCells = 11
@@ -940,10 +1038,10 @@ func overlayHelp(canvas []line, l layout, btop bool) {
 	}
 	for _, pair := range helpLegend {
 		row := line{{" ", plainStyle}}
-		for _, st := range pair {
-			label := " " + statusLabel(st)
+		for _, g := range pair {
+			label := " " + g.label
 			row = append(row,
-				seg{StatusIcon(st), statusStyle(st)},
+				seg{g.icon, g.style},
 				seg{label + strings.Repeat(" ", max(0, legendCells-ansi.StringWidth(label))), plainStyle})
 		}
 		rows = append(rows, row)

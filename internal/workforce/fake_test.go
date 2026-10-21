@@ -2,12 +2,15 @@ package workforce_test
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -20,8 +23,9 @@ import (
 )
 
 // fakeHerdr is a herdr server with state: workspaces, tabs, panes and the
-// agents named in them, answering the lists the workforce reads the way
-// herdr 0.9.3 does. A knob makes a method fail.
+// agents named in them, answering the lists the workforce reads and closing
+// panes the way herdr 0.9.3 does. Knobs make a method fail, or a stale pane
+// id resolve.
 type fakeHerdr struct {
 	t   *testing.T
 	srv *herdrtest.Server
@@ -33,6 +37,11 @@ type fakeHerdr struct {
 	next       int
 	// fail answers a method with an error code.
 	fail map[string]string
+	// alias maps a pane id herdr no longer lists, one frozen in a shell's
+	// HERDR_PANE_ID, to the pane pane.process_info resolves it to.
+	alias map[string]string
+	// onCall, when set, runs before each call is answered, under the lock.
+	onCall func(method string)
 }
 
 type fakeWS struct{ id, label string }
@@ -47,7 +56,7 @@ type fakePane struct {
 
 func newFake(t *testing.T) *fakeHerdr {
 	t.Helper()
-	f := &fakeHerdr{t: t, fail: map[string]string{}}
+	f := &fakeHerdr{t: t, fail: map[string]string{}, alias: map[string]string{}}
 	f.srv = herdrtest.Start(t, f.handle)
 	return f
 }
@@ -105,6 +114,11 @@ func (f *fakeHerdr) setPane(id string, change func(*fakePane)) {
 	change(f.pane(id))
 }
 
+// dropPane removes a pane, as closing it by hand does, under the lock.
+func (f *fakeHerdr) dropPane(id string) {
+	f.panes = slices.DeleteFunc(f.panes, func(p *fakePane) bool { return p.id == id })
+}
+
 func (f *fakeHerdr) pane(id string) *fakePane {
 	for _, p := range f.panes {
 		if p.id == id {
@@ -112,6 +126,41 @@ func (f *fakeHerdr) pane(id string) *fakePane {
 		}
 	}
 	return nil
+}
+
+// tabByLabel is the tab labelled label, or nil.
+func (f *fakeHerdr) tabByLabel(label string) *fakeTab {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, t := range f.tabs {
+		if t.label == label {
+			return t
+		}
+	}
+	return nil
+}
+
+// methods is every method called, in order.
+func (f *fakeHerdr) methods() []string {
+	var out []string
+	for _, r := range f.srv.Requests() {
+		out = append(out, r.Method)
+	}
+	return out
+}
+
+// params is the params of every call to method, decoded.
+func (f *fakeHerdr) params(method string) []map[string]any {
+	var out []map[string]any
+	for _, r := range f.srv.Requests() {
+		if r.Method != method {
+			continue
+		}
+		var m map[string]any
+		require.NoError(f.t, json.Unmarshal(r.Params, &m))
+		out = append(out, m)
+	}
+	return out
 }
 
 func errReply(code string) herdrtest.Reply {
@@ -132,9 +181,15 @@ func (f *fakeHerdr) paneInfo(p *fakePane) map[string]any {
 func (f *fakeHerdr) handle(r herdrtest.Request) herdrtest.Reply {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.onCall != nil {
+		f.onCall(r.Method)
+	}
 	if code, ok := f.fail[r.Method]; ok {
 		return errReply(code)
 	}
+	var p map[string]any
+	_ = json.Unmarshal(r.Params, &p)
+	str := func(k string) string { s, _ := p[k].(string); return s }
 	switch r.Method {
 	case "pane.list":
 		out := []map[string]any{}
@@ -164,6 +219,35 @@ func (f *fakeHerdr) handle(r herdrtest.Request) herdrtest.Reply {
 			}
 		}
 		return herdrtest.Reply{Result: map[string]any{"type": "agent_list", "agents": out}}
+	case "pane.close":
+		i := slices.IndexFunc(f.panes, func(x *fakePane) bool { return x.id == str("pane_id") })
+		if i < 0 {
+			return errReply("pane_not_found")
+		}
+		closed := f.panes[i]
+		f.panes = slices.Delete(f.panes, i, i+1)
+		if !slices.ContainsFunc(f.panes, func(x *fakePane) bool { return x.tab == closed.tab }) {
+			f.tabs = slices.DeleteFunc(f.tabs, func(t *fakeTab) bool { return t.id == closed.tab })
+		}
+		if !slices.ContainsFunc(f.panes, func(x *fakePane) bool { return x.ws == closed.ws }) {
+			f.workspaces = slices.DeleteFunc(f.workspaces, func(w *fakeWS) bool { return w.id == closed.ws })
+		}
+		return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
+	case "pane.get":
+		pane := f.pane(str("pane_id"))
+		if pane == nil {
+			return errReply("pane_not_found")
+		}
+		return herdrtest.Reply{Result: map[string]any{"type": "pane_info", "pane": f.paneInfo(pane)}}
+	case "pane.process_info":
+		pane := f.pane(str("pane_id"))
+		if real, ok := f.alias[str("pane_id")]; ok {
+			pane = f.pane(real)
+		}
+		if pane == nil {
+			return errReply("pane_not_found")
+		}
+		return herdrtest.Reply{Result: map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": pane.id, "shell_pid": 100, "foreground_process_group_id": 100}}}
 	}
 	return errReply("unknown_method")
 }
@@ -174,6 +258,7 @@ func (f *fakeHerdr) handle(r herdrtest.Request) herdrtest.Reply {
 type fixture struct {
 	h    *fakeHerdr
 	db   string
+	st   *store.Store
 	svc  *workforce.Service
 	ws   string
 	boss string
@@ -212,13 +297,14 @@ func newFixture(t *testing.T, config string) *fixture {
 	t.Cleanup(func() { _ = st.Close() })
 
 	h := newFake(t)
-	f := &fixture{h: h, db: db}
+	f := &fixture{h: h, db: db, st: st}
 	f.ws = h.addWorkspace("herdr-agentisan")
 	f.boss = h.addTab(f.ws, "ha-boss", "claude", "working")
 	f.svc = &workforce.Service{
 		Herdr: h.client(), Store: st, ConfigDir: dir,
-		LookupEnv: func(string) (string, bool) { return "", false },
-		Idle:      &team.IdleClock{},
+		LookupEnv:   func(string) (string, bool) { return "", false },
+		Idle:        &team.IdleClock{},
+		HandoffPoll: time.Millisecond,
 	}
 	return f
 }
@@ -261,4 +347,23 @@ func (f *fixture) bindRow(t *testing.T, logicalID, group, pane string) {
 		"INSERT INTO workers (logical_id, project, grp, pane_id, generation, status, created_at, terminal_id) VALUES (?, 'herdr-agentisan', ?, ?, 0, 'active', 0, ?)",
 		logicalID, group, pane, terminal)
 	require.NoError(t, err)
+}
+
+// worker is one worker as a spawn leaves it: its tab in the team's
+// workspace, an idle agent and an active row.
+type worker struct{ ID, PaneID string }
+
+func (f *fixture) worker(t *testing.T, id, group string) worker {
+	t.Helper()
+	pane := f.h.addTab(f.ws, id, "claude", "idle")
+	f.bindRow(t, id, group, pane)
+	return worker{ID: id, PaneID: pane}
+}
+
+// row reads one worker's row.
+func (f *fixture) row(t *testing.T, id string) store.Row {
+	t.Helper()
+	r, err := f.st.WorkerRow(t.Context(), id)
+	require.NoError(t, err)
+	return r
 }

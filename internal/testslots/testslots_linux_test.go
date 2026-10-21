@@ -1,8 +1,11 @@
 package testslots_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 
@@ -137,5 +140,45 @@ func TestCountEveryKindOfLock(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, snapshot.Slots{Used: 1, Total: 1}, got)
 		})
+	}
+}
+
+// TestCountWhileOtherLocksChange: locks that other processes take and drop
+// while Count reads /proc/locks never make a held one read as free
+// (NERD-5341). With 64 held and 8 goroutines churning their own locks, one
+// plain read of the list missed a held lock in most counts.
+func TestCountWhileOtherLocksChange(t *testing.T) {
+	t.Parallel()
+	needProcLocks(t)
+	dir := t.TempDir()
+	paths := make([]string, 64)
+	for i := range paths {
+		paths[i] = filepath.Join(dir, fmt.Sprintf("held.%d.lock", i))
+		lockFile(t, paths[i], flockEx)
+	}
+	var stop atomic.Bool
+	var wg sync.WaitGroup
+	for i := range 8 {
+		churn := filepath.Join(dir, fmt.Sprintf("churn.%d.lock", i))
+		wg.Go(func() {
+			for !stop.Load() {
+				fd, err := syscall.Open(churn, syscall.O_RDWR|syscall.O_CREAT|syscall.O_CLOEXEC, 0o600)
+				if err != nil {
+					return
+				}
+				_ = syscall.Flock(fd, syscall.LOCK_EX)
+				_ = syscall.Flock(fd, syscall.LOCK_UN)
+				_ = syscall.Close(fd)
+			}
+		})
+	}
+	t.Cleanup(func() {
+		stop.Store(true)
+		wg.Wait()
+	})
+	for range 20 {
+		got, err := testslots.Count(testslots.ProcLocks, paths)
+		require.NoError(t, err)
+		require.Equal(t, snapshot.Slots{Used: 64, Total: 64}, got, "a held lock read as free")
 	}
 }

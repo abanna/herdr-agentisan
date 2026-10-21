@@ -1,0 +1,24 @@
+╭──────────────────────────────────────────────────────────────────────────────╮
+│ agentisan · PRs none · issues 14                                    [ btop ] │
+│ boss ▸ ◐ working · #867 release · review · ctx ▓▓░░░░░░ 23%            17:19 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+
+ ◀ back  CODERS · 6 ✔1 ◐1 ●1 ⚠1 ⟳1 ▸1
+ write the code
+╭─ ⚠ pee05 · blocked ──────────────────────────────────────────────────────────╮
+│ opus  ctx ▓▓▓▓▓▓▓▓░░ 78%                                                     │
+│ NERD-5247                                                                    │
+│ waiting on boss: the review loop wants a size waiver for the generation      │
+│                                                                              │
+│ in stage 1h09m                                                               │
+│ pane w2:p5 · tab w2:t5                                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ ✔ pee06 · done ─────────────────────────────────────────────────────────────╮
+│ son  ctx ▓▓▓▓▓░░░░░ 47%                                                      │
+│ NERD-5268                                                                    │
+│ precheck: tdaddy impact on the stale pane id resolver, then the 7b           │
+│ enumeration for every changed function, then stage 8, then the commit and t… │
+│ in stage 2h19m · idle 2d08h                                                  │
+│ pane w2:p6 · tab w2:t6                                                       │
+╰──────────────────────────────────────────────────────────────────────────────╯
+ enter jump · ↑↓ move · esc back · ctrl-b m btop · ? help · q quit           ↑4
