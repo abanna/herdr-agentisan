@@ -239,9 +239,10 @@ exempts whatever is later added under that name.
 - `docs/architecture.md` — why the pieces are shaped this way, and the
   deliberate limits.
 - `docs/adr/` — accepted architecture decisions. `0001-boss-led-workflow-plugin.md`
-  (ADR-001, read its Amendments section too) is the design source of truth
-  for the daemon, token contract, storage and build order; a change that
-  contradicts it needs a superseding ADR, not a quiet edit.
+  (ADR-001; its amendments are in `docs/adr/0001/`, one file each: read them
+  all) is the design source of truth for the daemon, token contract, storage
+  and build order; a change that contradicts it needs a superseding ADR, not a
+  quiet edit.
 
 Tests live beside the code they cover, in `package <name>_test`, so they
 exercise the exported surface an agent would actually call.
