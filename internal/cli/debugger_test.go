@@ -71,19 +71,43 @@ func TestDebuggerArgsPrintsTheLaunch(t *testing.T) {
 
 	out, err = runIn(ctx, "debugger", "args", "--root", root, "--repo", repo, "--server-dir", server)
 	require.NoError(t, err)
-	stub := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(stub, "claude"),
-		[]byte("#!/bin/sh\npwd\nprintf '%s\\n' \"$HERDR_PLUGIN_CONFIG_DIR\"\nfor a; do printf '%s\\n' \"$a\"; done\n"), 0o700)) //nolint:gosec // an executable stand-in
-	sh := exec.CommandContext(t.Context(), "sh", "-c", out)
-	sh.Dir = t.TempDir()
-	sh.Env = []string{"PATH=" + stub + ":/usr/bin:/bin"}
-	ran, err := sh.Output()
+	ran, err := runLine(t, out)
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimSuffix(string(ran), "\n"), "\n")
 	require.Greater(t, len(lines), 2, string(ran))
 	assert.Equal(t, repo, lines[0], "the line starts claude in the repo, wherever it is run from")
 	assert.Equal(t, config, lines[1], "with the config dir in its environment")
 	assert.Equal(t, want.Args, lines[2:], "the shell reads back the argv")
+}
+
+// TestDebuggerArgsFailedCdNeverStartsClaude: the line joins the cd and
+// claude with &&, so a repo that is gone by the time the line runs fails the
+// shell before claude starts. With a ; claude would start in the caller's
+// directory, which the fence would then admit whole.
+func TestDebuggerArgsFailedCdNeverStartsClaude(t *testing.T) {
+	t.Parallel()
+	root, repo, server, config := launchDirs(t)
+	out, err := runIn(envCtx(t, map[string]string{"HERDR_PLUGIN_CONFIG_DIR": config}), "debugger", "args", "--root", root, "--repo", repo, "--server-dir", server)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(repo))
+
+	ran, err := runLine(t, out)
+	require.Error(t, err, "the cd fails, and so does the line")
+	assert.Empty(t, string(ran), "claude never ran")
+}
+
+// runLine runs a printed launch line through sh, from a directory of its
+// own, with a stand-in claude first on PATH that prints its working
+// directory, HERDR_PLUGIN_CONFIG_DIR and each argument, one per line.
+func runLine(t *testing.T, line string) ([]byte, error) {
+	t.Helper()
+	stub := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(stub, "claude"),
+		[]byte("#!/bin/sh\npwd\nprintf '%s\\n' \"$HERDR_PLUGIN_CONFIG_DIR\"\nfor a; do printf '%s\\n' \"$a\"; done\n"), 0o700)) //nolint:gosec // an executable stand-in
+	sh := exec.CommandContext(t.Context(), "sh", "-c", line)
+	sh.Dir = t.TempDir()
+	sh.Env = []string{"PATH=" + stub + ":/usr/bin:/bin"}
+	return sh.Output()
 }
 
 // TestDebuggerArgsNeedsItsInputs: no role under the root, no config dir, or
