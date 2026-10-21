@@ -64,8 +64,10 @@ func TestStatus(t *testing.T) {
 }
 
 // TestStatusCountsEveryTakenSlot: an agent started by hand takes a slot, and
-// so does a pane a live row binds whose agent is not up yet; a row whose pane
-// herdr no longer lists takes none.
+// so does a pane a live row binds whose agent is not up yet; a row whose
+// terminal herdr no longer lists takes none, and nor does a lost one, whose
+// pane id is only where it was last seen (A35). Both are listed unbound, and
+// another team's rows are not.
 func TestStatusCountsEveryTakenSlot(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, teamConfig)
@@ -74,12 +76,22 @@ func TestStatusCountsEveryTakenSlot(t *testing.T) {
 	f.bindRow(t, "ha-coder-1", "coder", starting)
 	f.h.addTab(f.ws, "ha-coder-2", "", "unknown")  // a shell, bound by nothing
 	f.bindRow(t, "ha-coder-3", "coder", "w10:p99") // its pane is gone
+	reissued := f.h.addTab(f.ws, "ha-coder-4", "claude", "idle")
+	f.bindRow(t, "ha-coder-4", "coder", reissued)
+	f.markLost(t, "ha-coder-4")
+	f.bindRow(t, "zz-coder-1", "coder", "w10:p98")
+	f.moveProject(t, "zz-coder-1", "other")
 
 	got, err := f.svc.Status(t.Context(), workforce.StatusRequest{})
 	require.NoError(t, err)
-	assert.Equal(t, 2, got.Groups[0].Occupied)
-	assert.Equal(t, 1, got.Groups[0].Open)
-	assert.Len(t, got.Groups[0].Members, 3)
+	assert.Equal(t, 3, got.Groups[0].Occupied, "the lost row's pane still runs an agent")
+	assert.Equal(t, 0, got.Groups[0].Open)
+	require.Len(t, got.Groups[0].Members, 4)
+	assert.False(t, got.Groups[0].Members[3].Recorded, "a lost row binds nothing: %+v", got.Groups[0].Members[3])
+	assert.Equal(t, []workforce.UnboundWorker{
+		{ID: "ha-coder-3", Group: "coder", PaneID: "w10:p99", Status: "active"},
+		{ID: "ha-coder-4", Group: "coder", PaneID: reissued, Status: "lost"},
+	}, got.Unbound)
 }
 
 // TestStatusOrdersTheGroupsItFinds: the team model's types first, then every

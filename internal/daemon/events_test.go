@@ -47,8 +47,8 @@ func (th *teamHerdr) listedPanes() []map[string]any {
 	return out
 }
 
-// bindWorker writes a workers row binding pane to logicalID into the state
-// database of a daemon about to run in stateDir.
+// bindWorker writes a workers row binding pane, by its terminal, to
+// logicalID into the state database of a daemon about to run in stateDir.
 func bindWorker(t *testing.T, stateDir string, th *teamHerdr, logicalID, pane string) {
 	t.Helper()
 	p := paths(t, stateDir, th.fakeHerdr)
@@ -60,8 +60,8 @@ func bindWorker(t *testing.T, stateDir string, th *teamHerdr, logicalID, pane st
 	require.NoError(t, err)
 	defer raw.Close() //nolint:errcheck // test cleanup
 	_, err = raw.ExecContext(t.Context(),
-		"INSERT INTO workers (logical_id, project, grp, pane_id, generation, status, created_at) VALUES (?, 'agentisan', 'coders', ?, 1, 'active', 0)",
-		logicalID, pane)
+		"INSERT INTO workers (logical_id, project, grp, pane_id, generation, status, created_at, terminal_id) VALUES (?, 'agentisan', 'coders', ?, 1, 'active', 0, ?)",
+		logicalID, pane, "term_"+pane)
 	require.NoError(t, err)
 }
 
