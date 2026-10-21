@@ -33,7 +33,7 @@ var plain = dashboard.Options{Profile: colorprofile.NoTTY}
 var attrs = dashboard.Options{Profile: colorprofile.ASCII}
 
 // fixtures are every snapshot in testdata.
-var fixtures = []string{"full", "empty", "blocked", "crowd", "wide", "group"}
+var fixtures = []string{"full", "empty", "blocked", "crowd", "wide", "group", "shells"}
 
 // fixture loads testdata/<name>.json through the same source the CLI uses.
 func fixture(t *testing.T, name string) *snapshot.Snapshot {
@@ -93,6 +93,18 @@ func TestRenderGolden(t *testing.T) {
 		"blocked_120x40":             {frame: frame("blocked", first, true), w: 120, h: 40},
 		"empty_80x24":                {frame: frame("empty", first, true), w: 80, h: 24},
 		"wide_120x40":                {frame: frame("wide", first, true), w: 120, h: 40},
+		// Plain shells draw ▸ (ADR-001 A38); a shell with a handoff stays ⟳,
+		// and an unnamed agent stays ?.
+		"shells_80x24":  {frame: frame("shells", first, true), w: 80, h: 24},
+		"shells_120x40": {frame: frame("shells", first, true), w: 120, h: 40},
+		// A snapshot 42 s older than the clock: the footer says so.
+		"stale_80x24": {
+			frame: func(t *testing.T) dashboard.Frame {
+				t.Helper()
+				return dashboard.Frame{Snapshot: fixture(t, "full"), Now: at.Add(42 * time.Second), Btop: true}
+			},
+			w: 80, h: 24,
+		},
 		"waiting_80x24": {
 			frame: func(*testing.T) dashboard.Frame { return dashboard.Frame{Now: at, Btop: true} }, w: 80, h: 24,
 		},
@@ -390,19 +402,22 @@ func TestRenderContents(t *testing.T) {
 		// not #rrggbb is no colour, never a broken frame.
 		"a colour that is not #rrggbb": {frame: of(withProject(&snapshot.Project{Color: "\x1b[31mred"}), 80, 24), want: []string{"│ t "}, not: []string{"\x1b"}},
 
-		// The boss line: state, item, stage, watchers, ctx and runtime, the
-		// clock on the right. Watchers then runtime give way first.
+		// The boss line: state, item, stage, ctx and runtime, the clock on
+		// the right. The runtime gives way first.
 		"the boss line in full": {
 			frame: from("full", 120, 40),
-			match: []string{`│ boss ▸ ◐ working · #867 release · review · watchers 4 · ctx ▓▓░░░░░░ 23% · up 2h14m +17:19 │`},
+			match: []string{`│ boss ▸ ◐ working · #867 release · review · ctx ▓▓░░░░░░ 23% · up 2h14m +17:19 │`},
 		},
 		"the boss line at 80": {
 			frame: from("full", 80, 24),
 			match: []string{`│ boss ▸ ◐ working · #867 release · review · ctx ▓▓░░░░░░ 23% +17:19 │`},
 			not:   []string{"watchers", "up 2h"},
 		},
-		"no boss":                         {frame: from("blocked", 80, 24), match: []string{`│ boss ▸ not running +17:19 │`}},
-		"a boss with no watchers counted": {frame: from("crowd", 120, 40), want: []string{"watchers 0"}, not: []string{" up "}},
+		"no boss": {frame: from("blocked", 80, 24), match: []string{`│ boss ▸ not running +17:19 │`}},
+		// Nothing counts watchers, so the boss line never draws them, even
+		// where a fixture carries the v1 key (ADR-001 A38).
+		"watchers are never drawn": {frame: from("full", 200, 60), not: []string{"watchers"}},
+		"nor a count of none":      {frame: from("crowd", 120, 40), want: []string{"│ boss ▸ ● idle · #900 · plan · ctx "}, not: []string{"watchers", " up "}},
 		"a missing ctx is an empty gauge": {
 			frame: of(&snapshot.Snapshot{V: 1, Team: "t", Boss: &snapshot.Boss{Agent: snapshot.Agent{Name: "boss", Status: snapshot.StatusIdle}}, Groups: []snapshot.Group{
 				{Name: "coders", Agents: []snapshot.Agent{{Name: "pee01", Status: snapshot.StatusIdle, Model: "opus"}}},
@@ -423,6 +438,31 @@ func TestRenderContents(t *testing.T) {
 			frame: of(one("t", snapshot.Agent{Name: "x", Status: "asleep"}), 80, 24),
 			want:  []string{"╭─ G · 1 ?1 ─", "│ ? x  unknown "},
 			not:   []string{"asleep"},
+		},
+		// A plain shell is ▸ and "shell", and its title counts it so (ADR-001
+		// A38). A shell with a handoff is ready, as $team counts it, and an
+		// unnamed agent herdr cannot classify stays unknown.
+		"a plain shell": {
+			frame: of(one("t", snapshot.Agent{Name: "notes", Unnamed: true, Shell: true, Status: snapshot.StatusUnknown}), 80, 24),
+			// The state column is as wide as "shell", not "unknown".
+			want: []string{"╭─ G · 1 ▸1 ─", "│ ▸ notes  shell  ░░░░░   -- "},
+			not:  []string{"? notes", "?1", "unknown"},
+		},
+		"a shell with a handoff": {
+			frame: of(one("t", snapshot.Agent{Name: "w2:p4", Unnamed: true, Shell: true, Status: snapshot.StatusReady}), 80, 24),
+			want:  []string{"╭─ G · 1 ⟳1 ─", "│ ⟳ w2:p4  ready "},
+			not:   []string{"▸1", "shell"},
+		},
+		"an unnamed agent is no shell": {
+			frame: of(one("t", snapshot.Agent{Name: "scratch", Unnamed: true, Status: snapshot.StatusUnknown}), 80, 24),
+			want:  []string{"╭─ G · 1 ?1 ─", "│ ? scratch  unknown "},
+			not:   []string{"▸ scratch", "▸1", "shell"},
+		},
+		// Render draws what it is given: a shell whose status the contract
+		// does not know is still a shell.
+		"a shell with an invalid status": {
+			frame: of(one("t", snapshot.Agent{Name: "notes", Unnamed: true, Shell: true, Status: "asleep"}), 80, 24),
+			want:  []string{"╭─ G · 1 ▸1 ─", "│ ▸ notes  shell "},
 		},
 		"no groups":       {frame: from("empty", 80, 24), want: []string{"no agents in this team"}, not: []string{"╭─ "}},
 		"no snapshot yet": {frame: func(*testing.T) (dashboard.Frame, int, int) { return dashboard.Frame{Now: at}, 80, 24 }, want: []string{"waiting for the daemon…"}, not: []string{"╭─ "}},
@@ -810,11 +850,19 @@ func TestShortModel(t *testing.T) {
 		"Sonnet 4.5":        "son",
 		"haiku":             "hai",
 		"claude-haiku-4-5":  "hai",
-		"gpt-5-codex":       "gpt-",
-		"Codex":             "code",
-		"o3":                "o3",
-		"  Gemini 2.5 Pro":  "gemi",
-		"ÉCLAIR":            "écla",
+		"fable":             "fab",
+		"claude-fable-5-1":  "fab",
+		"Fable 5.1":         "fab",
+		// A Codex model by its name, wherever it says codex.
+		"gpt-5-codex":       "cdx",
+		"gpt-5.5-codex":     "cdx",
+		"codex-mini-latest": "cdx",
+		"Codex":             "cdx",
+		// Any other model is its first word, cut.
+		"gpt-5.5":          "gpt-",
+		"o3":               "o3",
+		"  Gemini 2.5 Pro": "gemi",
+		"ÉCLAIR":           "écla",
 		// Four cells, not four runes: a wide model never overflows its column.
 		"日本モデル": "日本",
 		"👍👍👍":   "👍👍",
@@ -1042,7 +1090,7 @@ func TestHelpOverlay(t *testing.T) {
 		t.Run(fmt.Sprint("btop=", btop), func(t *testing.T) {
 			t.Parallel()
 			out := dashboard.Render(dashboard.Frame{Snapshot: fixture(t, "full"), Now: at, Help: true, Btop: btop}, 120, 40, plain)
-			for _, s := range []string{"╭ help", "↑ ↓", "enter", "click", "/         search", "?", "q", "◐ working", "● idle", "⚠ blocked", "✔ done", "⟳ ready", "? unknown"} {
+			for _, s := range []string{"╭ help", "↑ ↓", "enter", "click", "/         search", "?", "q", "◐ working", "● idle", "⚠ blocked", "✔ done", "⟳ ready", "? unknown", "▸ shell"} {
 				assert.Contains(t, out, s)
 			}
 			assert.Equal(t, btop, strings.Contains(out, "[ btop ]  btop in a herdr popup"))

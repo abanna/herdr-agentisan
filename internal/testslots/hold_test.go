@@ -1,7 +1,10 @@
 package testslots_test
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -269,10 +272,10 @@ func TestOneReadingManyLists(t *testing.T) {
 	assert.Equal(t, snapshot.Slots{Used: 1, Total: 1}, gate)
 }
 
-// TestAReadingIsTwoPasses: the kernel lists the locks a page at a time, so a
-// lock released mid-read can hide another; a reading holds every lock and
-// every waiter either pass lists (A40).
-func TestAReadingIsTwoPasses(t *testing.T) {
+// TestAReadingIsTheUnionOfItsReads: the kernel lists the locks a page at a
+// time, so a lock released mid-read can hide another; a reading holds every
+// lock and every waiter any of its reads lists (A40).
+func TestAReadingIsTheUnionOfItsReads(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	a := filepath.Join(dir, "a.lock")
@@ -282,21 +285,21 @@ func TestAReadingIsTwoPasses(t *testing.T) {
 	holder := []byte("1: FLOCK  ADVISORY  WRITE 100 " + devOf(t, a) + " 0 EOF\n")
 	waiter := []byte("1: -> FLOCK  ADVISORY  WRITE 100 " + devOf(t, a) + " 0 EOF\n")
 	tests := map[string]struct {
-		passes [][]byte
-		want   snapshot.Slots
+		reads [][]byte
+		want  snapshot.Slots
 	}{
-		"held in both":                  {passes: [][]byte{holder, holder}, want: snapshot.Slots{Held: 1, Total: 1}},
-		"held in the first only":        {passes: [][]byte{holder, nil}, want: snapshot.Slots{Held: 1, Total: 1}},
-		"held in the second only":       {passes: [][]byte{nil, holder}, want: snapshot.Slots{Held: 1, Total: 1}},
-		"in neither":                    {passes: [][]byte{nil, nil}, want: snapshot.Slots{Total: 1}},
-		"waiting in the first only":     {passes: [][]byte{append(append([]byte{}, holder...), waiter...), holder}, want: snapshot.Slots{Used: 1, Total: 1}},
-		"waiting in the second only":    {passes: [][]byte{holder, append(append([]byte{}, waiter...), holder...)}, want: snapshot.Slots{Used: 1, Total: 1}},
-		"the same holder in both, once": {passes: [][]byte{holder, holder, holder}, want: snapshot.Slots{Held: 1, Total: 1}},
+		"held in both":                  {reads: [][]byte{holder, holder}, want: snapshot.Slots{Held: 1, Total: 1}},
+		"held in the first only":        {reads: [][]byte{holder, nil}, want: snapshot.Slots{Held: 1, Total: 1}},
+		"held in the second only":       {reads: [][]byte{nil, holder}, want: snapshot.Slots{Held: 1, Total: 1}},
+		"in neither":                    {reads: [][]byte{nil, nil}, want: snapshot.Slots{Total: 1}},
+		"waiting in the first only":     {reads: [][]byte{append(append([]byte{}, holder...), waiter...), holder}, want: snapshot.Slots{Used: 1, Total: 1}},
+		"waiting in the second only":    {reads: [][]byte{holder, append(append([]byte{}, waiter...), holder...)}, want: snapshot.Slots{Used: 1, Total: 1}},
+		"the same holder in both, once": {reads: [][]byte{holder, holder, holder}, want: snapshot.Slots{Held: 1, Total: 1}},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			r, err := testslots.ReadingOf(p.root, tc.passes...)
+			r, err := testslots.ReadingOf(p.root, tc.reads...)
 			require.NoError(t, err)
 			got, err := r.Count([]string{a})
 			require.NoError(t, err)
@@ -304,43 +307,66 @@ func TestAReadingIsTwoPasses(t *testing.T) {
 		})
 	}
 
-	t.Run("a pass it cannot read", func(t *testing.T) {
+	t.Run("a read it cannot parse", func(t *testing.T) {
 		t.Parallel()
 		_, err := testslots.ReadingOf(p.root, holder, []byte("1: FLOCK\n"))
 		require.ErrorIs(t, err, testslots.ErrLocks)
 	})
 }
 
-// TestReadReadsTwoPasses: Read reads the lock list twice for one reading,
-// and keeps what either pass lists; a pass that fails fails the reading.
-func TestReadReadsTwoPasses(t *testing.T) {
+// TestReadReadsThreeStaggeredReads: Read reads the lock list three times
+// for one reading, the first read() of each asking for a page, a third and
+// two thirds of one, and keeps what any read lists; a read that fails fails
+// the reading (A31, NERD-5341; A40).
+func TestReadReadsThreeStaggeredReads(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
-	a, b := filepath.Join(dir, "a.lock"), filepath.Join(dir, "b.lock")
-	for _, p := range []string{a, b} {
+	var paths []string
+	var reads [][]byte
+	for i, name := range []string{"a.lock", "b.lock", "c.lock"} {
+		p := filepath.Join(dir, name)
 		require.NoError(t, os.WriteFile(p, nil, 0o600))
+		paths = append(paths, p)
+		reads = append(reads, []byte(fmt.Sprintf("1: FLOCK  ADVISORY  WRITE %d %s 0 EOF\n", 200+i, devOf(t, p))))
 	}
-	passes := [][]byte{
-		[]byte("1: FLOCK  ADVISORY  WRITE 200 " + devOf(t, a) + " 0 EOF\n"),
-		[]byte("1: FLOCK  ADVISORY  WRITE 201 " + devOf(t, b) + " 0 EOF\n"),
+	const page = 4096
+	var firsts []int
+	open := func() (io.ReadCloser, error) {
+		r := &firstSize{r: bytes.NewReader(reads[len(firsts)%len(reads)]), first: -1}
+		firsts = append(firsts, 0)
+		r.got = &firsts[len(firsts)-1]
+		return r, nil
 	}
-	var reads int
-	r, err := testslots.ReadPasses(t.TempDir(), func() ([]byte, error) {
-		reads++
-		return passes[(reads-1)%len(passes)], nil
-	})
+	r, err := testslots.ReadStaggered(t.TempDir(), "locks", open, page)
 	require.NoError(t, err)
-	assert.Equal(t, 2, reads, "two passes")
-	got, err := r.Count([]string{a, b})
+	assert.Equal(t, []int{page, page / 3, 2 * page / 3}, firsts, "three reads, their first read() a page, a third and two thirds of one")
+	got, err := r.Count(paths)
 	require.NoError(t, err)
-	assert.Equal(t, snapshot.Slots{Used: 2, Total: 2}, got, "a lock either pass lists is taken")
+	assert.Equal(t, snapshot.Slots{Used: 3, Total: 3}, got, "a lock any read lists is taken")
 
-	reads = 0
-	_, err = testslots.ReadPasses(t.TempDir(), func() ([]byte, error) {
-		if reads++; reads == 2 {
-			return nil, fmt.Errorf("%w: the second pass", testslots.ErrLocks)
+	n := 0
+	_, err = testslots.ReadStaggered(t.TempDir(), "locks", func() (io.ReadCloser, error) {
+		if n++; n == 3 {
+			return nil, errors.New("the third read")
 		}
-		return passes[0], nil
-	})
+		return io.NopCloser(bytes.NewReader(reads[0])), nil
+	}, page)
 	require.ErrorIs(t, err, testslots.ErrLocks)
 }
+
+// firstSize records how much the first Read call asked for.
+type firstSize struct {
+	r     io.Reader
+	first int
+	got   *int
+}
+
+func (f *firstSize) Read(p []byte) (int, error) {
+	if f.first < 0 {
+		f.first = len(p)
+		*f.got = len(p)
+	}
+	return f.r.Read(p) //nolint:wrapcheck // a stand-in reader
+}
+
+func (*firstSize) Close() error { return nil }

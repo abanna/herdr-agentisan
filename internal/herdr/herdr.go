@@ -498,6 +498,11 @@ func (c Client) zoomPane(ctx context.Context, paneID, mode string) (PaneZoom, er
 // (src/app/api/panes.rs:484-500 at v0.9.3). If focus changed, herdr streams
 // pane.focused after answering (src/server/headless.rs:467, api.rs:842-873).
 func (c Client) FocusPane(ctx context.Context, paneID string) (PaneInfo, error) {
+	return c.paneCall(ctx, "pane.focus", paneID)
+}
+
+// paneCall calls method, which takes one pane id and answers pane_info.
+func (c Client) paneCall(ctx context.Context, method, paneID string) (PaneInfo, error) {
 	params := struct {
 		PaneID string `json:"pane_id"`
 	}{PaneID: paneID}
@@ -505,14 +510,14 @@ func (c Client) FocusPane(ctx context.Context, paneID string) (PaneInfo, error) 
 		Type string    `json:"type"`
 		Pane *PaneInfo `json:"pane"`
 	}
-	if err := c.Call(ctx, "pane.focus", params, &out); err != nil {
+	if err := c.Call(ctx, method, params, &out); err != nil {
 		return PaneInfo{}, err
 	}
 	if out.Type != "pane_info" {
-		return PaneInfo{}, fmt.Errorf("%w: pane.focus: result type %q, want \"pane_info\"", ErrProtocol, out.Type)
+		return PaneInfo{}, fmt.Errorf("%w: %s: result type %q, want \"pane_info\"", ErrProtocol, method, out.Type)
 	}
 	if out.Pane == nil || out.Pane.PaneID == "" {
-		return PaneInfo{}, fmt.Errorf("%w: pane.focus: result has no pane.pane_id", ErrProtocol)
+		return PaneInfo{}, fmt.Errorf("%w: %s: result has no pane.pane_id", ErrProtocol, method)
 	}
 	return *out.Pane, nil
 }

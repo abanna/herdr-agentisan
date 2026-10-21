@@ -75,14 +75,16 @@ type lockList struct {
 // break a lease. A line in any other form is ErrLocks.
 func parse(content []byte) (lockList, error) {
 	l := lockList{holders: map[File][]int{}, waiting: map[int]bool{}}
-	for n, line := range bytes.Split(content, []byte("\n")) {
+	n := 0
+	for line := range bytes.Lines(content) {
+		n++
 		fields := strings.Fields(string(line))
 		if len(fields) == 0 {
 			continue
 		}
 		e, err := parseLine(fields)
 		if err != nil {
-			return lockList{}, fmt.Errorf("%w: line %d: %w", ErrLocks, n+1, err)
+			return lockList{}, fmt.Errorf("%w: line %d: %w", ErrLocks, n, err)
 		}
 		switch {
 		case e.waiter:
@@ -190,28 +192,39 @@ type stat struct {
 	err    error
 }
 
-// passes is how many times Read reads the lock list for one reading.
-const passes = 2
-
 // Read reads the held locks from procLocks, the path of a /proc/locks, and
 // judges their holders against proc, the root of a /proc.
 //
-// The kernel lists the locks a page at a time, and a lock released between
-// two pages can shift the next page past a lock that is still held, which
-// would read as free. So one reading is two passes, back to back, and holds
-// every lock and every waiter either pass lists (A40). The kernel never lists
-// a lock that was not there, so the union only keeps a lock released during
-// the reading taken until the next poll.
+// /proc/locks is a seq_file: each read() call returns at most a page, and
+// the kernel starts each page again from the index where the last one
+// stopped (fs/seq_file.c seq_read_iter, fs/locks.c locks_start). So when
+// another process drops a lock listed before that index between two calls,
+// every later line moves back one, and the next page skips one: a lock held
+// all along reads as free. The skip can only fall where a page begins, so
+// one reading is three whole reads of the list, each asking for a different
+// first size, a page, a third and two thirds of one, which sets its pages a
+// third of a page apart from the others'. A held lock is then missed only if
+// all three reads begin a page on it. The reading holds every holder and
+// every waiter any read lists (A40).
+//
+// Measured with 64 locks held while goroutines took and dropped others
+// (NERD-5341): one read missed a held lock in 1,974 of 3,000 counts with 8
+// of them, two plain reads, whose pages begin in the same places, in 1,244,
+// and three staggered reads in none of 30,000 with 16. The union can count a
+// slot that was released during the reads as used: it was, during the count.
 func Read(procLocks, proc string) (*Reading, error) {
-	return readPasses(proc, func() ([]byte, error) { return readList(procLocks) })
+	open := func() (io.ReadCloser, error) { return os.Open(procLocks) } // #nosec G304 -- the kernel's lock list, or a test's stand-in for it; only read.
+	return readStaggered(proc, procLocks, open, os.Getpagesize())
 }
 
-// readPasses is one reading made of passes calls to read, each one pass of
-// the lock list.
-func readPasses(proc string, read func() ([]byte, error)) (*Reading, error) {
-	contents := make([][]byte, 0, passes)
-	for range passes {
-		content, err := read()
+// readStaggered is one reading made of three whole reads of what open
+// opens, their first read() calls asking for page, page/3 and 2*page/3
+// bytes. A read that fails or holds a line parse cannot read fails it all: a
+// part of the list must never read as a slot free.
+func readStaggered(proc, name string, open func() (io.ReadCloser, error), page int) (*Reading, error) {
+	contents := make([][]byte, 0, 3)
+	for _, first := range []int{page, page / 3, 2 * page / 3} {
+		content, err := readWhole(name, open, max(first, 1))
 		if err != nil {
 			return nil, err
 		}
@@ -220,7 +233,8 @@ func readPasses(proc string, read func() ([]byte, error)) (*Reading, error) {
 	return reading(proc, contents...)
 }
 
-// reading is one reading made of the passes in contents.
+// reading is one reading made of the reads in contents: every holder and
+// every waiter any of them lists.
 func reading(proc string, contents ...[]byte) (*Reading, error) {
 	l := lockList{holders: map[File][]int{}, waiting: map[int]bool{}}
 	for _, content := range contents {
@@ -240,21 +254,36 @@ func reading(proc string, contents ...[]byte) (*Reading, error) {
 	return &Reading{locks: l, proc: proc, files: map[string]stat{}, holds: map[File]bool{}}, nil
 }
 
-// readList reads one pass of the lock list at procLocks.
-func readList(procLocks string) ([]byte, error) {
-	f, err := os.Open(procLocks) // #nosec G304 -- the kernel's lock list, or a test's stand-in for it; only read.
+// readChunk is how much each read() after the first asks for: at least a
+// page on every page size Linux uses, 4 KiB to 64 KiB, and a page is all
+// /proc/locks gives a call.
+const readChunk = 64 << 10
+
+// readWhole reads what open opens to its end, its first read() call asking
+// for first bytes, and fails past MaxProcLocks.
+func readWhole(name string, open func() (io.ReadCloser, error), first int) ([]byte, error) {
+	f, err := open()
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrLocks, err)
 	}
 	defer func() { _ = f.Close() }()
-	content, err := io.ReadAll(io.LimitReader(f, MaxProcLocks+1))
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrLocks, err)
+	var content []byte
+	buf := make([]byte, max(first, readChunk))
+	ask := first
+	for {
+		n, err := f.Read(buf[:ask])
+		content = append(content, buf[:n]...)
+		if len(content) > MaxProcLocks {
+			return nil, fmt.Errorf("%w: %s is over %d bytes", ErrLocks, name, MaxProcLocks)
+		}
+		if errors.Is(err, io.EOF) {
+			return content, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrLocks, err)
+		}
+		ask = len(buf)
 	}
-	if len(content) > MaxProcLocks {
-		return nil, fmt.Errorf("%w: %s is over %d bytes", ErrLocks, procLocks, MaxProcLocks)
-	}
-	return content, nil
 }
 
 // Count is how many of paths some process holds a lock on, of len(paths),
