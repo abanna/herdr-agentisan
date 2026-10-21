@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A29, A31 and A35 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A29, A31, A35 and A41 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -904,3 +904,20 @@ Budget: an agent pane a team places carries 8 keys, and a push sets 4.
 - **Logs, not events.** A rebind or a re-key is logged at info. A lost row, and a candidate with another shell, are logged at warn. Workflow events for them can follow as an addition to `docs/telemetry.md`.
 - **A19's tab race is narrower.** herdr 0.9.3 maps a tab's position to its saved number (`src/app/ids.rs:19-25`), so a tab opened or closed between `pane.list` and `tab.list` cannot put a neighbour's label on a pane. Only a tab renamed between the two calls can mislabel a pane, for that one poll.
 - **Out of scope.** The focus history (Back already skips unlisted panes, A16), messages to a bare pane, and the tokens a live handoff erases.
+
+### A41. herdr's tab bar: the team's line
+
+*Adds to:* A24, A29 and A31. *Overrides:* A29's and A31's Cutover, which retire herdr's `tab_bar_right` command with herdr-status.sh: the entry stays, and runs `status line`. Recorded with NERD-5324 (G6 of the migration's parity inventory).
+
+- **Why.** The header shows only while a dashboard is open. herdr-status.sh's line is on every workspace's tab bar, all the time, and both teams read it there.
+- **The line.** `herdr-agentisan status line` prints one line from the daemon's `snapshot` op, so it calls neither gh nor herdr: `PRs #878⏳ #886✓ · slots 2/2 · issues 14`, in herdr-status.sh's order, each PR with the header's mark (A29) in its compact form.
+  - What the snapshot does not report is left out, as in the header. A part that is not reported may simply not be configured, a project with no `github` repo or no `[tests] locks`, where a `?` would show forever. A snapshot that reports nothing is an empty line.
+  - It names no team: it follows the focused workspace, whose tabs the bar already shows.
+- **Which team.** `--project`'s, or the team `--workspace`'s workspace is in. With neither, the team of `HERDR_ACTIVE_WORKSPACE_ID`, which herdr sets for a tab-bar command to the server's active workspace when it spawns it (`src/app/custom_commands.rs:244-286`), so the line follows focus within one interval. Without it, the ◆ spaces' team, as for an op that selects nothing. A workspace in no team prints an empty line, which hides the entry.
+- **Within herdr's limits.** herdr 0.9.3 runs the command through `/bin/sh -lc` and keeps the first 80 characters of its last line, counting characters, not cells, with styles stripped. It clears the entry when the command exits non-zero, prints nothing, or outlives `timeout_seconds` (default 2), and kills its process group then (`src/app/tab_bar_status.rs`). So:
+  - The line fits 80 characters on its own: the PRs give way to a count, and a count line still too long is cut with `…`.
+  - The command waits at most 1 s for the daemon (`--timeout`), not the socket's 5 s. Every daemon outcome exits 0 with one short line: `agentisan: daemon down` when nothing answers, `agentisan: starting` before the first poll, `agentisan: not answering` past the budget, and `agentisan: daemon error` for a refusal or an answer that breaks the protocol or the contract.
+  - Only a command line that is wrong, such as no state directory or a bad flag, exits non-zero, so herdr clears the entry and logs why.
+- **The state directory.** herdr does not set `HERDR_PLUGIN_STATE_DIR` for a tab-bar command, so the snippet passes `--state-dir`: herdr's state directory plus `plugins/nerdsrun.agentisan` (`src/plugin_paths.rs:21-25`, `src/config/io.rs:37-42`). Deriving that path in Go was rejected: it would tie the plugin to herdr's internal layout.
+- **The snippet.** `docs/config/herdr-tab-bar.example.toml`, every 5 s with a 2 s timeout, where herdr-status.sh ran every 60 s: one read of the daemon's cache is cheap. `TestTabBarSnippet` runs its command line.
+- **Cutover.** Retiring herdr-status.sh is an edit of herdr's config, by hand, never by the plugin. For herdr-agentisan it follows the live check. For agentisan-skills it also waits for per-project locks: until then the one `[tests] locks` list (A31) gives that team another team's slots, and no held slot.

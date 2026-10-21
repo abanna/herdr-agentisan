@@ -287,8 +287,25 @@ keeps one per slot in `$XDG_RUNTIME_DIR/agentisan/gate.<n>.lock`. Without
 from when this daemon first saw the boss's pane, so a handoff or a daemon
 restart starts it again.
 
-With both in the header, herdr-status.sh, herdr's `tab_bar_right`, can be
-retired.
+## The team's line in herdr's tab bar
+
+`herdr-agentisan status line` prints herdr-status.sh's line for a team,
+`PRs #878⏳ #886✓ · slots 2/2 · issues 14`, from the daemon's snapshot, so it
+never calls gh (ADR-001 A41). Run as herdr's `tab_bar_right` command, it
+follows the focused workspace: the line is that workspace's team's, and
+outside every team the entry hides. `--project <name>` shows one team
+everywhere. What the daemon does not report is left out, and the line fits
+the 80 characters herdr shows, the PRs giving way to a count first. A daemon
+that is down, starting or slower than 1 s is one short line, such as
+`agentisan: daemon down`, never a blank entry.
+
+Put the `[ui]` keys of
+[`docs/config/herdr-tab-bar.example.toml`](docs/config/herdr-tab-bar.example.toml)
+in herdr's config, in place of herdr-status.sh's entry, and reload herdr's
+config. herdr gives a tab-bar command no `HERDR_PLUGIN_STATE_DIR`, so the
+command names the plugin's state directory with `--state-dir`. Retire
+herdr-status.sh by hand after a live check; for the agentisan-skills team,
+only once each project counts its own test slots.
 
 ## Gates
 

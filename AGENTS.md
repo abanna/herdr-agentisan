@@ -191,8 +191,11 @@ exempts whatever is later added under that name.
   an unnamed row by its pane id. From the daemon it shows its own team:
   `locate.go` finds the pane running it by its pid, and the daemon maps that
   pane's workspace to a team (A24). `/` narrows the agents to a search query in
-  place (`search.go`, ADR-001 A20). Goldens in `testdata/`
-  (`go test ./internal/dashboard/ -update`, then read every one).
+  place (`search.go`, ADR-001 A20). Also the team's one line for herdr's tab
+  bar (`tabbar.go`, A41), which `status line` prints, with its
+  `tab_bar_right` entry `docs/config/herdr-tab-bar.example.toml`, for herdr's
+  own config (`TestTabBarSnippet` in `internal/cli` runs it). Goldens in
+  `testdata/` (`go test ./internal/dashboard/ -update`, then read every one).
 - `internal/devctl/` — the `devctl` cobra tree: the coverage floor, the
   docs-parity check and the large-file ceiling, none of which the Go toolchain
   provides.

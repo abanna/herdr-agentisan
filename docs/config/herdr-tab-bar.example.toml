@@ -1,0 +1,38 @@
+# herdr's tab bar for Agentisan (ADR-001 A41): the team's PRs, test slots and
+# open issues, herdr-status.sh's line, at the right of the tab row on every
+# workspace. herdr plugins cannot ship config: put these two keys in the
+# [ui] table of herdr's own config (~/.config/herdr/config.toml), in place of
+# the tab_bar_right you have, and reload herdr's config.
+#
+# The line reads "PRs #878⏳ #886✓ · slots 2/2 · issues 14", each PR with the
+# dashboard header's mark (A29). It comes from the daemon's snapshot, so it
+# never calls gh or herdr, and it follows the focused workspace: herdr gives
+# the command HERDR_ACTIVE_WORKSPACE_ID, and the line is that workspace's
+# team's. Outside every team the entry hides; what the daemon does not
+# report is left out. Add `--project <name>` to show one team everywhere.
+#
+# - herdr runs the command through `/bin/sh -lc`, so herdr-agentisan must be
+#   on that shell's PATH (`task install`), or give an absolute path.
+# - herdr does not set HERDR_PLUGIN_STATE_DIR for a tab-bar command, so
+#   --state-dir names the plugin's state directory, where the daemon runs:
+#   herdr's state directory plus plugins/nerdsrun.agentisan. That is
+#   $XDG_STATE_HOME/herdr/plugins/nerdsrun.agentisan when XDG_STATE_HOME is
+#   set, else the path below.
+# - Every 5 s, where herdr-status.sh ran every 60: the line is one read of
+#   the daemon's cache, so the bar follows a workspace switch within 5 s. The
+#   command waits at most 1 s for the daemon (--timeout), under
+#   timeout_seconds, then prints "agentisan: not answering"; a daemon down or
+#   starting says so too. herdr clears an entry whose command fails, prints
+#   nothing or outlives timeout_seconds.
+# - herdr shows the first 80 characters of the line, so the PRs give way to
+#   a count first and the slots and issues always show.
+#
+# TestTabBarSnippet (internal/cli) runs this command line and keeps it in
+# step with the command's flags and budget.
+
+[ui]
+tab_bar_right = [
+  { type = "command", command = 'herdr-agentisan status line --state-dir "$HOME/.local/state/herdr/plugins/nerdsrun.agentisan"', interval_seconds = 5, timeout_seconds = 2 },
+  { type = "datetime", format = "%H:%M" },
+]
+tab_bar_right_separator = " · "
