@@ -919,7 +919,7 @@ Budget: an agent pane a team places carries 8 keys, and a push sets 4.
 - **Data age.** When the drawn snapshot's `at` is more than 15 whole seconds older than the dashboard's clock, the footer shows `data Ns old` in yellow, always in seconds (an hour reads `data 3600s old`). It comes after a search query and before the errors, the note and the hints, and the footer is cut from the right, so a long error cannot push it off. Nothing is shown with no snapshot, or with an `at` that is after the clock or is the zero time.
   - The daemon polls every 3 s, so against the daemon the age appears only when the poll stops. A fixture always reads stale.
   - There is no `r` refresh key: the dashboard already asks the daemon every second.
-- **A new optional key, `shell`.** It is set on a row whose pane runs no agent: herdr detects none and knows none by name. Absent means false, as for `unnamed` (A18), so every snapshot written before it means what it meant.
+- **A new optional key, `shell`.** It is set on a row whose pane runs no agent: herdr detects none and knows none by name. It is not A35's shell, the pane's shell process that a `workers` row is matched by. Absent means false, as for `unnamed` (A18), so every snapshot written before it means what it meant.
   - A shell has no agent name, so it is always `unnamed`; and a shell is never the boss (A18). The decoder refuses a document that breaks either.
   - The dashboard draws a shell whose status is `unknown` as `▸` with the state word `shell`, counts it as `▸N` in its group's title, and names it in the help.
   - A shell with another status keeps that status's glyph. The one case is `ready` from a handoff token, which `$team` counts as ready too.
