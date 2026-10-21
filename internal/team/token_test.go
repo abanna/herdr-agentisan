@@ -15,7 +15,7 @@ import (
 // p is a pane in workspace ws with an agent status; handoff, when set, is its
 // handoff token.
 func p(id, ws, status string, handoff ...string) herdr.PaneInfo {
-	pane := herdr.PaneInfo{PaneID: id, WorkspaceID: ws, AgentStatus: status}
+	pane := herdr.PaneInfo{PaneID: id, TerminalID: "term_" + id, WorkspaceID: ws, AgentStatus: status}
 	if status != "unknown" {
 		pane.Agent = "claude"
 	}
@@ -27,7 +27,7 @@ func p(id, ws, status string, handoff ...string) herdr.PaneInfo {
 
 // shell is a plain shell: no agent, status unknown.
 func shell(id, ws string) herdr.PaneInfo {
-	return herdr.PaneInfo{PaneID: id, WorkspaceID: ws, AgentStatus: "unknown"}
+	return herdr.PaneInfo{PaneID: id, TerminalID: "term_" + id, WorkspaceID: ws, AgentStatus: "unknown"}
 }
 
 // TestTeamTokenGoldens is the `$team` format (ADR-001 A28, amending A17's

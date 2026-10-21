@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/abanna/herdr-agentisan/internal/settings"
+	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
 )
 
@@ -54,6 +55,20 @@ type GroupStatus struct {
 	Members    []Member `json:"members"`
 }
 
+// UnboundWorker is a live workers row of the team that binds no pane
+// (ADR-001 A35).
+type UnboundWorker struct {
+	ID    string `json:"id"`
+	Group string `json:"group"`
+	// PaneID is the pane the row was last seen on: a hint, never a pane to
+	// act on.
+	PaneID string `json:"pane_id"`
+	// Status is the row's: lost once the team poll found no pane holding
+	// it, else what it was while herdr lists its terminal nowhere, until
+	// the poll re-keys or loses it.
+	Status string `json:"status"`
+}
+
 // StatusResult is team status's answer.
 type StatusResult struct {
 	Project string `json:"project"`
@@ -62,6 +77,8 @@ type StatusResult struct {
 	Workspaces []string      `json:"workspaces"`
 	Groups     []GroupStatus `json:"groups"`
 	Boss       []Member      `json:"boss"`
+	// Unbound are the team's live rows no pane is bound to, by id.
+	Unbound []UnboundWorker `json:"unbound"`
 }
 
 // Status reports a team: every group, configured or found, with its counts
@@ -97,7 +114,7 @@ func (s *Service) Status(ctx context.Context, req StatusRequest) (StatusResult, 
 	if i := slices.IndexFunc(m.Projects, func(p team.Project) bool { return p.Name == t.Project }); i >= 0 {
 		pr = m.Projects[i]
 	}
-	out := StatusResult{Project: t.Project, Layout: t.Layout, Workspaces: slices.Clone(pr.Workspaces), Groups: []GroupStatus{}, Boss: []Member{}}
+	out := StatusResult{Project: t.Project, Layout: t.Layout, Workspaces: slices.Clone(pr.Workspaces), Groups: []GroupStatus{}, Boss: []Member{}, Unbound: unbound(t.Project, l, rows)}
 	if out.Workspaces == nil {
 		out.Workspaces = []string{}
 	}
@@ -134,6 +151,22 @@ func (s *Service) Status(ctx context.Context, req StatusRequest) (StatusResult, 
 		out.Groups = append(out.Groups, g)
 	}
 	return out, nil
+}
+
+// unbound are project's rows that bind no pane in l: lost, or with a
+// terminal herdr lists nowhere, rows being in logical id order.
+func unbound(project string, l layout, rows []store.Worker) []UnboundWorker {
+	listed := map[string]bool{}
+	for _, p := range l.Panes {
+		listed[p.TerminalID] = p.TerminalID != ""
+	}
+	out := []UnboundWorker{}
+	for _, r := range rows {
+		if r.Project == project && (r.Status == store.StatusLost || !listed[r.TerminalID]) {
+			out = append(out, UnboundWorker{ID: r.LogicalID, Group: r.Group, PaneID: r.PaneID, Status: r.Status})
+		}
+	}
+	return out
 }
 
 // member reports one worker of the model, named by its tab's label in l
