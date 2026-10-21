@@ -38,14 +38,20 @@ refusal exits 1:
 
 ## Who the sender is
 
-The daemon reads the sender from herdr and `state.db`, not from anything the
-command claims:
-1. the worker bound to the terminal of the pane the command runs in;
+The command names the pane it runs in, once its own process lineage
+confirms it, and the daemon reads who that pane is from herdr and
+`state.db`:
+1. the worker a live row binds to the pane's terminal;
 2. else that team's boss, for a pane in its `<short>-boss` tab or ◆ boss;
 3. else the pane itself, by its terminal.
 
 `HERDR_AGENTISAN_WORKER` counts only when the command's own pane can't be
-confirmed.
+confirmed, and only for a worker with a live row.
+
+There is no authentication, as with `herdr agent prompt`. The daemon takes
+the pane the command names, so any process of yours that reaches the
+daemon's socket can claim any pane, and `HERDR_AGENTISAN_WORKER` is a claim
+too.
 
 ## What arrives
 

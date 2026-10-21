@@ -98,6 +98,52 @@ func TestStatusChangedEmitsTheSchema(t *testing.T) {
 	}
 }
 
+// TestMessageEventsEmitTheSchema is A30's contract for the four message
+// events, as docs/telemetry.md lists it: each name, exactly its eight
+// attributes, the body line and the severity, spelled out by hand so a
+// renamed event or key fails the test rather than silently moving the field.
+func TestMessageEventsEmitTheSchema(t *testing.T) {
+	t.Parallel()
+
+	m := telemetry.Message{
+		ID: "01JMSG", FromKind: "worker", From: "ha-coder-1", ToKind: "boss", To: "ha-boss",
+		ReturnedFrom: "ha-coder-2", Attempts: 2, Reason: "timed out",
+	}
+	want := map[string]any{
+		"agentisan.message.id": "01JMSG", "agentisan.message.from.kind": "worker", "agentisan.message.from.id": "ha-coder-1",
+		"agentisan.message.to.kind": "boss", "agentisan.message.to.id": "ha-boss",
+		"agentisan.message.returned_from": "ha-coder-2", "agentisan.message.attempts": int64(2),
+		"agentisan.message.reason": "timed out",
+	}
+	tests := map[string]struct {
+		emit func(*telemetry.Events, context.Context, telemetry.Message)
+		body string
+	}{
+		"agentisan.message.queued":    {(*telemetry.Events).MessageQueued, "01JMSG queued for ha-boss"},
+		"agentisan.message.delivered": {(*telemetry.Events).MessageDelivered, "01JMSG delivered to ha-boss"},
+		"agentisan.message.failed":    {(*telemetry.Events).MessageFailed, "01JMSG failed to ha-boss"},
+		"agentisan.message.returned":  {(*telemetry.Events).MessageReturned, "01JMSG returned to ha-boss"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			events, rec := telemetrytest.NewEvents()
+			tc.emit(events, t.Context(), m)
+
+			got := rec.Events()
+			require.Len(t, got, 1)
+			assert.Equal(t, name, got[0].Name)
+			assert.Equal(t, want, got[0].Attrs, "exactly the schema's attributes, no more")
+
+			records := rec.Records()
+			assert.Equal(t, log.SeverityInfo, records[0].Severity())
+			assert.Equal(t, "INFO", records[0].SeverityText())
+			assert.Equal(t, tc.body, records[0].Body().AsString(), "the message and its recipient, never its body")
+			assert.False(t, records[0].Timestamp().IsZero(), "the event carries when it was seen")
+		})
+	}
+}
+
 // TestNilEventsEmitNothing: the daemon holds a nil *Events when no endpoint
 // is configured, and every emit is then a silent no-op, never a panic.
 func TestNilEventsEmitNothing(t *testing.T) {

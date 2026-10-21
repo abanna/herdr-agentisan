@@ -49,8 +49,15 @@ func TestSendFindsTheSenderAndTheRecipient(t *testing.T) {
 	notes := f.h.addTab(f.h.addWorkspace("notes"), "notes", "claude", "idle")
 	spacesBoss := f.h.addTab(f.h.addWorkspace("◆ boss"), "1", "claude", "working")
 	spacesCoder := f.h.addTab(f.h.addWorkspace("◆ coders"), "1", "claude", "idle")
+	inBossTab := f.h.addPane(f.boss, "claude", "idle") // a split in the boss tab
+	f.bindRow(t, "ha-coder-7", "coder", inBossTab)
+	lost := f.worker(t, "ha-coder-2", "coder")
+	f.markLost(t, "ha-coder-2") // the poll lost it once; its pane still shows its terminal
+	f.worker(t, "ha-coder-3", "coder")
+	f.exec(t, "UPDATE workers SET status = ? WHERE logical_id = 'ha-coder-3'", store.StatusStarting)
 
 	worker := workforce.Party{Kind: store.KindWorker, ID: "ha-coder-1"}
+	named := func(id string) workforce.Party { return workforce.Party{Kind: store.KindWorker, ID: id} }
 	haBoss := workforce.Party{Kind: store.KindBoss, ID: "ha-boss"}
 	spaces := workforce.Party{Kind: store.KindBoss, ID: "boss"}
 	pane := func(p string) workforce.Party { return workforce.Party{Kind: store.KindPane, ID: f.terminal(t, p)} }
@@ -68,6 +75,10 @@ func TestSendFindsTheSenderAndTheRecipient(t *testing.T) {
 		"no pane, the worker's variable":       {workforce.SendRequest{To: "boss", Worker: "ha-coder-1"}, worker, haBoss},
 		"a pane herdr lists nowhere":           {workforce.SendRequest{To: "boss", CallerPane: "w99:p1", Worker: "ha-coder-1"}, worker, haBoss},
 		"a confirmed pane beats the variable":  {workforce.SendRequest{To: "boss", CallerPane: scratch, Worker: "ha-coder-1"}, pane(scratch), haBoss},
+		"a worker bound in the boss tab":       {workforce.SendRequest{To: "boss", CallerPane: inBossTab}, named("ha-coder-7"), haBoss},
+		"a lost row's pane":                    {workforce.SendRequest{To: "boss", CallerPane: lost.PaneID}, named("ha-coder-2"), haBoss},
+		"no pane, a lost worker's variable":    {workforce.SendRequest{To: "boss", Worker: "ha-coder-2"}, named("ha-coder-2"), haBoss},
+		"no pane, a starting worker's":         {workforce.SendRequest{To: "boss", Worker: "ha-coder-3"}, named("ha-coder-3"), haBoss},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

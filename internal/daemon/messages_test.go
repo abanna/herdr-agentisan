@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/telemetry"
 	"github.com/abanna/herdr-agentisan/internal/telemetry/telemetrytest"
+	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
 var (
@@ -642,6 +644,24 @@ func TestDispatcherFailsAPaneMessageItCannotType(t *testing.T) {
 	}
 }
 
+// TestDispatcherNeverAgesOutAWorkersMessage is Q3: the hour is for a pane
+// recipient only, so a worker's message held two hours, such as one queued
+// through a long handoff, is still typed.
+func TestDispatcherNeverAgesOutAWorkersMessage(t *testing.T) {
+	t.Parallel()
+	th, p, dir := haTeam(t)
+	st := stateStore(t, dir, th)
+	now := time.Now()
+	m, err := st.Send(t.Context(), coder, haBoss, "held two hours", now.Add(-2*time.Hour))
+	require.NoError(t, err)
+	o := teamOpts(t, dir, th, workforceConfig(t))
+	o.Now = func() time.Time { return now } // the age is exact
+	run(t, o)
+
+	eventuallyState(t, st, m.ID, store.MessageDelivered)
+	assert.Equal(t, typed{Target: "ha-coder-1", Pane: "w14:p2", Text: "[msg " + m.ID + " from ha-boss] held two hours"}, p.next(t))
+}
+
 // TestDispatcherHoldsWhenAListFailsLater: every poll replaces the model the
 // dispatcher checks targets against, so a list that fails after good polls
 // holds every message until it answers again, rather than leaving the last
@@ -688,6 +708,59 @@ func listed(t *testing.T, srv *herdrtest.Server, n int) {
 	}
 	from := count()
 	require.Eventually(t, func() bool { return count() >= from+n+1 }, ready, 5*time.Millisecond, "the daemon did not list the panes %d more times", n)
+}
+
+// TestDispatcherHoldsAPaneNoticeWhenItsListFails is B3: the panes the
+// dispatcher lists for its pane recipients failing holds a pane's notice
+// for the next pass, untried, and never fails it as shown by no pane; the
+// pass goes on to the other recipients.
+func TestDispatcherHoldsAPaneNoticeWhenItsListFails(t *testing.T) {
+	t.Parallel()
+	th, p, dir := haTeam(t)
+	st := stateStore(t, dir, th)
+	shell := store.Address{Kind: store.KindPane, ID: "term_w12:p1"} // ◆ herdr's shell: refused, queued again
+	m := sent(t, st, shell, store.Daemon, "[agentisan] a notice")
+	o := teamOpts(t, dir, th, workforceConfig(t))
+	o.Poll = time.Hour // the poll at start only: the send's wake makes the next pass
+	run(t, o)
+	healthy(t, dir, th.fakeHerdr)
+	require.Eventually(t, func() bool {
+		got := stateOf(t, st, m.ID)
+		return got.State == store.MessageQueued && got.Attempts >= 1
+	}, ready, 10*time.Millisecond, "the pass at start tried it")
+	before := stateOf(t, st, m.ID)
+
+	// The send lists the panes before the agents, the dispatcher after:
+	// fail the first pane.list after an agent.list, and only that one.
+	var sawAgents, failed atomic.Bool
+	th.mu.Lock()
+	th.onCall = func(method string) {
+		th.mu.Lock()
+		defer th.mu.Unlock()
+		if failed.Load() {
+			th.panesErr = false
+		}
+		switch {
+		case method == "agent.list":
+			sawAgents.Store(true)
+		case method == "pane.list" && sawAgents.Load() && !failed.Load():
+			failed.Store(true)
+			th.panesErr = true
+		}
+	}
+	th.mu.Unlock()
+
+	data, err := daemon.Workforce(t.Context(), socketPath(t, dir, th.path), daemon.OpSend,
+		workforce.SendRequest{To: "ha-coder-1", Body: "wake", CallerPane: "w14:p1"})
+	require.NoError(t, err)
+	var res workforce.SendResult
+	require.NoError(t, json.Unmarshal(data, &res))
+	assert.Equal(t, "ha-coder-1", p.next(t).Target, "the pass went on to the coder")
+	eventuallyState(t, st, res.ID, store.MessageDelivered)
+	require.True(t, failed.Load(), "the dispatcher's pane.list was failed")
+	got := stateOf(t, st, m.ID)
+	assert.Equal(t, store.MessageQueued, got.State, "held, not failed: %+v", got)
+	assert.Equal(t, before.Attempts, got.Attempts, "not claimed while the list failed")
 }
 
 // TestDispatcherLogsAWaitOnce (Q3): a message held poll after poll is
@@ -894,6 +967,40 @@ func TestRecoverDispatchingWithoutTheTeamPoll(t *testing.T) {
 		return err == nil && ok
 	}, ready, 10*time.Millisecond, "no notice was queued")
 	assert.Equal(t, m.ID, queued.NoticeOf)
+}
+
+// TestRecoveredFailureEmitsFailed is A30's events: a message a crash left
+// dispatching gives one agentisan.message.failed as the next daemon starts,
+// with its one attempt and the recovered reason.
+func TestRecoveredFailureEmitsFailed(t *testing.T) {
+	t.Parallel()
+	th, _, dir := haTeam(t)
+	st := stateStore(t, dir, th)
+	m := sent(t, st, coder, haBoss, "cut off")
+	_, ok, err := st.Claim(t.Context(), coder, time.Now())
+	require.NoError(t, err)
+	require.True(t, ok)
+	events, rec := telemetrytest.NewEvents()
+	o := teamOpts(t, dir, th, workforceConfig(t))
+	o.Team.Events = events
+	run(t, o)
+
+	eventuallyState(t, st, m.ID, store.MessageFailed)
+	of := func() []telemetrytest.Event {
+		var got []telemetrytest.Event
+		for _, e := range rec.Events() {
+			if e.Attrs["agentisan.message.id"] == m.ID {
+				got = append(got, e)
+			}
+		}
+		return got
+	}
+	require.Eventually(t, func() bool { return len(of()) > 0 }, ready, 10*time.Millisecond, "no event for the recovered message")
+	assert.Equal(t, []telemetrytest.Event{{Name: telemetry.EventMessageFailed, Attrs: map[string]any{
+		"agentisan.message.id": m.ID, "agentisan.message.from.kind": "boss", "agentisan.message.from.id": "ha-boss",
+		"agentisan.message.to.kind": "worker", "agentisan.message.to.id": "ha-coder-1",
+		"agentisan.message.returned_from": "", "agentisan.message.attempts": int64(1), "agentisan.message.reason": daemon.RecoveredReason,
+	}}}, of())
 }
 
 // TestACrashMidDispatchFailsTheMessage is A2's crash rule, for real: a
