@@ -353,12 +353,15 @@ func TestWorkforceOpsWaitForTheFirstReconcile(t *testing.T) {
 
 // TestWorkforceRetriesNotReady: daemon.Workforce asks a daemon that answers
 // not_ready again until it answers, all within the one wait the command has,
-// which the caller's context can shorten; once that ends, it asks no more.
+// which the caller's context can shorten: a deadline that ends an exchange,
+// or the wait between two asks, ends the asks at once with the last
+// refusal, and nothing is asked after that.
 func TestWorkforceRetriesNotReady(t *testing.T) {
 	t.Parallel()
 	// serve answers op not_ready n times, running then before each, and
 	// counts the asks.
-	serve := func(n int32, then func(int32)) (string, *atomic.Int32) {
+	serve := func(t *testing.T, n int32, then func(int32)) (string, *atomic.Int32) {
+		t.Helper()
 		var calls atomic.Int32
 		sock := shortDir(t) + "/d.sock"
 		closeOp, err := daemon.ServeOp(t.Context(), sock, daemon.OpTeamStatus, "not_ready", time.Second, func(context.Context) (any, error) {
@@ -373,12 +376,24 @@ func TestWorkforceRetriesNotReady(t *testing.T) {
 		t.Cleanup(closeOp)
 		return sock, &calls
 	}
+	// prompt asserts that Workforce returned on the cue passed at
+	// passedAt, not at the end of its own wait (StatusBudget plus an
+	// exchange): a Workforce that ignores its caller's context returns on
+	// the same refusal, 15 s late (QA #77, F-1).
+	prompt := func(t *testing.T, passedAt *atomic.Int64) {
+		t.Helper()
+		require.NotZero(t, passedAt.Load(), "the cue passed")
+		assert.Less(t, time.Since(time.Unix(0, passedAt.Load())), daemon.StatusBudget, "returned on the cue, not on Workforce's own wait")
+	}
 
-	sock, calls := serve(2, func(int32) {})
-	data, err := daemon.Workforce(t.Context(), sock, daemon.OpTeamStatus, struct{}{})
-	require.NoError(t, err)
-	assert.JSONEq(t, `{"ok":true}`, string(data))
-	assert.Equal(t, int32(3), calls.Load())
+	t.Run("asked again until it answers", func(t *testing.T) {
+		t.Parallel()
+		sock, calls := serve(t, 2, func(int32) {})
+		data, err := daemon.Workforce(t.Context(), sock, daemon.OpTeamStatus, struct{}{})
+		require.NoError(t, err)
+		assert.JSONEq(t, `{"ok":true}`, string(data))
+		assert.Equal(t, int32(3), calls.Load())
+	})
 
 	// The caller's deadline passes while the server handles the second ask,
 	// once it has counted it, and the server holds its answer until
@@ -386,25 +401,57 @@ func TestWorkforceRetriesNotReady(t *testing.T) {
 	// what the server counted is exact, whatever the scheduler does: a
 	// count read off a clock deadline raced the server's handler for the
 	// last ask (NERD-5354 F2, 2 asks read and 3 counted) or the first (0).
-	const deadlineAt = 2
-	ctx := newCueDeadline(t.Context())
-	returned := make(chan struct{})
-	var release sync.Once
-	defer release.Do(func() { close(returned) }) // before the server's Cleanup waits for its handlers
-	sock, calls = serve(1000, func(c int32) {
-		if c == deadlineAt {
-			ctx.pass()
-			<-returned
-		}
+	t.Run("the deadline ends an exchange", func(t *testing.T) {
+		t.Parallel()
+		const deadlineAt = 2
+		ctx := newCueDeadline(t.Context())
+		returned := make(chan struct{})
+		var release sync.Once
+		defer release.Do(func() { close(returned) }) // before the server's Cleanup waits for its handlers
+		var passedAt atomic.Int64
+		sock, calls := serve(t, 1000, func(c int32) {
+			if c == deadlineAt {
+				passedAt.Store(time.Now().UnixNano())
+				ctx.pass()
+				<-returned
+			}
+		})
+		_, err := daemon.Workforce(ctx, sock, daemon.OpTeamStatus, struct{}{})
+		prompt(t, &passedAt)
+		release.Do(func() { close(returned) })
+		// The deadline cut the second exchange short, after a not_ready:
+		// that refusal is the answer (A35).
+		require.ErrorIs(t, err, daemon.ErrNotReady)
+		assert.Equal(t, int32(deadlineAt), calls.Load(), "asked again until the deadline")
+		time.Sleep(300 * time.Millisecond)
+		assert.Equal(t, int32(deadlineAt), calls.Load(), "no ask after the wait ended")
 	})
-	_, err = daemon.Workforce(ctx, sock, daemon.OpTeamStatus, struct{}{})
-	release.Do(func() { close(returned) })
-	// The deadline cut the second exchange short, after a not_ready: that
-	// refusal is the answer (A35).
-	require.ErrorIs(t, err, daemon.ErrNotReady)
-	assert.Equal(t, int32(deadlineAt), calls.Load(), "asked again until the deadline")
-	time.Sleep(300 * time.Millisecond)
-	assert.Equal(t, int32(deadlineAt), calls.Load(), "no ask after the wait ended")
+
+	// The caller's deadline passes 30 ms into the 100 ms wait after the
+	// first refusal: Workforce returns that refusal at once, never the
+	// context's error, and dials no more. The cue is a timer, so on a
+	// machine that delays it past the wait it lands in a later wait or
+	// exchange instead, which ends the same way; only the count is left
+	// unpinned for that (QA #77, F-2).
+	t.Run("the deadline ends the wait between two asks", func(t *testing.T) {
+		t.Parallel()
+		ctx := newCueDeadline(t.Context())
+		var passedAt atomic.Int64
+		sock, calls := serve(t, 1000, func(c int32) {
+			if c == 1 {
+				time.AfterFunc(30*time.Millisecond, func() {
+					passedAt.Store(time.Now().UnixNano())
+					ctx.pass()
+				})
+			}
+		})
+		_, err := daemon.Workforce(ctx, sock, daemon.OpTeamStatus, struct{}{})
+		prompt(t, &passedAt)
+		require.ErrorIs(t, err, daemon.ErrNotReady, "the last refusal, not the deadline")
+		asked := calls.Load()
+		time.Sleep(300 * time.Millisecond)
+		assert.Equal(t, asked, calls.Load(), "no ask after the wait ended")
+	})
 }
 
 // cueDeadline is a context whose deadline passes when the test says so,

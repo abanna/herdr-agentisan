@@ -35,19 +35,22 @@ import (
 // idle. A daemon that is ready ends every wait at once, so the size costs
 // nothing when nothing is wrong.
 //
-// It covers one bounded thing at a time, so a wait for what a daemon does
-// once it serves (its focus subscription, a poll) starts after it serves
-// (serving), not with its start (NERD-5354 F3). With its start forced to
-// 7 s and the subscription and first poll to 4 s after it serves,
-// TestBackWalksTheHistory, TestTeamPushStopsWithTheDaemon and
-// TestRunClearsTheViewOutsideEveryTeam failed 7 of 7 subtests timing from
-// the start, and pass 7 of 7 timing from serving.
+// It covers one bounded thing at a time. The tests NERD-5354 F3 named,
+// TestBackWalksTheHistory (through backDaemon),
+// TestTeamPushStopsWithTheDaemon and TestRunClearsTheViewOutsideEveryTeam,
+// wait for what a daemon does once it serves (its focus subscription, a
+// poll) from when it serves (serving), not from its start: with its start
+// forced to 7 s and the subscription and first poll to 4 s after it serves,
+// those 7 (sub)tests failed timing from the start and pass timing from
+// serving. A new wait for such an event should use serving too; the rest of
+// the package still times its waits from run, a follow-up (QA #77, F-5).
 //
 // It assumes memory headroom, not an idle CPU. In this package's -race
-// -count=10 run on 2 cores, a start took p99 0.5 s; capped at 300M (85% of
-// its peak, 129k major page faults), store.Open took up to 86 s and a
-// first poll up to 19 s, past any fixed wait, and 25 tests failed. A
-// timeout on a machine out of memory or swap is that, not the test.
+// -count=10 run on 2 cores, a start took p99 0.5 s and the run peaked at
+// 367 MiB; capped at 300 MiB (129k major page faults), store.Open took up
+// to 86 s and a first poll up to 19 s, past any fixed wait, and 25 tests
+// failed. A timeout on a machine out of memory or swap is that, not the
+// test.
 const ready = herdr.CallTimeout + store.BusyTimeout
 
 // shortDir returns a fresh directory with a short path: unix socket paths
