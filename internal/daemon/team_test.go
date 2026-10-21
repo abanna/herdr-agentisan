@@ -480,7 +480,7 @@ func TestTeamPushStopsWithTheDaemon(t *testing.T) {
 			t.Parallel()
 			th := newTeamHerdr(t)
 			original := th.srv
-			r := run(t, teamOpts(t, shortDir(t), th, ""))
+			r := serving(t, teamOpts(t, shortDir(t), th, ""), th.fakeHerdr)
 			polled(t, original, 1)
 
 			tc.stop(th, r)

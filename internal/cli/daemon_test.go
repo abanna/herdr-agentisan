@@ -31,6 +31,15 @@ import (
 // store's waits (store.BusyTimeout). A fresh state.db costs ten fsyncs,
 // which take seconds on a runner whose disk other suites keep busy, so a
 // literal few seconds flakes there. A ready daemon ends every wait at once.
+//
+// A wait for what a daemon does once it serves, such as its first GitHub
+// collection, starts after it serves (awaitDaemon), so its start and that
+// wait each get ready (NERD-5366). With its start forced to 7 s and its
+// collection to 4 s after it serves, TestDaemonRunFindsGhOnItsPATH timed
+// from the start failed 3 of 3 subtests and passes 3 of 3 from serving.
+// It assumes memory headroom: capped at 150M (80% of the package's peak,
+// 30k major page faults), 7 other tests here failed, while this one's
+// daemons reached their collection within 0.4 s of their start.
 const ready = herdr.CallTimeout + store.BusyTimeout
 
 // daemonEnv is a herdr server plus a plugin state directory, both scratch:

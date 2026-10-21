@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"maps"
 	"net"
@@ -13,6 +12,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -380,17 +380,60 @@ func TestWorkforceRetriesNotReady(t *testing.T) {
 	assert.JSONEq(t, `{"ok":true}`, string(data))
 	assert.Equal(t, int32(3), calls.Load())
 
-	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
-	defer cancel()
-	sock, calls = serve(1000, func(int32) {})
+	// The caller's deadline passes while the server handles the second ask,
+	// once it has counted it, and the server holds its answer until
+	// Workforce has returned, so the deadline cuts that exchange short and
+	// what the server counted is exact, whatever the scheduler does: a
+	// count read off a clock deadline raced the server's handler for the
+	// last ask (NERD-5354 F2, 2 asks read and 3 counted) or the first (0).
+	const deadlineAt = 2
+	ctx := newCueDeadline(t.Context())
+	returned := make(chan struct{})
+	var release sync.Once
+	defer release.Do(func() { close(returned) }) // before the server's Cleanup waits for its handlers
+	sock, calls = serve(1000, func(c int32) {
+		if c == deadlineAt {
+			ctx.pass()
+			<-returned
+		}
+	})
 	_, err = daemon.Workforce(ctx, sock, daemon.OpTeamStatus, struct{}{})
-	// The deadline ends an exchange, or the wait between two.
-	assert.True(t, errors.Is(err, context.DeadlineExceeded) || errors.Is(err, daemon.ErrNotReady), "%v", err)
-	asked := calls.Load()
-	assert.Positive(t, asked)
+	release.Do(func() { close(returned) })
+	// The deadline cut the second exchange short, after a not_ready: that
+	// refusal is the answer (A35).
+	require.ErrorIs(t, err, daemon.ErrNotReady)
+	assert.Equal(t, int32(deadlineAt), calls.Load(), "asked again until the deadline")
 	time.Sleep(300 * time.Millisecond)
-	assert.Equal(t, asked, calls.Load(), "no ask after the wait ended")
+	assert.Equal(t, int32(deadlineAt), calls.Load(), "no ask after the wait ended")
 }
+
+// cueDeadline is a context whose deadline passes when the test says so,
+// not at a time: once pass runs, Done is closed and Err is
+// context.DeadlineExceeded. A test ends a caller's wait at a known point
+// of an exchange with it, where a clock deadline lands wherever the
+// scheduler puts it.
+type cueDeadline struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
+func newCueDeadline(parent context.Context) *cueDeadline {
+	return &cueDeadline{Context: parent, done: make(chan struct{})}
+}
+
+func (c *cueDeadline) Done() <-chan struct{} { return c.done }
+
+func (c *cueDeadline) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func (c *cueDeadline) pass() { c.once.Do(func() { close(c.done) }) }
 
 // TestWorkforceKeepsNotReadyPastTheDeadline: a deadline that cuts short an
 // ask after a not_ready refusal is that refusal, not a daemon gone. The

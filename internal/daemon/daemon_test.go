@@ -34,6 +34,20 @@ import (
 // fresh store.Open took a median of 2.3 s and up to 5.3 s, against 40 ms
 // idle. A daemon that is ready ends every wait at once, so the size costs
 // nothing when nothing is wrong.
+//
+// It covers one bounded thing at a time, so a wait for what a daemon does
+// once it serves (its focus subscription, a poll) starts after it serves
+// (serving), not with its start (NERD-5354 F3). With its start forced to
+// 7 s and the subscription and first poll to 4 s after it serves,
+// TestBackWalksTheHistory, TestTeamPushStopsWithTheDaemon and
+// TestRunClearsTheViewOutsideEveryTeam failed 7 of 7 subtests timing from
+// the start, and pass 7 of 7 timing from serving.
+//
+// It assumes memory headroom, not an idle CPU. In this package's -race
+// -count=10 run on 2 cores, a start took p99 0.5 s; capped at 300M (85% of
+// its peak, 129k major page faults), store.Open took up to 86 s and a
+// first poll up to 19 s, past any fixed wait, and 25 tests failed. A
+// timeout on a machine out of memory or swap is that, not the test.
 const ready = herdr.CallTimeout + store.BusyTimeout
 
 // shortDir returns a fresh directory with a short path: unix socket paths
@@ -271,6 +285,20 @@ func run(t *testing.T, o daemon.Options) *running {
 			t.Errorf("daemon did not stop within %v of cancel", ready)
 		}
 	})
+	return r
+}
+
+// serving runs a daemon with o, as run does, and returns once it answers
+// health in o.StateDir for h's herdr: once its start is over. A wait for
+// something it does once serving, such as subscribing to focus or polling,
+// then gets ready of its own, not what its start left of it (NERD-5354
+// F3): its start and that wait are each bounded by the daemon's own
+// herdr and state database bounds, and a slow store.Open, measured at up
+// to 86 s under memory pressure, is no longer charged to the wait after it.
+func serving(t *testing.T, o daemon.Options, h *fakeHerdr) *running {
+	t.Helper()
+	r := run(t, o)
+	r.healthy(t, o.StateDir, h)
 	return r
 }
 
