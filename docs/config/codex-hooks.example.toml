@@ -1,6 +1,9 @@
 # Codex hooks that report each Codex agent's context use to its herdr pane as
-# the `ctx` token (ADR-001 A22, A27). Add them to ~/.codex/config.toml, or to
-# a trusted project's .codex/config.toml.
+# the `ctx` token (ADR-001 A22, A27, A43). `herdr-agentisan codex hooks`
+# installs them in ~/.codex/hooks.json ($CODEX_HOME/hooks.json), after any
+# hooks already there. Or paste them at the end of ~/.codex/config.toml; the
+# command then leaves hooks.json alone. A project's .codex/config.toml works
+# too, for that repo only, once Codex trusts the project.
 #
 # - Start Codex with `codex --no-daemon`. A hook run by the shared app-server
 #   daemon carries the daemon's environment, not the pane's, so the report
