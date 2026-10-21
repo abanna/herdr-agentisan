@@ -43,6 +43,8 @@ func TestHoldArgv(t *testing.T) {
 		"not flock":                      {argv: []string{"flockx", lock, "sleep"}},
 		"another command":                {argv: []string{"flock", lock, "cat"}},
 		"sleep only as a later argument": {argv: []string{"flock", lock, "sh", "-c", "sleep 1"}},
+		"sleep after another command":    {argv: []string{"flock", lock, "nice", "sleep", "60"}},
+		"sleep under timeout":            {argv: []string{"flock", lock, "timeout", "5", "sleep", "1"}},
 		"no command":                     {argv: []string{"flock", lock}},
 		"the fd form":                    {argv: []string{"flock", "-n", "9"}},
 		"-c with two strings":            {argv: []string{"flock", lock, "-c", "sleep 1", "x"}},

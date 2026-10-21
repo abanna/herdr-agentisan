@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -459,4 +460,62 @@ func TestAProjectsLockFileRecovers(t *testing.T) {
 	servedTeam(t, sock, "alpha", slotsAre(1, 1))
 	polled(t, th.srv, 2)
 	assert.Equal(t, 1, strings.Count(logs.String(), `"project":"alpha","message":"test slots: counting again"`), "the recovery logged once")
+}
+
+// TestOnePollOneReading: a poll reads the lock list once, and every project
+// counts its lock files from that one reading (A40). The stand-in
+// /proc/locks is a FIFO whose first reading, both its passes, lists a lock
+// as held, and whose every later reading lists nothing: two projects that
+// list that lock count it held, the same, where a reading of its own for
+// the second would read it free (QA #58, F1).
+func TestOnePollOneReading(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	lock := filepath.Join(dir, "gate.lock")
+	require.NoError(t, os.WriteFile(lock, nil, 0o600))
+	fifo := filepath.Join(dir, "locks")
+	require.NoError(t, syscall.Mkfifo(fifo, 0o600))
+
+	// Each open of the FIFO is one pass; the first two get the held lock.
+	held := lockLine(t, 1, 999999, lock)
+	var stop atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for pass := 0; ; pass++ {
+			f, err := os.OpenFile(fifo, os.O_WRONLY, 0)
+			if err != nil || stop.Load() {
+				if f != nil {
+					_ = f.Close()
+				}
+				return
+			}
+			if pass < 2 {
+				_, _ = f.WriteString(held)
+			}
+			_ = f.Close()
+		}
+	}()
+	t.Cleanup(func() {
+		stop.Store(true)
+		// Let a writer blocked on its next open go.
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			if f, err := os.OpenFile(fifo, os.O_RDONLY|syscall.O_NONBLOCK, 0); err == nil {
+				_ = f.Close()
+			}
+			time.Sleep(time.Millisecond)
+		}
+	})
+
+	slots := daemon.SlotsOfOnePoll(fifo, filepath.Join(dir, "proc"), settings.TestLocks{Projects: map[string][]string{"alpha": {lock}, "beta": {lock}}})
+	alpha, beta := slots("alpha"), slots("beta")
+	require.NotNil(t, alpha)
+	require.NotNil(t, beta)
+	assert.Equal(t, snapshot.Slots{Used: 1, Total: 1}, *alpha, "the poll's reading lists the lock held")
+	assert.Equal(t, *alpha, *beta, "both projects count the poll's one reading")
 }
