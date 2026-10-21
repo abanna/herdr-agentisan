@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -50,6 +51,11 @@ var (
 	// ErrTerminal means the terminal program failed.
 	ErrTerminal = errors.New("dashboard terminal failed")
 )
+
+// noter is a source with a footer note of its own, read after each poll.
+type noter interface {
+	Note() string
+}
 
 // Config is what a dashboard needs.
 type Config struct {
@@ -91,18 +97,36 @@ func HerdrConfig(src snapshot.Source, socketPath string) Config {
 	return cfg
 }
 
-// DaemonConfig is HerdrConfig reading snapshots from the daemon of the herdr
-// server at herdrSocket, whose state lives under stateDir: the socket `daemon
-// health` asks (daemon.PathsFor). A state dir or herdr socket that names no
-// daemon socket is the caller's mistake, reported before the terminal is
-// taken over; a daemon that is not running is not, and shows in the footer
-// while the dashboard keeps polling.
-func DaemonConfig(stateDir, herdrSocket string) (Config, error) {
+// Where says which team a daemon dashboard shows (ADR-001 A24): Project's
+// when set; else the team of the workspace its own pane is in, which it
+// finds by PID through herdr, with PaneID (HERDR_PANE_ID) as its first
+// guess and WorkspaceID (HERDR_WORKSPACE_ID) for when herdr cannot be asked.
+type Where struct {
+	Project     string
+	PID         int
+	PaneID      string
+	WorkspaceID string
+}
+
+// DaemonConfig is HerdrConfig reading the snapshots of the team where
+// selects from the daemon of the herdr server at herdrSocket, whose state
+// lives under stateDir: the socket `daemon health` asks (daemon.PathsFor).
+// A state dir or herdr socket that names no daemon socket is the caller's
+// mistake, reported before the terminal is taken over; a daemon that is not
+// running is not, and shows in the footer while the dashboard keeps polling.
+func DaemonConfig(stateDir, herdrSocket string, where Where) (Config, error) {
 	paths, err := daemon.PathsFor(stateDir, herdrSocket)
 	if err != nil {
 		return Config{}, fmt.Errorf("daemon socket: %w", err)
 	}
-	return HerdrConfig(daemon.SnapshotSource{Socket: paths.Socket}, herdrSocket), nil
+	src := &TeamSource{Socket: paths.Socket, Project: where.Project}
+	if where.Project == "" {
+		src.Locator = &Locator{
+			Herdr: herdr.Client{SocketPath: herdrSocket}, PID: where.PID,
+			PaneID: where.PaneID, WorkspaceID: where.WorkspaceID,
+		}
+	}
+	return HerdrConfig(src, herdrSocket), nil
 }
 
 // FixtureConfig is HerdrConfig reading snapshots from the JSON file at path,
@@ -148,6 +172,12 @@ type Model struct {
 	sourceErr     error
 	focusErr      error
 	btopErr       error
+	// noTeam is set while the source says there is no team here
+	// (ErrNoTeamHere): no board is drawn then, not the last one.
+	noTeam bool
+	// sourceNote is the source's own footer note, such as herdr not
+	// answering where the dashboard runs.
+	sourceNote string
 }
 
 // The arrow keys, as tea.KeyPressMsg.String names them. Left and right are
@@ -165,6 +195,7 @@ type (
 	snapshotMsg struct {
 		snap snapshot.Snapshot
 		err  error
+		note string
 	}
 	tickMsg  struct{}
 	focusMsg struct {
@@ -209,12 +240,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Each answer schedules exactly one tick, and each tick exactly one
 		// fetch, so polls never overlap or multiply.
 		m.clock = m.cfg.Now()
+		m.sourceNote = msg.note
 		if msg.err != nil {
 			m.sourceErr = msg.err // keep drawing the last good snapshot
+			if errors.Is(msg.err, ErrNoTeamHere) {
+				// Not this place's team: draw none, never the last one.
+				m.noTeam = true
+				m.show(nil)
+				m.settle()
+			}
 			return m, m.tick()
 		}
 		s := msg.snap
-		m.sourceErr = nil
+		m.sourceErr, m.noTeam = nil, false
 		m.show(&s)
 		m.reanchor()
 		m.settle()
@@ -306,8 +344,11 @@ func (m Model) View() tea.View {
 func (m Model) Frame() Frame {
 	f := Frame{
 		Snapshot: m.snap, Selection: m.sel, Scroll: m.scroll, Now: m.clock,
-		Help: m.help, Btop: m.cfg.Btop != nil, Note: m.cfg.Note,
+		Help: m.help, Btop: m.cfg.Btop != nil, Note: m.cfg.Note, NoTeam: m.noTeam,
 		Search: m.search.on, Query: m.search.query,
+	}
+	if m.sourceNote != "" {
+		f.Note = strings.TrimPrefix(f.Note+sep+m.sourceNote, sep)
 	}
 	for _, err := range []error{m.sourceErr, m.focusErr, m.btopErr} {
 		if err != nil {
@@ -351,7 +392,11 @@ func (m Model) fetch() tea.Cmd {
 		ctx, cancel := context.WithTimeout(ctx, timeout)
 		defer cancel()
 		s, err := src.Snapshot(ctx)
-		return snapshotMsg{snap: s, err: err}
+		msg := snapshotMsg{snap: s, err: err}
+		if n, ok := src.(noter); ok {
+			msg.note = n.Note()
+		}
+		return msg
 	}
 }
 

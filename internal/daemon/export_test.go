@@ -47,7 +47,7 @@ func StillServedOver(ctx context.Context, socket string, ident Identity, protoco
 // the daemon's own client.
 func FocusSnapshotOver(ctx context.Context, socket string, ident Identity, st *store.Store) error {
 	o := Options{HerdrSocket: socket, Logger: zerolog.Nop()}.withDefaults().forServer(ident)
-	return o.snapshotFocus(ctx, st, newWalker(), ident)
+	return o.snapshotFocus(ctx, st, newWalker(), newViewSync(), ident)
 }
 
 // DialGuard is the check the daemon's client runs on every connection, for
@@ -92,6 +92,13 @@ func (t *TeamCache) Load(sel Selector) (json.RawMessage, error) { return t.c.loa
 func WithGitHubTicks(g GitHubOptions, ticks <-chan time.Time) GitHubOptions {
 	g.ticks = ticks
 	return g
+}
+
+// WithProcLocks returns t with procLocks standing in for /proc/locks when
+// the team poll counts the test slots.
+func WithProcLocks(t TeamOptions, procLocks string) TeamOptions {
+	t.procLocks = procLocks
+	return t
 }
 
 // StartTimeFrom is the StartTime hook a daemon builds from a process table

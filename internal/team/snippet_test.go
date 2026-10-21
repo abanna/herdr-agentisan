@@ -164,11 +164,11 @@ func (tok sidebarToken) colour(t *testing.T, value string) string {
 }
 
 // TestSidebarSnippet keeps the documented rows in step with what the daemon
-// writes (ADR-001 A28):
+// writes (ADR-001 A28 and its addendum):
 //   - agents, line 1: the state icon, the three ctx band tokens, each with a
 //     colour of its own and no rule (gt and lt cannot read "ctx 56%"), then
-//     the name; line 2: the workspace (until the agent view, NERD-5309), the
-//     item and the stage;
+//     the name; line 2: the item and the stage, and no workspace, since the
+//     agent view shows the focused team;
 //   - spaces, line 2: `$team` alone, red when any agent is blocked, else pink
 //     when any is ready, else its own colour, which the rules get right for
 //     $team's real values, two-digit counts included.
@@ -185,7 +185,7 @@ func TestSidebarSnippet(t *testing.T) {
 		fgs = append(fgs, tok.Fg)
 	}
 	assert.Len(t, slices.Compact(slices.Sorted(slices.Values(fgs))), 3, "each band has its own colour")
-	assert.Equal(t, []string{"workspace", "$" + report.ItemKey, "$" + report.StageKey}, names(agents[1]))
+	assert.Equal(t, []string{"$" + report.ItemKey, "$" + report.StageKey}, names(agents[1]))
 
 	require.Len(t, spaces, 2)
 	assert.Equal(t, []string{"state_icon", "workspace"}, names(spaces[0]))

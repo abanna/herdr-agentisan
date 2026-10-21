@@ -68,8 +68,10 @@ func TestCtxKeysFitHerdr(t *testing.T) {
 
 // TestCtxTokens: every pane herdr's agents panel lists, one with an agent
 // herdr detected or one agent.list names, gets its ctx display, in a team or
-// not; a plain shell gets none. Each carries all three band keys, the two not
-// in use empty, so a pane changing band never shows two. Sorted by pane id.
+// not; a plain shell gets none. A pane only agent.list names shows "ctx  --",
+// whatever ctx a Codex left in it (ADR-001 A27). Each carries all three band
+// keys, the two not in use empty, so a pane changing band never shows two.
+// Sorted by pane id.
 func TestCtxTokens(t *testing.T) {
 	t.Parallel()
 	ctx := func(id, ws, agent, raw string) herdr.PaneInfo {
@@ -86,7 +88,7 @@ func TestCtxTokens(t *testing.T) {
 			ctx("wN:p1", "wN", "claude", "40"),
 			ctx("wN:p3", "wN", "claude", ""),
 			ctx("wN:p4", "wN", "", "61"), // a shell, its ctx left behind
-			ctx("wN:p5", "wN", "", ""),   // named by agent.list only
+			ctx("wN:p5", "wN", "", "45"), // named by agent.list only, a Codex's ctx left behind
 			ctx("w2:p1", "w2", "claude", "58"),
 		},
 		Agents: []herdr.AgentInfo{{PaneID: "wN:p5", Name: "ha-codér-✓"}, {PaneID: "wN:p4", Name: ""}, {PaneID: "w9:p9", Name: "gone"}},

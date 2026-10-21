@@ -16,8 +16,9 @@ import (
 )
 
 // TestStatus: every configured group with its counts, and any type found in
-// herdr; members named by row, else tab label; ctx null unless a percentage;
-// idle_s from the poll's clock; the boss's panes apart, named by pane id.
+// herdr; members named by row, else tab label; ctx null unless a percentage
+// on a pane herdr detects an agent in (ADR-001 A27); idle_s from the poll's
+// clock; the boss's panes apart, named by pane id.
 func TestStatus(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, teamConfig)
@@ -29,6 +30,7 @@ func TestStatus(t *testing.T) {
 		p.tokens = map[string]string{"ctx": "42", "item": "NERD-5254", "stage": "build_test"}
 	})
 	f.h.setPane(hand, func(p *fakePane) { p.tokens = map[string]string{"ctx": "42%"} })
+	f.h.setPane(split, func(p *fakePane) { p.name, p.tokens = "ha-hooked", map[string]string{"ctx": "61"} })
 	t0 := time.Date(2026, 10, 19, 21, 0, 0, 0, time.UTC)
 	f.svc.Now = func() time.Time { return t0.Add(90 * time.Second) }
 	f.svc.Idle.Observe(team.Model{Projects: []team.Project{{Name: "herdr-agentisan", Groups: []team.Group{{Name: "coder", Workers: []team.Worker{{Pane: team.Pane{ID: coder, Status: team.StatusIdle}}}}}}}}, t0)
@@ -53,7 +55,7 @@ func TestStatus(t *testing.T) {
 	assert.Equal(t, []workforce.Member{
 		{ID: f.boss, PaneID: f.boss, Agent: "claude", Status: "working"},
 		{ID: split, PaneID: split, Status: "unknown"},
-	}, got.Boss, "named by pane id: the boss's tab holds more than the boss")
+	}, got.Boss, "named by pane id: the boss's tab holds more than the boss; a ctx a Codex left in a named shell is null")
 
 	f.svc.Now = func() time.Time { return t0.Add(-5 * time.Second) }
 	got, err = f.svc.Status(t.Context(), workforce.StatusRequest{})

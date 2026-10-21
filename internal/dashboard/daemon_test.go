@@ -32,17 +32,21 @@ func shortDir(t *testing.T) string {
 // TestDaemonConfig: the dashboard herdr runs reads the daemon of its herdr
 // server, at the socket `daemon health` asks: the plugin state directory
 // plus HERDR_SOCKET_PATH (daemon.PathsFor). Either missing is the caller's
-// mistake, reported before the terminal is taken over.
+// mistake, reported before the terminal is taken over. The team is the one
+// where its pane is, found through that herdr, or the project it is given.
 func TestDaemonConfig(t *testing.T) {
 	t.Parallel()
 
 	dir := shortDir(t)
 	const herdrSock = "/run/user/1000/herdr.sock"
+	where := dashboard.Where{PID: 77, PaneID: "w2:p1", WorkspaceID: "w2"}
 	tests := map[string]struct {
 		stateDir, herdrSocket string
+		project               string
 		want                  error
 	}{
 		"the daemon of this server": {stateDir: dir, herdrSocket: herdrSock},
+		"a project's team":          {stateDir: dir, herdrSocket: herdrSock, project: "alpha"},
 		// Nothing is read at config time: a state dir herdr has not made
 		// yet is a daemon that is not running, which the footer reports.
 		"a state dir that does not exist yet": {stateDir: filepath.Join(dir, "later"), herdrSocket: herdrSock},
@@ -55,7 +59,9 @@ func TestDaemonConfig(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			cfg, err := dashboard.DaemonConfig(tc.stateDir, tc.herdrSocket)
+			w := where
+			w.Project = tc.project
+			cfg, err := dashboard.DaemonConfig(tc.stateDir, tc.herdrSocket, w)
 			if tc.want != nil {
 				require.ErrorIs(t, err, tc.want)
 				return
@@ -63,7 +69,11 @@ func TestDaemonConfig(t *testing.T) {
 			require.NoError(t, err)
 			paths, err := daemon.PathsFor(tc.stateDir, tc.herdrSocket)
 			require.NoError(t, err)
-			assert.Equal(t, daemon.SnapshotSource{Socket: paths.Socket}, cfg.Source)
+			want := &dashboard.TeamSource{Socket: paths.Socket, Project: tc.project}
+			if tc.project == "" {
+				want.Locator = &dashboard.Locator{Herdr: herdr.Client{SocketPath: tc.herdrSocket}, PID: 77, PaneID: "w2:p1", WorkspaceID: "w2"}
+			}
+			assert.Equal(t, want, cfg.Source)
 			assert.Equal(t, dashboard.HerdrFocuser{Client: herdr.Client{SocketPath: tc.herdrSocket}}, cfg.Focuser)
 			assert.Equal(t, dashboard.HerdrBtop{Client: herdr.Client{SocketPath: tc.herdrSocket}}, cfg.Btop)
 		})
@@ -78,7 +88,7 @@ func TestNoDaemonIsOneLineAndRetried(t *testing.T) {
 
 	stateDir := shortDir(t)
 	const herdrSock = "/run/user/1000/herdr.sock"
-	cfg, err := dashboard.DaemonConfig(stateDir, herdrSock)
+	cfg, err := dashboard.DaemonConfig(stateDir, herdrSock, dashboard.Where{Project: "agentisan"})
 	require.NoError(t, err)
 	cfg.Interval, cfg.Now, cfg.Options = time.Millisecond, func() time.Time { return at }, plain
 	m, tick := startedPolling(t, cfg, 120, 40)
