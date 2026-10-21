@@ -16,8 +16,9 @@ govulncheck, modernize) are pinned in `go.mod` under the `tool` directive and
 resolve through `go tool` — there is nothing to install globally and no
 version to keep in sync by hand. `task tools` lists what is pinned.
 
-Requires Go 1.26.9+ (pinned by the `toolchain` directive in `go.mod`; earlier
-1.26 patches carry reachable stdlib advisories that `govulncheck` fails on)
+Requires Go 1.26.10+ (pinned by the `toolchain` directive in `go.mod`; earlier
+1.26 patches carry reachable stdlib advisories that `govulncheck` fails on,
+most recently GO-2026-6809 in `crypto/x509`, fixed in 1.26.10)
 and [Task](https://taskfile.dev). `task --list` shows
 everything.
 
@@ -125,10 +126,12 @@ exempts whatever is later added under that name.
   by project or workspace, so the op never calls herdr (A18, A24,
   `snapshot.go`, with `SnapshotSource`, the dashboard's client), and sends
   each status change since the last poll as a workflow event
-  (`events.go`). `daemon start` spawns a detached `daemon run`; herdr's
-  `[[startup]]` hook runs it, and the `daemon-restart` action covers
-  linking. Tests run daemons in process against herdrtest and a scratch
-  state dir, never the real ones.
+  (`events.go`). It keeps herdr's agent view on the focused team, which
+  focus events and the poll feed it, and clears it outside every team and
+  on a clean stop (`view.go`, the A28 addendum). `daemon start` spawns a
+  detached `daemon run`; herdr's `[[startup]]` hook runs it, and the
+  `daemon-restart` action covers linking. Tests run daemons in process
+  against herdrtest and a scratch state dir, never the real ones.
 - `internal/team/` — the team domain model (ADR-001 D5, A17): project → group
   → logical worker → current pane, built from `pane.list`, `workspace.list`,
   `tab.list`, `agent.list` and `state.db`'s `workers` rows. A `Resolver` maps
@@ -168,6 +171,11 @@ exempts whatever is later added under that name.
   it with an environment they build, never the real gh or GitHub. The
   daemon's collector (`internal/daemon/github.go`) runs it every 60 s beside
   the team poll and caches each project's result for the snapshot.
+- `internal/testslots/` — the dashboard header's test slots (ADR-001 A31):
+  which of `[tests] locks` some process holds a lock on, read from the
+  kernel's `/proc/locks` every team poll without opening or locking a lock
+  file. Tests hold real locks on temp files and read them back; the parser
+  is tested on its own against written lines.
 - `internal/snapshot/` — the versioned snapshot contract (ADR-001 D5/D6,
   A18): the groups and agents, the boss, and the project's PRs, issues and
   test slots. Decoding is strict: exact keys, closed enums, RFC 3339 times.
@@ -176,7 +184,9 @@ exempts whatever is later added under that name.
   a header box, then the groups stacked as boxes with one dense line per
   agent, in the snapshot's group order, scrolling to keep the selection in
   view. It reads the daemon (`DaemonConfig`) or a fixture, and Jump focuses
-  an unnamed row by its pane id. `/` narrows the agents to a search query in
+  an unnamed row by its pane id. From the daemon it shows its own team:
+  `locate.go` finds the pane running it by its pid, and the daemon maps that
+  pane's workspace to a team (A24). `/` narrows the agents to a search query in
   place (`search.go`, ADR-001 A20). Goldens in `testdata/`
   (`go test ./internal/dashboard/ -update`, then read every one).
 - `internal/devctl/` — the `devctl` cobra tree: the coverage floor, the
@@ -201,7 +211,7 @@ exempts whatever is later added under that name.
   read at each query. No caller chooses the URL, the variables or the file.
   Tests run an httptest Elasticsearch on a recorded answer
   (`testdata/worker-trail.json`).
-- `.devcontainer/` — the reproducible dev environment: Go 1.26.9 plus the
+- `.devcontainer/` — the reproducible dev environment: Go 1.26.10 plus the
   two tools `go tool` does not resolve (Task, uv).
 - `docs/architecture.md` — why the pieces are shaped this way, and the
   deliberate limits.

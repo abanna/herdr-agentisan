@@ -28,7 +28,8 @@ func backoff(n int) time.Duration {
 
 // followFocus records focus in st until ctx ends (D3, A11): it subscribes to
 // pane.focused, records the pane focused now, then every focus event, telling
-// Back's walker w of each before it is recorded.
+// Back's walker w of each before it is recorded, and the agent view v of its
+// workspace (A28 addendum).
 //
 // Whenever the subscription ends, because herdr dropped events the daemon
 // had not read (ErrEventsLost) or the connection dropped, it resubscribes
@@ -37,10 +38,10 @@ func backoff(n int) time.Duration {
 // names: once the socket is another server's, or gone, it stops, and Run's
 // poll ends the daemon. Every herdr call it makes goes through Run's guarded
 // client (forServer), so none of them reaches a replacement.
-func (o Options) followFocus(ctx context.Context, st *store.Store, w *walker, ident Identity) {
+func (o Options) followFocus(ctx context.Context, st *store.Store, w *walker, v *viewSync, ident Identity) {
 	failures := 0
 	for {
-		err := o.streamFocus(ctx, st, w, ident, &failures)
+		err := o.streamFocus(ctx, st, w, v, ident, &failures)
 		if ctx.Err() != nil {
 			return
 		}
@@ -74,7 +75,7 @@ func (o Options) followFocus(ctx context.Context, st *store.Store, w *walker, id
 // answer was on its way, so the daemon's server is going. That subscription
 // is closed unread, or that pane.list answer is dropped, and collection stops
 // (ErrHerdrGone).
-func (o Options) streamFocus(ctx context.Context, st *store.Store, w *walker, ident Identity, failures *int) error {
+func (o Options) streamFocus(ctx context.Context, st *store.Store, w *walker, v *viewSync, ident Identity, failures *int) error {
 	sub, err := o.Herdr.Subscribe(ctx, herdr.SubscribePaneFocused)
 	if err != nil {
 		return fmt.Errorf("subscribe to focus events: %w", err)
@@ -83,7 +84,7 @@ func (o Options) streamFocus(ctx context.Context, st *store.Store, w *walker, id
 	if !o.sameServer(ident) {
 		return fmt.Errorf("%w: the socket was replaced while subscribing to focus events", ErrHerdrGone)
 	}
-	if err := o.snapshotFocus(ctx, st, w, ident); err != nil {
+	if err := o.snapshotFocus(ctx, st, w, v, ident); err != nil {
 		return err
 	}
 	for {
@@ -94,6 +95,7 @@ func (o Options) streamFocus(ctx context.Context, st *store.Store, w *walker, id
 		*failures = 0
 		if ev.Kind == herdr.EventPaneFocused {
 			o.recordFocus(ctx, st, w, ev.PaneID)
+			v.focus(ev.WorkspaceID)
 		}
 	}
 }
@@ -106,26 +108,31 @@ func (o Options) streamFocus(ctx context.Context, st *store.Store, w *walker, id
 // identity is checked again once it has answered: if the socket was replaced
 // meanwhile, the answer is dropped unrecorded (ErrHerdrGone). A pane.list
 // that fails any other way costs only the snapshot. Once focus is read
-// afresh, the walker forgets the moves it still expected herdr to announce.
-func (o Options) snapshotFocus(ctx context.Context, st *store.Store, w *walker, ident Identity) error {
+// afresh, the walker forgets the moves it still expected herdr to announce,
+// and the agent view the view it last sent, which it sends again.
+func (o Options) snapshotFocus(ctx context.Context, st *store.Store, w *walker, v *viewSync, ident Identity) error {
 	panes, err := o.Herdr.ListPanes(ctx)
 	if errors.Is(err, ErrHerdrGone) {
 		return fmt.Errorf("read the focused pane: %w", err)
 	}
 	if err != nil {
 		o.Logger.Warn().Err(err).Msg("read the focused pane")
+		v.resynced("")
 		return nil
 	}
 	if !o.sameServer(ident) {
 		return fmt.Errorf("%w: the socket was replaced while pane.list was answered", ErrHerdrGone)
 	}
+	workspace := ""
 	for _, p := range panes {
 		if p.Focused {
 			o.recordFocus(ctx, st, w, p.PaneID)
+			workspace = p.WorkspaceID
 			break
 		}
 	}
 	w.resynced()
+	v.resynced(workspace)
 	return nil
 }
 

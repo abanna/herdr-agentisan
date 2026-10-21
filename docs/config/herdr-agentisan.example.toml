@@ -91,6 +91,15 @@ endpoint = "127.0.0.1:4328"
 [debugger]
 env_file = "~/.config/herdr-agentisan/elastic.env"
 
+# The test slots the dashboard header shows as "slots used/total" (ADR-001
+# A31): one lock file per slot, as absolute paths; ~ is not expanded. A slot
+# is in use while some process holds a lock on its file. Shared file and
+# --set only, like [telemetry]. agentisan's gate keeps one per
+# AGENTISAN_GATE_CONCURRENCY slot in $XDG_RUNTIME_DIR/agentisan; keep them on
+# tmpfs or ext4.
+[tests]
+locks = ["/run/user/1000/agentisan/gate.0.lock"]
+
 # ---------------------------------------------------------------------------
 # Projects. The key is the project's name: lower case, digits and dashes.
 #
