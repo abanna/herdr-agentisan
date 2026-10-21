@@ -164,20 +164,26 @@ func TestDataAge(t *testing.T) {
 	})
 }
 
-// TestStageColourInTheGroupView: a group's view (ADR-001 A37) draws a box's
-// stage in the colour the whole stage takes, as a row does (A38), on both of
-// its wrapped lines; a stage not reported stays dim.
+// TestStageColourInTheGroupView: a box's stage takes the colour of the rule
+// the whole stage matches (ADR-001 A38) on both of its lines, even when the
+// word that matches is on the second. A stage that matches no rule is
+// plain, as the view drew it before A38, and a stage not reported stays
+// dim, so the two never look alike.
 func TestStageColourInTheGroupView(t *testing.T) {
 	t.Parallel()
 
 	long := "READY for review: " + strings.Repeat("word ", 20)
+	// The only rule's word wraps onto the second line of a 76-cell box.
+	late := strings.Repeat("step ", 14) + "BLOCKED"
 	snap := &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "coders", Agents: []snapshot.Agent{
 		{Name: "pee01", Status: snapshot.StatusWorking, Stage: long},
 		{Name: "pee02", Status: snapshot.StatusBlocked, Stage: "blocked: 1Password agent"},
 		{Name: "pee03", Status: snapshot.StatusIdle, Stage: "restored"},
+		{Name: "pee04", Status: snapshot.StatusWorking, Stage: late},
+		{Name: "pee05", Status: snapshot.StatusIdle},
 	}}}}
 	f := dashboard.Frame{Snapshot: snap, Selection: dashboard.Selection{Group: -1}, Now: at, Group: "coders"}
-	out := dashboard.Render(f, 80, 40, dashboard.Options{Profile: colorprofile.TrueColor})
+	out := dashboard.Render(f, 80, 60, dashboard.Options{Profile: colorprofile.TrueColor})
 
 	styled := func(text string) *regexp.Regexp {
 		return regexp.MustCompile(`\x1b\[([0-9;:]*)m` + regexp.QuoteMeta(text))
@@ -189,7 +195,9 @@ func TestStageColourInTheGroupView(t *testing.T) {
 		{"#50fa7b", "READY for review: word", true},
 		{"#50fa7b", "word word", true}, // the second line keeps the colour
 		{"#ff5555", "blocked: 1Password agent", true},
-		{"#6c7086", "restored", false},
+		{"#ff5555", "step step", true}, // coloured by a word on the next line
+		{"#ff5555", "BLOCKED", true},
+		{"#6c7086", "no stage reported", false},
 	} {
 		found := styled(tc.text).FindAllStringSubmatch(out, -1)
 		require.NotEmpty(t, found, "%q is drawn", tc.text)
@@ -198,6 +206,24 @@ func TestStageColourInTheGroupView(t *testing.T) {
 			assert.Equal(t, tc.bold, hasParam(m[1], "1"), "%q's weight", tc.text)
 		}
 	}
+	require.Contains(t, ansi.Strip(out), "│ restored ")
+	for _, m := range styled("restored").FindAllStringSubmatch(out, -1) {
+		assert.Contains(t, []string{"", "0"}, m[1], "a stage no rule matches is plain: only a reset comes before it")
+	}
+}
+
+// TestHandoffShellInTheGroupView: a shell with a handoff is drawn ready in
+// its group's view, as in its row (ADR-001 A38's D3), with the ready badge.
+func TestHandoffShellInTheGroupView(t *testing.T) {
+	t.Parallel()
+
+	snap := &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "coders", Agents: []snapshot.Agent{
+		{Name: "w2:p4", Unnamed: true, Shell: true, PaneID: "w2:p4", Status: snapshot.StatusReady},
+	}}}}
+	out := dashboard.Render(dashboard.Frame{Snapshot: snap, Now: at, Group: "coders"}, 80, 24, dashboard.Options{Profile: colorprofile.NoTTY})
+	title := lineWith(t, out, "⟳ w2:p4 · ready")
+	assert.Contains(t, title, "⟳ READY ─╮")
+	assert.NotContains(t, title, "▸", "a shell with a handoff is no plain shell")
 }
 
 // TestShellGlyphColour: a plain shell's ▸ is drawn in unknown's style, which

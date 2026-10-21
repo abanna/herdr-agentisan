@@ -42,13 +42,22 @@ var (
 	stageRedStyle   = lipgloss.NewStyle().Bold(true).Foreground(colRed)
 )
 
-// stageStyle is a stage's colour, v12's rules made case-insensitive and
-// word-bounded (ADR-001 A38), tried in v12's order: bold green when a word
-// is "ready"; else bold red when one is "red" or "blocked"; else yellow when
-// one is "waiting" or "queued"; else dim. A word is a run of letters, marks
-// and digits, so "ready_to_merge" is ready, "already" is not, and "restored"
-// is not red.
+// stageStyle is a stage's colour in a row and on the boss line: its rule's
+// (stageRule), or dim when it matches none.
 func stageStyle(stage string) lipgloss.Style {
+	if st, ok := stageRule(stage); ok {
+		return st
+	}
+	return dimStyle
+}
+
+// stageRule is the colour of the first of v12's rules a stage matches,
+// made case-insensitive and word-bounded (ADR-001 A38), tried in v12's
+// order: bold green when a word is "ready"; else bold red when one is "red"
+// or "blocked"; else yellow when one is "waiting" or "queued". ok is false
+// when it matches none. A word is a run of letters, marks and digits, so
+// "ready_to_merge" is ready, "already" is not, and "restored" is not red.
+func stageRule(stage string) (st lipgloss.Style, ok bool) {
 	words := strings.FieldsFunc(stage, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsMark(r) && !unicode.IsDigit(r)
 	})
@@ -59,13 +68,13 @@ func stageStyle(stage string) lipgloss.Style {
 	}
 	switch {
 	case has("ready"):
-		return stageReadyStyle
+		return stageReadyStyle, true
 	case has("red", "blocked"):
-		return stageRedStyle
+		return stageRedStyle, true
 	case has("waiting", "queued"):
-		return noteStyle
+		return noteStyle, true
 	default:
-		return dimStyle
+		return plainStyle, false
 	}
 }
 
