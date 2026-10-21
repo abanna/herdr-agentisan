@@ -171,8 +171,9 @@ func TestSubscriptionOutlivesTheCallTimeout(t *testing.T) {
 }
 
 // TestSubscribeAckAfterTheTimeout: an ack herdr sends after the client's
-// timeout fails the call, as one never sent does: the error a 50 ms timeout
-// met under load, "events.subscribe: context deadline exceeded".
+// timeout fails the call, as one never sent does, and always with the
+// timeout's error: only the context ends the read, so the error never
+// depends on which of two timers fired first.
 func TestSubscribeAckAfterTheTimeout(t *testing.T) {
 	t.Parallel()
 	const timeout = 100 * time.Millisecond
@@ -295,8 +296,7 @@ func TestSubscribeAckIsBounded(t *testing.T) {
 
 			start := time.Now()
 			_, err := herdr.Client{SocketPath: silentSocket(t), Timeout: tc.timeout}.Subscribe(ctx, herdr.SubscribePaneFocused)
-			require.Error(t, err)
-			assert.True(t, errors.Is(err, context.DeadlineExceeded) || errors.Is(err, herdr.ErrUnavailable), "got %v", err)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
 			assert.Less(t, time.Since(start), 2*time.Second)
 		})
 	}
