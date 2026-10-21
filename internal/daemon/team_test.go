@@ -39,6 +39,10 @@ type teamHerdr struct {
 	agentsErr bool
 	refuse    map[string]bool
 	viewErr   string
+	// shells is each pane's shell pid, which pane.process_info answers; a
+	// pane with none answers herdr's null. infoFails fails it for a pane.
+	shells    map[string]uint32
+	infoFails map[string]bool
 	// procs are pane.process_info's foreground processes, by pane; a pane
 	// with none runs no foreground job.
 	procs map[string][]map[string]any
@@ -53,6 +57,7 @@ func newTeamHerdr(t *testing.T) *teamHerdr {
 	th := &teamHerdr{
 		fakeHerdr:  &fakeHerdr{t: t, path: filepath.Join(shortDir(t), "h.sock"), streams: make(chan *stream, 64)},
 		workspaces: workspaces, tabs: []map[string]any{}, panes: panes, refuse: map[string]bool{},
+		shells: map[string]uint32{}, infoFails: map[string]bool{},
 	}
 	th.h = th.serveTeam(th.serve(22))
 	th.srv = herdrtest.StartAt(t, th.path, th.h)
@@ -88,6 +93,23 @@ func (th *teamHerdr) serveTeam(normal herdrtest.Handler) herdrtest.Handler {
 				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "server_unavailable", Message: "busy"}}
 			}
 			return herdrtest.Reply{Result: map[string]any{"type": "agent_list", "agents": append([]map[string]any{}, th.agents...)}}
+		case "pane.process_info":
+			var params struct {
+				PaneID string `json:"pane_id"`
+			}
+			_ = json.Unmarshal(r.Params, &params)
+			th.mu.Lock()
+			defer th.mu.Unlock()
+			if th.infoFails[params.PaneID] {
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "server_unavailable", Message: "busy"}}
+			}
+			procs := th.procs[params.PaneID]
+			if procs == nil {
+				procs = []map[string]any{}
+			}
+			return herdrtest.Reply{Result: map[string]any{"type": "pane_process_info", "process_info": map[string]any{
+				"pane_id": params.PaneID, "shell_pid": th.shells[params.PaneID], "foreground_process_group_id": 0, "foreground_processes": slices.Clone(procs),
+			}}}
 		case "pane.report_metadata":
 			var params struct {
 				PaneID string `json:"pane_id"`
@@ -99,20 +121,6 @@ func (th *teamHerdr) serveTeam(normal herdrtest.Handler) herdrtest.Handler {
 				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "pane_not_found", Message: "pane " + params.PaneID + " not found"}}
 			}
 			return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
-		case "pane.process_info":
-			var params struct {
-				PaneID string `json:"pane_id"`
-			}
-			_ = json.Unmarshal(r.Params, &params)
-			th.mu.Lock()
-			defer th.mu.Unlock()
-			procs := th.procs[params.PaneID]
-			if procs == nil {
-				procs = []map[string]any{}
-			}
-			return herdrtest.Reply{Result: map[string]any{"type": "pane_process_info", "process_info": map[string]any{
-				"pane_id": params.PaneID, "shell_pid": 1, "foreground_process_group_id": 1, "foreground_processes": slices.Clone(procs),
-			}}}
 		case "workspace.report_metadata":
 			var params struct {
 				WorkspaceID string `json:"workspace_id"`
@@ -245,7 +253,7 @@ func liveSpaces() ([]herdr.WorkspaceInfo, []map[string]any) {
 		{WorkspaceID: "w2", Label: "notes"},
 	}
 	pane := func(id, ws, agent, status string, tokens map[string]string) map[string]any {
-		p := map[string]any{"pane_id": id, "workspace_id": ws, "agent": agent, "agent_status": status, "focused": false}
+		p := map[string]any{"pane_id": id, "terminal_id": "term_" + id, "workspace_id": ws, "agent": agent, "agent_status": status, "focused": false}
 		if agent == "" {
 			p["agent"] = nil
 		}
@@ -525,6 +533,8 @@ func TestTeamPushIgnoresAServerReplacedMidPoll(t *testing.T) {
 		"while the workspaces are listed": {during: "workspace.list"},
 		"while the tabs are listed":       {during: "tab.list", config: tabsTeam},
 		"while the agents are listed":     {during: "agent.list"},
+		// Two rows with no shell: the second read dials the replacement.
+		"while a worker's shell is read": {during: "pane.process_info"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -539,7 +549,12 @@ func TestTeamPushIgnoresAServerReplacedMidPoll(t *testing.T) {
 					<-swapped // every such call waits, focus's pane.list included
 				}
 			}
-			o := teamOpts(t, shortDir(t), th, configDir(t, tc.config))
+			dir := shortDir(t)
+			if during == "pane.process_info" {
+				bindWorker(t, dir, th, "coders-1", "wN:p1")
+				bindWorker(t, dir, th, "coders-2", "wN:p2")
+			}
+			o := teamOpts(t, dir, th, configDir(t, tc.config))
 			o.Poll = time.Hour // only the poll at start runs
 			r := run(t, o)
 

@@ -223,15 +223,42 @@ func newFixture(t *testing.T, config string) *fixture {
 	return f
 }
 
-// bindRow writes a live workers row binding logicalID, of group, to pane,
-// as a spawn records its worker.
-func (f *fixture) bindRow(t *testing.T, logicalID, group, pane string) {
+// markLost marks logicalID's row lost, as the team poll does (A35).
+func (f *fixture) markLost(t *testing.T, logicalID string) {
+	t.Helper()
+	f.exec(t, "UPDATE workers SET status = 'lost' WHERE logical_id = ?", logicalID)
+}
+
+// moveProject gives logicalID's row to project.
+func (f *fixture) moveProject(t *testing.T, logicalID, project string) {
+	t.Helper()
+	f.exec(t, "UPDATE workers SET project = ? WHERE logical_id = ?", project, logicalID)
+}
+
+func (f *fixture) exec(t *testing.T, query string, args ...any) {
 	t.Helper()
 	raw, err := sql.Open("sqlite", f.db)
 	require.NoError(t, err)
 	defer raw.Close() //nolint:errcheck // test cleanup
+	_, err = raw.ExecContext(t.Context(), query, args...)
+	require.NoError(t, err)
+}
+
+// bindRow writes a live workers row binding logicalID, of group, to pane and
+// its terminal, as a spawn records its worker.
+func (f *fixture) bindRow(t *testing.T, logicalID, group, pane string) {
+	t.Helper()
+	f.h.mu.Lock()
+	terminal := ""
+	if p := f.h.pane(pane); p != nil {
+		terminal = p.terminal
+	}
+	f.h.mu.Unlock()
+	raw, err := sql.Open("sqlite", f.db)
+	require.NoError(t, err)
+	defer raw.Close() //nolint:errcheck // test cleanup
 	_, err = raw.ExecContext(t.Context(),
-		"INSERT INTO workers (logical_id, project, grp, pane_id, generation, status, created_at) VALUES (?, 'herdr-agentisan', ?, ?, 0, 'active', 0)",
-		logicalID, group, pane)
+		"INSERT INTO workers (logical_id, project, grp, pane_id, generation, status, created_at, terminal_id) VALUES (?, 'herdr-agentisan', ?, ?, 0, 'active', 0, ?)",
+		logicalID, group, pane, terminal)
 	require.NoError(t, err)
 }

@@ -45,7 +45,7 @@ func TestThreeMessagesDuringAHandoffArriveOnce(t *testing.T) {
 	ctx := t.Context()
 	seedWorker(t, s, "ha-coder-2", "w14:p2", 4)
 
-	h, err := s.BeginHandoff(ctx, "ha-coder-2", "w14:p7", t1)
+	h, err := s.BeginHandoff(ctx, "ha-coder-2", "w14:p7", terminal("w14:p7"), t1)
 	require.NoError(t, err)
 	var sent []string
 	for _, body := range []string{"one", "two", "three"} {
@@ -94,7 +94,7 @@ func TestHandoffWithAMessageInFlight(t *testing.T) {
 	second := send(t, s, worker("w"), boss, "second")
 	claim(t, s, worker("w"))
 
-	h, err := s.BeginHandoff(ctx, "w", "w14:p7", t1)
+	h, err := s.BeginHandoff(ctx, "w", "w14:p7", terminal("w14:p7"), t1)
 	require.NoError(t, err)
 	require.NoError(t, s.Delivered(ctx, first.ID, t1), "the dispatch in flight lands")
 	noClaim(t, s, worker("w"), "held until the handoff ends")
@@ -109,7 +109,7 @@ func TestFailHandoffKeepsTheOldSession(t *testing.T) {
 	s := open(t, dbPath(t))
 	ctx := t.Context()
 	seedWorker(t, s, "w", "w14:p2", 1)
-	h, err := s.BeginHandoff(ctx, "w", "w14:p7", t1)
+	h, err := s.BeginHandoff(ctx, "w", "w14:p7", terminal("w14:p7"), t1)
 	require.NoError(t, err)
 	m := send(t, s, worker("w"), boss, "hi")
 	noClaim(t, s, worker("w"), "held")
@@ -121,7 +121,7 @@ func TestFailHandoffKeepsTheOldSession(t *testing.T) {
 	assert.Equal(t, "failed", handoffState(t, s, h))
 	assert.Equal(t, m.ID, claim(t, s, worker("w")).ID, "released to the old session")
 
-	h2, err := s.BeginHandoff(ctx, "w", "w14:p8", t1)
+	h2, err := s.BeginHandoff(ctx, "w", "w14:p8", terminal("w14:p8"), t1)
 	require.NoError(t, err, "a new handoff may begin once the last one ended")
 	assert.NotEqual(t, h, h2)
 }
@@ -132,7 +132,7 @@ func TestCompleteHandoffIsOneTransaction(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
 	seedWorker(t, s, "w", "w14:p2", 0)
-	h, err := s.BeginHandoff(t.Context(), "w", "w14:p7", t1)
+	h, err := s.BeginHandoff(t.Context(), "w", "w14:p7", terminal("w14:p7"), t1)
 	require.NoError(t, err)
 	send(t, s, worker("w"), boss, "held")
 	_, err = store.DB(s).ExecContext(t.Context(),
@@ -145,8 +145,8 @@ func TestCompleteHandoffIsOneTransaction(t *testing.T) {
 	noClaim(t, s, worker("w"), "still held")
 }
 
-// TestHandoffRefusals: a handoff needs a live worker and a new pane, one at a
-// time; completing or failing needs a pending handoff, and completing needs
+// TestHandoffRefusals: a handoff needs a live worker and a new pane and
+// terminal, one at a time; completing or failing needs a pending handoff, and completing needs
 // the worker still on the old pane. A refused complete leaves the handoff
 // pending, for the caller to fail.
 func TestHandoffRefusals(t *testing.T) {
@@ -162,25 +162,32 @@ func TestHandoffRefusals(t *testing.T) {
 		at       time.Time
 		want     error
 	}{
-		"no such worker":      {id: "nobody", pane: "w14:p9", want: store.ErrNotBound},
-		"a retired worker":    {id: "gone", pane: "w14:p9", want: store.ErrNotBound},
-		"the pane it is on":   {id: "w", pane: "w14:p2", want: store.ErrInvalid},
-		"no new pane":         {id: "w", pane: "", want: store.ErrInvalid},
-		"a control byte":      {id: "w", pane: "w14:\x1bp9", want: store.ErrInvalid},
-		"the zero time":       {id: "w", pane: "w14:p9", at: time.Time{}, want: store.ErrInvalid},
-		"an empty logical id": {id: "", pane: "w14:p9", want: store.ErrInvalid},
+		"no such worker":            {id: "nobody", pane: "w14:p9", want: store.ErrNotBound},
+		"a retired worker":          {id: "gone", pane: "w14:p9", want: store.ErrNotBound},
+		"the pane it is on":         {id: "w", pane: "w14:p2", want: store.ErrInvalid},
+		"no new pane":               {id: "w", pane: "", want: store.ErrInvalid},
+		"a control byte":            {id: "w", pane: "w14:\x1bp9", want: store.ErrInvalid},
+		"a NUL in the pane":         {id: "w", pane: "w14:\x00p9", want: store.ErrInvalid},
+		"invalid UTF-8 in the pane": {id: "w", pane: "w14:\xffp9", want: store.ErrInvalid},
+		"the zero time":             {id: "w", pane: "w14:p9", at: time.Time{}, want: store.ErrInvalid},
+		"an empty logical id":       {id: "", pane: "w14:p9", want: store.ErrInvalid},
 	} {
 		at := tc.at
 		if name != "the zero time" {
 			at = t1
 		}
-		_, err := s.BeginHandoff(ctx, tc.id, tc.pane, at)
+		_, err := s.BeginHandoff(ctx, tc.id, tc.pane, terminal(tc.pane), at)
 		require.ErrorIs(t, err, tc.want, name)
 	}
 
-	h, err := s.BeginHandoff(ctx, "w", "w14:p7", t1)
+	_, err := s.BeginHandoff(ctx, "w", "w14:p9", terminal("w14:p2"), t1)
+	require.ErrorIs(t, err, store.ErrInvalid, "the terminal it is on")
+	_, err = s.BeginHandoff(ctx, "w", "w14:p9", "", t1)
+	require.ErrorIs(t, err, store.ErrInvalid, "no new terminal")
+
+	h, err := s.BeginHandoff(ctx, "w", "w14:p7", terminal("w14:p7"), t1)
 	require.NoError(t, err)
-	_, err = s.BeginHandoff(ctx, "w", "w14:p8", t1)
+	_, err = s.BeginHandoff(ctx, "w", "w14:p8", terminal("w14:p8"), t1)
 	require.ErrorIs(t, err, store.ErrHandoffPending, "one at a time")
 
 	require.ErrorIs(t, s.CompleteHandoff(ctx, h+100, t1), store.ErrNoHandoff)
@@ -203,7 +210,7 @@ func TestCancelledContext(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
 	seedWorker(t, s, "w", "w14:p2", 0)
-	h, err := s.BeginHandoff(t.Context(), "w", "w14:p7", t1)
+	h, err := s.BeginHandoff(t.Context(), "w", "w14:p7", terminal("w14:p7"), t1)
 	require.NoError(t, err)
 	m := send(t, s, boss, pane, "hi")
 	ctx, cancel := context.WithCancel(t.Context())

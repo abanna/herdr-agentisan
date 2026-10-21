@@ -323,7 +323,9 @@ func (c Client) ShowNotification(ctx context.Context, n Notification) (Notificat
 type PaneInfo struct {
 	PaneID string `json:"pane_id"`
 	// TerminalID is the terminal the pane shows (src/api/schema/panes.rs:451).
-	// A live handoff gives a pane a new one and keeps its pane id.
+	// herdr never reissues one and keeps it when the pane moves, where a
+	// pane id can change or be reissued, but a live handoff or a restart
+	// gives every pane a new one (ADR-001 A35).
 	TerminalID  string `json:"terminal_id"`
 	WorkspaceID string `json:"workspace_id"`
 	// TabID is the tab the pane is in (src/api/schema/panes.rs:453).
