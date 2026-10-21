@@ -957,6 +957,31 @@ func TestStartClasses(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, daemon.StartResult{PID: os.Getpid()}, res)
 	})
+	// During `daemon restart` the old daemon has let go of the lock but may
+	// still be exiting, and its record names it: it is waited on until it
+	// is gone, and then the spawn that exited is what failed.
+	t.Run("a spawn that exits after the old daemon lets go names the spawn", func(t *testing.T) {
+		t.Parallel()
+		h := newHerdr(t, 22)
+		dir := shortDir(t)
+		o := opts(t, dir, h)
+		table := &procs{start: map[int]uint64{os.Getpid(): 77}}
+		o.Hooks.StartTime = table.startTime
+		old := run(t, o)
+		healthy(t, dir, h)
+		old.cancel()
+		<-old.exited // it let go; its record names it, still alive
+		gone := make(chan struct{})
+		close(gone)
+		o.Hooks.Spawn = func(context.Context) (daemon.Spawned, error) {
+			time.AfterFunc(300*time.Millisecond, func() { table.set(os.Getpid(), 78) }) // the old process exits
+			return daemon.Spawned{PID: 4242, Exited: gone}, nil
+		}
+
+		res, err := daemon.Start(t.Context(), o)
+		require.ErrorIs(t, err, daemon.ErrDaemonExited)
+		assert.Equal(t, daemon.StartResult{PID: 4242}, res, "the spawn, not the old daemon")
+	})
 	t.Run("a daemon already starting that exits before it answers is an error", func(t *testing.T) {
 		t.Parallel()
 		h := newHerdr(t, 22)

@@ -476,22 +476,30 @@ var closed = func() <-chan struct{} {
 // Otherwise it waits on p, which may still be waiting for the lock, as during
 // a live handoff, until p exits: that is ErrDaemonExited. Without an answer
 // by StartWait it reports the daemon unhealthy, still starting; a ctx that
-// ends first is its error.
+// ends first is its error. The pid it reports is the live holder's, or else
+// p's.
 //
 // It reads the record without probing the lock: a probe takes a free lock
 // for an instant, and a daemon trying it then would read the record of one
 // that has let go but not yet exited as a live holder, and give up.
 func (o Options) awaitHealth(ctx context.Context, paths Paths, ident Identity, p Spawned) (StartResult, error) {
 	deadline := time.Now().Add(o.StartWait)
-	pid := p.PID
+	var pid int
 	for {
 		if h, err := Health(ctx, paths.Socket); err == nil && h.Herdr == ident {
 			return StartResult{PID: h.PID, Healthy: true}, nil
 		}
+		// The exit is read before the record: a spawn that exits as
+		// already running read a live holder's record first, so the read
+		// after this one sees it.
+		gone := exited(p.Exited)
 		if info := readInfo(paths.Lock); info.Herdr == ident && o.alive(info) {
 			pid = info.PID
-		} else if exited(p.Exited) {
-			return StartResult{PID: pid}, fmt.Errorf("%w: pid %d", ErrDaemonExited, pid)
+		} else {
+			pid = p.PID // no live holder to name
+			if gone {
+				return StartResult{PID: pid}, fmt.Errorf("%w: pid %d", ErrDaemonExited, pid)
+			}
 		}
 		if time.Now().After(deadline) {
 			return StartResult{PID: pid}, nil
