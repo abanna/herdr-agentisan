@@ -97,6 +97,13 @@ func WithGitHubTicks(g GitHubOptions, ticks <-chan time.Time) GitHubOptions {
 	return g
 }
 
+// WithStoreClose returns o with closeStore standing in for closing the state
+// database when Run exits.
+func WithStoreClose(o Options, closeStore func(*store.Store) error) Options {
+	o.closeStore = closeStore
+	return o
+}
+
 // WithProcLocks returns t with procLocks standing in for /proc/locks when
 // the team poll counts the test slots.
 func WithProcLocks(t TeamOptions, procLocks string) TeamOptions {
