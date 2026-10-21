@@ -106,6 +106,19 @@ func TestQueryReadsTheRecordedTrail(t *testing.T) {
 	}
 }
 
+// TestQueryKeepsNumbersExact: a long past 2^53 comes back digit for digit,
+// and is_partial is carried.
+func TestQueryKeepsNumbersExact(t *testing.T) {
+	t.Parallel()
+	srv, _, _ := esStandIn(t, http.StatusOK, []byte(`{"columns":[{"name":"n","type":"long"}],"values":[[9007199254740993]],"is_partial":true}`))
+	c, err := trail.NewClient(srv.URL, probeKey, nil)
+	require.NoError(t, err)
+	table, err := c.Query(t.Context(), "FROM logs-agentisan.otel-*")
+	require.NoError(t, err)
+	assert.Equal(t, json.Number("9007199254740993"), table.Values[0][0])
+	assert.True(t, table.Partial)
+}
+
 // TestQueryErrors: each way Elasticsearch can fail maps to its sentinel,
 // with what the caller needs to act on it and never the key.
 func TestQueryErrors(t *testing.T) {
@@ -166,13 +179,18 @@ func TestQueryErrors(t *testing.T) {
 
 // TestNewClient: the URL is http(s)://host[:port] and nothing more, since
 // a path or a user would bend where the key goes; neither the URL nor the
-// key is repeated in the error.
+// key is repeated in the error. The client keeps the URL rebuilt from its
+// scheme and host, so an empty query or fragment mark is dropped.
 func TestNewClient(t *testing.T) {
 	t.Parallel()
-	for _, ok := range []string{"http://172.25.0.2:32698", "https://es.example:9200/", "http://[::1]:9200", "https://es.example"} {
+	for ok, want := range map[string]string{
+		"http://172.25.0.2:32698": "http://172.25.0.2:32698", "https://es.example:9200/": "https://es.example:9200",
+		"http://[::1]:9200": "http://[::1]:9200", "https://es.example": "https://es.example",
+		"http://es:9200?": "http://es:9200", "http://es:9200#": "http://es:9200",
+	} {
 		c, err := trail.NewClient(ok, probeKey, nil)
 		require.NoError(t, err, ok)
-		assert.Equal(t, "trail.Client("+strings.TrimSuffix(ok, "/")+")", c.String())
+		assert.Equal(t, "trail.Client("+want+")", c.String(), ok)
 	}
 	for name, bad := range map[string]string{
 		"no scheme": "es.example:9200", "ftp": "ftp://es.example", "a user": "http://elastic:s3cret-pass@es:9200",
