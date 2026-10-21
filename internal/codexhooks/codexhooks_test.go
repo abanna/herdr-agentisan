@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -448,6 +449,43 @@ func TestInstallAtOnce(t *testing.T) {
 	assertOnly(t, home, codexhooks.FileName)
 }
 
+// TestInstallReplacesByRename: an install replaces hooks.json by a rename,
+// never by writing into it, so a Codex reading it meanwhile reads the old
+// file or the new one, never half of either. A reader that opened the old
+// file still reads all of it, the path names a new inode, and no temp file
+// is left beside it.
+func TestInstallReplacesByRename(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	path := filepath.Join(home, codexhooks.FileName)
+	old := `{"hooks":{}}`
+	write(t, path, old, 0o600)
+	reader, err := os.Open(path) // #nosec G304 -- a temp file the test wrote
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = reader.Close() })
+	before := inode(t, path)
+
+	res, err := codexhooks.Install(home)
+	require.NoError(t, err)
+	require.True(t, res.Changed)
+	assert.NotEqual(t, before, inode(t, path), "the file is replaced, not written in place")
+	kept, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	assert.Equal(t, old, string(kept), "the old file is untouched under its reader")
+	assert.Equal(t, decode(t, installed), decode(t, read(t, path)))
+	assertOnly(t, home, codexhooks.FileName)
+}
+
+// inode is path's inode number.
+func inode(t *testing.T, path string) uint64 {
+	t.Helper()
+	st, err := os.Stat(path)
+	require.NoError(t, err)
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	require.True(t, ok, "no inode for %s", path)
+	return sys.Ino
+}
+
 func TestInstallFileModes(t *testing.T) {
 	t.Parallel()
 	t.Run("a new file is 0600, in a new home of 0700", func(t *testing.T) {
@@ -532,6 +570,12 @@ async = true
 			config: "[hooks]\nPostCompact = [{ hooks = [{ type = \"command\", command = \"/x/herdr-agentisan report codex\" }] }]\n",
 			want:   codexhooks.ErrInConfigTOML,
 		},
+		// Codex runs it on whatever event it sits under, so one there on
+		// an event Install never writes would still run twice.
+		"one on an event Install never writes": {
+			config: "[[hooks.SessionStart]]\n\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"herdr-agentisan report codex\"\n",
+			want:   codexhooks.ErrInConfigTOML,
+		},
 		"not TOML": {config: "[hooks\n", want: codexhooks.ErrInvalid},
 	}
 	for name, tc := range tests {
@@ -588,10 +632,12 @@ command = "notify"
 trusted_hash = "sha256:00"
 `
 		write(t, filepath.Join(home, "config.toml"), config, 0o600)
+		before := inode(t, filepath.Join(home, "config.toml"))
 		res, err := codexhooks.Install(home)
 		require.NoError(t, err)
 		assert.True(t, res.Changed)
 		assert.Equal(t, config, read(t, filepath.Join(home, "config.toml")))
+		assert.Equal(t, before, inode(t, filepath.Join(home, "config.toml")), "not even rewritten with the same bytes")
 	})
 }
 
