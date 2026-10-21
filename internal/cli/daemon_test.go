@@ -79,7 +79,7 @@ type inProcess struct {
 
 func (p *inProcess) hooks() daemon.Hooks {
 	return daemon.Hooks{
-		Spawn: func(context.Context) (int, error) {
+		Spawn: func(context.Context) (daemon.Spawned, error) {
 			ctx, cancel := context.WithCancel(p.t.Context())
 			done := make(chan struct{})
 			go func() {
@@ -99,7 +99,7 @@ func (p *inProcess) hooks() daemon.Hooks {
 			defer p.mu.Unlock()
 			p.runs++
 			p.cancel[os.Getpid()] = cancel
-			return os.Getpid(), nil
+			return daemon.Spawned{PID: os.Getpid(), Exited: done}, nil
 		},
 		Signal: func(pid int) error {
 			p.mu.Lock()
@@ -247,6 +247,59 @@ func TestDaemonCommandsFailClearly(t *testing.T) {
 			_, err := runCtx(ctx, tc.args...)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+// TestDaemonStartReportsADaemonThatExited: a spawned daemon that exits before
+// it answers health fails `daemon start` and `daemon restart`, naming the log
+// that says why, so herdr's plugin log records the start as failed (A48).
+func TestDaemonStartReportsADaemonThatExited(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{{"daemon", "start"}, {"daemon", "restart"}} {
+		t.Run(args[1], func(t *testing.T) {
+			t.Parallel()
+			e := newDaemonEnv(t)
+			var logs bytes.Buffer
+			gone := make(chan struct{})
+			close(gone)
+			ctx := cli.WithDaemonHooks(daemonCtx(t, e, nil, &logs), daemon.Hooks{
+				Spawn: func(context.Context) (daemon.Spawned, error) {
+					return daemon.Spawned{PID: 4242, Exited: gone}, nil
+				},
+				StartTime: func(int) (uint64, error) { return 9, nil },
+			})
+			paths, err := daemon.PathsFor(e.stateDir, e.herdrSock)
+			require.NoError(t, err)
+
+			out, err := runCtx(ctx, args...)
+			require.ErrorIs(t, err, daemon.ErrDaemonExited)
+			assert.Contains(t, err.Error(), "pid 4242")
+			assert.Contains(t, err.Error(), paths.Log)
+			assert.NotContains(t, out, "(pid", "nothing reported as running or starting")
+		})
+	}
+}
+
+// TestRenderStart: what `daemon start` says for each outcome, among them
+// the two a test cannot reach without waiting out DefaultStartWait.
+func TestRenderStart(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct {
+		res  daemon.StartResult
+		want string
+	}{
+		"started":                   {daemon.StartResult{PID: 7, Healthy: true}, "daemon running (pid 7)\n"},
+		"already running":           {daemon.StartResult{PID: 7, AlreadyRunning: true, Healthy: true}, "daemon already running (pid 7)\n"},
+		"still starting":            {daemon.StartResult{PID: 7}, "daemon starting (pid 7) but not answering health yet; see /s/daemon.log\n"},
+		"already running, starting": {daemon.StartResult{PID: 7, AlreadyRunning: true}, "daemon already running (pid 7) but still starting, not answering health yet; see /s/daemon.log\n"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var out bytes.Buffer
+			require.NoError(t, cli.RenderStart(&out, tc.res, "/s/daemon.log"))
+			assert.Equal(t, tc.want, out.String())
 		})
 	}
 }

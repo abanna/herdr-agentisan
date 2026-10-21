@@ -991,3 +991,19 @@ Budget: an agent pane a team places carries 8 keys, and a push sets 4.
 - **In a group's view (A37).** A box's title draws a plain shell as `▸ name · shell`, as its row does, and the box's stage takes the stage colours on both of its lines. A stage not reported stays dim.
 - **Watchers.** The boss line no longer draws `watchers`. Nothing counts them: the daemon cannot see a session's background monitors. The v1 key stays, decoded and range-checked, so every v1 document that carries it still decodes.
 - **Short model names.** Fable is `fab`, beside `opus`, `son` and `hai`, and a model whose name says `codex` is `cdx`. Any other model is still its first word, cut to four cells.
+
+### A48. D3: `daemon start` waits for the daemon, not a clock
+
+*Adds to:* D3 and A3. *Overrides:* the fixed 3 s that `daemon start` waited for health, kept by the user's decision since NERD-5247 (#14). The user reversed it on 2026-10-21 (NERD-5345).
+
+- **Why 3 s was too short.** During a live handoff (A3) the new daemon waits for the old daemon's lock, and the old daemon notices the replaced socket only at its next poll, up to `PollInterval` (3 s) later. So a handoff start is that wait, plus the old daemon's shutdown, plus the new daemon's start, and a 3 s wait misses a share of handoffs on any disk.
+  - Measured on the real binary against a fake herdr at a load average of 110–155: 3 of 21 handoffs took over 3 s, and 2 of 14 under fsync load, up to 3.40 s.
+  - The live startup hook's handoff at 2026-10-21T07:35Z took 2.23 s.
+  - A fresh `state.db` under fsync load has taken up to 5.3 s to open (#14).
+- **The wait.** `daemon start` returns as soon as the daemon of this server answers health. Until then it waits on the daemon. While the lock record names a live daemon of this server, that daemon is starting, whichever start spawned it. Otherwise it waits on the process it spawned, which may still be waiting for the lock. The ceiling, `DefaultStartWait`, is `PollInterval` + `herdr.CallTimeout` + `store.BusyTimeout`, 13 s: one poll for an old daemon to let go, then the new daemon's ping and store bounds.
+- **Three outcomes.**
+  - It answers: "daemon running (pid N)", as before.
+  - It is still starting at the ceiling: "daemon starting (pid N) but not answering health yet", naming `daemon.log`, and exit 0, since it may yet come up.
+  - It exits before it answers, and no other daemon of this server holds the lock: `ErrDaemonExited`, naming `daemon.log`, and a non-zero exit, so herdr's plugin log records the startup hook or the `daemon-restart` action as failed. Before, this waited out the 3 s and printed the same "not answering health yet" as a daemon still starting.
+- **Knowing it exited.** `daemon start` waits on the process it spawns, rather than releasing it, only to learn when it exits. The daemon still leads its own session and outlives the command, reparented.
+- **The lock is read, not probed.** While it waits, `daemon start` reads the lock record without taking the lock. A probe takes a free lock for an instant. A daemon trying the lock in that instant could read the record of one that has let go but not yet exited, take it for a live holder, and exit as already running.
