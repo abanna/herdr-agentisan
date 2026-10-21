@@ -960,3 +960,20 @@ Budget: an agent pane a team places carries 8 keys, and a push sets 4.
 - **`tab_id`, a new optional key.** The tab `pane.list` lists the pane in. herdr 0.9.3 numbers a tab by its place in its workspace (A19), so it is shown and never a focus target.
 - **`idle_since`, a new optional key.** When the daemon first saw an agent at rest, idle or done: when its last turn ended. It comes from A23's idle clock, fed by every poll from `pane.list`'s statuses, so it restarts with the daemon. A plain shell never carries it, whatever status herdr gives it, and neither does an agent at work.
 - **The contract.** Both keys are additive and optional, in the boss too, with A18's `unnamed` as the precedent: absent means not reported, so every earlier snapshot keeps its meaning. Decoding stays strict: a re-cased key, a `tab_id` that is not a string or an `idle_since` that is not RFC 3339 is refused. So a reader built before this amendment refuses a snapshot carrying either key, `unknown key "tab_id"`, as one built before A18 refused `unnamed`. The dashboard and the daemon ship in one binary, but a dashboard split already open when the binary is installed and the daemon restarted keeps running the old one: it shows that error in its footer over its last frame until it is closed and opened again. Reopen open dashboards after installing.
+
+### A46. What a repo file may set
+
+*Amends:* D9's precedence, whose repo file layer no longer sets every profile key. *Adds to:* A23's configuration that `worker spawn` reads, and A36's "Never in a repo file". Recorded with NERD-5352: QA of #47 (NERD-5254 part 3) showed a committed repo file setting `shell_ready_keys`, and the user decided what a repo file may not set.
+
+- **The keys.** A project's `.herdr-agentisan.toml` cannot set `agent.command`, a group's `agent.command`, any `[spawn]` key (`shell_prompt`, `shell_ready_keys`, `shell_ready_after_s`), `verify`, or any `[integrations.<name>]` key (`url`, `token`). They come only from the user's own layers: the shared file, its `[projects.<name>]` tables and `--set`.
+- **Why.** A repo file is committed, so whoever can commit to the repo writes it. Every workforce op resolves the project's profile with it (A23), unlike the team poll, which reads no repo file (A36).
+  - A command set there would run in a new tab of the user's terminal.
+  - `shell_ready_keys` would be typed into whatever program holds that tab, and `shell_prompt` and `shell_ready_after_s` decide when.
+  - `verify` is commands to run.
+  - An integration's `token` and `url` together decide which of the user's secrets is read, and where it is sent. `config resolve --check-secrets` already runs `op read` on the reference.
+- **What the repo file keeps.** It keeps the keys that run and type nothing: `color`, `github`, a group's `workers` and `slots`, `agent.model`, a group's `agent.model`, and `rotation`. A model goes to the agent as one argument after `--model`. herdr's `agent.start` quotes every argument for the pane's shell and refuses control characters (herdr 0.9.5), so a model is never shell syntax.
+- **Set means present.** A key is refused whatever its value, an empty list or `""` included. A higher layer replaces a lower one's value whole, so a repo file's `shell_ready_keys = []` or `verify = []` would still undo the user's own. A table that sets none of them, such as an empty `[spawn]`, passes. A table, an inline table and a dotted key name the same key.
+- **The error.** `ErrInvalid`, naming the key, the repo layer and its file, and where to set it instead (`herdr-agentisan.toml` or `--set`). It never names the value, and the first such key in path order is the one reported.
+  - A workforce op answers it `config_invalid`.
+  - A plain secret in a repo file is still `ErrSecretValue`, first, as in every layer.
+  - A repo file that sets one of these keys now fails `config resolve --project` and every workforce op for its project until the key moves to the shared file.

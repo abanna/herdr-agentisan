@@ -236,6 +236,12 @@ the daemon does, and a team added to the configuration since gets them
 after a `daemon-restart`. A worker whose row no pane is bound to, such as one
 lost after a herdr live handoff, is listed under `unbound` (ADR-001 A35).
 Just after the daemon starts, the command waits for its first poll.
+
+Each command resolves the project's profile with its repo's committed
+`.herdr-agentisan.toml`. So that file cannot set what runs or is typed in
+your terminals, or where a secret goes (ADR-001 A46). Agent commands,
+`[spawn]`, `verify` and `[integrations]` belong in `herdr-agentisan.toml` or
+`--set`. A repo file that sets one is refused, and names the key.
 ## The dashboard
 
 `herdr-agentisan dashboard` draws a team from the daemon (ADR-001 D5,

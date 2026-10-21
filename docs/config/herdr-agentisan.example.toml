@@ -14,7 +14,12 @@
 #   2. the shared tables below: every top-level table except [projects]
 #   3. [projects.<name>], the only place short and layout can be set
 #   4. <repo>/.herdr-agentisan.toml: a profile body with its own
-#      schema_version = 1; it cannot set repo
+#      schema_version = 1; it cannot set repo or a group's description.
+#      It is committed, so it cannot set what runs or is typed in your
+#      terminals, or where a secret goes, either (ADR-001 A46):
+#      agent.command, a group's agent.command, [spawn], verify and
+#      [integrations] come only from this file and --set. It keeps
+#      color, github, group counts, models and rotation.
 #   5. --set key.path=value on the command line, e.g.
 #      --set groups.coder.workers=4  --set 'rotation.thresholds=[50,60,70]'
 #
