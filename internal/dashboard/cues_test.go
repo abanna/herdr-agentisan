@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/colorprofile"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -161,4 +162,68 @@ func TestDataAge(t *testing.T) {
 		ls := lines(dashboard.Render(f, 120, 40, plain))
 		assert.Contains(t, ls[len(ls)-1], " · data 60s old · ")
 	})
+}
+
+// TestStageColourInTheGroupView: a group's view (ADR-001 A37) draws a box's
+// stage in the colour the whole stage takes, as a row does (A38), on both of
+// its wrapped lines; a stage not reported stays dim.
+func TestStageColourInTheGroupView(t *testing.T) {
+	t.Parallel()
+
+	long := "READY for review: " + strings.Repeat("word ", 20)
+	snap := &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "coders", Agents: []snapshot.Agent{
+		{Name: "pee01", Status: snapshot.StatusWorking, Stage: long},
+		{Name: "pee02", Status: snapshot.StatusBlocked, Stage: "blocked: 1Password agent"},
+		{Name: "pee03", Status: snapshot.StatusIdle, Stage: "restored"},
+	}}}}
+	f := dashboard.Frame{Snapshot: snap, Selection: dashboard.Selection{Group: -1}, Now: at, Group: "coders"}
+	out := dashboard.Render(f, 80, 40, dashboard.Options{Profile: colorprofile.TrueColor})
+
+	styled := func(text string) *regexp.Regexp {
+		return regexp.MustCompile(`\x1b\[([0-9;:]*)m` + regexp.QuoteMeta(text))
+	}
+	for _, tc := range []struct {
+		hex, text string
+		bold      bool
+	}{
+		{"#50fa7b", "READY for review: word", true},
+		{"#50fa7b", "word word", true}, // the second line keeps the colour
+		{"#ff5555", "blocked: 1Password agent", true},
+		{"#6c7086", "restored", false},
+	} {
+		found := styled(tc.text).FindAllStringSubmatch(out, -1)
+		require.NotEmpty(t, found, "%q is drawn", tc.text)
+		for _, m := range found {
+			assert.Contains(t, m[1], truecolor(tc.hex), "%q's colour", tc.text)
+			assert.Equal(t, tc.bold, hasParam(m[1], "1"), "%q's weight", tc.text)
+		}
+	}
+}
+
+// TestShellGlyphColour: a plain shell's ▸ is drawn in unknown's style, which
+// is no colour at all, in its row, in its group's title count and in its
+// box in the group's view (ADR-001 A38), so it never reads as a status
+// colour. A mutant that draws the count plain (QA's SD10) is equivalent:
+// unknown's style is plain.
+func TestShellGlyphColour(t *testing.T) {
+	t.Parallel()
+
+	snap := &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "coders", Agents: []snapshot.Agent{
+		{Name: "notes", Unnamed: true, Shell: true, Status: snapshot.StatusUnknown},
+		{Name: "pee01", Status: snapshot.StatusWorking},
+	}}}}
+	tc := dashboard.Options{Profile: colorprofile.TrueColor}
+	coloured := regexp.MustCompile(`\x1b\[[0-9;:]*38;[0-9;:]*m▸`)
+	for name, f := range map[string]dashboard.Frame{
+		"the overview":     {Snapshot: snap, Selection: dashboard.Selection{Group: -1}, Now: at},
+		"the group's view": {Snapshot: snap, Selection: dashboard.Selection{Group: -1}, Now: at, Group: "coders"},
+	} {
+		out := dashboard.Render(f, 80, 24, tc)
+		assert.Contains(t, ansi.Strip(out), "▸1", "%s: the title counts the shell", name)
+		assert.Contains(t, ansi.Strip(out), "▸ notes", "%s: the shell's own glyph", name)
+		assert.NotRegexp(t, coloured, out, "%s: no ▸ carries a colour", name)
+		// The working agent's glyph is coloured in the same frame, so a
+		// colour, had ▸ one, would show.
+		assert.Regexp(t, regexp.MustCompile(regexp.QuoteMeta(truecolor("#50fa7b"))+`[0-9;]*m◐`), out, name)
+	}
 }

@@ -968,5 +968,6 @@ Budget: an agent pane a team places carries 8 keys, and a push sets 4.
   - A shell with another status keeps that status's glyph. The one case is `ready` from a handoff token, which `$team` counts as ready too.
   - An unnamed agent is not a shell, so an agent herdr cannot classify yet keeps `?`. The key is what tells the two apart: from `unnamed` and `unknown` alone they look the same.
   - **Version skew.** A dashboard started before this build refuses a newer daemon's `shell` key (strict v1) until it is reopened, as with `unnamed`. After `daemon-restart`, reopen any open dashboard.
+- **In a group's view (A37).** A box's title draws a plain shell as `▸ name · shell`, as its row does, and the box's stage takes the stage colours on both of its lines. A stage not reported stays dim.
 - **Watchers.** The boss line no longer draws `watchers`. Nothing counts them: the daemon cannot see a session's background monitors. The v1 key stays, decoded and range-checked, so every v1 document that carries it still decodes.
 - **Short model names.** Fable is `fab`, beside `opus`, `son` and `hai`, and a model whose name says `codex` is `cdx`. Any other model is still its first word, cut to four cells.
