@@ -105,7 +105,8 @@ same as `dir`, `env` and `argv`. The parts of the launch:
   `--add-dir <the daemon's directory>`. Without it, Claude Code's built-in
   read-only commands, such as `cat` and `grep`, would read any file you can,
   with no allow rule. With it, the file tools refuse a read outside the
-  working directories (the repo and the daemon's directory), and a
+  working directories (the repo and the daemon's directory), except Claude
+  Code's own files under `~/.claude/` (skills, plugins, `CLAUDE.md`), and a
   file-reading command outside them asks, which `dontAsk` denies. It needs
   Claude Code 2.1.257 or later. Inside the fence, a command that reads
   without naming a file, such as `grep -r` run from a directory, is not
@@ -135,7 +136,9 @@ What still reaches past the allow list and the fence:
   debugger session. In this repo git tracks `{}`, while the working tree
   holds the Agentisan bundle's hooks; their SessionStart hook rewrites
   `.claude/hooks/.handoff-dirty` and `.handoff-attempts` at each start.
-- **Mods, managed policy and that file's allow rules.** A mod you installed
-  can still approve a call `dontAsk` would deny, and an allow rule in
-  managed policy or the repo's `.claude/settings.json` widens the debugger
-  too, so check the file, not only what git tracks.
+- **Mods.** Without managed settings or a Team or Enterprise login, a mod
+  you installed can approve a call a deny rule refuses, one the fence would
+  ask for, or one only `dontAsk` would deny: it can lift every rule here,
+  the env file's deny included. The launch does not choose which mods load.
+- **Managed policy and that file's allow rules.** An allow rule in either
+  widens the debugger too, so check the file, not only what git tracks.
