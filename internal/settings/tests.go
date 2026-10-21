@@ -14,8 +14,9 @@ const testLocksPath = "tests.locks"
 const MaxTestLocks = 32
 
 // testsSchema is [tests]. Like [telemetry] it belongs to the shared file and
-// --set only: the slots are the machine's, read by the one daemon per herdr
-// server, so a project table or a repo file naming them is an unknown key.
+// --set, and to a project's own table (A40): the slots are the machine's,
+// read by the one daemon per herdr server, so a repo file naming them is an
+// unknown key.
 var testsSchema = &node{kind: kindTable, fields: map[string]*node{
 	"locks": leafOf(kindStrings),
 }}
@@ -51,7 +52,13 @@ func (m merged) checkTests() error {
 // TestLocks is tests.locks as resolved, which Load has checked, each entry
 // cleaned; nil when it is unset or empty.
 func (r Resolved) TestLocks() []string {
-	v, _ := lookup(r.Values, testLocksPath)
+	return locksIn(r.Values)
+}
+
+// locksIn is tests.locks in a resolved tree, each entry cleaned; nil when it
+// is unset or empty.
+func locksIn(values map[string]any) []string {
+	v, _ := lookup(values, testLocksPath)
 	locks, _ := v.([]string)
 	if len(locks) == 0 {
 		return nil
@@ -63,17 +70,50 @@ func (r Resolved) TestLocks() []string {
 	return out
 }
 
-// TestLocks is the lock files behind the test slots, read by the daemon once
-// when it starts, from the shared file in configDir. nil is none, and no
-// slots are reported; so is no configDir, or no file in it. The read selects
-// no project, so it touches no repo and reads no environment variable.
-func TestLocks(configDir string) ([]string, error) {
-	if configDir == "" {
-		return nil, nil
+// TestLocks is the lock files behind each team's test slots (A31, A40).
+type TestLocks struct {
+	// Shared is [tests] locks: the slots of the unnamed project and of any
+	// project the file does not configure.
+	Shared []string
+	// Projects holds every configured project's lock files: its own
+	// [projects.<p>.tests] locks when its table sets them, an empty list
+	// included, and the shared ones otherwise.
+	Projects map[string][]string
+}
+
+// Of is project's lock files; nil is none, and no slots are reported. A
+// configured project has its own entry, so its empty list never falls back
+// to the shared one.
+func (l TestLocks) Of(project string) []string {
+	if locks, ok := l.Projects[project]; ok {
+		return locks
 	}
+	return l.Shared
+}
+
+// ReadTestLocks reads every project's lock files, once, for the daemon, from
+// the shared file in configDir. A project's merge as Headers' do: the
+// defaults, the shared tables and its own table, where its list replaces the
+// shared one whole; no repo file can set them. No configDir, or no file in
+// it, is none. Like Headers it selects no project, so it touches no repo and
+// reads no environment variable.
+func ReadTestLocks(configDir string) (TestLocks, error) {
+	if configDir == "" {
+		return TestLocks{}, nil
+	}
+	// Load lints the whole file, every project's lock files included; the
+	// merges below only read what it has checked.
 	res, err := Load(LoadOptions{ConfigDir: configDir, LookupEnv: func(string) (string, bool) { return "", false }})
 	if err != nil {
-		return nil, err
+		return TestLocks{}, err
 	}
-	return res.TestLocks(), nil
+	shared, projects, err := loadShared(filepath.Join(configDir, FileName))
+	if err != nil {
+		return TestLocks{}, err
+	}
+	out := TestLocks{Shared: res.TestLocks(), Projects: make(map[string][]string, len(projects))}
+	for name, p := range projects {
+		out.Projects[name] = locksIn(merge(defaults(), shared, p).values)
+	}
+	return out, nil
 }

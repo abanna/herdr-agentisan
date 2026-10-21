@@ -23,14 +23,16 @@ func locksList(n int) string {
 }
 
 // TestTestLocksPrecedence: [tests] locks names the lock files behind the
-// header's test slots (A31). Like [telemetry] it is a shared key: the shared
-// file sets it, --set overrides it, and its provenance is reported like any
-// leaf. Each entry comes back cleaned; unset or empty is none.
+// header's test slots (A31). The shared file sets it, a project's own table
+// replaces it for that project (A40), --set overrides both, and its
+// provenance is reported like any leaf. Each entry comes back cleaned; unset
+// or empty is none.
 func TestTestLocksPrecedence(t *testing.T) {
 	t.Parallel()
 
 	const app = "[projects.app]\nrepo = \"REPO\"\n"
 	const two = "[tests]\nlocks = [\"/run/user/1000/agentisan/gate.0.lock\", \"/run/user/1000/agentisan/gate.1.lock\"]\n"
+	const own = "[projects.app.tests]\nlocks = [\"/tmp//own.lock\"]\n"
 	gates := []string{"/run/user/1000/agentisan/gate.0.lock", "/run/user/1000/agentisan/gate.1.lock"}
 	tests := map[string]struct {
 		file    string // the shared file after schema_version; "-" for no file
@@ -52,6 +54,10 @@ func TestTestLocksPrecedence(t *testing.T) {
 		"--set beats the shared file":      {file: two + app, set: []string{`tests.locks=["/tmp/x.lock"]`}, want: []string{"/tmp/x.lock"}, layer: settings.LayerFlag},
 		"--set with no key in the file":    {file: app, set: []string{`tests.locks=["/tmp/x.lock"]`}, want: []string{"/tmp/x.lock"}, layer: settings.LayerFlag},
 		"--set empty turns them off":       {file: two + app, set: []string{`tests.locks=[]`}, layer: settings.LayerFlag},
+		"a project's own, selected":        {file: two + app + own, project: "app", want: []string{"/tmp/own.lock"}, layer: settings.LayerProject},
+		"a project's own, none selected":   {file: two + app + own, want: gates, layer: settings.LayerShared},
+		"a project's own empty list":       {file: two + app + "[projects.app.tests]\nlocks = []\n", project: "app", layer: settings.LayerProject},
+		"--set beats a project's own":      {file: two + app + own, project: "app", set: []string{`tests.locks=["/tmp/x.lock"]`}, want: []string{"/tmp/x.lock"}, layer: settings.LayerFlag},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -87,8 +93,8 @@ func settingsLocks(n int) []string {
 // TestTestLocksErrors: every entry is an absolute path, named once, at most
 // MaxTestLocks of them: the daemon reads them wherever it started and
 // expands no ~. Anything else is refused at load, naming the key, its layer
-// and file. Only the shared file and --set may set them: the slots are the
-// machine's, not a project's.
+// and file, in a project's table as in the shared file. A repo file may not
+// set them: the lock files are the machine's, not a repo's.
 func TestTestLocksErrors(t *testing.T) {
 	t.Parallel()
 
@@ -117,9 +123,17 @@ func TestTestLocksErrors(t *testing.T) {
 		"a number in the list": {file: locks(`["/tmp/a.lock", 2]`), wantErr: settings.ErrInvalid, wantIn: []string{"tests.locks", "item 2"}},
 		"tests is not a table": {file: "tests = [\"/tmp/a.lock\"]\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"tests", "want a table"}},
 		"an unknown key":       {file: "[tests]\nslots = 2\n" + app, wantErr: settings.ErrUnknownKey, wantIn: []string{"tests.slots"}},
-		"in a project table": {
-			file: app + "[projects.app.tests]\nlocks = [\"/tmp/a.lock\"]\n", wantErr: settings.ErrUnknownKey,
-			wantIn: []string{"projects.app.tests"},
+		"a relative path in a project's table": {
+			file: app + "[projects.app.tests]\nlocks = [\"gate.lock\"]\n", wantErr: settings.ErrInvalid,
+			wantIn: []string{"projects.app.tests.locks", "project", "entry 1", "not an absolute path"},
+		},
+		"a project's table, its project selected": {
+			file: app + "[projects.app.tests]\nlocks = [\"/tmp/a.lock\", \"/tmp/a.lock\"]\n", project: "app", wantErr: settings.ErrInvalid,
+			wantIn: []string{"projects.app.tests.locks", "entry 2", "already listed"},
+		},
+		"an unknown key in a project's table": {
+			file: app + "[projects.app.tests]\nslots = 2\n", wantErr: settings.ErrUnknownKey,
+			wantIn: []string{"projects.app.tests.slots"},
 		},
 		"in a repo file": {
 			file: app, repoFile: "[tests]\nlocks = [\"/tmp/a.lock\"]\n", project: "app",
@@ -144,23 +158,58 @@ func TestTestLocksErrors(t *testing.T) {
 	}
 }
 
-// TestTestLocksForTheDaemon: the daemon reads the lock files once, from the
-// shared file alone. No config dir or no file is none; a file that does not
-// resolve is its error, and no slots are reported.
-func TestTestLocksForTheDaemon(t *testing.T) {
+// TestReadTestLocks: the daemon reads every project's lock files once, from
+// the shared file alone (A40). A project's own list replaces the shared one,
+// an empty one included; a project with none of its own, and a project the
+// file does not configure, counts the shared one. No config dir or no file is
+// none; a file that does not resolve is its error, and no slots are reported.
+func TestReadTestLocks(t *testing.T) {
 	t.Parallel()
+	const shared = "[tests]\nlocks = [\"/run/a//gate.0.lock\", \"/run/a/gate.1.lock\"]\n"
+	gates := []string{"/run/a/gate.0.lock", "/run/a/gate.1.lock"}
 	tests := map[string]struct {
-		file    string // "" for no file; "nodir" for no config dir
-		want    []string
-		wantErr error
+		file     string // "" for no file; "nodir" for no config dir
+		want     settings.TestLocks
+		project  string // a project to look up, with Of
+		wantOf   []string
+		wantErr  error
+		wantText string
 	}{
-		"no config dir":      {file: "nodir"},
-		"no file":            {},
-		"no [tests]":         {file: "[projects.app]\nrepo = \"/x\"\n"},
-		"two lock files":     {file: "[tests]\nlocks = [\"/run/a//gate.0.lock\", \"/run/a/gate.1.lock\"]\n", want: []string{"/run/a/gate.0.lock", "/run/a/gate.1.lock"}},
-		"a relative one":     {file: "[tests]\nlocks = [\"gate.lock\"]\n", wantErr: settings.ErrInvalid},
-		"a newer schema":     {file: "schema_version = 2\n", wantErr: settings.ErrUnsupportedSchema},
-		"a file that breaks": {file: "[tests\n", wantErr: settings.ErrInvalid},
+		"no config dir":  {file: "nodir", project: "app"},
+		"no file":        {want: settings.TestLocks{Projects: map[string][]string{}}, project: "app"},
+		"no [tests]":     {file: "[projects.app]\nrepo = \"/x\"\n", want: settings.TestLocks{Projects: map[string][]string{"app": nil}}, project: "app"},
+		"two lock files": {file: shared, want: settings.TestLocks{Shared: gates, Projects: map[string][]string{}}, project: "app", wantOf: gates},
+		"a project with none of its own": {
+			file: shared + "[projects.app]\nrepo = \"/x\"\n", want: settings.TestLocks{Shared: gates, Projects: map[string][]string{"app": gates}},
+			project: "app", wantOf: gates,
+		},
+		"a project's own": {
+			file:    shared + "[projects.app]\nrepo = \"/x\"\nshort = \"ap\"\n[projects.app.tests]\nlocks = [\"/tmp/skills/./a.lock\"]\n[projects.web]\nrepo = \"/y\"\nshort = \"we\"\n",
+			want:    settings.TestLocks{Shared: gates, Projects: map[string][]string{"app": {"/tmp/skills/a.lock"}, "web": gates}},
+			project: "app", wantOf: []string{"/tmp/skills/a.lock"},
+		},
+		"a project's own empty list": {
+			file:    shared + "[projects.app]\nrepo = \"/x\"\n[projects.app.tests]\nlocks = []\n",
+			want:    settings.TestLocks{Shared: gates, Projects: map[string][]string{"app": nil}},
+			project: "app",
+		},
+		"a project's own, with no shared list": {
+			file:    "[projects.app]\nrepo = \"/x\"\n[projects.app.tests]\nlocks = [\"/tmp/a.lock\"]\n",
+			want:    settings.TestLocks{Projects: map[string][]string{"app": {"/tmp/a.lock"}}},
+			project: "app", wantOf: []string{"/tmp/a.lock"},
+		},
+		"the unnamed project": {
+			file: shared + "[projects.app]\nrepo = \"/x\"\n[projects.app.tests]\nlocks = []\n", want: settings.TestLocks{Shared: gates, Projects: map[string][]string{"app": nil}},
+			wantOf: gates,
+		},
+		"a project the file does not configure": {
+			file: shared + "[projects.app]\nrepo = \"/x\"\n", want: settings.TestLocks{Shared: gates, Projects: map[string][]string{"app": gates}},
+			project: "other", wantOf: gates,
+		},
+		"a relative one":           {file: "[tests]\nlocks = [\"gate.lock\"]\n", wantErr: settings.ErrInvalid},
+		"a project's relative one": {file: "[projects.app]\nrepo = \"/x\"\n[projects.app.tests]\nlocks = [\"gate.lock\"]\n", wantErr: settings.ErrInvalid, wantText: "projects.app.tests.locks"},
+		"a newer schema":           {file: "schema_version = 2\n", wantErr: settings.ErrUnsupportedSchema},
+		"a file that breaks":       {file: "[tests\n", wantErr: settings.ErrInvalid},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -177,9 +226,13 @@ func TestTestLocksForTheDaemon(t *testing.T) {
 				}
 				require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte(body), 0o600))
 			}
-			got, err := settings.TestLocks(dir)
+			got, err := settings.ReadTestLocks(dir)
 			require.ErrorIs(t, err, tc.wantErr)
+			if tc.wantText != "" {
+				assert.Contains(t, err.Error(), tc.wantText)
+			}
 			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.wantOf, got.Of(tc.project))
 		})
 	}
 }

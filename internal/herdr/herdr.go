@@ -28,6 +28,12 @@ var (
 	// ErrUnavailable means the socket could not be reached or the connection
 	// failed mid-call.
 	ErrUnavailable = errors.New("herdr is unavailable")
+	// ErrNotSent means a call ended before any of its request was written:
+	// its dial failed, or the Dialed check refused the server. Whatever the
+	// call asked for certainly did not happen, so it can be tried again; a
+	// call that fails after writing may have taken effect, and never says
+	// this.
+	ErrNotSent = errors.New("nothing was sent to herdr")
 	// ErrProtocol means herdr answered with something the schema does not allow.
 	ErrProtocol = errors.New("herdr protocol violation")
 	// ErrAPI means herdr answered with an error body; see APIError.
@@ -113,7 +119,7 @@ func (c Client) dialed(method string) error {
 		return nil
 	}
 	if err := c.Dialed(); err != nil {
-		return fmt.Errorf("%s: %w", method, err)
+		return fmt.Errorf("%w: %s: %w", ErrNotSent, method, err)
 	}
 	return nil
 }
@@ -155,7 +161,7 @@ func (c Client) Call(ctx context.Context, method string, params, out any) error 
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", c.SocketPath)
 	if err != nil {
-		return fmt.Errorf("%w: dial %s: %w", ErrUnavailable, c.SocketPath, err)
+		return fmt.Errorf("%w: %w: dial %s: %w", ErrUnavailable, ErrNotSent, c.SocketPath, err)
 	}
 	defer conn.Close() //nolint:errcheck // one-shot connection; the response is already read or the call failed
 	if err := c.dialed(method); err != nil {

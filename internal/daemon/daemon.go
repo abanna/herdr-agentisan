@@ -280,6 +280,7 @@ func Run(ctx context.Context, o Options) (err error) {
 			err = errors.Join(err, fmt.Errorf("daemon state: %w", cerr))
 		}
 	}()
+	o.recoverDispatching(ctx, st)
 
 	w := newWalker() // shared: the collector tells it where focus goes
 	snapshots := &snapshotCache{}

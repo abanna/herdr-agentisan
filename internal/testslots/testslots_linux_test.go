@@ -3,11 +3,15 @@ package testslots_test
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,12 +68,12 @@ func TestCountReadsTheKernel(t *testing.T) {
 	require.NoError(t, os.WriteFile(gate1, nil, 0o600))
 	lockFile(t, filepath.Join(dir, "decoy.lock"), flockEx)
 
-	got, err := testslots.Count(testslots.ProcLocks, []string{gate0, gate1, gone})
+	got, err := count(testslots.ProcLocks, []string{gate0, gate1, gone})
 	require.NoError(t, err)
 	assert.Equal(t, snapshot.Slots{Used: 1, Total: 3}, got, "only gate.0 is held; the decoy is not listed")
 
 	require.NoError(t, syscall.Flock(int(held.Fd()), syscall.LOCK_UN))
-	got, err = testslots.Count(testslots.ProcLocks, []string{gate0, gate1, gone})
+	got, err = count(testslots.ProcLocks, []string{gate0, gate1, gone})
 	require.NoError(t, err)
 	assert.Equal(t, snapshot.Slots{Used: 0, Total: 3}, got, "released")
 }
@@ -136,11 +140,48 @@ func TestCountEveryKindOfLock(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			_, listed := setup(t, t.TempDir())
-			got, err := testslots.Count(testslots.ProcLocks, []string{listed})
+			got, err := count(testslots.ProcLocks, []string{listed})
 			require.NoError(t, err)
 			assert.Equal(t, snapshot.Slots{Used: 1, Total: 1}, got)
 		})
 	}
+}
+
+// TestCountARealHold: the boss's hold, `flock <lock> sleep …` from
+// util-linux, read back through the kernel's own lists (A40). Queued behind
+// a run it holds nothing, and the run's slot is used; once the run lets go
+// the hold takes the lock, and the slot is held, not used.
+func TestCountARealHold(t *testing.T) {
+	t.Parallel()
+	needProcLocks(t)
+	flock, err := exec.LookPath("flock")
+	require.NoError(t, err, "util-linux flock(1) runs the hold under test")
+	dir := t.TempDir()
+	slot, other := filepath.Join(dir, "slot.lock"), filepath.Join(dir, "other.lock")
+	run := lockFile(t, slot, flockEx)
+	lockFile(t, other, flockEx)
+
+	hold := exec.Command(flock, slot, "sleep", "60") // #nosec G204 -- flock from PATH, on a temp lock.
+	hold.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	require.NoError(t, hold.Start())
+	t.Cleanup(func() {
+		_ = syscall.Kill(-hold.Process.Pid, syscall.SIGKILL)
+		_ = hold.Wait()
+	})
+	waiting := regexp.MustCompile(`(?m)^\d+: -> FLOCK +ADVISORY +WRITE +` + strconv.Itoa(hold.Process.Pid) + ` +` + regexp.QuoteMeta(devOf(t, slot)) + ` `)
+	require.Eventually(t, func() bool {
+		locks, err := os.ReadFile(testslots.ProcLocks)
+		return err == nil && waiting.Match(locks)
+	}, 30*time.Second, 10*time.Millisecond, "the hold queues behind the run")
+	got, err := count(testslots.ProcLocks, []string{slot, other})
+	require.NoError(t, err)
+	assert.Equal(t, snapshot.Slots{Used: 2, Total: 2}, got, "a hold still waiting holds nothing")
+
+	require.NoError(t, run.Close())
+	require.Eventually(t, func() bool {
+		got, err := count(testslots.ProcLocks, []string{slot, other})
+		return err == nil && got == snapshot.Slots{Used: 1, Held: 1, Total: 2}
+	}, 30*time.Second, 10*time.Millisecond, "the hold takes the slot once the run lets go")
 }
 
 // TestCountWhileOtherLocksChange: locks that other processes take and drop
@@ -177,7 +218,7 @@ func TestCountWhileOtherLocksChange(t *testing.T) {
 		wg.Wait()
 	})
 	for range 20 {
-		got, err := testslots.Count(testslots.ProcLocks, paths)
+		got, err := count(testslots.ProcLocks, paths)
 		require.NoError(t, err)
 		require.Equal(t, snapshot.Slots{Used: 64, Total: 64}, got, "a held lock read as free")
 	}

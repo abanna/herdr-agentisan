@@ -231,14 +231,17 @@ the last write wins; after, the daemon's next push, within 3 s, replaces the
 value v12 left on each group space. The daemon never writes `◆ herdr`, so
 v12's last value there clears itself when its 30 s TTL runs out.
 
-## The trail, read back
+## The debugger
 
-`herdr-agentisan events worker <id>` answers "what happened to worker X in
-the last hour" from the workflow events in Elasticsearch, and `events query
-'<ES|QL>'` runs any read of them. They are the debugger agent's tools
-(ADR-001 item 12). They take Elasticsearch's URL and read key from the env
-file `[debugger] env_file` names, at each query, so the key never enters an
-agent's environment. See [`docs/debugger.md`](docs/debugger.md).
+A read-only Claude agent that answers "what happened to worker X in the last
+hour" from the workflow events (ADR-001 item 12, A32). Its role ships here,
+in `roles/debugger.md`. `herdr-agentisan events worker <id>` and `events
+query '<ES|QL>'` read the events in Elasticsearch. They take its URL and read
+key from the env file `[debugger] env_file` names, at each query, so the key
+never enters an agent's environment. `herdr-agentisan debugger args` prints
+the claude command that starts it read-only, its reads fenced to the repo
+and the daemon's directory; `worker spawn --group debugger`
+will launch it. See [`docs/debugger.md`](docs/debugger.md).
 
 ## Teams: one workspace, one tab per worker
 
@@ -373,9 +376,12 @@ action after changing them.
 The header shows `slots used/total` for the lock files `[tests] locks`
 names in the shared `herdr-agentisan.toml` (ADR-001 A31): a slot is in use
 while some process holds a lock on its file, as `/proc/locks` lists them,
-counted every poll. Give absolute paths on tmpfs or ext4; agentisan's gate
-keeps one per slot in `$XDG_RUNTIME_DIR/agentisan/gate.<n>.lock`. Without
-`[tests]`, or off Linux, no slots are shown. The boss's `up 2h14m` counts
+counted every poll. A project's own `[projects.<p>.tests] locks` replaces
+the shared list for its team (A40). Give absolute paths on tmpfs or ext4;
+agentisan's gate keeps one per slot in
+`$XDG_RUNTIME_DIR/agentisan/gate.<n>.lock`. A slot a boss holds with
+`flock <lock> sleep …` shows as held, not used: `slots 1/2 (1 held)`.
+Without a list, or off Linux, no slots are shown. The boss's `up 2h14m` counts
 from when this daemon first saw the boss's pane, so a handoff or a daemon
 restart starts it again.
 
