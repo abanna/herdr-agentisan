@@ -272,12 +272,13 @@ func Run(ctx context.Context, o Options) error {
 
 	focusCtx, stopFocus := context.WithCancel(ctx)
 	var focus sync.WaitGroup
-	focus.Go(func() { o.followFocus(focusCtx, st, w, ident) })
+	views := newViewSync() // the collector tells it focus, the team poll the teams
+	focus.Go(func() { o.followFocus(focusCtx, st, w, views, ident) })
 	defer func() {
 		stopFocus()
 		focus.Wait()
 	}()
-	stopTeam := o.startTeam(ctx, st, ident, snapshots, idle)
+	stopTeam := o.startTeam(ctx, st, ident, snapshots, idle, views)
 	defer stopTeam()
 	o.Logger.Info().Int("pid", os.Getpid()).Uint32("protocol", pong.Protocol).Str("socket", paths.Socket).
 		Int("store_version", st.UserVersion()).Msg("daemon running")

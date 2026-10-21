@@ -12,7 +12,11 @@
 # colour. A colour rule cannot do this: gt and lt only match a value that is
 # all number, which "ctx 56%" is not.
 #
-# Agents, line 2: the workspace, the work item and the agentisan stage.
+# Agents, line 2: the work item and the agentisan stage. No workspace: the
+# daemon sets herdr's agent view to the team you are in, labelled with its
+# project, so the panel lists that team, then any blocked agent from
+# elsewhere. Outside every team it clears the view, and the panel lists
+# every agent in herdr's own order.
 #
 # Spaces, line 2: $team, the daemon's count of the space's team,
 # "4 agents · 0 working · 1 ready", with " · 2 blocked" when any are. ready
@@ -27,7 +31,7 @@
 [ui.sidebar.agents]
 rows = [
   ["state_icon", { token = "$ctx_ok", fg = "#6c7086" }, { token = "$ctx_warn", fg = "#fab387", bold = true }, { token = "$ctx_hot", fg = "#f38ba8", bold = true }, { token = "agent", bold = true }],
-  [{ token = "workspace", rules = [{ starts_with = "◆", fg = "#89dceb", bold = true }] }, { token = "$item", fg = "#89b4fa" }, { token = "$stage", fg = "#a6adc8", rules = [{ contains = "READY", fg = "#a6e3a1", bold = true }, { contains = "RED", fg = "#f38ba8", bold = true }, { contains = "blocked", ignore_case = true, fg = "#f38ba8", bold = true }, { contains = "waiting", ignore_case = true, fg = "#f9e2af" }, { contains = "queued", ignore_case = true, fg = "#f9e2af" }] }],
+  [{ token = "$item", fg = "#89b4fa" }, { token = "$stage", fg = "#a6adc8", rules = [{ contains = "READY", fg = "#a6e3a1", bold = true }, { contains = "RED", fg = "#f38ba8", bold = true }, { contains = "blocked", ignore_case = true, fg = "#f38ba8", bold = true }, { contains = "waiting", ignore_case = true, fg = "#f9e2af" }, { contains = "queued", ignore_case = true, fg = "#f9e2af" }] }],
 ]
 
 [ui.sidebar.spaces]

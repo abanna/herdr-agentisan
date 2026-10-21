@@ -59,10 +59,11 @@ func TestDashboardRejectsBadInvocations(t *testing.T) {
 			args: []string{"dashboard", "--fixture", sample}, env: map[string]string{"HERDR_PLUGIN_CONTEXT_JSON": "{"},
 			want: plugin.ErrInvalidEnv,
 		},
-		"positional":      {args: []string{"dashboard", "extra"}},
-		"unknown flag":    {args: []string{"dashboard", "--bogus"}},
-		"missing fixture": {args: []string{"dashboard", "--fixture", filepath.Join(dir, "nope.json")}, want: snapshot.ErrUnavailable},
-		"newer fixture":   {args: []string{"dashboard", "--fixture", bad}, want: snapshot.ErrUnsupportedVersion},
+		"a project with a fixture": {args: []string{"dashboard", "--fixture", sample, "--project", "alpha"}, contains: "[fixture project]"},
+		"positional":               {args: []string{"dashboard", "extra"}},
+		"unknown flag":             {args: []string{"dashboard", "--bogus"}},
+		"missing fixture":          {args: []string{"dashboard", "--fixture", filepath.Join(dir, "nope.json")}, want: snapshot.ErrUnavailable},
+		"newer fixture":            {args: []string{"dashboard", "--fixture", bad}, want: snapshot.ErrUnsupportedVersion},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -229,7 +230,8 @@ func TestDashboardEnterFocusesThroughHerdr(t *testing.T) {
 // daemon of the herdr server in HERDR_SOCKET_PATH, under the plugin state
 // directory from HERDR_PLUGIN_STATE_DIR or --state-dir, exactly where
 // `daemon health` looks. With no daemon there it says so, keeps polling and
-// still quits on q.
+// still quits on q. It asks herdr only where its own pane is (A24), and
+// with --project not even that.
 func TestDashboardReadsTheDaemon(t *testing.T) {
 	t.Parallel()
 
@@ -242,29 +244,48 @@ func TestDashboardReadsTheDaemon(t *testing.T) {
 		return line.String()
 	}
 	tests := map[string]struct {
-		flag    bool // the state dir comes from --state-dir, not the environment
-		daemon  bool // a daemon answers at the socket
+		flag    bool   // the state dir comes from --state-dir, not the environment
+		daemon  bool   // a daemon answers at the socket
+		reply   string // what it answers; "" for the sample
+		project string // --project
+		asked   string // the selector the daemon must have been sent
 		waitFor []string
 	}{
-		"the state dir from HERDR_PLUGIN_STATE_DIR": {daemon: true, waitFor: []string{"pee01"}},
-		"the state dir from --state-dir":            {flag: true, daemon: true, waitFor: []string{"pee01"}},
+		"the state dir from HERDR_PLUGIN_STATE_DIR": {daemon: true, asked: `{"workspace_id":"w2"}`, waitFor: []string{"pee01"}},
+		"the state dir from --state-dir":            {flag: true, daemon: true, asked: `{"workspace_id":"w2"}`, waitFor: []string{"pee01"}},
 		"no daemon running":                         {waitFor: []string{"waiting for the daemon", "daemon not running"}},
+		"a project's team":                          {daemon: true, project: "alpha", asked: `{"project":"alpha"}`, waitFor: []string{"pee01"}},
+		"outside every team": {
+			daemon: true, reply: `{"ok":false,"error":{"code":"no_team","message":"workspace w2 is no team's"}}` + "\n",
+			waitFor: []string{"no team in this workspace", "this workspace (w2) is not a team's; pass --project"},
+		},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			srv := herdrtest.Start(t, focusOK)
+			srv := herdrtest.Start(t, ownPane)
 			stateDir, err := os.MkdirTemp("", "cs")
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = os.RemoveAll(stateDir) })
 			paths, err := daemon.PathsFor(stateDir, srv.Path)
 			require.NoError(t, err)
+			var asked *lockedBuffer
 			if tc.daemon {
 				require.NoError(t, os.MkdirAll(paths.Dir, 0o700))
-				fakeDaemonAt(t, paths.Socket, `{"ok":true,"data":`+sampleLine(t)+"}\n")
+				reply := tc.reply
+				if reply == "" {
+					reply = `{"ok":true,"data":` + sampleLine(t) + "}\n"
+				}
+				asked = fakeDaemonAt(t, paths.Socket, reply)
 			}
-			env := map[string]string{"HERDR_SOCKET_PATH": srv.Path, "HERDR_PLUGIN_STATE_DIR": stateDir}
+			env := map[string]string{
+				"HERDR_SOCKET_PATH": srv.Path, "HERDR_PLUGIN_STATE_DIR": stateDir,
+				"HERDR_PANE_ID": "w2:p1", "HERDR_WORKSPACE_ID": "w7",
+			}
 			args := []string{"dashboard"}
+			if tc.project != "" {
+				args = append(args, "--project", tc.project)
+			}
 			if tc.flag {
 				env["HERDR_PLUGIN_STATE_DIR"] = filepath.Join(stateDir, "elsewhere")
 				args = append(args, "--state-dir", stateDir)
@@ -275,26 +296,52 @@ func TestDashboardReadsTheDaemon(t *testing.T) {
 				s.waitFor(text)
 			}
 			s.quit()
-			assert.Empty(t, srv.Requests(), "drawing never calls herdr; the daemon is the collector")
+			for _, r := range srv.Requests() {
+				assert.Contains(t, []string{"pane.list", "pane.process_info"}, r.Method, "drawing never calls herdr but to find its own pane; the daemon is the collector")
+			}
+			if tc.project != "" {
+				assert.Empty(t, srv.Requests(), "a project's team is not located")
+			}
+			if tc.asked != "" {
+				assert.Contains(t, asked.String(), `"args":`+tc.asked)
+			}
 		})
 	}
 }
 
-// fakeDaemonAt answers every connection at sock with reply.
-func fakeDaemonAt(t *testing.T, sock, reply string) {
+// ownPane is a herdr with one pane, w2:p1, which runs this process: the
+// dashboard runs in the test's process.
+func ownPane(r herdrtest.Request) herdrtest.Reply {
+	switch r.Method {
+	case "pane.list":
+		return herdrtest.Reply{Result: map[string]any{"type": "pane_list", "panes": []map[string]any{{"pane_id": "w2:p1", "workspace_id": "w2", "focused": true}}}}
+	case "pane.process_info":
+		return herdrtest.Reply{Result: map[string]any{"type": "pane_process_info", "process_info": map[string]any{
+			"pane_id": "w2:p1", "shell_pid": os.Getpid(), "foreground_process_group_id": os.Getpid(), "foreground_processes": []any{},
+		}}}
+	}
+	return focusOK(r)
+}
+
+// fakeDaemonAt answers every connection at sock with reply, and returns
+// every request line it read.
+func fakeDaemonAt(t *testing.T, sock, reply string) *lockedBuffer {
 	t.Helper()
 	ln, err := net.Listen("unix", sock)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })
+	asked := &lockedBuffer{}
 	go func() {
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
 				return
 			}
-			_, _ = bufio.NewReader(conn).ReadBytes('\n')
+			line, _ := bufio.NewReader(conn).ReadBytes('\n')
+			_, _ = asked.Write(line)
 			_, _ = conn.Write([]byte(reply))
 			_ = conn.Close()
 		}
 	}()
+	return asked
 }

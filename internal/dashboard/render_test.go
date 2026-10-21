@@ -96,6 +96,14 @@ func TestRenderGolden(t *testing.T) {
 		"waiting_80x24": {
 			frame: func(*testing.T) dashboard.Frame { return dashboard.Frame{Now: at, Btop: true} }, w: 80, h: 24,
 		},
+		// No team where the dashboard runs (A24): no board, and the footer
+		// says why.
+		"no_team_here_80x24": {
+			frame: func(*testing.T) dashboard.Frame {
+				return dashboard.Frame{Now: at, Btop: true, NoTeam: true, Errors: []error{errors.New("this workspace (w9) is not a team's; pass --project")}}
+			},
+			w: 80, h: 24,
+		},
 		"help_80x24": {
 			frame: func(t *testing.T) dashboard.Frame {
 				t.Helper()
@@ -971,6 +979,12 @@ func TestRenderFooter(t *testing.T) {
 		"an error's newlines stay on one line": {
 			frame: dashboard.Frame{Now: at, Errors: []error{errors.New("a\nb")}},
 			want:  " ✖ a b · " + hints,
+		},
+		// A workspace id from herdr or HERDR_WORKSPACE_ID reaches the footer
+		// as it came: its escapes cannot drive the terminal.
+		"escapes in an error and a note are drawn inert": {
+			frame: dashboard.Frame{Now: at, Note: "(w\x1b]0;x\x07)", Errors: []error{errors.New("(w\x1b[2J9)")}},
+			want:  " ✖ (w [2J9) · (w ]0;x ) · " + hints,
 		},
 		"the agents out of view, on the right": {
 			frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "g", Agents: slices.Repeat([]snapshot.Agent{{Name: "a", Status: snapshot.StatusIdle}}, 40)}}}, Now: at},
