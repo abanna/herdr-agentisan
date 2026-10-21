@@ -150,18 +150,46 @@ func TestSubscribeSocketPathClasses(t *testing.T) {
 }
 
 // TestSubscriptionOutlivesTheCallTimeout: only the ack is bounded by the
-// client's timeout. A focus stream is quiet for hours at a time.
+// client's timeout. A focus stream is quiet for hours at a time: an event
+// sent after the ack's deadline still arrives. The timeout leaves the ack
+// room on a loaded machine (a 50 ms one lost that race under load, see
+// TestSubscribeAckAfterTheTimeout), and the wait is counted from before the
+// call, so the deadline has passed by then however long the ack took.
 func TestSubscriptionOutlivesTheCallTimeout(t *testing.T) {
 	t.Parallel()
+	const timeout = time.Second
 	lines := make(chan []byte, 1)
 	srv := herdrtest.Start(t, streaming(lines))
-	sub := subscribe(t, herdr.Client{SocketPath: srv.Path, Timeout: 50 * time.Millisecond})
+	start := time.Now()
+	sub := subscribe(t, herdr.Client{SocketPath: srv.Path, Timeout: timeout})
 
-	time.Sleep(250 * time.Millisecond)
+	time.Sleep(time.Until(start.Add(timeout + 100*time.Millisecond)))
 	lines <- herdrtest.PaneFocused("w1:p1", "w1")
 	got, err := next(t, sub)
 	require.NoError(t, err)
 	assert.Equal(t, "w1:p1", got.PaneID)
+}
+
+// TestSubscribeAckAfterTheTimeout: an ack herdr sends after the client's
+// timeout fails the call, as one never sent does, and always with the
+// timeout's error: only the context ends the read, so the error never
+// depends on which of two timers fired first.
+func TestSubscribeAckAfterTheTimeout(t *testing.T) {
+	t.Parallel()
+	const timeout = 100 * time.Millisecond
+	late := make(chan struct{})
+	srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
+		<-late
+		return herdrtest.Reply{Result: herdrtest.SubscriptionStarted(), Stream: make(chan []byte)}
+	})
+	t.Cleanup(func() { close(late) }) // the ack goes out as the test ends, before the server's cleanup
+
+	start := time.Now()
+	sub, err := herdr.Client{SocketPath: srv.Path, Timeout: timeout}.Subscribe(t.Context(), herdr.SubscribePaneFocused)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Equal(t, "events.subscribe: context deadline exceeded", err.Error())
+	assert.Nil(t, sub)
+	assert.Less(t, time.Since(start), 10*timeout, "the client gives up at its timeout, not at the ack")
 }
 
 // TestSubscribeAckClasses walks every way the ack can fail. Each is an error a
@@ -268,8 +296,7 @@ func TestSubscribeAckIsBounded(t *testing.T) {
 
 			start := time.Now()
 			_, err := herdr.Client{SocketPath: silentSocket(t), Timeout: tc.timeout}.Subscribe(ctx, herdr.SubscribePaneFocused)
-			require.Error(t, err)
-			assert.True(t, errors.Is(err, context.DeadlineExceeded) || errors.Is(err, herdr.ErrUnavailable), "got %v", err)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
 			assert.Less(t, time.Since(start), 2*time.Second)
 		})
 	}

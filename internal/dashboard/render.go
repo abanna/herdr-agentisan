@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"errors"
 	"fmt"
 	"image/color"
 	"math"
@@ -60,11 +61,13 @@ const (
 	sep     = " · "
 	waiting = "waiting for the daemon…"
 	noTeam  = "no agents in this team"
-	// noTeamHere is the body when there is no team where the dashboard
-	// runs; the footer says why.
-	noTeamHere = "no team in this workspace"
-	noAgents   = "no agents"
-	noBoss     = "not running"
+	// noTeamHere is the body in a workspace that is no team's (ADR-001
+	// A24), and noTeamToShow the body for every other place with no team
+	// to show; the footer says why.
+	noTeamHere   = "no team in this workspace"
+	noTeamToShow = "no team to show"
+	noAgents     = "no agents"
+	noBoss       = "not running"
 )
 
 // Options tune the renderer. The zero value renders with DefaultThresholds
@@ -114,9 +117,10 @@ type Frame struct {
 	Btop bool
 	// Note is a standing footer note, such as why focus is off.
 	Note string
-	// NoTeam is set when there is no team where the dashboard runs: with no
-	// Snapshot, the body says so instead of waiting for the daemon.
-	NoTeam bool
+	// NoTeam is why there is no team where the dashboard runs, nil while
+	// there is one: with no Snapshot, the body says so instead of waiting
+	// for the daemon, "no team in this workspace" for ErrNotATeamsWorkspace.
+	NoTeam error
 	// Errors are shown in the footer, first to last. Nil entries are skipped.
 	Errors []error
 	// Search is set while a query is typed: the footer leads with Query, and
@@ -149,8 +153,12 @@ func Render(f Frame, w, h int, opts Options) string {
 	l.drawHeader(canvas, f, th)
 	switch {
 	case l.avail == 0:
-	case f.Snapshot == nil && f.NoTeam:
-		canvas[l.top] = line{{" ", plainStyle}, {noTeamHere, dimStyle}}
+	case f.Snapshot == nil && f.NoTeam != nil:
+		body := noTeamToShow
+		if errors.Is(f.NoTeam, ErrNotATeamsWorkspace) {
+			body = noTeamHere
+		}
+		canvas[l.top] = line{{" ", plainStyle}, {body, dimStyle}}
 	case f.Snapshot == nil:
 		canvas[l.top] = line{{" ", plainStyle}, {waiting, dimStyle}}
 	case len(l.groups) == 0 && f.Search && strings.TrimSpace(f.Query) != "":
@@ -913,25 +921,53 @@ func footer(f Frame, l layout) line {
 	return slices.Concat(left.truncate(room).pad(l.w-1-markW), line{{mark, dimStyle}})
 }
 
+// keyHints joins the keys that work, as the footer names them: Enter and
+// the arrows first, only when act is set, since both act on an agent and do
+// nothing with none drawn.
+func keyHints(act bool, keys ...string) string {
+	if act {
+		keys = append([]string{"enter jump", "↑↓ move"}, keys...)
+	}
+	return strings.Join(keys, sep)
+}
+
 // searchHints are the keys that work while a query is typed.
-const searchHints = "enter jump · ↑↓ move · esc clear"
+func searchHints(act bool) string {
+	return keyHints(act, "esc clear")
+}
 
 // viewHints are the keys that work in a group's view, as hints names them.
-func viewHints(btop bool) string {
+func viewHints(btop, act bool) string {
 	if btop {
-		return "enter jump · ↑↓ move · esc back · ctrl-b m btop · ? help · q quit"
+		return keyHints(act, "esc back", "ctrl-b m btop", "? help", "q quit")
 	}
-	return "enter jump · ↑↓ move · esc back · ? help · q quit"
+	return keyHints(act, "esc back", "? help", "q quit")
 }
 
 // hints are the keys that work, as the footer names them. ctrl-b m is
 // herdr's own popup key for btop in this setup, named only where herdr is
 // reachable.
-func hints(btop bool) string {
+func hints(btop, act bool) string {
 	if btop {
-		return "enter jump · ↑↓ move · ctrl-b m btop · ? help · q quit"
+		return keyHints(act, "ctrl-b m btop", "? help", "q quit")
 	}
-	return "enter jump · ↑↓ move · ? help · q quit"
+	return keyHints(act, "? help", "q quit")
+}
+
+// onAgent reports whether f draws an agent for Enter and the arrows to act
+// on: one of the open group's, in its view, and else one of any group's.
+// With no snapshot, no team here, or a query that matches none, there is
+// none.
+func onAgent(f Frame, view bool) bool {
+	if f.Snapshot == nil {
+		return false
+	}
+	groups := f.Snapshot.Groups
+	if view {
+		g := groupIndex(groups, f.Group)
+		return g >= 0 && len(groups[g].Agents) > 0
+	}
+	return slices.ContainsFunc(groups, func(g snapshot.Group) bool { return len(g.Agents) > 0 })
 }
 
 // staleAfter is the age, in whole seconds, past which the footer says how
@@ -975,13 +1011,14 @@ func footerParts(f Frame, view bool) []seg {
 	if f.Note != "" {
 		parts = append(parts, seg{clean(f.Note), noteStyle})
 	}
+	act := onAgent(f, view)
 	switch {
 	case f.Search:
-		return append(parts, seg{searchHints, dimStyle})
+		return append(parts, seg{searchHints(act), dimStyle})
 	case view:
-		return append(parts, seg{viewHints(f.Btop), dimStyle})
+		return append(parts, seg{viewHints(f.Btop, act), dimStyle})
 	default:
-		return append(parts, seg{hints(f.Btop), dimStyle})
+		return append(parts, seg{hints(f.Btop, act), dimStyle})
 	}
 }
 

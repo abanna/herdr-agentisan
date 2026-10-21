@@ -23,23 +23,33 @@ const RelocateEvery = 10 * time.Second
 // then, never another team's.
 var ErrNoTeamHere = errors.New("no team here")
 
+// ErrNotATeamsWorkspace is the one ErrNoTeamHere ADR-001 A24 names: the
+// dashboard runs in a workspace the daemon knows no team of.
+var ErrNotATeamsWorkspace = fmt.Errorf("%w: the workspace is no team's", ErrNoTeamHere)
+
 // noPane is the footer's line when no herdr pane runs the dashboard.
 const noPane = "this dashboard runs in no herdr pane; pass --project"
 
 // placeError is a place the dashboard shows no team for. Its message is the
-// footer's whole line; it matches ErrNoTeamHere and what caused it.
+// footer's whole line; it matches ErrNoTeamHere, or kind when set (which
+// wraps it), and what caused it.
 type placeError struct {
-	msg string
-	err error
+	msg  string
+	kind error
+	err  error
 }
 
 func (e *placeError) Error() string { return e.msg }
 
 func (e *placeError) Unwrap() []error {
-	if e.err == nil {
-		return []error{ErrNoTeamHere}
+	kind := e.kind
+	if kind == nil {
+		kind = ErrNoTeamHere
 	}
-	return []error{ErrNoTeamHere, e.err}
+	if e.err == nil {
+		return []error{kind}
+	}
+	return []error{kind, e.err}
 }
 
 // Panes is the slice of the herdr client a Locator asks.
@@ -201,7 +211,7 @@ func (s *TeamSource) Snapshot(ctx context.Context) (snapshot.Snapshot, error) {
 		snap, err = s.ask(ctx, daemon.Selector{WorkspaceID: s.place.WorkspaceID})
 	}
 	if errors.Is(err, daemon.ErrNoTeam) {
-		return snapshot.Snapshot{}, &placeError{msg: fmt.Sprintf("this workspace (%s) is not a team's; pass --project", s.place.WorkspaceID), err: err}
+		return snapshot.Snapshot{}, &placeError{msg: fmt.Sprintf("this workspace (%s) is not a team's; pass --project", s.place.WorkspaceID), kind: ErrNotATeamsWorkspace, err: err}
 	}
 	if err == nil {
 		s.searched = false
@@ -218,8 +228,15 @@ func (s *TeamSource) Note() string {
 
 // locate finds the place again at now. A search that finds none is kept,
 // and answered, until the next is due, so a dashboard outside any pane
-// does not ask herdr every poll.
+// does not ask herdr every poll. It takes at most half of what is left of
+// ctx's time: a herdr that hangs then leaves the daemon the rest, and the
+// footer blames herdr, not the daemon.
 func (s *TeamSource) locate(ctx context.Context, now time.Time) {
+	if deadline, ok := ctx.Deadline(); ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Until(deadline)/2)
+		defer cancel()
+	}
 	s.place, s.err = s.Locator.Locate(ctx)
 	s.at, s.searched = now, true
 }
