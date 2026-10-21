@@ -383,14 +383,19 @@ func TestOpenWaitsForALockUpToTheBusyTimeout(t *testing.T) {
 // TestOpenWaitsAgainWhileAnotherOpenerProgresses: an opener racing another
 // one on the same file waits out the busy timeout behind it when the disk is
 // slow. If the other opener made progress meanwhile, by applying a migration
-// or switching the file to WAL, Open waits again instead of failing, so racing
-// openers all succeed (NERD-5364). Any other write is no such progress: Open
-// fails with ErrOpen after BusyTimeout, as with a lock held and never used.
+// or giving the fresh file its first write (its switch to WAL), Open waits
+// again instead of failing, so racing openers all succeed (NERD-5364). Any
+// other write is no such progress: Open fails with ErrOpen after BusyTimeout,
+// as with a lock held and never used.
 func TestOpenWaitsAgainWhileAnotherOpenerProgresses(t *testing.T) {
 	t.Parallel()
 	const (
-		progressAt = 3 * time.Second                   // within Open's first wait
-		releaseAt  = store.BusyTimeout + 2*time.Second // past it
+		// Early in Open's first wait, so the other connection's progress is
+		// on disk before that wait runs out however loaded the machine is;
+		// that connection also runs with synchronous=OFF, so it never waits
+		// on an fsync.
+		progressAt = 1500 * time.Millisecond
+		releaseAt  = store.BusyTimeout + 2*time.Second // past Open's first wait
 	)
 	file := func(sql string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(sql)} }
 	one := fstest.MapFS{"0001_a.sql": file("CREATE TABLE a (x INTEGER);")}
@@ -406,9 +411,12 @@ func TestOpenWaitsAgainWhileAnotherOpenerProgresses(t *testing.T) {
 			migrated: true, lock: "BEGIN IMMEDIATE",
 			progress: "CREATE TABLE b (y INTEGER); PRAGMA user_version = 2; COMMIT; BEGIN IMMEDIATE",
 		},
-		"another opener switches the file to WAL": {
-			// Exclusive locking mode keeps the lock across the switch.
-			lock: "PRAGMA locking_mode = EXCLUSIVE; PRAGMA user_version = 0", progress: "PRAGMA journal_mode = WAL",
+		"another opener gives the fresh file its first write": {
+			// The switch to WAL, as a racing opener makes it, writes the
+			// empty file's first page. Exclusive locking mode then locks
+			// WAL readers out again until the release.
+			lock:     "BEGIN EXCLUSIVE",
+			progress: "COMMIT; PRAGMA journal_mode = WAL; PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE",
 		},
 		"a newer build's migration is refused at once": {
 			migrated: true, lock: "BEGIN IMMEDIATE",
@@ -418,11 +426,11 @@ func TestOpenWaitsAgainWhileAnotherOpenerProgresses(t *testing.T) {
 			migrated: true, lock: "BEGIN IMMEDIATE",
 			progress: "INSERT INTO a VALUES (1); COMMIT; BEGIN IMMEDIATE", want: store.ErrOpen,
 		},
-		"a file already in WAL is no switch": {
+		"a file already written is no first write": {
 			migrated: true, lock: "PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT",
 			progress: "INSERT INTO a VALUES (1)", want: store.ErrOpen,
 		},
-		"another write is no switch to WAL": {
+		"another write to a written file is no first write": {
 			lock: "PRAGMA locking_mode = EXCLUSIVE; PRAGMA user_version = 0", progress: "CREATE TABLE z (x INTEGER)",
 			want: store.ErrOpen,
 		},
@@ -443,6 +451,8 @@ func TestOpenWaitsAgainWhileAnotherOpenerProgresses(t *testing.T) {
 				}
 				other := raw(t, path)
 				conn, err := other.Conn(t.Context())
+				require.NoError(t, err)
+				_, err = conn.ExecContext(t.Context(), "PRAGMA synchronous = OFF")
 				require.NoError(t, err)
 				_, err = conn.ExecContext(t.Context(), tc.lock)
 				require.NoError(t, err)
