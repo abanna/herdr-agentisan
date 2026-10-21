@@ -20,12 +20,13 @@ func TestGroupDescriptions(t *testing.T) {
 	const app = "[projects.app]\nrepo = \"REPO\"\n"
 	const coder = "[groups.coder]\nworkers = 1\nslots = 2\n"
 	tests := map[string]struct {
-		file  string // the shared file after schema_version
-		set   []string
-		group string
-		want  settings.Group
-		layer string // groups.<group>.description's; "" when unset
-		teams map[string]string
+		file     string // the shared file after schema_version
+		repoFile string // the repo file after schema_version
+		set      []string
+		group    string
+		want     settings.Group
+		layer    string // groups.<group>.description's; "" when unset
+		teams    map[string]string
 	}{
 		"no description": {file: coder + app, group: "coder", want: settings.Group{Workers: 1, Slots: 2}},
 		"a shared one, for every project": {
@@ -49,36 +50,56 @@ func TestGroupDescriptions(t *testing.T) {
 		},
 		"a group that only describes, in the project's table": {
 			file: app + "[projects.app.groups.coders]\ndescription = \"write fixes and new code\"\n", group: "coders",
-			want: settings.Group{Description: "write fixes and new code"}, layer: settings.LayerProject,
+			want: settings.Group{Description: "write fixes and new code", DescribesOnly: true}, layer: settings.LayerProject,
 			teams: map[string]string{"coders": "write fixes and new code"},
 		},
 		"a group that only describes, shared": {
 			file: "[groups.qa]\ndescription = \"runs the gates\"\n" + app, group: "qa",
-			want: settings.Group{Description: "runs the gates"}, layer: settings.LayerShared,
+			want: settings.Group{Description: "runs the gates", DescribesOnly: true}, layer: settings.LayerShared,
 			teams: map[string]string{"qa": "runs the gates"},
 		},
 		"a group that only describes, with an empty description": {
 			file: app + "[projects.app.groups.coders]\ndescription = \"\"\n", group: "coders",
-			want: settings.Group{}, layer: settings.LayerProject,
+			want: settings.Group{DescribesOnly: true}, layer: settings.LayerProject,
 		},
 		"a shared worker group the project describes": {
 			file: coder + app + "[projects.app.groups.coder]\ndescription = \"writes code\"\n", group: "coder",
 			want: settings.Group{Workers: 1, Slots: 2, Description: "writes code"}, layer: settings.LayerProject,
 			teams: map[string]string{"coder": "writes code"},
 		},
+		"both counts set to 0, described": {
+			file: app + "[projects.app.groups.qa]\nworkers = 0\nslots = 0\ndescription = \"parked\"\n", group: "qa",
+			want: settings.Group{Description: "parked"}, layer: settings.LayerProject,
+			teams: map[string]string{"qa": "parked"},
+		},
+		"a shared group that only describes, given counts by the repo file": {
+			file: "[groups.qa]\ndescription = \"runs the gates\"\n" + app, repoFile: "[groups.qa]\nworkers = 1\nslots = 2\n", group: "qa",
+			want: settings.Group{Workers: 1, Slots: 2, Description: "runs the gates"}, layer: settings.LayerShared,
+			teams: map[string]string{"qa": "runs the gates"},
+		},
+		"a group that only describes, with an empty agent table": {
+			file: app + "[projects.app.groups.qa]\ndescription = \"runs the gates\"\nagent = {}\n", group: "qa",
+			want: settings.Group{Description: "runs the gates", DescribesOnly: true}, layer: settings.LayerProject,
+			teams: map[string]string{"qa": "runs the gates"},
+		},
+		"a group that only describes, with an agent whose model is none": {
+			file: app + "[projects.app.groups.qa]\ndescription = \"runs the gates\"\nagent = { model = \"\" }\n", group: "qa",
+			want: settings.Group{Description: "runs the gates", DescribesOnly: true}, layer: settings.LayerProject,
+			teams: map[string]string{"qa": "runs the gates"},
+		},
 		"exactly 80 characters": {
 			file: app + "[projects.app.groups.qa]\ndescription = \"" + strings.Repeat("a", 80) + "\"\n", group: "qa",
-			want: settings.Group{Description: strings.Repeat("a", 80)}, layer: settings.LayerProject,
+			want: settings.Group{Description: strings.Repeat("a", 80), DescribesOnly: true}, layer: settings.LayerProject,
 			teams: map[string]string{"qa": strings.Repeat("a", 80)},
 		},
 		"80 characters that are not ASCII": {
 			file: app + "[projects.app.groups.qa]\ndescription = \"" + strings.Repeat("é", 80) + "\"\n", group: "qa",
-			want: settings.Group{Description: strings.Repeat("é", 80)}, layer: settings.LayerProject,
+			want: settings.Group{Description: strings.Repeat("é", 80), DescribesOnly: true}, layer: settings.LayerProject,
 			teams: map[string]string{"qa": strings.Repeat("é", 80)},
 		},
 		"punctuation, symbols and spaces": {
 			file: app + "[projects.app.groups.qa]\ndescription = \" gates + slots · re-run → PR #41 ✓ \"\n", group: "qa",
-			want: settings.Group{Description: " gates + slots · re-run → PR #41 ✓ "}, layer: settings.LayerProject,
+			want: settings.Group{Description: " gates + slots · re-run → PR #41 ✓ ", DescribesOnly: true}, layer: settings.LayerProject,
 			teams: map[string]string{"qa": " gates + slots · re-run → PR #41 ✓ "},
 		},
 	}
@@ -87,6 +108,9 @@ func TestGroupDescriptions(t *testing.T) {
 			t.Parallel()
 			repo, dir := newRepo(t), t.TempDir()
 			writeFile(t, dir, settings.FileName, "schema_version = 1\n"+tc.file, repo)
+			if tc.repoFile != "" {
+				writeFile(t, repo, settings.RepoFileName, "schema_version = 1\n"+tc.repoFile, repo)
+			}
 
 			r, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", Set: tc.set, LookupEnv: envOf(nil)})
 			require.NoError(t, err)
@@ -111,8 +135,9 @@ func TestGroupDescriptions(t *testing.T) {
 
 // TestGroupDescriptionErrors: a description is one line every client draws
 // as written, at most 80 characters; a group that sets workers or slots
-// still needs both; boss is never a group; and a repo file cannot set one,
-// since the daemon reads no repo file. Each error names the key path and its
+// still needs both; a group that only describes takes no agent, from any
+// layer; boss is never a group; and a repo file cannot set one, since the
+// daemon reads no repo file. Each error names the key path and its
 // layer, never the value, which may carry terminal escapes.
 func TestGroupDescriptionErrors(t *testing.T) {
 	t.Parallel()
@@ -165,6 +190,30 @@ func TestGroupDescriptionErrors(t *testing.T) {
 		"slots without workers": {
 			file:   app + "[projects.app.groups.qa]\nslots = 1\ndescription = \"x\"\n",
 			wantIn: []string{"groups.qa.workers (not set in any layer)", "every group needs workers"},
+		},
+		"an agent's model on a group that only describes": {
+			file:   app + "[projects.app.groups.qa]\ndescription = \"x\"\nagent = { model = \"sonnet\" }\n",
+			wantIn: []string{"projects.app.groups.qa.agent.model (project", "only describes", "starts no worker"},
+		},
+		"an agent's command on a group that only describes": {
+			file:   app + "[projects.app.groups.qa]\ndescription = \"x\"\nagent = { command = [\"claude\"] }\n",
+			wantIn: []string{"projects.app.groups.qa.agent.command (project", "only describes"},
+		},
+		"an empty command on a group that only describes": {
+			file:   app + "[projects.app.groups.qa]\ndescription = \"x\"\nagent = { command = [] }\n",
+			wantIn: []string{"projects.app.groups.qa.agent.command (project", "only describes"},
+		},
+		"both, the command named first": {
+			file:   app + "[projects.app.groups.qa]\ndescription = \"x\"\nagent = { command = [\"claude\"], model = \"sonnet\" }\n",
+			wantIn: []string{"projects.app.groups.qa.agent.command (project", "only describes"},
+		},
+		"an agent from --set on a group that only describes": {
+			file: app + "[projects.app.groups.qa]\ndescription = \"x\"\n", set: []string{`groups.qa.agent.model="sonnet"`},
+			wantIn: []string{"groups.qa.agent.model (flag", "only describes"},
+		},
+		"an agent from the repo file on a shared group that only describes": {
+			file: "[groups.qa]\ndescription = \"x\"\n" + app, repoFile: "[groups.qa.agent]\nmodel = \"sonnet\"\n", inRepo: true,
+			wantIn: []string{"groups.qa.agent.model (repo, ", settings.RepoFileName, "only describes"},
 		},
 		"the boss described": {
 			file: app + "[projects.app.groups.boss]\ndescription = \"x\"\n", wantIn: []string{"boss's tab"},

@@ -122,6 +122,48 @@ func TestStatusOrdersTheGroupsItFinds(t *testing.T) {
 	assert.Equal(t, []string{"librarian", "research"}, names, "not the types' order, research before librarian")
 }
 
+// TestStatusOfADescriptionOnlyGroup: a group that only describes is no
+// worker type (ADR-001 A36), so it is listed only as herdr shows it, never
+// as configured; a group that sets both counts to 0 is still one.
+func TestStatusOfADescriptionOnlyGroup(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig+`
+[projects.herdr-agentisan.groups.clerk]
+description = "keeps Linear in sync"
+
+[projects.herdr-agentisan.groups.zeta]
+workers = 0
+slots = 0
+description = "parked"
+`)
+	byName := func() map[string]workforce.GroupStatus {
+		t.Helper()
+		got, err := f.svc.Status(t.Context(), workforce.StatusRequest{})
+		require.NoError(t, err)
+		out := map[string]workforce.GroupStatus{}
+		for _, g := range got.Groups {
+			out[g.Name] = g
+		}
+		return out
+	}
+
+	groups := byName()
+	assert.NotContains(t, groups, "clerk", "a group that only describes, which herdr does not show, is not listed")
+	assert.Equal(t, workforce.GroupStatus{Name: "zeta", Configured: true, Targets: []string{}, Members: []workforce.Member{}}, groups["zeta"], "a group with both counts set to 0 is a configured type")
+
+	clerk := f.h.addTab(f.ws, "ha-clerk-1", "claude", "idle")
+	assert.Equal(t, workforce.GroupStatus{
+		Name: "clerk", Occupied: 1, Targets: []string{f.ws},
+		Members: []workforce.Member{{ID: "ha-clerk-1", PaneID: clerk, Agent: "claude", Status: "idle"}},
+	}, byName()["clerk"], "one herdr shows is listed as found, not configured")
+
+	only := newFixture(t, "schema_version = 1\n[projects.herdr-agentisan]\nrepo = \"REPO\"\nshort = \"ha\"\nlayout = \"tabs\"\n[projects.herdr-agentisan.groups.clerk]\ndescription = \"keeps Linear in sync\"\n")
+	got, err := only.svc.Status(t.Context(), workforce.StatusRequest{})
+	require.NoError(t, err)
+	assert.Empty(t, got.Groups, "a team whose every group only describes has no worker type")
+	assert.NotNil(t, got.Groups, "an empty list, not null")
+}
+
 // TestStatusOfTheSpacesProject: --project names the ◆ spaces project too,
 // whose groups are its spaces, in their own order; the default never picks
 // it.

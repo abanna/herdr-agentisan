@@ -159,11 +159,15 @@ func (m merged) checkGroups() error {
 				return m.invalidf("groups."+name+".description", "%v", err)
 			}
 		}
-		workers, ok := g["workers"].(int)
-		_, hasSlots := g["slots"].(int)
-		if !ok && !hasSlots && described {
-			continue // it describes a group and starts no worker (A36)
+		if describesOnly(g) {
+			// It describes a group and starts no worker (A36), so an agent
+			// of its own would never launch.
+			if err := m.checkNoAgent(name); err != nil {
+				return err
+			}
+			continue
 		}
+		workers, ok := g["workers"].(int)
 		if !ok {
 			return m.invalidf(workersPath, "every group needs workers")
 		}
@@ -179,6 +183,30 @@ func (m merged) checkGroups() error {
 		}
 		if slots > MaxSlots {
 			return m.invalidf(slotsPath, "slots %d is above %d", slots, MaxSlots)
+		}
+	}
+	return nil
+}
+
+// describesOnly reports whether a merged group table only describes: it sets
+// a description, even "", and neither count (A36).
+func describesOnly(g map[string]any) bool {
+	_, hasWorkers := g["workers"].(int)
+	_, hasSlots := g["slots"].(int)
+	_, described := g["description"].(string)
+	return described && !hasWorkers && !hasSlots
+}
+
+// checkNoAgent refuses an agent on a group that only describes, whichever
+// layer sets it: any key of its agent table, the command first, but a model
+// of "", which is none.
+func (m merged) checkNoAgent(group string) error {
+	table := "groups." + group + "." + agentKey
+	v, _ := m.get(table)
+	agent, _ := v.(map[string]any)
+	for _, key := range slices.Sorted(maps.Keys(agent)) {
+		if agent[key] != "" {
+			return m.invalidf(table+"."+key, "the group only describes, so it starts no worker and takes no agent; give it workers and slots, or leave the agent out")
 		}
 	}
 	return nil
@@ -302,7 +330,7 @@ func buildProfile(name string, values map[string]any) *Profile {
 			workers, _ := g["workers"].(int)
 			slots, _ := g["slots"].(int)
 			description, _ := g["description"].(string)
-			p.Groups[n] = Group{Workers: workers, Slots: slots, Agent: groupAgent(g), Description: description}
+			p.Groups[n] = Group{Workers: workers, Slots: slots, Agent: groupAgent(g), Description: description, DescribesOnly: describesOnly(g)}
 		}
 	}
 	if v, ok := lookup(values, "integrations"); ok {

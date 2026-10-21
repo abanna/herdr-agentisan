@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
@@ -138,6 +139,14 @@ type GroupDescriptions struct{ d *groupDescriptions }
 // NewGroupDescriptions reads the shared file in dir; "" reads nothing.
 func NewGroupDescriptions(dir string) GroupDescriptions {
 	return GroupDescriptions{d: newGroupDescriptions(dir)}
+}
+
+// NewGroupDescriptionsReading is NewGroupDescriptions with read standing in
+// for settings.Teams.
+func NewGroupDescriptionsReading(dir string, read func(dir string) ([]settings.Team, error)) GroupDescriptions {
+	d := newGroupDescriptions(dir)
+	d.read = read
+	return GroupDescriptions{d: d}
 }
 
 // Refresh is one poll's look at the file.
