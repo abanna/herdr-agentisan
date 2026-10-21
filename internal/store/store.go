@@ -22,6 +22,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"modernc.org/sqlite" // the pure-Go "sqlite" driver: no cgo (A1)
@@ -67,6 +68,9 @@ var (
 type Store struct {
 	db      *sql.DB
 	version int
+	// closeWait bounds Close's wait for the connection; Open sets BusyTimeout.
+	closeWait time.Duration
+	closed    atomic.Bool
 }
 
 // Pragmas are the connection settings Open sets and verifies.
@@ -135,7 +139,7 @@ func open(ctx context.Context, path string, migrations fs.FS) (*Store, error) {
 	db.SetConnMaxLifetime(0)
 	db.SetConnMaxIdleTime(0)
 
-	s := &Store{db: db}
+	s := &Store{db: db, closeWait: BusyTimeout}
 	if err := s.init(ctx, path, set); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -274,12 +278,51 @@ func (s *Store) Pragmas(ctx context.Context) (Pragmas, error) { return readPragm
 // store opened it (PRAGMA user_version).
 func (s *Store) UserVersion() int { return s.version }
 
-// Close closes the connection. The store is unusable afterwards.
+// Close closes the connection. The store is unusable afterwards, and closing
+// it again is a no-op.
+//
+// SQLite removes state.db-wal and -shm when its last connection closes, after
+// checkpointing the WAL, and Close makes sure that checkpoint runs
+// (NERD-5355). A statement whose ctx ends mid-flight is interrupted
+// (sqlite3_interrupt), and SQLite keeps the interrupt set on its connection
+// until the next statement starts there. The driver reports such a connection
+// invalid, so database/sql discards it and closes it at once, and that close's
+// checkpoint fails on the interrupt, keeping the files; with nothing else
+// open, closing the pool would then close nothing. So Close first runs one
+// statement, on the connection the pool still holds or on a fresh one: the
+// last connection to close has run a statement since any interrupt.
+//
+// It waits for the connection up to closeWait. A store user still holding it,
+// which the daemon's shutdown order rules out, is reported as ErrStore rather
+// than blocking Close for good, and the pool is closed either way.
 func (s *Store) Close() error {
-	if err := s.db.Close(); err != nil {
+	if s.closed.Swap(true) {
+		return nil
+	}
+	err := s.beforeClose()
+	if cerr := s.db.Close(); cerr != nil {
+		err = errors.Join(err, cerr)
+	}
+	if err != nil {
 		return fmt.Errorf("%w: close: %w", ErrStore, err)
 	}
 	return nil
+}
+
+// beforeClose runs one statement that changes nothing, then releases the
+// connection. The statement runs on context.Background(): the driver arms no
+// interrupt on a context that never ends. The store has one connection
+// (SetMaxOpenConns(1)), so the statement starts only after every earlier one
+// has released it, an interrupted one included.
+func (s *Store) beforeClose() error {
+	ctx, cancel := context.WithTimeout(context.Background(), s.closeWait)
+	defer cancel()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("take the connection: %w", err)
+	}
+	_, err = conn.ExecContext(context.Background(), "SELECT 1")
+	return errors.Join(err, conn.Close())
 }
 
 // recordFocus appends a focus unless the pane is already the most recently

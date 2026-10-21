@@ -112,6 +112,11 @@ exempts whatever is later added under that name.
   `report stage` pushes `item` and `stage` on each agentisan step
   transition. They read `HERDR_PANE_ID`, a pane-shell variable, which is why
   it is not in `plugin.Env`.
+- `internal/codexhooks/` — installing those Codex hooks (ADR-001 A43):
+  `codex hooks` writes them into `$CODEX_HOME/hooks.json`, after every entry
+  already there, which it keeps as written, and never edits `config.toml` or
+  trusts a hook; `--check` only reports. Tests use temp Codex homes, never
+  the real `~/.codex`.
 - `internal/daemon/` — the daemon's lifecycle (ADR-001 D3, A3, A4): one daemon
   per herdr server, enforced by a flock'd `daemon.lock` that records the
   server's socket inode; the protocol pin; `daemon.log` capped at 10 MB; the
@@ -130,7 +135,11 @@ exempts whatever is later added under that name.
   (`descriptions.go`, A36), and sends each status change since the last
   poll as a workflow event (`events.go`). It keeps herdr's agent view on the
   focused team, which focus events and the poll feed it, and clears it
-  outside every team and on a clean stop (`view.go`, the A28 addendum).
+  outside every team and on a clean stop (`view.go`, the A28 addendum, A49).
+  It types each queued message into its recipient with `agent.prompt`, by
+  the agent name the poll's last model shows where it belongs, returns an
+  ended binding's queue to its boss, and fails, never retrying, whatever a
+  timeout or a crash may have typed (`messages.go`, A2, A30).
   `daemon start` spawns a detached `daemon run` and waits for its health or
   its exit (A48); herdr's `[[startup]]` hook runs it, and the
   `daemon-restart` action covers linking. Tests run daemons in process
@@ -156,8 +165,12 @@ exempts whatever is later added under that name.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
   references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check,
-  and each group's one-line description (A36), never from a repo file.
-  Sample in `docs/config/herdr-agentisan.example.toml`.
+  each group's one-line description (A36), never from a repo file, and each
+  project's test-slot lock files, which the daemon reads once at start
+  (`tests.go`, A40). A repo file is committed, so it sets only colour, github,
+  group counts, models and rotation (A46, `repoFileKeys`, refused by default),
+  and a model from any layer is checked as safe to pass to an agent
+  (`CheckModel`). Sample in `docs/config/herdr-agentisan.example.toml`.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
   embedded from `migrations/` and tracked by `user_version`. The daemon holds
@@ -180,12 +193,15 @@ exempts whatever is later added under that name.
   it with an environment they build, never the real gh or GitHub. The
   daemon's collector (`internal/daemon/github.go`) runs it every 60 s beside
   the team poll and caches each project's result for the snapshot.
-- `internal/testslots/` — the dashboard header's test slots (ADR-001 A31):
-  which of `[tests] locks` some process holds a lock on, read from the
-  kernel's `/proc/locks` every team poll without opening or locking a lock
-  file, three times with staggered pages, since a page can skip a line
-  while other locks change. Tests hold real locks on temp files and read
-  them back, the parser is tested on its own against written lines, and a
+- `internal/testslots/` — the dashboard header's test slots (ADR-001 A31,
+  A40): which of a project's lock files some process holds a lock on, read
+  from the kernel's `/proc/locks` once every team poll without opening or
+  locking a lock file, three times with staggered pages, since a page can
+  skip a line while other locks change, and which of those a boss's
+  `flock <lock> sleep …` holds, told by the holder's `/proc` cmdline and
+  open files. Tests hold real locks on temp files, and run a real flock(1)
+  hold, and read them back; the parser and the hold check are tested on
+  their own against written lines and a stand-in `/proc`, and a
   page-at-a-time stand-in (`seqfile_test.go`) forces the skip.
 - `internal/snapshot/` — the versioned snapshot contract (ADR-001 D5/D6,
   A18): the groups and agents, the boss, and the project's PRs, issues and
@@ -226,20 +242,27 @@ exempts whatever is later added under that name.
   events into Elasticsearch is `docs/config/otelcol-agentisan.yaml`, run by
   `task otelcol:up`; `collector_test.go` pins its keys and the task's
   `docker run`.
-- `internal/trail/` — the trail read back (ADR-001 item 12): an ES|QL client
+- `internal/trail/` — the trail read back (ADR-001 item 12, A32): an ES|QL client
   over `logs-agentisan.otel-*`, the debugger's recipes, and the env file its
   URL and read key come from, `[debugger] env_file` in the shared config,
   read at each query. No caller chooses the URL, the variables or the file.
   Tests run an httptest Elasticsearch on a recorded answer
   (`testdata/worker-trail.json`).
+- `internal/debugger/` and `roles/debugger.md` — the debugger agent that
+  ships with the plugin (item 12, A32): its role, and its launch as data,
+  claude with `--permission-mode dontAsk`, a read-only allow list and its
+  reads fenced to the repo it starts in and the daemon's directory.
+  `herdr-agentisan events` and `debugger args` are its commands;
+  `TestRoleMatchesTheLaunch` keeps the role, the CLI and the launch in step.
 - `.devcontainer/` — the reproducible dev environment: Go 1.26.10 plus the
   two tools `go tool` does not resolve (Task, uv).
 - `docs/architecture.md` — why the pieces are shaped this way, and the
   deliberate limits.
 - `docs/adr/` — accepted architecture decisions. `0001-boss-led-workflow-plugin.md`
-  (ADR-001, read its Amendments section too) is the design source of truth
-  for the daemon, token contract, storage and build order; a change that
-  contradicts it needs a superseding ADR, not a quiet edit.
+  (ADR-001; its amendments are in `docs/adr/0001/`, one file each: read them
+  all) is the design source of truth for the daemon, token contract, storage
+  and build order; a change that contradicts it needs a superseding ADR, not a
+  quiet edit.
 
 Tests live beside the code they cover, in `package <name>_test`, so they
 exercise the exported surface an agent would actually call.

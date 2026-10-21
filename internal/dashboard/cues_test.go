@@ -112,9 +112,17 @@ func TestStageColourWhenCut(t *testing.T) {
 func TestDataAge(t *testing.T) {
 	t.Parallel()
 
-	const hints = "enter jump · ↑↓ move · ? help · q quit"
+	// hints are the footer's keys with an agent to act on, bare its keys
+	// with none, as a frame with no snapshot has.
+	const (
+		hints = "enter jump · ↑↓ move · ? help · q quit"
+		bare  = "? help · q quit"
+	)
+	// aged has one agent, so its frames' hints are the full ones.
 	aged := func(d time.Duration) *snapshot.Snapshot {
-		return &snapshot.Snapshot{V: 1, At: at.Add(-d), Team: "t"}
+		return &snapshot.Snapshot{V: 1, At: at.Add(-d), Team: "t", Groups: []snapshot.Group{{Name: "g", Agents: []snapshot.Agent{
+			{Name: "a", PaneID: "w1:p1", Status: snapshot.StatusIdle},
+		}}}}
 	}
 	tests := map[string]struct {
 		frame dashboard.Frame
@@ -126,9 +134,9 @@ func TestDataAge(t *testing.T) {
 		"16 s old":                      {frame: dashboard.Frame{Snapshot: aged(16 * time.Second), Now: at}, want: " data 16s old · " + hints},
 		"an hour old is still seconds":  {frame: dashboard.Frame{Snapshot: aged(time.Hour), Now: at}, want: " data 3600s old · " + hints},
 		"a snapshot from the future":    {frame: dashboard.Frame{Snapshot: aged(-time.Hour), Now: at}, want: " " + hints},
-		"no snapshot":                   {frame: dashboard.Frame{Now: at}, want: " " + hints},
-		"no team here":                  {frame: dashboard.Frame{Now: at, NoTeam: true}, want: " " + hints},
-		"a snapshot that reports no at": {frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t"}, Now: at}, want: " " + hints},
+		"no snapshot":                   {frame: dashboard.Frame{Now: at}, want: " " + bare},
+		"no team here":                  {frame: dashboard.Frame{Now: at, NoTeam: dashboard.ErrNotATeamsWorkspace}, want: " " + bare},
+		"a snapshot that reports no at": {frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t"}, Now: at}, want: " " + bare},
 		"before the errors and the note": {
 			frame: dashboard.Frame{Snapshot: aged(20 * time.Second), Now: at, Note: "focus off", Errors: []error{errors.New("e1")}},
 			want:  " data 20s old · ✖ e1 · focus off · " + hints,
@@ -164,20 +172,26 @@ func TestDataAge(t *testing.T) {
 	})
 }
 
-// TestStageColourInTheGroupView: a group's view (ADR-001 A37) draws a box's
-// stage in the colour the whole stage takes, as a row does (A38), on both of
-// its wrapped lines; a stage not reported stays dim.
+// TestStageColourInTheGroupView: a box's stage takes the colour of the rule
+// the whole stage matches (ADR-001 A38) on both of its lines, even when the
+// word that matches is on the second. A stage that matches no rule is
+// plain, as the view drew it before A38, and a stage not reported stays
+// dim, so the two never look alike.
 func TestStageColourInTheGroupView(t *testing.T) {
 	t.Parallel()
 
 	long := "READY for review: " + strings.Repeat("word ", 20)
+	// The only rule's word wraps onto the second line of a 76-cell box.
+	late := strings.Repeat("step ", 14) + "BLOCKED"
 	snap := &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "coders", Agents: []snapshot.Agent{
 		{Name: "pee01", Status: snapshot.StatusWorking, Stage: long},
 		{Name: "pee02", Status: snapshot.StatusBlocked, Stage: "blocked: 1Password agent"},
 		{Name: "pee03", Status: snapshot.StatusIdle, Stage: "restored"},
+		{Name: "pee04", Status: snapshot.StatusWorking, Stage: late},
+		{Name: "pee05", Status: snapshot.StatusIdle},
 	}}}}
 	f := dashboard.Frame{Snapshot: snap, Selection: dashboard.Selection{Group: -1}, Now: at, Group: "coders"}
-	out := dashboard.Render(f, 80, 40, dashboard.Options{Profile: colorprofile.TrueColor})
+	out := dashboard.Render(f, 80, 60, dashboard.Options{Profile: colorprofile.TrueColor})
 
 	styled := func(text string) *regexp.Regexp {
 		return regexp.MustCompile(`\x1b\[([0-9;:]*)m` + regexp.QuoteMeta(text))
@@ -189,7 +203,9 @@ func TestStageColourInTheGroupView(t *testing.T) {
 		{"#50fa7b", "READY for review: word", true},
 		{"#50fa7b", "word word", true}, // the second line keeps the colour
 		{"#ff5555", "blocked: 1Password agent", true},
-		{"#6c7086", "restored", false},
+		{"#ff5555", "step step", true}, // coloured by a word on the next line
+		{"#ff5555", "BLOCKED", true},
+		{"#6c7086", "no stage reported", false},
 	} {
 		found := styled(tc.text).FindAllStringSubmatch(out, -1)
 		require.NotEmpty(t, found, "%q is drawn", tc.text)
@@ -198,6 +214,24 @@ func TestStageColourInTheGroupView(t *testing.T) {
 			assert.Equal(t, tc.bold, hasParam(m[1], "1"), "%q's weight", tc.text)
 		}
 	}
+	require.Contains(t, ansi.Strip(out), "│ restored ")
+	for _, m := range styled("restored").FindAllStringSubmatch(out, -1) {
+		assert.Contains(t, []string{"", "0"}, m[1], "a stage no rule matches is plain: only a reset comes before it")
+	}
+}
+
+// TestHandoffShellInTheGroupView: a shell with a handoff is drawn ready in
+// its group's view, as in its row (ADR-001 A38's D3), with the ready badge.
+func TestHandoffShellInTheGroupView(t *testing.T) {
+	t.Parallel()
+
+	snap := &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "coders", Agents: []snapshot.Agent{
+		{Name: "w2:p4", Unnamed: true, Shell: true, PaneID: "w2:p4", Status: snapshot.StatusReady},
+	}}}}
+	out := dashboard.Render(dashboard.Frame{Snapshot: snap, Now: at, Group: "coders"}, 80, 24, dashboard.Options{Profile: colorprofile.NoTTY})
+	title := lineWith(t, out, "⟳ w2:p4 · ready")
+	assert.Contains(t, title, "⟳ READY ─╮")
+	assert.NotContains(t, title, "▸", "a shell with a handoff is no plain shell")
 }
 
 // TestShellGlyphColour: a plain shell's ▸ is drawn in unknown's style, which

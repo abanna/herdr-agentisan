@@ -32,6 +32,10 @@ var plain = dashboard.Options{Profile: colorprofile.NoTTY}
 // selected line can be found.
 var attrs = dashboard.Options{Profile: colorprofile.ASCII}
 
+// fullColour keeps every colour and attribute, for tests that compare
+// styles.
+var fullColour = dashboard.Options{Profile: colorprofile.TrueColor}
+
 // fixtures are every snapshot in testdata.
 var fixtures = []string{"full", "empty", "blocked", "crowd", "wide", "group", "shells"}
 
@@ -112,7 +116,7 @@ func TestRenderGolden(t *testing.T) {
 		// says why.
 		"no_team_here_80x24": {
 			frame: func(*testing.T) dashboard.Frame {
-				return dashboard.Frame{Now: at, Btop: true, NoTeam: true, Errors: []error{errors.New("this workspace (w9) is not a team's; pass --project")}}
+				return dashboard.Frame{Now: at, Btop: true, NoTeam: dashboard.ErrNotATeamsWorkspace, Errors: []error{errors.New("this workspace (w9) is not a team's; pass --project")}}
 			},
 			w: 80, h: 24,
 		},
@@ -385,6 +389,10 @@ func TestRenderContents(t *testing.T) {
 		// Nothing reported, nothing shown: no "PRs ?", no "issues 0".
 		"no project shows the name alone": {frame: from("blocked", 120, 40), match: []string{`│ assay +\[ btop \] │`}, not: []string{"PRs", "issues", "slots"}},
 		"a colour and slots alone":        {frame: from("wide", 120, 40), want: []string{"チーム​ · slots 0/3 "}, not: []string{"PRs", "issues"}},
+		// A held slot leaves the count, and the line says so (A40).
+		"a held slot":     {frame: of(withProject(&snapshot.Project{Slots: &snapshot.Slots{Used: 1, Total: 3, Held: 1}}), 80, 24), want: []string{"│ t · slots 1/2 (1 held) "}},
+		"every slot held": {frame: of(withProject(&snapshot.Project{Slots: &snapshot.Slots{Total: 2, Held: 2}}), 80, 24), want: []string{"│ t · slots 0/0 (2 held) "}},
+		"none held":       {frame: of(withProject(&snapshot.Project{Slots: &snapshot.Slots{Used: 1, Total: 3}}), 80, 24), want: []string{"│ t · slots 1/3 "}, not: []string{"held"}},
 		"every PR state has a mark": {
 			frame: of(withProject(&snapshot.Project{PRs: []snapshot.PR{
 				{Number: 1, CI: snapshot.CIUnknown, Codex: snapshot.CodexUnknown, Merge: snapshot.MergeUnknown},
@@ -854,8 +862,21 @@ func TestShortModel(t *testing.T) {
 		"gpt-5.5-codex":     "cdx",
 		"codex-mini-latest": "cdx",
 		"Codex":             "cdx",
-		// Any other model is its first word, cut.
+		// A gpt- model that ends in a word is that word, so the three Codex
+		// models the routing rules bind each draw as their own.
+		"gpt-6-luna":  "luna",
+		"gpt-6.1-sol": "sol",
+		"gpt-6-astra": "astr",
+		"GPT-6-Luna":  "luna",
+		"gpt-5-mini":  "mini",
+		// Any other model is its first word, cut: a gpt- name that does not
+		// end in a word, or a word that is not a gpt- name's.
 		"gpt-5.5":          "gpt-",
+		"gpt-6-1":          "gpt-",
+		"gpt-":             "gpt-",
+		"gpt-6-luna2":      "gpt-",
+		"gpt6-luna":        "gpt6",
+		"chatgpt-6-luna":   "chat",
 		"o3":               "o3",
 		"  Gemini 2.5 Pro": "gemi",
 		"ÉCLAIR":           "écla",
@@ -988,6 +1009,35 @@ func TestRenderProjectColour(t *testing.T) {
 	assert.Regexp(t, `^\x1b\[[0-9;]*`+regexp.QuoteMeta(truecolor("#bd93f9"))+`[0-9;]*m╭`, out)
 }
 
+// TestRenderSlotsColour: the slots are drawn as a note when no slot is free,
+// and a held slot is not free (A40).
+func TestRenderSlotsColour(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		slots snapshot.Slots
+		text  string
+		note  bool
+	}{
+		"one free":               {slots: snapshot.Slots{Used: 1, Total: 2}, text: "slots 1/2"},
+		"all used":               {slots: snapshot.Slots{Used: 2, Total: 2}, text: "slots 2/2", note: true},
+		"one free beside a hold": {slots: snapshot.Slots{Used: 1, Total: 3, Held: 1}, text: "slots 1/2 (1 held)"},
+		"the rest used":          {slots: snapshot.Slots{Used: 2, Total: 3, Held: 1}, text: "slots 2/2 (1 held)", note: true},
+		"all held":               {slots: snapshot.Slots{Total: 2, Held: 2}, text: "slots 0/0 (2 held)", note: true},
+		"none at all":            {slots: snapshot.Slots{}, text: "slots 0/0"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			snap := &snapshot.Snapshot{V: 1, Team: "t", Project: &snapshot.Project{Slots: &tc.slots}}
+			out := dashboard.Render(dashboard.Frame{Snapshot: snap, Now: at}, 80, 24, dashboard.Options{Profile: colorprofile.TrueColor})
+			require.Contains(t, ansi.Strip(out), tc.text)
+			note := regexp.MustCompile(regexp.QuoteMeta(truecolor("#f1fa8c")) + `[0-9;]*m` + regexp.QuoteMeta(tc.text))
+			assert.Equal(t, tc.note, note.MatchString(out), "drawn as a note")
+		})
+	}
+}
+
 // TestRenderSelectionIsReverseVideo: the selected agent's row, and only that
 // row, is drawn in reverse video.
 func TestRenderSelectionIsReverseVideo(t *testing.T) {
@@ -1004,35 +1054,65 @@ func TestRenderFooter(t *testing.T) {
 	t.Parallel()
 
 	const hints = "enter jump · ↑↓ move · ? help · q quit"
+	// one is a board with an agent to jump to.
+	one := &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "g", Agents: []snapshot.Agent{{Name: "a", Status: snapshot.StatusIdle}}}}}
 	tests := map[string]struct {
 		frame dashboard.Frame
 		want  string
 	}{
-		"hints alone": {frame: dashboard.Frame{Now: at}, want: " " + hints},
+		"hints alone": {frame: dashboard.Frame{Snapshot: one, Now: at}, want: " " + hints},
 		// ctrl-b m is herdr's popup key for btop in this setup; it is only
 		// advertised where herdr is reachable.
-		"the btop hint with herdr": {frame: dashboard.Frame{Now: at, Btop: true}, want: " enter jump · ↑↓ move · ctrl-b m btop · ? help · q quit"},
+		"the btop hint with herdr": {frame: dashboard.Frame{Snapshot: one, Now: at, Btop: true}, want: " enter jump · ↑↓ move · ctrl-b m btop · ? help · q quit"},
 		"a note leads the hints": {
-			frame: dashboard.Frame{Now: at, Note: "focus off"},
+			frame: dashboard.Frame{Snapshot: one, Now: at, Note: "focus off"},
 			want:  " focus off · " + hints,
 		},
 		"errors lead the note": {
-			frame: dashboard.Frame{Now: at, Note: "focus off", Errors: []error{errors.New("e1"), nil, errors.New("e2")}},
+			frame: dashboard.Frame{Snapshot: one, Now: at, Note: "focus off", Errors: []error{errors.New("e1"), nil, errors.New("e2")}},
 			want:  " ✖ e1 · ✖ e2 · focus off · " + hints,
 		},
 		"a long error is cut to one line": {
-			frame: dashboard.Frame{Now: at, Errors: []error{errors.New(strings.Repeat("x", 200))}},
+			frame: dashboard.Frame{Snapshot: one, Now: at, Errors: []error{errors.New(strings.Repeat("x", 200))}},
 			want:  " ✖ " + strings.Repeat("x", 75) + "…",
 		},
 		"an error's newlines stay on one line": {
-			frame: dashboard.Frame{Now: at, Errors: []error{errors.New("a\nb")}},
+			frame: dashboard.Frame{Snapshot: one, Now: at, Errors: []error{errors.New("a\nb")}},
 			want:  " ✖ a b · " + hints,
 		},
 		// A workspace id from herdr or HERDR_WORKSPACE_ID reaches the footer
 		// as it came: its escapes cannot drive the terminal.
 		"escapes in an error and a note are drawn inert": {
-			frame: dashboard.Frame{Now: at, Note: "(w\x1b]0;x\x07)", Errors: []error{errors.New("(w\x1b[2J9)")}},
+			frame: dashboard.Frame{Snapshot: one, Now: at, Note: "(w\x1b]0;x\x07)", Errors: []error{errors.New("(w\x1b[2J9)")}},
 			want:  " ✖ (w [2J9) · (w ]0;x ) · " + hints,
+		},
+		// Enter and the arrows act on an agent: with none on the screen they
+		// do nothing, and are not offered, so help and quit fit.
+		"no board yet":   {frame: dashboard.Frame{Now: at}, want: " ? help · q quit"},
+		"no board, btop": {frame: dashboard.Frame{Now: at, Btop: true}, want: " ctrl-b m btop · ? help · q quit"},
+		"no team here": {
+			frame: dashboard.Frame{Now: at, NoTeam: dashboard.ErrNotATeamsWorkspace, Errors: []error{errors.New("this workspace (w9) is not a team's; pass --project")}},
+			want:  " ✖ this workspace (w9) is not a team's; pass --project · ? help · q quit",
+		},
+		"a team with no agents": {
+			frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "g"}}}, Now: at},
+			want:  " ? help · q quit",
+		},
+		"a query that matches no agent": {
+			frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t"}, Now: at, Search: true, Query: "zz"},
+			want:  " /zz▏ · esc clear",
+		},
+		"a query that matches one": {
+			frame: dashboard.Frame{Snapshot: one, Now: at, Search: true, Query: "a"},
+			want:  " /a▏ · enter jump · ↑↓ move · esc clear",
+		},
+		"a group's view with no agents": {
+			frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "g"}}}, Now: at, Group: "g"},
+			want:  " esc back · ? help · q quit",
+		},
+		"a group's view with one": {
+			frame: dashboard.Frame{Snapshot: one, Now: at, Group: "g"},
+			want:  " enter jump · ↑↓ move · esc back · ? help · q quit",
 		},
 		"the agents out of view, on the right": {
 			frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "g", Agents: slices.Repeat([]snapshot.Agent{{Name: "a", Status: snapshot.StatusIdle}}, 40)}}}, Now: at},
@@ -1064,6 +1144,121 @@ func TestHelpOverlay(t *testing.T) {
 			for _, s := range []string{"← →", "b back"} {
 				assert.NotContains(t, out, s, "keys that do nothing are not advertised")
 			}
+		})
+	}
+}
+
+// cell is one terminal cell of a drawn line: the cluster that starts in it,
+// "" for the second cell of a wide one, then any zero-width cluster drawn
+// after the cell, and the SGR in force there.
+type cell struct{ text, sgr string }
+
+// sgrAt matches an SGR sequence at the start of a string.
+var sgrAt = regexp.MustCompile(`^\x1b\[([0-9;:]*)m`)
+
+// cellsOf is l's cells, padded with blank ones to w: a frame drops its
+// lines' trailing spaces, which are blank cells all the same.
+func cellsOf(l string, w int) []cell {
+	var out []cell
+	cur, pending := "", ""
+	for l != "" {
+		if m := sgrAt.FindStringSubmatch(l); m != nil {
+			cur = m[0]
+			if m[1] == "" || m[1] == "0" {
+				cur = ""
+			}
+			l = l[len(m[0]):]
+			continue
+		}
+		c, cw := ansi.FirstGraphemeCluster(l, ansi.GraphemeWidth)
+		l = l[len(c):]
+		if cw == 0 {
+			if len(out) == 0 {
+				pending += c
+			} else {
+				out[len(out)-1].text += c
+			}
+			continue
+		}
+		out = append(out, cell{pending + c, cur})
+		pending = ""
+		for range cw - 1 {
+			out = append(out, cell{"", cur})
+		}
+	}
+	for len(out) < w {
+		out = append(out, cell{" ", ""})
+	}
+	return out
+}
+
+// TestHelpOverWideCharacters: the help box covers its own cells and no
+// others. A wide character the box cuts at either edge leaves a space in its
+// cell outside the box, in its own style, so the rest of the line, a
+// selected row's reverse video included, stays as it was, in the overview
+// and in a group's view. A zero-width character goes with the cell before
+// it, so one the box covers is not drawn beside it.
+func TestHelpOverWideCharacters(t *testing.T) {
+	t.Parallel()
+
+	var agents []snapshot.Agent
+	for i, name := range []string{"漢字漢字漢字漢字", "a漢字漢字漢字漢字", "ab漢字漢字漢字漢字"} {
+		agents = append(agents, snapshot.Agent{
+			Name: name, PaneID: fmt.Sprintf("w1:p%d", i), Status: snapshot.StatusWorking,
+			Item: strings.Repeat("項目\u200b", 20), Stage: strings.Repeat("レ\u200bビュー中です", 10),
+		})
+	}
+	snap := &snapshot.Snapshot{V: 1, At: at, Team: "t", Groups: []snapshot.Group{{Name: "g", Agents: agents}}}
+	for view, h := range map[string]int{"": 8, "g": 24} {
+		t.Run("view "+view, func(t *testing.T) {
+			t.Parallel()
+			edges := map[string]int{}
+			for w := 50; w < 66; w++ {
+				for a := range agents {
+					f := dashboard.Frame{Snapshot: snap, Now: at, Selection: dashboard.Selection{Agent: a}, Group: view}
+					base := lines(dashboard.Render(f, w, h, fullColour))
+					f.Help = true
+					help := lines(dashboard.Render(f, w, h, fullColour))
+					top := slices.IndexFunc(help, func(l string) bool { return strings.Contains(ansi.Strip(l), "╭ help") })
+					require.GreaterOrEqual(t, top, 0)
+					// The box is [x0, x1): its title is "╭ help ─…─╮", and a
+					// group's view draws boxes of its own around it.
+					first := cellsOf(help[top], w)
+					x0 := strings.Index(ansi.Strip(help[top]), "╭ help")
+					require.GreaterOrEqual(t, x0, 0)
+					x0 = ansi.StringWidth(ansi.Strip(help[top])[:x0])
+					x1 := x0 + slices.IndexFunc(first[x0:], func(c cell) bool { return c.text == "╮" }) + 1
+					require.Positive(t, x0)
+					require.Greater(t, x1, x0)
+					require.LessOrEqual(t, x1, w)
+					for y := top; y < h; y++ {
+						got, want := cellsOf(help[y], w), cellsOf(base[y], w)
+						if y > top && got[x0].text != "│" && got[x0].text != "╰" {
+							break // under the box
+						}
+						// A wide character's second cell is blank, but for the
+						// zero-width ones drawn after it.
+						if ansi.StringWidth(want[x0].text) == 0 {
+							want[x0-1].text = " "
+							edges["left"]++
+						}
+						if x1 < w && ansi.StringWidth(want[x1].text) == 0 {
+							want[x1].text = " " + want[x1].text
+							edges["right"]++
+						}
+						if strings.Contains(want[x1-1].text, "\u200b") {
+							edges["zero-width"]++
+						}
+						label := fmt.Sprintf("%dx%d, agent %d, line %d", w, h, a, y)
+						require.Equal(t, want[:x0], got[:x0], "left of the box: %s", label)
+						require.Equal(t, want[x1:], got[x1:], "right of the box: %s", label)
+						require.Contains(t, []string{"╮", "│", "╯"}, got[x1-1].text, "the box's right edge is its own: %s", label)
+					}
+				}
+			}
+			assert.Positive(t, edges["left"], "the sweep cuts a wide character at the box's left edge")
+			assert.Positive(t, edges["right"], "the sweep cuts a wide character at the box's right edge")
+			assert.Positive(t, edges["zero-width"], "the sweep covers a zero-width character with the box's right edge")
 		})
 	}
 }

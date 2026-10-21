@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
@@ -336,4 +338,184 @@ func TestEveryTeamCarriesTheSlotsAndItsOwnBoss(t *testing.T) {
 	for _, p := range teams {
 		servedTeam(t, sock, p, func(s snapshot.Snapshot) bool { return at(t1)(s) && slotsAre(0, 2)(s) })
 	}
+}
+
+// lockLine is a /proc/locks line: pid holding an exclusive flock on path.
+func lockLine(t *testing.T, n, pid int, path string) string {
+	t.Helper()
+	var st syscall.Stat_t
+	require.NoError(t, syscall.Stat(path, &st))
+	dev := uint64(st.Dev) //nolint:unconvert // Dev is int32 on darwin
+	return fmt.Sprintf("%d: FLOCK  ADVISORY  WRITE %d %02x:%02x:%d 0 EOF\n", n, pid, unix.Major(dev), unix.Minor(dev), st.Ino)
+}
+
+// TestEachTeamCountsItsOwnLocks: each team counts its own project's lock
+// files, from one reading of the held locks for every team (A40). A
+// project's own list replaces the shared one, an empty one included; a slot
+// a hold keeps is held, not used. A lock file one project cannot look at
+// costs that project's slots alone, logged once for it.
+func TestEachTeamCountsItsOwnLocks(t *testing.T) {
+	t.Parallel()
+	locks := t.TempDir()
+	gate, s1, s2, s3 := filepath.Join(locks, "gate.0.lock"), filepath.Join(locks, "s1.lock"), filepath.Join(locks, "s2.lock"), filepath.Join(locks, "s3.lock")
+	for _, p := range []string{gate, s1, s2} {
+		require.NoError(t, os.WriteFile(p, nil, 0o600))
+	}
+	// A stand-in /proc: pid 100 is the boss's hold on s1.
+	proc := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(proc, "100", "fd"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(proc, "100", "cmdline"), []byte("flock\x00"+s1+"\x00sleep\x0086400\x00"), 0o600))
+	require.NoError(t, os.Symlink(s1, filepath.Join(proc, "100", "fd", "3")))
+	standIn := filepath.Join(locks, "proc-locks")
+	require.NoError(t, os.WriteFile(standIn, []byte(lockLine(t, 1, 200, gate)+lockLine(t, 2, 100, s1)+lockLine(t, 3, 201, s2)), 0o600))
+	notDir := filepath.Join(locks, "file")
+	require.NoError(t, os.WriteFile(notDir, nil, 0o600))
+
+	tests := map[string]struct {
+		alpha     string // alpha's own list, after its table
+		wantAlpha *snapshot.Slots
+		wantLog   string
+	}{
+		"its own list": {
+			alpha:     fmt.Sprintf("[projects.alpha.tests]\nlocks = [%q, %q, %q]\n", s1, s2, s3),
+			wantAlpha: &snapshot.Slots{Used: 1, Held: 1, Total: 3},
+		},
+		"a lock file it cannot look at": {
+			alpha:   fmt.Sprintf("[projects.alpha.tests]\nlocks = [%q, %q]\n", s1, filepath.Join(notDir, "x.lock")),
+			wantLog: "test slots: cannot count them",
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			th := newTeamHerdr(t)
+			everyTeam(th)
+			var logs lockedLog
+			dir := shortDir(t)
+			config := everyTeamConfig + fmt.Sprintf("[tests]\nlocks = [%q]\n", gate) + tc.alpha + "[projects.beta.tests]\nlocks = []\n"
+			o := teamOpts(t, dir, th, configDir(t, config))
+			o.Team = new(daemon.WithProc(daemon.WithProcLocks(*o.Team, standIn), proc))
+			o.Logger = zerolog.New(&logs)
+			run(t, o)
+			sock := socketPath(t, dir, th.path)
+
+			spaces := servedTeam(t, sock, "agentisan", slotsAre(1, 1))
+			assert.Equal(t, &snapshot.Slots{Used: 1, Total: 1}, spaces.Project.Slots, "the spaces count the shared list")
+			polled(t, th.srv, 3)
+			alpha := servedTeam(t, sock, "alpha", anySnapshot)
+			if tc.wantAlpha == nil {
+				assert.True(t, alpha.Project == nil || alpha.Project.Slots == nil, "alpha reports no slots")
+			} else {
+				require.NotNil(t, alpha.Project)
+				assert.Equal(t, tc.wantAlpha, alpha.Project.Slots, "alpha counts its own list")
+			}
+			beta := servedTeam(t, sock, "beta", anySnapshot)
+			assert.True(t, beta.Project == nil || beta.Project.Slots == nil, "beta's empty list reports no slots")
+			assert.Equal(t, &snapshot.Slots{Used: 1, Total: 1}, servedTeam(t, sock, "agentisan", anySnapshot).Project.Slots, "alpha's failure costs the spaces nothing")
+			if tc.wantLog != "" {
+				assert.Equal(t, 1, strings.Count(logs.String(), tc.wantLog), "logged once over the polls")
+				assert.Contains(t, logs.String(), `"project":"alpha"`)
+			} else {
+				assert.NotContains(t, logs.String(), "cannot count")
+			}
+		})
+	}
+}
+
+// TestAProjectsLockFileRecovers: a project whose lock file cannot be looked
+// at reports no slots, logged once for it, and its slots return, with one
+// more line, once the file can be looked at again (A40).
+func TestAProjectsLockFileRecovers(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("root looks into a directory it may not search")
+	}
+	locks := t.TempDir()
+	shut := filepath.Join(locks, "shut")
+	require.NoError(t, os.MkdirAll(filepath.Join(shut, "in"), 0o700))
+	slot := filepath.Join(shut, "in", "slot.lock")
+	require.NoError(t, os.WriteFile(slot, nil, 0o600))
+	standIn := filepath.Join(locks, "proc-locks")
+	require.NoError(t, os.WriteFile(standIn, []byte(lockLine(t, 1, 200, slot)), 0o600))
+	require.NoError(t, os.Chmod(shut, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(shut, 0o700) })
+
+	th := newTeamHerdr(t)
+	everyTeam(th)
+	var logs lockedLog
+	dir := shortDir(t)
+	o := teamOpts(t, dir, th, configDir(t, everyTeamConfig+fmt.Sprintf("[projects.alpha.tests]\nlocks = [%q]\n", slot)))
+	o.Team = new(daemon.WithProc(daemon.WithProcLocks(*o.Team, standIn), t.TempDir()))
+	o.Logger = zerolog.New(&logs)
+	run(t, o)
+	sock := socketPath(t, dir, th.path)
+
+	servedTeam(t, sock, "alpha", anySnapshot)
+	polled(t, th.srv, 3)
+	alpha := servedTeam(t, sock, "alpha", anySnapshot)
+	assert.True(t, alpha.Project == nil || alpha.Project.Slots == nil, "no slots while the lock file cannot be looked at")
+	assert.Equal(t, 1, strings.Count(logs.String(), "test slots: cannot count them"), "logged once over the polls")
+
+	require.NoError(t, os.Chmod(shut, 0o700))
+	servedTeam(t, sock, "alpha", slotsAre(1, 1))
+	polled(t, th.srv, 2)
+	assert.Equal(t, 1, strings.Count(logs.String(), `"project":"alpha","message":"test slots: counting again"`), "the recovery logged once")
+}
+
+// TestOnePollOneReading: a poll reads the lock list once, and every project
+// counts its lock files from that one reading (A40). The stand-in
+// /proc/locks is a FIFO whose first reading, both its passes, lists a lock
+// as held, and whose every later reading lists nothing: two projects that
+// list that lock count it held, the same, where a reading of its own for
+// the second would read it free (QA #58, F1).
+func TestOnePollOneReading(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	lock := filepath.Join(dir, "gate.lock")
+	require.NoError(t, os.WriteFile(lock, nil, 0o600))
+	fifo := filepath.Join(dir, "locks")
+	require.NoError(t, syscall.Mkfifo(fifo, 0o600))
+
+	// Each open of the FIFO is one pass; the first two get the held lock.
+	held := lockLine(t, 1, 999999, lock)
+	var stop atomic.Bool
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for pass := 0; ; pass++ {
+			f, err := os.OpenFile(fifo, os.O_WRONLY, 0)
+			if err != nil || stop.Load() {
+				if f != nil {
+					_ = f.Close()
+				}
+				return
+			}
+			if pass < 2 {
+				_, _ = f.WriteString(held)
+			}
+			_ = f.Close()
+		}
+	}()
+	t.Cleanup(func() {
+		stop.Store(true)
+		// Let a writer blocked on its next open go.
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			if f, err := os.OpenFile(fifo, os.O_RDONLY|syscall.O_NONBLOCK, 0); err == nil {
+				_ = f.Close()
+			}
+			time.Sleep(time.Millisecond)
+		}
+	})
+
+	slots := daemon.SlotsOfOnePoll(fifo, filepath.Join(dir, "proc"), settings.TestLocks{Projects: map[string][]string{"alpha": {lock}, "beta": {lock}}})
+	alpha, beta := slots("alpha"), slots("beta")
+	require.NotNil(t, alpha)
+	require.NotNil(t, beta)
+	assert.Equal(t, snapshot.Slots{Used: 1, Total: 1}, *alpha, "the poll's reading lists the lock held")
+	assert.Equal(t, *alpha, *beta, "both projects count the poll's one reading")
 }
