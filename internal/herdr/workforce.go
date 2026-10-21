@@ -15,9 +15,10 @@ import (
 // Sentinel errors for herdr error codes the workforce branches on. Each is an
 // ErrAPI too: an APIError with that code matches both.
 var (
-	// ErrPaneBusy means agent.start found no shell at the pane's
-	// foreground: one still starting, or a program in its place
-	// (agent_pane_busy, src/app/agents.rs:194-196).
+	// ErrPaneBusy means agent.start found the pane taken: it already hosts
+	// an agent or a launch still pending (src/app/agents.rs:187-188), or no
+	// shell is at its foreground, one still starting or a program in its
+	// place (agent_pane_busy, src/app/agents.rs:194-196).
 	ErrPaneBusy = errors.New("herdr pane is not an available shell")
 	// ErrNameTaken means another terminal already has the agent name
 	// (agent_name_taken).
@@ -26,7 +27,7 @@ var (
 	// (agent_not_found).
 	ErrAgentNotFound = errors.New("herdr agent not found")
 	// ErrWaitTimeout means pane.wait_for_output saw no match in time
-	// (timeout, src/api/wait.rs:115-127).
+	// (timeout, src/api/wait.rs:114-126).
 	ErrWaitTimeout = errors.New("herdr wait timed out")
 )
 
@@ -84,7 +85,8 @@ func (c Client) CreateTab(ctx context.Context, t TabCreate) (Created, error) {
 	return created("tab.create", "tab_created", out.Type, out.Tab, out.RootPane)
 }
 
-// WorkspaceCreate opens a workspace, never focused.
+// WorkspaceCreate opens a workspace, not focused: herdr switches to it only
+// when no workspace is active (src/app/creation.rs:155).
 type WorkspaceCreate struct {
 	Cwd   string
 	Label string
@@ -152,8 +154,7 @@ type Agent struct {
 	// TerminalID is stable for the terminal's life, where a pane id can be
 	// reissued; the wait pins it.
 	TerminalID string `json:"terminal_id"`
-	// Name is null in herdr's schema for an unnamed agent, which decodes to
-	// "".
+	// Name is omitted by herdr for an unnamed agent, which decodes to "".
 	Name string `json:"name"`
 	// Agent is the agent herdr detects, such as "claude"; "" before it has
 	// detected one.
@@ -175,14 +176,14 @@ type AgentStart struct {
 	// Args follow the executable.
 	Args []string
 	// Timeout is herdr's own startup timeout: over 3 s, at most 300 s
-	// (src/app/agents.rs:203-210).
+	// (src/app/agents.rs:202-209). 0 sends none, so herdr's 30 s applies.
 	Timeout time.Duration
 }
 
 // StartAgent types the agent's command line into the pane's shell and
 // returns at once, before the agent is up: agent.start, answered with
-// agent_started {agent, argv}. ErrPaneBusy means no shell was at the
-// foreground.
+// agent_started {agent, argv}, with the launch pending. ErrPaneBusy means the
+// pane was taken (see ErrPaneBusy).
 func (c Client) StartAgent(ctx context.Context, a AgentStart) (Agent, error) {
 	params := struct {
 		Name      string   `json:"name"`
@@ -266,9 +267,13 @@ func (c Client) callOK(ctx context.Context, method string, params any) error {
 // WaitForOutput waits until a line of the pane's visible screen matches the
 // regular expression pattern (herdr's regex crate, line by line,
 // src/api/subscriptions.rs:21-37) and returns that line: pane.wait_for_output,
-// answered with output_matched. herdr holds the call open until then, so the
-// client's own timeout is lifted to cover the wait. ErrWaitTimeout means no
-// line matched within timeout.
+// answered with output_matched. herdr trims each row's trailing white space
+// and drops trailing blank rows, and answers the first matching line from the
+// top: a pattern that needs trailing white space (`\$ $`) never matches, and
+// an older matching line still on the screen ends the wait at once. herdr
+// holds the call open until then, so the client's own timeout is added to
+// timeout to cover the wait and herdr's own late answer; a shorter deadline
+// in ctx still ends it. ErrWaitTimeout means no line matched within timeout.
 func (c Client) WaitForOutput(ctx context.Context, paneID, pattern string, timeout time.Duration) (string, error) {
 	params := struct {
 		PaneID    string `json:"pane_id"`

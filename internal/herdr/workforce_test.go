@@ -36,18 +36,24 @@ func agentOf(paneID, name, status string, ready bool) map[string]any {
 	return a
 }
 
+// pending is a as agent.start answers it: herdr reports the launch it has
+// just begun as pending (src/app/agents.rs:217, 228-231).
+func pending(a map[string]any) map[string]any {
+	a["launch_pending"] = true
+	return a
+}
+
 // TestWorkforceCallsSendTheSchemaShape: every workforce call sends herdr
 // 0.9.3's params exactly, never focusing what it opens, and reads its result.
 func TestWorkforceCallsSendTheSchemaShape(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
-		result     map[string]any
-		call       func(herdr.Client) (any, error)
-		method     string
-		params     string
-		want       any
-		wantClient time.Duration
+		result map[string]any
+		call   func(herdr.Client) (any, error)
+		method string
+		params string
+		want   any
 	}{
 		"tab.create": {
 			result: map[string]any{"type": "tab_created", "tab": map[string]any{"tab_id": "w14:t2", "workspace_id": "w14"}, "root_pane": rootPaneOf("w14:p7", "w14")},
@@ -59,13 +65,17 @@ func TestWorkforceCallsSendTheSchemaShape(t *testing.T) {
 			want:   herdr.Created{WorkspaceID: "w14", TabID: "w14:t2", RootPane: herdr.PaneInfo{PaneID: "w14:p7", TerminalID: "term-w14:p7", WorkspaceID: "w14", TabID: "w14:t2", AgentStatus: "unknown"}},
 		},
 		"workspace.create": {
-			result: map[string]any{"type": "workspace_created", "workspace": map[string]any{"workspace_id": "w20"}, "tab": map[string]any{"tab_id": "w20:t1", "workspace_id": "w20"}, "root_pane": rootPaneOf("w20:p1", "w20")},
+			result: map[string]any{"type": "workspace_created", "workspace": map[string]any{"workspace_id": "w20"}, "tab": map[string]any{"tab_id": "w20:t1", "workspace_id": "w20"}, "root_pane": func() map[string]any {
+				p := rootPaneOf("w20:p1", "w20")
+				p["tab_id"] = "w20:t1" // herdr builds the tab and its root pane from the same tab 0
+				return p
+			}()},
 			call: func(c herdr.Client) (any, error) {
 				return c.CreateWorkspace(t.Context(), herdr.WorkspaceCreate{Cwd: "/repo", Label: "assay"})
 			},
 			method: "workspace.create",
 			params: `{"cwd":"/repo","label":"assay","focus":false}`,
-			want:   herdr.Created{WorkspaceID: "w20", TabID: "w20:t1", RootPane: herdr.PaneInfo{PaneID: "w20:p1", TerminalID: "term-w20:p1", WorkspaceID: "w20", TabID: "w20:t2", AgentStatus: "unknown"}},
+			want:   herdr.Created{WorkspaceID: "w20", TabID: "w20:t1", RootPane: herdr.PaneInfo{PaneID: "w20:p1", TerminalID: "term-w20:p1", WorkspaceID: "w20", TabID: "w20:t1", AgentStatus: "unknown"}},
 		},
 		"tab.rename": {
 			result: map[string]any{"type": "tab_info", "tab": map[string]any{"tab_id": "w20:t1", "workspace_id": "w20"}},
@@ -74,22 +84,22 @@ func TestWorkforceCallsSendTheSchemaShape(t *testing.T) {
 			params: `{"tab_id":"w20:t1","label":"as-coder-1"}`,
 		},
 		"agent.start": {
-			result: map[string]any{"type": "agent_started", "agent": agentOf("w14:p7", "ha-coder-2", "unknown", false), "argv": []string{"claude", "--name", "ha-coder-2"}},
+			result: map[string]any{"type": "agent_started", "agent": pending(agentOf("w14:p7", "ha-coder-2", "unknown", false)), "argv": []string{"claude", "--name", "ha-coder-2"}},
 			call: func(c herdr.Client) (any, error) {
 				return c.StartAgent(t.Context(), herdr.AgentStart{Name: "ha-coder-2", Kind: "claude", PaneID: "w14:p7", Args: []string{"--name", "ha-coder-2"}, Timeout: 90 * time.Second})
 			},
 			method: "agent.start",
 			params: `{"name":"ha-coder-2","kind":"claude","pane_id":"w14:p7","args":["--name","ha-coder-2"],"timeout_ms":90000}`,
-			want:   herdr.Agent{PaneID: "w14:p7", TerminalID: "term-w14:p7", Name: "ha-coder-2", AgentStatus: "unknown"},
+			want:   herdr.Agent{PaneID: "w14:p7", TerminalID: "term-w14:p7", Name: "ha-coder-2", AgentStatus: "unknown", LaunchPending: true},
 		},
 		"agent.start with no args": {
-			result: map[string]any{"type": "agent_started", "agent": agentOf("w14:p7", "ha-review-1", "unknown", false), "argv": []string{"codex"}},
+			result: map[string]any{"type": "agent_started", "agent": pending(agentOf("w14:p7", "ha-review-1", "unknown", false)), "argv": []string{"codex"}},
 			call: func(c herdr.Client) (any, error) {
 				return c.StartAgent(t.Context(), herdr.AgentStart{Name: "ha-review-1", Kind: "codex", PaneID: "w14:p7"})
 			},
 			method: "agent.start",
 			params: `{"name":"ha-review-1","kind":"codex","pane_id":"w14:p7"}`,
-			want:   herdr.Agent{PaneID: "w14:p7", TerminalID: "term-w14:p7", Name: "ha-review-1", AgentStatus: "unknown"},
+			want:   herdr.Agent{PaneID: "w14:p7", TerminalID: "term-w14:p7", Name: "ha-review-1", AgentStatus: "unknown", LaunchPending: true},
 		},
 		"agent.get": {
 			result: map[string]any{"type": "agent_info", "agent": agentOf("w14:p7", "ha-coder-2", "idle", true)},
@@ -129,20 +139,20 @@ func TestWorkforceCallsSendTheSchemaShape(t *testing.T) {
 			params: `{"pane_id":"w14:p7","keys":["enter"]}`,
 		},
 		"pane.wait_for_output": {
-			result: map[string]any{"type": "output_matched", "pane_id": "w14:p7", "revision": 4, "matched_line": "~/repo ❯ ", "read": map[string]any{}},
+			result: map[string]any{"type": "output_matched", "pane_id": "w14:p7", "revision": 4, "matched_line": "~/repo ❯", "read": map[string]any{}},
 			call: func(c herdr.Client) (any, error) {
 				return c.WaitForOutput(t.Context(), "w14:p7", `❯\s*$`, 2*time.Second)
 			},
 			method: "pane.wait_for_output",
 			params: `{"pane_id":"w14:p7","source":"visible","match":{"type":"regex","value":"❯\\s*$"},"timeout_ms":2000}`,
-			want:   "~/repo ❯ ",
+			want:   "~/repo ❯",
 		},
 		"pane.wait_for_output, no time at all": {
-			result: map[string]any{"type": "output_matched", "pane_id": "w14:p7", "revision": 4, "matched_line": "$ ", "read": map[string]any{}},
-			call:   func(c herdr.Client) (any, error) { return c.WaitForOutput(t.Context(), "w14:p7", `\$ $`, 0) },
+			result: map[string]any{"type": "output_matched", "pane_id": "w14:p7", "revision": 4, "matched_line": "$", "read": map[string]any{}},
+			call:   func(c herdr.Client) (any, error) { return c.WaitForOutput(t.Context(), "w14:p7", `\$$`, 0) },
 			method: "pane.wait_for_output",
-			params: `{"pane_id":"w14:p7","source":"visible","match":{"type":"regex","value":"\\$ $"},"timeout_ms":1}`,
-			want:   "$ ",
+			params: `{"pane_id":"w14:p7","source":"visible","match":{"type":"regex","value":"\\$$"},"timeout_ms":1}`,
+			want:   "$",
 		},
 	}
 	for name, tc := range tests {
@@ -170,13 +180,13 @@ func TestWaitForOutputOutlivesTheCallTimeout(t *testing.T) {
 	t.Parallel()
 	srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
 		time.Sleep(300 * time.Millisecond)
-		return herdrtest.Reply{Result: map[string]any{"type": "output_matched", "matched_line": "$ ", "pane_id": "w1:p1", "revision": 1, "read": map[string]any{}}}
+		return herdrtest.Reply{Result: map[string]any{"type": "output_matched", "matched_line": "$", "pane_id": "w1:p1", "revision": 1, "read": map[string]any{}}}
 	})
 
 	c := herdr.Client{SocketPath: srv.Path, Timeout: 100 * time.Millisecond}
-	got, err := c.WaitForOutput(t.Context(), "w1:p1", `\$ $`, 2*time.Second)
+	got, err := c.WaitForOutput(t.Context(), "w1:p1", `\$$`, 2*time.Second)
 	require.NoError(t, err)
-	assert.Equal(t, "$ ", got)
+	assert.Equal(t, "$", got)
 
 	_, err = c.ListPanes(t.Context())
 	require.Error(t, err)
@@ -279,4 +289,74 @@ func TestWorkforceCallFailureClasses(t *testing.T) {
 	}
 	_, err := herdr.Client{}.CreateTab(t.Context(), herdr.TabCreate{})
 	require.ErrorIs(t, err, herdr.ErrNoSocket)
+}
+
+// TestRenameTabNeedsItsTab: a tab_info with no tab, or a tab with no id, is
+// a protocol violation, each check on its own.
+func TestRenameTabNeedsItsTab(t *testing.T) {
+	t.Parallel()
+	for name, result := range map[string]map[string]any{
+		"no tab":           {"type": "tab_info"},
+		"a tab with no id": {"type": "tab_info", "tab": map[string]any{"workspace_id": "w14"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Result: result} })
+			err := herdr.Client{SocketPath: srv.Path}.RenameTab(t.Context(), "w14:t2", "x")
+			require.ErrorIs(t, err, herdr.ErrProtocol)
+		})
+	}
+}
+
+// TestWaitForOutputReadsHerdrsOwnTimeout: herdr answers timeout once the
+// wait's time is up, a little late under load; the client still reads that
+// answer, so the caller gets ErrWaitTimeout, not a dropped connection.
+func TestWaitForOutputReadsHerdrsOwnTimeout(t *testing.T) {
+	t.Parallel()
+	srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
+		time.Sleep(300 * time.Millisecond)
+		return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "timeout", Message: "timed out"}}
+	})
+	_, err := herdr.Client{SocketPath: srv.Path}.WaitForOutput(t.Context(), "w1:p1", `❯$`, 200*time.Millisecond)
+	require.ErrorIs(t, err, herdr.ErrWaitTimeout)
+}
+
+// TestWaitForOutputEndsWithTheCallersDeadline: the lifted timeout never
+// outlasts the caller's own deadline.
+func TestWaitForOutputEndsWithTheCallersDeadline(t *testing.T) {
+	t.Parallel()
+	srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
+		time.Sleep(time.Second)
+		return herdrtest.Reply{Result: map[string]any{"type": "output_matched", "matched_line": "~/repo ❯", "pane_id": "w1:p1", "revision": 1, "read": map[string]any{}}}
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	_, err := herdr.Client{SocketPath: srv.Path}.WaitForOutput(ctx, "w1:p1", `❯$`, 10*time.Second)
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, context.DeadlineExceeded) || errors.Is(err, herdr.ErrUnavailable), "%v", err)
+}
+
+// TestWorkforceCodesMatchOneSentinel: each code the workforce branches on
+// matches its own sentinel and ErrAPI, and no other sentinel.
+func TestWorkforceCodesMatchOneSentinel(t *testing.T) {
+	t.Parallel()
+	sentinels := []error{herdr.ErrPaneBusy, herdr.ErrNameTaken, herdr.ErrAgentNotFound, herdr.ErrWaitTimeout, herdr.ErrPaneNotFound, herdr.ErrEventsLost}
+	for code, want := range map[string]error{
+		"agent_pane_busy":  herdr.ErrPaneBusy,
+		"agent_name_taken": herdr.ErrNameTaken,
+		"agent_not_found":  herdr.ErrAgentNotFound,
+		"timeout":          herdr.ErrWaitTimeout,
+	} {
+		t.Run(code, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: code, Message: code}}
+			})
+			_, err := herdr.Client{SocketPath: srv.Path}.GetAgent(t.Context(), "ha-coder-1")
+			require.ErrorIs(t, err, herdr.ErrAPI)
+			for _, s := range sentinels {
+				assert.Equal(t, s == want, errors.Is(err, s), "%s against %v", code, s)
+			}
+		})
+	}
 }
