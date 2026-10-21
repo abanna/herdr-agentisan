@@ -3,6 +3,9 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"maps"
+	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -81,7 +84,7 @@ type TeamCache struct{ c snapshotCache }
 // Store caches every team in m, built at at, with spaces the team an op
 // selecting nothing gets.
 func (t *TeamCache) Store(m team.Model, spaces string, at time.Time) error {
-	return t.c.store(m, spaces, at, nil, nil)
+	return t.c.store(m, spaces, at, nil, nil, nil)
 }
 
 // Load is what the snapshot op answers sel with.
@@ -110,16 +113,43 @@ func DefaultStartTime() func(pid int) (uint64, error) {
 	return Options{}.withDefaults().Hooks.StartTime
 }
 
+// ServedBudget is the budget the daemon's own op map gives op with args,
+// which the server enforces; OpBudget is the client's copy.
+func ServedBudget(op string, args json.RawMessage) time.Duration {
+	return workforceOps(&workforce.Service{}, new(atomic.Bool))[op].budget(args)
+}
+
+// WorkforceOpNames is every op the daemon's workforce op map serves.
+func WorkforceOpNames() []string {
+	return slices.Sorted(maps.Keys(workforceOps(&workforce.Service{}, new(atomic.Bool))))
+}
+
+// GroupDescriptions is the team poll's reader of the group descriptions
+// (A36), driven one poll at a time.
+type GroupDescriptions struct{ d *groupDescriptions }
+
+// NewGroupDescriptions reads the shared file in dir; "" reads nothing.
+func NewGroupDescriptions(dir string) GroupDescriptions {
+	return GroupDescriptions{d: newGroupDescriptions(dir)}
+}
+
+// Refresh is one poll's look at the file.
+func (g GroupDescriptions) Refresh(log zerolog.Logger) { g.d.refresh(log) }
+
+// Of is project's descriptions, by group.
+func (g GroupDescriptions) Of(project string) map[string]string { return g.d.of(project) }
+
 // WorkforceCode is the refusal code a workforce op answers err with.
 var WorkforceCode = workforceCode
 
 // ServeOp serves the daemon socket at path with one op, name, of budget,
-// running run under ctx. It returns the function that closes the socket.
-func ServeOp(ctx context.Context, path, name string, budget time.Duration, run func(context.Context) (any, error)) (func(), error) {
+// running run under ctx and answering each of its errors with code. It
+// returns the function that closes the socket.
+func ServeOp(ctx context.Context, path, name, code string, budget time.Duration, run func(context.Context) (any, error)) (func(), error) {
 	ops := map[string]op{name: {
 		budget: func(json.RawMessage) time.Duration { return budget },
 		run:    func(ctx context.Context, _ json.RawMessage) (any, error) { return run(ctx) },
-		code:   workforceCode,
+		code:   func(error) string { return code },
 	}}
 	srv, err := listen(ctx, path, func() HealthInfo { return HealthInfo{} }, func() (BackResult, error) { return BackResult{}, nil },
 		func(Selector) (json.RawMessage, error) { return nil, ErrNotReady }, ops, zerolog.Nop())

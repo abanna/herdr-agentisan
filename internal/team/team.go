@@ -120,6 +120,8 @@ type Worker struct {
 // Pane is what the model reads of a herdr pane.
 type Pane struct {
 	ID string
+	// TabID is the tab herdr lists the pane in; "" when it lists none.
+	TabID string
 	// Name is the name herdr knows the pane's agent by (agent.list), the
 	// name agent.focus takes; "" for a shell or an agent nobody named.
 	Name string
@@ -221,15 +223,7 @@ func (rs Resolvers) Resolve(l Layout) Resolution {
 // agent.list's names join by pane id the same way: an empty name names
 // nothing, and when it lists one pane twice the lowest name takes it.
 func Build(l Layout, r Resolver, workers []store.Worker) Model {
-	ids := map[string]string{}
-	for _, w := range workers {
-		if w.TerminalID == "" || w.Status == store.StatusLost {
-			continue
-		}
-		if id, taken := ids[w.TerminalID]; !taken || w.LogicalID < id {
-			ids[w.TerminalID] = w.LogicalID
-		}
-	}
+	ids := Bindings(workers)
 	names := agentNames(l.Agents)
 
 	projects := map[string]*Project{}
@@ -286,6 +280,22 @@ func Build(l Layout, r Resolver, workers []store.Worker) Model {
 	return m
 }
 
+// Bindings maps each terminal the workers rows bind to the logical id that
+// binds it, as Build joins them: a lost row, or one with no terminal, binds
+// none, and when two rows bind one terminal the lowest logical id takes it.
+func Bindings(workers []store.Worker) map[string]string {
+	ids := map[string]string{}
+	for _, w := range workers {
+		if w.TerminalID == "" || w.Status == store.StatusLost {
+			continue
+		}
+		if id, taken := ids[w.TerminalID]; !taken || w.LogicalID < id {
+			ids[w.TerminalID] = w.LogicalID
+		}
+	}
+	return ids
+}
+
 // agentNames gives each pane agent.list's name for its agent: an empty name
 // names nothing, and when it lists one pane twice the lowest name takes it.
 func agentNames(agents []herdr.AgentInfo) map[string]string {
@@ -304,6 +314,7 @@ func worker(p herdr.PaneInfo, t Target, ids, names map[string]string) Worker {
 		ID: p.PaneID, Name: names[p.PaneID], Label: p.Label, Agent: p.Agent,
 		Status: statusOf(p.AgentStatus), Handoff: p.Tokens[HandoffKey] != "",
 		Ctx: ctxOf(p), Item: p.Tokens[report.ItemKey], Stage: p.Tokens[report.StageKey],
+		TabID: p.TabID,
 	}}
 	if id, ok := ids[p.TerminalID]; ok {
 		w.ID, w.Bound = id, true

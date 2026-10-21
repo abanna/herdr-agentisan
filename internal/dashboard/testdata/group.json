@@ -1,0 +1,22 @@
+{
+  "v": 1,
+  "at": "2026-10-09T17:19:00Z",
+  "team": "agentisan",
+  "project": {"color": "#bd93f9", "prs": [], "issues": 14},
+  "boss": {"name": "boss", "pane_id": "w1:p1", "tab_id": "w1:t1", "status": "working", "model": "claude-opus-4-1", "ctx": 23, "item": "#867 release", "stage": "review",
+           "stage_started_at": "2026-10-09T17:02:00Z"},
+  "groups": [
+    {"name": "coders", "description": "write the code", "agents": [
+      {"name": "pee01", "pane_id": "w2:p1", "tab_id": "w2:t1", "status": "working", "model": "claude-opus-4-1", "ctx": 38, "item": "NERD-5255", "stage": "go-review", "stage_started_at": "2026-10-09T17:07:00Z"},
+      {"name": "pee02", "pane_id": "w2:p2", "tab_id": "w2:t2", "status": "ready", "model": "opus", "ctx": 61, "stage": "handoff read", "stage_started_at": "2026-10-09T17:15:00Z", "idle_since": "2026-10-09T17:16:00Z"},
+      {"name": "scratch", "unnamed": true, "shell": true, "pane_id": "w2:p3", "tab_id": "w2:t3", "status": "unknown"},
+      {"name": "pee04", "pane_id": "w2:p4", "tab_id": "w2:t4", "status": "idle", "ctx": 22, "item": "PR3a", "idle_since": "2026-10-09T16:40:00Z"},
+      {"name": "pee05", "pane_id": "w2:p5", "tab_id": "w2:t5", "status": "blocked", "model": "opus", "ctx": 78, "item": "NERD-5247", "stage": "waiting on boss: the review loop wants a size waiver for the generation", "stage_started_at": "2026-10-09T16:10:00Z"},
+      {"name": "pee06", "pane_id": "w2:p6", "tab_id": "w2:t6", "status": "done", "model": "Sonnet 4.5", "ctx": 47, "item": "NERD-5268", "stage": "precheck: tdaddy impact on the stale pane id resolver, then the 7b enumeration for every changed function, then stage 8, then the commit and the review loop", "stage_started_at": "2026-10-09T15:00:00Z", "idle_since": "2026-10-07T09:00:00Z"}
+    ]},
+    {"name": "qa", "agents": [
+      {"name": "qa", "pane_id": "w5:p1", "status": "working", "model": "sonnet", "ctx": 12, "item": "PR#41", "stage": "qa: reading", "stage_started_at": "2026-10-09T17:18:00Z"}
+    ]},
+    {"name": "research", "agents": []}
+  ]
+}

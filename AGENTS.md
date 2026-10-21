@@ -125,14 +125,16 @@ exempts whatever is later added under that name.
   and every agent pane's ctx display (`team.go`, A28) and caches every team's
   snapshot, with the workspaces each holds, which the `snapshot` op serves
   by project or workspace, so the op never calls herdr (A18, A24,
-  `snapshot.go`, with `SnapshotSource`, the dashboard's client), and sends
-  each status change since the last poll as a workflow event
-  (`events.go`). It keeps herdr's agent view on the focused team, which
-  focus events and the poll feed it, and clears it outside every team and
-  on a clean stop (`view.go`, the A28 addendum). `daemon start` spawns a
-  detached `daemon run`; herdr's `[[startup]]` hook runs it, and the
-  `daemon-restart` action covers linking. Tests run daemons in process
-  against herdrtest and a scratch state dir, never the real ones.
+  `snapshot.go`, with `SnapshotSource`, the dashboard's client), each group
+  with its description, re-read when the shared file changes
+  (`descriptions.go`, A36), and sends each status change since the last
+  poll as a workflow event (`events.go`). It keeps herdr's agent view on the
+  focused team, which focus events and the poll feed it, and clears it
+  outside every team and on a clean stop (`view.go`, the A28 addendum).
+  `daemon start` spawns a detached `daemon run`; herdr's `[[startup]]` hook
+  runs it, and the `daemon-restart` action covers linking. Tests run
+  daemons in process against herdrtest and a scratch state dir, never the
+  real ones.
 - `internal/team/` — the team domain model (ADR-001 D5, A17): project → group
   → logical worker → current pane, built from `pane.list`, `workspace.list`,
   `tab.list`, `agent.list` and `state.db`'s `workers` rows, joined by
@@ -145,13 +147,16 @@ exempts whatever is later added under that name.
   in the resolver's group order, with the in-memory stage clock (A18) and
   idle clock (A23).
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
-  `team status` so far: each group's counts and members on a tabs team or
-  the ◆ spaces, with idle times from the daemon's clock and the rows no pane
-  is bound to (A35). The daemon runs them; `internal/cli` only asks it.
+  `team status` and `worker retire` so far: each group's counts and members
+  on a tabs team or the ◆ spaces, with idle times from the daemon's clock and
+  the rows no pane is bound to (A35), and closing the pane a worker's row is
+  bound to, after its handoff when asked, with the row retired. The daemon
+  runs them; `internal/cli` only asks it.
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
-  references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check.
+  references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check,
+  and each group's one-line description (A36), never from a repo file.
   Sample in `docs/config/herdr-agentisan.example.toml`.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
@@ -178,8 +183,10 @@ exempts whatever is later added under that name.
 - `internal/testslots/` — the dashboard header's test slots (ADR-001 A31):
   which of `[tests] locks` some process holds a lock on, read from the
   kernel's `/proc/locks` every team poll without opening or locking a lock
-  file. Tests hold real locks on temp files and read them back; the parser
-  is tested on its own against written lines.
+  file, three times with staggered pages, since a page can skip a line
+  while other locks change. Tests hold real locks on temp files and read
+  them back, the parser is tested on its own against written lines, and a
+  page-at-a-time stand-in (`seqfile_test.go`) forces the skip.
 - `internal/snapshot/` — the versioned snapshot contract (ADR-001 D5/D6,
   A18): the groups and agents, the boss, and the project's PRs, issues and
   test slots. Decoding is strict: exact keys, closed enums, RFC 3339 times.
@@ -191,7 +198,9 @@ exempts whatever is later added under that name.
   an unnamed row by its pane id. From the daemon it shows its own team:
   `locate.go` finds the pane running it by its pid, and the daemon maps that
   pane's workspace to a team (A24). `/` narrows the agents to a search query in
-  place (`search.go`, ADR-001 A20). Also the team's one line for herdr's tab
+  place (`search.go`, ADR-001 A20), and 1-9 or a click on a group's title
+  opens the group's view, a box per agent from the snapshot alone
+  (`groupview.go`, A37). Also the team's one line for herdr's tab
   bar (`tabbar.go`, A41), which `status line` prints, with its
   `tab_bar_right` entry `docs/config/herdr-tab-bar.example.toml`, for herdr's
   own config (`TestTabBarSnippet` in `internal/cli` runs it). Goldens in
@@ -217,6 +226,12 @@ exempts whatever is later added under that name.
   events into Elasticsearch is `docs/config/otelcol-agentisan.yaml`, run by
   `task otelcol:up`; `collector_test.go` pins its keys and the task's
   `docker run`.
+- `internal/trail/` — the trail read back (ADR-001 item 12): an ES|QL client
+  over `logs-agentisan.otel-*`, the debugger's recipes, and the env file its
+  URL and read key come from, `[debugger] env_file` in the shared config,
+  read at each query. No caller chooses the URL, the variables or the file.
+  Tests run an httptest Elasticsearch on a recorded answer
+  (`testdata/worker-trail.json`).
 - `.devcontainer/` — the reproducible dev environment: Go 1.26.10 plus the
   two tools `go tool` does not resolve (Task, uv).
 - `docs/architecture.md` — why the pieces are shaped this way, and the

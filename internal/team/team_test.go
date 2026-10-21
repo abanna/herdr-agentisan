@@ -73,7 +73,9 @@ func TestBuildJoinsWorkersRows(t *testing.T) {
 
 	tests := map[string]struct {
 		rows []store.Worker
-		want map[string]string // pane id -> worker id; a provisional id has "?" appended
+		// blank is a pane herdr lists with no terminal id.
+		blank string
+		want  map[string]string // pane id -> worker id; a provisional id has "?" appended
 	}{
 		"no rows: every worker is provisional": {
 			want: map[string]string{"wJ:p1": "wJ:p1?", "wN:p1": "wN:p1?", "wN:p2": "wN:p2?", "wN:p3": "wN:p3?", "wY:p1": "wY:p1?"},
@@ -117,6 +119,13 @@ func TestBuildJoinsWorkersRows(t *testing.T) {
 			},
 			want: map[string]string{"wJ:p1": "wJ:p1?", "wN:p1": "wN:p1?", "wN:p2": "wN:p2?", "wN:p3": "wN:p3?", "wY:p1": "wY:p1?"},
 		},
+		// No terminal is no binding, on either side: a row from before A35
+		// never binds a pane herdr lists with no terminal id.
+		"a row and a pane with no terminal": {
+			rows:  []store.Worker{{LogicalID: "coders-2", PaneID: "wN:p1"}},
+			blank: "wN:p1",
+			want:  map[string]string{"wJ:p1": "wJ:p1?", "wN:p1": "wN:p1?", "wN:p2": "wN:p2?", "wN:p3": "wN:p3?", "wY:p1": "wY:p1?"},
+		},
 		// A row binding a pane outside the model binds nothing in it.
 		"a row on the edit shell": {
 			rows: []store.Worker{{LogicalID: "x", PaneID: "w12:p1", TerminalID: "term_w12:p1"}},
@@ -126,7 +135,13 @@ func TestBuildJoinsWorkersRows(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			m := team.Build(liveLayout(), team.Spaces{}, tc.rows)
+			l := liveLayout()
+			for i := range l.Panes {
+				if l.Panes[i].PaneID == tc.blank {
+					l.Panes[i].TerminalID = ""
+				}
+			}
+			m := team.Build(l, team.Spaces{}, tc.rows)
 
 			got := map[string]string{}
 			groupOf := map[string]string{}
