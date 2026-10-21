@@ -115,16 +115,35 @@ func printf(w io.Writer, format string, args ...any) error {
 	return err //nolint:wrapcheck // trivial write
 }
 
-func renderStart(w io.Writer, res daemon.StartResult) error {
+// startDaemon starts the daemon and says what Start found (A48). A daemon
+// that exited before it answered health is an error, so the command exits
+// non-zero and herdr's plugin log records the start as failed; one still
+// starting when Start stops waiting is not.
+func startDaemon(cmd *cobra.Command, o daemon.Options) error {
+	res, err := daemon.Start(cmd.Context(), o)
+	logPath := "daemon.log"
+	if p, perr := daemon.PathsFor(o.StateDir, o.HerdrSocket); perr == nil {
+		logPath = p.Log
+	}
+	switch {
+	case errors.Is(err, daemon.ErrDaemonExited):
+		return fmt.Errorf("daemon start: %w; see %s", err, logPath)
+	case err != nil:
+		return fmt.Errorf("daemon start: %w", noHerdr(err))
+	}
+	return renderStart(cmd.OutOrStdout(), res, logPath)
+}
+
+func renderStart(w io.Writer, res daemon.StartResult, logPath string) error {
 	switch {
 	case res.AlreadyRunning && res.Healthy:
 		return printf(w, "daemon already running (pid %d)\n", res.PID)
 	case res.AlreadyRunning:
-		return printf(w, "daemon already running (pid %d) but not answering health yet\n", res.PID)
+		return printf(w, "daemon already running (pid %d) but still starting, not answering health yet; see %s\n", res.PID, logPath)
 	case res.Healthy:
 		return printf(w, "daemon running (pid %d)\n", res.PID)
 	default:
-		return printf(w, "daemon started (pid %d) but not answering health yet; see daemon.log\n", res.PID)
+		return printf(w, "daemon starting (pid %d) but not answering health yet; see %s\n", res.PID, logPath)
 	}
 }
 
@@ -138,11 +157,7 @@ func newDaemonStartCmd(opts func(*cobra.Command) (daemon.Options, error)) *cobra
 			if err != nil {
 				return err
 			}
-			res, err := daemon.Start(cmd.Context(), o)
-			if err != nil {
-				return fmt.Errorf("daemon start: %w", noHerdr(err))
-			}
-			return renderStart(cmd.OutOrStdout(), res)
+			return startDaemon(cmd, o)
 		},
 	}
 }
@@ -245,11 +260,7 @@ func newDaemonRestartCmd(opts func(*cobra.Command) (daemon.Options, error)) *cob
 			if err := stopDaemon(cmd, o); err != nil {
 				return err
 			}
-			res, err := daemon.Start(cmd.Context(), o)
-			if err != nil {
-				return fmt.Errorf("daemon start: %w", noHerdr(err))
-			}
-			return renderStart(cmd.OutOrStdout(), res)
+			return startDaemon(cmd, o)
 		},
 	}
 }
