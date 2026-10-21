@@ -18,3 +18,12 @@ func OpenWith(ctx context.Context, path string, migrations fs.FS) (*Store, error
 
 // VerifyPragmas checks the pragmas Open relies on against db's connection.
 func VerifyPragmas(ctx context.Context, db *sql.DB) error { return verifyPragmas(ctx, db) }
+
+// InUTC is r with its times in UTC, for comparing with a test's literals.
+func (r Row) InUTC() Row {
+	r.CreatedAt = r.CreatedAt.UTC()
+	if !r.RetiredAt.IsZero() {
+		r.RetiredAt = r.RetiredAt.UTC()
+	}
+	return r
+}

@@ -145,9 +145,11 @@ exempts whatever is later added under that name.
   in the resolver's group order, with the in-memory stage clock (A18) and
   idle clock (A23).
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
-  `team status` so far: each group's counts and members on a tabs team or
-  the ◆ spaces, with idle times from the daemon's clock and the rows no pane
-  is bound to (A35). The daemon runs them; `internal/cli` only asks it.
+  `team status` and `worker retire` so far: each group's counts and members
+  on a tabs team or the ◆ spaces, with idle times from the daemon's clock and
+  the rows no pane is bound to (A35), and closing the pane a worker's row is
+  bound to, after its handoff when asked, with the row retired. The daemon
+  runs them; `internal/cli` only asks it.
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret

@@ -34,6 +34,8 @@ const (
 	codeUnknownOp          = "unknown_op"
 	// codeTimeout answers an op whose own budget ended.
 	codeTimeout = "timeout"
+	// codeFailed answers an op error no code of its own names.
+	codeFailed = "failed"
 )
 
 // Client-side sentinel errors.
@@ -124,8 +126,9 @@ type server struct {
 	// encoded.
 	snapshot func(Selector) (json.RawMessage, error)
 	// ops are the ops that take args and a budget of their own: the
-	// workforce's (A23). They run under opsCtx, the daemon's own context,
-	// never under the connection: an op whose client went still finishes.
+	// workforce's (A23). They run under opsCtx, which the daemon cancels
+	// before it closes the socket, never under the connection: an op whose
+	// client went still finishes.
 	ops    map[string]op
 	opsCtx context.Context
 	log    zerolog.Logger
@@ -253,20 +256,25 @@ func (s *server) run(name string, o op, args json.RawMessage, extend func(time.D
 	res, err := o.run(ctx, args)
 	if err != nil {
 		s.log.Info().Err(err).Str("op", name).Msg("op refused")
-		// An op whose own budget ended is a timeout, whichever call it was
-		// in; the error says what it was waiting on.
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		code := o.code(err)
+		// An op whose own budget ended while a call failed is a timeout, the
+		// error saying what it waited on; a code that says more than that a
+		// call failed, such as handoff_timeout or herdr_gone, stands.
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) && callFailed[code] {
 			return refuse(codeTimeout, fmt.Sprintf("%s ran past its %s budget: %v", name, budget, err))
 		}
-		return refuse(o.code(err), err.Error())
+		return refuse(code, err.Error())
 	}
 	data, err := json.Marshal(res)
 	if err != nil {
-		return refuse("failed", fmt.Sprintf("encode the %s answer: %v", name, err))
+		return refuse(codeFailed, fmt.Sprintf("encode the %s answer: %v", name, err))
 	}
 	s.log.Info().Str("op", name).Msg("op done")
 	return response{OK: true, Data: data}
 }
+
+// callFailed are the codes that say only that a call failed.
+var callFailed = map[string]bool{codeHerdrFailed: true, codeStoreFailed: true, codeFailed: true}
 
 func refuse(code, message string) response {
 	return response{Error: &errorBody{Code: code, Message: message}}

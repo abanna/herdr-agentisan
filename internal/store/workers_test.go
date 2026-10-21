@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -235,4 +236,145 @@ func TestCompleteHandoffBindsTheNewTerminal(t *testing.T) {
 	reuse(t, s, "w")
 	require.ErrorIs(t, s.CompleteHandoff(ctx, h, t1), store.ErrNotBound, "the id was reused at generation 6")
 	assert.Equal(t, "term_next", liveRow(t, s, "w").TerminalID)
+}
+
+// TestBindWorkerLifecycle: a new logical id is bound at generation 0 and
+// starting, with its terminal; it goes active, then retires; the id reused
+// binds the same row to the new pane and terminal at the next generation,
+// with its retirement cleared (I1). A live id is never rebound, and Workers
+// only ever sees live rows.
+func TestBindWorkerLifecycle(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	t0 := time.Date(2026, 10, 19, 20, 0, 0, 0, time.UTC)
+	w := store.Worker{LogicalID: "ha-coder-2", Project: "herdr-agentisan", Group: "coder", PaneID: "w14:p7", TerminalID: "term_a"}
+
+	gen, err := s.BindWorker(ctx, w, t0)
+	require.NoError(t, err)
+	assert.Zero(t, gen)
+	w.Status = store.StatusStarting
+	row, err := s.WorkerRow(ctx, "ha-coder-2")
+	require.NoError(t, err)
+	assert.Equal(t, store.Row{Worker: w, CreatedAt: t0}, row.InUTC())
+
+	require.NoError(t, s.SetWorkerStatus(ctx, w, store.StatusActive, t0.Add(time.Second)))
+	_, err = s.BindWorker(ctx, store.Worker{LogicalID: "ha-coder-2", PaneID: "w14:p9", TerminalID: "term_b"}, t0.Add(2*time.Second))
+	require.ErrorIs(t, err, store.ErrWorkerLive, "a live id is never rebound")
+	w.Status = store.StatusActive
+	live, err := s.Workers(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []store.Worker{w}, live)
+
+	require.NoError(t, s.SetWorkerStatus(ctx, w, store.StatusRetired, t0.Add(time.Minute)))
+	require.ErrorIs(t, s.SetWorkerStatus(ctx, w, store.StatusRetired, t0.Add(2*time.Minute)), store.ErrNoWorker,
+		"a retired row stays retired at its first retirement")
+	row, err = s.WorkerRow(ctx, "ha-coder-2")
+	require.NoError(t, err)
+	w.Status = store.StatusRetired
+	assert.Equal(t, store.Row{Worker: w, CreatedAt: t0, RetiredAt: t0.Add(time.Minute)}, row.InUTC())
+	live, err = s.Workers(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, live)
+
+	again := store.Worker{LogicalID: "ha-coder-2", Project: "herdr-agentisan", Group: "coder", PaneID: "w14:pA", TerminalID: "term_c"}
+	gen, err = s.BindWorker(ctx, again, t0.Add(time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), gen)
+	row, err = s.WorkerRow(ctx, "ha-coder-2")
+	require.NoError(t, err)
+	again.Generation, again.Status = 1, store.StatusStarting
+	assert.Equal(t, store.Row{Worker: again, CreatedAt: t0}, row.InUTC(), "the row keeps its first creation")
+	require.ErrorIs(t, s.SetWorkerStatus(ctx, w, store.StatusRetired, t0.Add(2*time.Hour)), store.ErrNoWorker,
+		"a write planned on generation 0 never ends generation 1")
+}
+
+// TestBindWorkerReusesALostID: a lost row is live, so starting and active
+// never bring it back, while an ending retires it; BindWorker alone reuses
+// its id, at the next generation with the new terminal and the shell cleared
+// for the team poll to read (A35).
+func TestBindWorkerReusesALostID(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	t0 := time.Date(2026, 10, 19, 20, 0, 0, 0, time.UTC)
+	seedWorker(t, s, "w", "w14:p2", 3)
+	require.NoError(t, s.SetWorkerShell(ctx, liveRow(t, s, "w"), 4242, 77))
+	require.NoError(t, s.MarkWorkerLost(ctx, liveRow(t, s, "w")))
+	lost := liveRow(t, s, "w")
+	for _, status := range []string{store.StatusStarting, store.StatusActive} {
+		require.ErrorIs(t, s.SetWorkerStatus(ctx, lost, status, t0), store.ErrNoWorker, status)
+	}
+	assert.Equal(t, lost, liveRow(t, s, "w"))
+
+	gen, err := s.BindWorker(ctx, store.Worker{LogicalID: "w", Project: "agentisan", Group: "coders", PaneID: "w14:p9", TerminalID: "term_new"}, t0)
+	require.NoError(t, err)
+	assert.Equal(t, int64(4), gen)
+	assert.Equal(t, store.Worker{
+		LogicalID: "w", Project: "agentisan", Group: "coders", PaneID: "w14:p9", Generation: 4,
+		TerminalID: "term_new", Status: store.StatusStarting,
+	}, liveRow(t, s, "w"))
+
+	require.NoError(t, s.MarkWorkerLost(ctx, liveRow(t, s, "w")))
+	require.NoError(t, s.SetWorkerStatus(ctx, liveRow(t, s, "w"), store.StatusRetired, t0), "an ending retires a lost row")
+	row, err := s.WorkerRow(ctx, "w")
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusRetired, row.Status)
+}
+
+// TestSetWorkerStatusEndings: failed and gone retire a row as retired does;
+// a retirement dated before the row's creation (a clock stepped back) is
+// recorded at the creation, which the schema's CHECK requires.
+func TestSetWorkerStatusEndings(t *testing.T) {
+	t.Parallel()
+	t0 := time.Date(2026, 10, 19, 20, 0, 0, 0, time.UTC)
+	for _, status := range []string{store.StatusRetired, store.StatusFailed, store.StatusGone} {
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+			s := open(t, dbPath(t))
+			w := store.Worker{LogicalID: "x-qa-1", PaneID: "w1:p1", TerminalID: "term_1"}
+			_, err := s.BindWorker(t.Context(), w, t0)
+			require.NoError(t, err)
+
+			require.NoError(t, s.SetWorkerStatus(t.Context(), w, status, t0.Add(-time.Hour)))
+			row, err := s.WorkerRow(t.Context(), "x-qa-1")
+			require.NoError(t, err)
+			assert.Equal(t, status, row.Status)
+			assert.True(t, row.RetiredAt.Equal(t0), "retired at its creation, not before it")
+		})
+	}
+}
+
+// TestWorkerWritesRefuseWhatTheyCannotRecord: an empty id, pane or
+// terminal, an unknown status, a time nanoseconds cannot hold, an unknown id
+// and a closed store each fail with their own sentinel.
+func TestWorkerWritesRefuseWhatTheyCannotRecord(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	t0 := time.Date(2026, 10, 19, 20, 0, 0, 0, time.UTC)
+	w := store.Worker{LogicalID: "x-qa-1", PaneID: "w1:p1", TerminalID: "term_1"}
+
+	for name, bad := range map[string]store.Worker{
+		"no id":       {PaneID: "w1:p1", TerminalID: "term_1"},
+		"no pane":     {LogicalID: "x-qa-1", TerminalID: "term_1"},
+		"no terminal": {LogicalID: "x-qa-1", PaneID: "w1:p1"},
+	} {
+		_, err := s.BindWorker(ctx, bad, t0)
+		require.ErrorIs(t, err, store.ErrInvalid, name)
+	}
+	_, err := s.BindWorker(ctx, w, time.Date(3000, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.ErrorIs(t, err, store.ErrInvalid)
+	require.ErrorIs(t, s.SetWorkerStatus(ctx, w, "paused", t0), store.ErrInvalid)
+	require.ErrorIs(t, s.SetWorkerStatus(ctx, w, store.StatusActive, time.Time{}), store.ErrInvalid)
+	require.ErrorIs(t, s.SetWorkerStatus(ctx, w, store.StatusActive, t0), store.ErrNoWorker)
+	_, err = s.WorkerRow(ctx, "x-qa-1")
+	require.ErrorIs(t, err, store.ErrNoWorker)
+
+	require.NoError(t, s.Close())
+	_, err = s.BindWorker(context.Background(), w, t0)
+	require.ErrorIs(t, err, store.ErrStore)
+	require.ErrorIs(t, s.SetWorkerStatus(context.Background(), w, store.StatusActive, t0), store.ErrStore)
+	_, err = s.WorkerRow(context.Background(), "x-qa-1")
+	require.ErrorIs(t, err, store.ErrStore)
 }

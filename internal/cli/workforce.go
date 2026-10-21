@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,8 +17,8 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
-// The workforce commands (ADR-001 D11, A23): team status here; worker
-// retire, worker spawn and team up follow. The daemon runs each; the command
+// The workforce commands (ADR-001 D11, A23): team status and worker retire
+// here; worker spawn and team up follow. The daemon runs each; the command
 // parses, asks and prints. On every path, a flag it does not know included, stdout is exactly
 // one JSON object, the contract the herdr-workforce skill's wrapper reads:
 // {"ok":true,"data":…} or {"ok":false,"error":{"code","message"}}. It exits 0
@@ -87,21 +88,35 @@ func newTeamCmd() *cobra.Command {
 	return workforceGroup("team", "Inspect the boss's team (the herdr-workforce skill)", newTeamStatusCmd())
 }
 
+func newWorkerCmd() *cobra.Command {
+	return workforceGroup("worker", "Remove the team's workers (the herdr-workforce skill)", newWorkerRetireCmd())
+}
+
 // opFlags are the flags every workforce command takes.
 type opFlags struct {
 	stateDir string
 	project  string
 }
 
-func (f *opFlags) add(c *cobra.Command) {
+func (f *opFlags) add(c *cobra.Command, project bool) {
 	c.Flags().StringVar(&f.stateDir, "state-dir", "", "plugin state directory (default: HERDR_PLUGIN_STATE_DIR)")
-	c.Flags().StringVar(&f.project, "project", "", "the team's project (default: the team whose workspace this pane is in, else the only tabs team)")
+	if project {
+		c.Flags().StringVar(&f.project, "project", "", "the team's project (default: the team whose workspace this pane is in, else the only tabs team)")
+	}
 }
 
-// runOp asks the daemon to run op with req(the team the command means) and
-// prints its answer. The team is --project, else the caller's pane, as
-// workforce.FindCallerPane confirms it by this command's lineage.
-func (f *opFlags) runOp(cmd *cobra.Command, args []string, op string, req func(workforce.Selector) any) error {
+// selector is the team the command means, as workforce.SelectorFor finds it
+// by this command's lineage.
+func (f *opFlags) selector(ctx context.Context) (workforce.Selector, error) {
+	pane := report.PaneFrom(lookupEnvFrom(ctx))
+	pane.Lineage = lineageFrom(ctx)()
+	return workforce.SelectorFor(ctx, herdr.Client{SocketPath: pane.SocketPath}, f.project, pane) //nolint:wrapcheck // workforce wraps it
+}
+
+// runOp asks the daemon to run op with the request req builds once the
+// daemon's socket is known, and prints its answer. req fails only when
+// herdr does, finding the team (herdr_failed).
+func (f *opFlags) runOp(cmd *cobra.Command, args []string, op string, req func() (any, error)) error {
 	if len(args) > 0 {
 		return badRequest(cmd, fmt.Errorf("%s takes no arguments, got %s", cmd.CommandPath(), strings.Join(args, " ")))
 	}
@@ -118,13 +133,11 @@ func (f *opFlags) runOp(cmd *cobra.Command, args []string, op string, req func(w
 	if err != nil {
 		return refuseWith(cmd, codeDaemonUnavailable, noHerdr(err).Error())
 	}
-	pane := report.PaneFrom(lookupEnvFrom(ctx))
-	pane.Lineage = lineageFrom(ctx)()
-	caller, err := workforce.FindCallerPane(ctx, herdr.Client{SocketPath: pane.SocketPath}, pane)
+	r, err := req()
 	if err != nil {
 		return refuseWith(cmd, "herdr_failed", err.Error())
 	}
-	data, err := daemon.Workforce(ctx, paths.Socket, op, req(workforce.Selector{Project: f.project, CallerPane: caller}))
+	data, err := daemon.Workforce(ctx, paths.Socket, op, r)
 	var refused *daemon.RequestError
 	switch {
 	case err == nil:
@@ -144,9 +157,38 @@ func newTeamStatusCmd() *cobra.Command {
 		Short: "Every worker's group, status, ctx, item, stage and idle time, and open slots",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return f.runOp(cmd, args, daemon.OpTeamStatus, func(sel workforce.Selector) any { return workforce.StatusRequest{Selector: sel} })
+			return f.runOp(cmd, args, daemon.OpTeamStatus, func() (any, error) {
+				sel, err := f.selector(cmd.Context())
+				return workforce.StatusRequest{Selector: sel}, err
+			})
 		},
 	}
-	f.add(c)
+	f.add(c, true)
+	return c
+}
+
+func newWorkerRetireCmd() *cobra.Command {
+	var (
+		f            opFlags
+		afterHandoff bool
+	)
+	c := &cobra.Command{
+		Use:   "retire <id>",
+		Short: "Close a worker's pane, by logical id or pane id",
+		Long: "Closes the worker's pane and records it retired. With --after-handoff it\n" +
+			"first waits until the worker has written its handoff; ask the worker to\n" +
+			"write it before you run this.",
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) != 1 {
+				return badRequest(cmd, fmt.Errorf("%s takes one logical id or pane id, got %d arguments", cmd.CommandPath(), len(args)))
+			}
+			return f.runOp(cmd, nil, daemon.OpWorkerRetire, func() (any, error) {
+				return workforce.RetireRequest{Target: args[0], AfterHandoff: afterHandoff}, nil
+			})
+		},
+	}
+	f.add(c, false)
+	c.Flags().BoolVar(&afterHandoff, "after-handoff", false, "close the pane only once the worker's handoff is written")
 	return c
 }
