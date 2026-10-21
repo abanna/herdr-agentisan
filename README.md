@@ -142,12 +142,84 @@ Under the shared app-server daemon, with Codex's default sandbox (even for an
 approved escalation), or on an OS other than Linux and macOS, it reports
 nothing (ADR-001 A25, A26).
 
-Codex workers run under your own Codex sandbox setting, so by default they
-show `ctx` but no item or stage. To have a group's Codex workers report them,
-add `--sandbox danger-full-access` to the agent command they launch with.
+Codex workers run under your own Codex sandbox setting, so by default their
+`report stage` commands report nothing: they show `ctx`, and an item or a
+stage only from the [turn hooks](#report-item-and-stage-from-every-turn),
+which run outside the sandbox. To have a group's Codex workers report each
+step too, add `--sandbox danger-full-access` to the agent command they
+launch with.
 That runs their commands with no sandbox and no reviewer, since Codex's
 automatic review sees only escalations, which that mode never makes: a weaker
 guard than Claude's auto mode (ADR-001 A43).
+
+## Report `$item` and `$stage` from every turn
+
+Any agent, a boss, QA or research pane included, pushes its own `item` and
+`stage` at the edges of its turns, with no command typed by hand.
+`report turn` runs as an async `UserPromptSubmit` and `Stop` hook, reads
+what the turn's text states, and sets the tokens `report stage` sets:
+
+- **The stage** is the final message's closing `BOSS: <status>` or
+  `STATUS: <status>` line, less its prefix: `BOSS: blocked: 1Password agent`
+  sets `blocked: 1Password agent`. `BOSS:` is the line a worker ends each
+  turn with; `STATUS:` is for a pane with no boss above it.
+- **The item** is an `item: <id>` line: the first one in a prompt, as a
+  dispatch carries it, or the last one in the final message's closing
+  paragraph, beside the status line. A new item stated with no stage clears
+  the old stage.
+
+Markdown bold and code ticks around a line are fine; a value over 80
+characters is cut to 79 and `…`. A turn that states neither reports nothing,
+so a pipeline step's stage stays; so do a subagent's turns, and a Claude turn
+you interrupt, which runs no `Stop` hook. Agents write these lines only when
+told to, so say it in their instructions (`CLAUDE.md`, `AGENTS.md`), for
+example: "End every turn with a last line `BOSS: <what you are doing>`."
+
+For Claude, add the hooks to `.claude/settings.json` or
+`~/.claude/settings.json`
+([sample](docs/config/claude-hooks.example.json)):
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "herdr-agentisan report turn",
+            "timeout": 10,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "herdr-agentisan report turn",
+            "timeout": 10,
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+For Codex, paste the
+[Codex turn hooks](docs/config/codex-turn-hooks.example.toml) at the end of
+`~/.codex/config.toml`, or of a trusted project's `.codex/config.toml`, and
+trust them once. `herdr-agentisan codex hooks` installs only the `ctx` hooks
+above. Each turn hook is a group of its own, so that command never finds one
+beside `report codex`. They need `codex --no-daemon`, as `report codex`
+does: a hook the shared app-server ran reports nothing. Codex runs hooks outside its sandbox, so they
+work under the default one, unlike `report stage` from a tool command. Both
+print nothing and always exit 0; `HERDR_AGENTISAN_LOG_LEVEL=debug` logs why
+nothing was reported. ADR-001 A42 has the details.
 
 ## Search on prefix+/ and in the dashboard
 

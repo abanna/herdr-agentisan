@@ -183,7 +183,7 @@ func newReportCmd() *cobra.Command {
 			return fmt.Errorf("%s needs a subcommand; see --help", cmd.CommandPath())
 		},
 	}
-	c.AddCommand(newReportStatuslineCmd(), newReportStageCmd(), newReportCodexCmd())
+	c.AddCommand(newReportStatuslineCmd(), newReportStageCmd(), newReportCodexCmd(), newReportTurnCmd())
 	return c
 }
 
@@ -249,6 +249,43 @@ func newReportCodexCmd() *cobra.Command {
 				return nil
 			}
 			logger.Debug().Str("pane", pane.PaneID).Str("reported_to", res.PaneID).Int(report.CtxKey, res.Ctx).Msg("report codex")
+			return nil
+		},
+	}
+}
+
+func newReportTurnCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "turn",
+		Short: "Push item and stage from a Claude or Codex turn hook's payload on stdin",
+		Long: "Reads the JSON a Claude or Codex UserPromptSubmit or Stop hook passes on\n" +
+			"stdin and sets this pane's item and stage tokens to what the turn states:\n" +
+			"the item from an \"item: <id>\" line in the prompt or in the final message's\n" +
+			"closing paragraph, and the stage from the final message's closing\n" +
+			"\"BOSS: <status>\" or \"STATUS: <status>\" line. A new item stated with no\n" +
+			"stage clears the stage. Run it as an async hook\n" +
+			"(docs/config/claude-hooks.example.json, docs/config/codex-turn-hooks.example.toml).\n\n" +
+			"It prints nothing and always exits 0; why it reported nothing goes to\n" +
+			"the debug log (HERDR_AGENTISAN_LOG_LEVEL=debug).",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			ctx := cmd.Context()
+			// Read the lineage first, as statusline does: the pane is found
+			// through the processes running when the hook fired.
+			lineage := lineageFrom(ctx)()
+			logger := logging.From(ctx)
+			pane := report.PaneFrom(lookupEnvFrom(ctx))
+			pane.Lineage = lineage
+			res, err := report.Turn(ctx, herdr.Client{SocketPath: pane.SocketPath}, pane, cmd.InOrStdin())
+			// A hook's output is the agent's to read: Claude adds a
+			// UserPromptSubmit hook's stdout to the prompt, so a failure goes
+			// to the debug log.
+			if err != nil {
+				logger.Debug().Err(err).Str("pane", pane.PaneID).Ints("lineage", lineage.PIDs()).Msg("report turn: nothing reported")
+				return nil
+			}
+			logger.Debug().Str("pane", pane.PaneID).Str("reported_to", res.PaneID).
+				Str(report.ItemKey, res.Item).Str(report.StageKey, res.Stage).Bool("cleared", res.Cleared).Msg("report turn")
 			return nil
 		},
 	}

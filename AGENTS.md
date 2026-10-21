@@ -110,8 +110,11 @@ exempts whatever is later added under that name.
   (A22, hooks sampled in `docs/config/codex-hooks.example.toml`), with a
   24 h TTL (A27), and
   `report stage` pushes `item` and `stage` on each agentisan step
-  transition. They read `HERDR_PANE_ID`, a pane-shell variable, which is why
-  it is not in `plugin.Env`.
+  transition, and `report turn` pushes them from the `item:` and
+  `BOSS:`/`STATUS:` lines of a Claude or Codex turn (A42, hooks sampled in
+  `docs/config/claude-hooks.example.json` and
+  `docs/config/codex-turn-hooks.example.toml`). They read `HERDR_PANE_ID`, a
+  pane-shell variable, which is why it is not in `plugin.Env`.
 - `internal/codexhooks/` — installing those Codex hooks (ADR-001 A43):
   `codex hooks` writes them into `$CODEX_HOME/hooks.json`, after every entry
   already there, which it keeps as written, and never edits `config.toml` or
