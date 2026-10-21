@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/abanna/herdr-agentisan/internal/debugger"
+	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/trail"
 )
 
@@ -60,10 +61,14 @@ func newDebuggerArgsCmd() *cobra.Command {
 			if configDir == "" {
 				return errors.New("debugger args: pass --config-dir, the plugin's config dir, or set " + trail.ConfigDirEnv)
 			}
+			keyFiles, err := keyFiles(configDir, lookup)
+			if err != nil {
+				return fmt.Errorf("debugger args: %w", err)
+			}
 			if repo, err = filepath.Abs(repo); err != nil {
 				return fmt.Errorf("debugger args: the repo: %w", err)
 			}
-			launch, err := debugger.Launch{Root: root, Bin: bin, Repo: repo, ServerDir: serverDir, ConfigDir: configDir}.Command()
+			launch, err := debugger.Launch{Root: root, Bin: bin, Repo: repo, ServerDir: serverDir, ConfigDir: configDir, KeyFiles: keyFiles}.Command()
 			if err != nil {
 				return fmt.Errorf("debugger args: %w", err)
 			}
@@ -87,6 +92,24 @@ func newDebuggerArgsCmd() *cobra.Command {
 	c.Flags().StringVar(&configDir, "config-dir", "", "the plugin's config dir (default: $"+trail.ConfigDirEnv+")")
 	addJSONFlag(c, &asJSON)
 	return c
+}
+
+// keyFiles is the env file the shared config in configDir names, which
+// holds the trail's read key, and its target when it is a link: the launch
+// denies both to Read. The file itself is never opened.
+func keyFiles(configDir string, lookup func(string) (string, bool)) ([]string, error) {
+	envFile, err := settings.DebuggerEnvFile(configDir, lookup)
+	if err != nil {
+		return nil, fmt.Errorf("the shared config: %w", err)
+	}
+	if envFile == "" {
+		return nil, fmt.Errorf("set [debugger] env_file in %s: the debugger's events read the trail's key from it", filepath.Join(configDir, settings.FileName))
+	}
+	keys := []string{envFile}
+	if target, err := filepath.EvalSymlinks(envFile); err == nil && target != envFile {
+		keys = append(keys, target)
+	}
+	return keys, nil
 }
 
 // pluginRoot is HERDR_PLUGIN_ROOT when herdr set it, else the checkout the

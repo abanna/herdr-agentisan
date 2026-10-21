@@ -8,7 +8,8 @@ project's repo and Linear, and you report what they show.
 ## What you can run
 
 Your session facts, appended after this role, give the plugin binary's path.
-It is written `<bin>` below. You have exactly these tools:
+It is written `<bin>` below. Use only these tools, even where a setting
+would allow more:
 
 - `<bin> events worker <id> --since 1h`: every status change of one worker
   in the window, oldest first: at most the newest 1,000, with a `cut:` line

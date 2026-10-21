@@ -9,9 +9,11 @@ workflow from evidence (ADR-001 item 12, A32). It ships with the plugin:
 - `internal/debugger` builds its read-only launch, and `worker spawn --group
   debugger` will start it (item 4).
 
-It reads the trail, the daemon's log, the project's repo and Linear, and it
-can change nothing. The `events` commands work for anyone with the env file
-below: a person, the boss, or the debugger.
+It reads the trail, the daemon's log, the project's repo and Linear. Its
+launch allows nothing else, so it changes nothing, unless the repo's
+checked-in settings or managed policy allow more (see "Launching it"). The
+`events` commands work for anyone with the env file below: a person, the
+boss, or the debugger.
 
 ## `herdr-agentisan events`
 
@@ -90,8 +92,17 @@ from the project's repo. The parts of the launch:
   such as `HERDR_PLUGIN_CONFIG_DIR=… <bin> events …`, or behind `env`: an
   allow rule matches past an assignment only of the variables Claude Code
   counts as safe, so the debugger cannot point `events` at another env file.
-- **Denied outright:** reading the repo's `.env*` files, Edit, Write,
-  NotebookEdit, WebFetch and WebSearch.
+- **Denied outright:** reading the repo's `.env*` files and the env file
+  (by its name, and its target when it is a link), Edit, Write, NotebookEdit,
+  WebFetch and WebSearch. A redirect such as `> file` is checked as an Edit,
+  so it is denied too. The launch refuses a repo or daemon directory that
+  holds the env file, such as your home directory, and needs `env_file` set.
+- **`--setting-sources project`:** only the repo's checked-in settings load,
+  so the "don't ask again" rules that pile up in `.claude/settings.local.json`
+  and your own `~/.claude/settings.json` never widen it. Your statusline and
+  hooks do not run in it either, so its pane shows no `ctx`. The repo's
+  checked-in settings and managed policy still apply: an allow rule there
+  widens the debugger too.
 - **The environment:** `HERDR_PLUGIN_CONFIG_DIR`, so `events` finds the env
   file. There is no URL and no key in it.
 

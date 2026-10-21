@@ -18,6 +18,7 @@ var launch = debugger.Launch{
 	Repo:      "/home/u/src/assay",
 	ServerDir: "/home/u/.local/state/herdr/plugins/agentisan/srv-0123456789ab",
 	ConfigDir: "/home/u/.config/herdr/plugins/agentisan",
+	KeyFiles:  []string{"/home/u/.config/nerdsrun/local.env"},
 }
 
 // TestCommand: the launch, exactly. The role comes from the plugin root, a
@@ -35,6 +36,7 @@ func TestCommand(t *testing.T) {
 			"so run `/opt/herdr/plugins/agentisan/bin/herdr-agentisan events worker <id>` and " +
 			"`/opt/herdr/plugins/agentisan/bin/herdr-agentisan events query '<ES|QL>'`; the project repo is /home/u/src/assay; " +
 			"daemon.log is /home/u/.local/state/herdr/plugins/agentisan/srv-0123456789ab/daemon.log (rotated to daemon.log.1).",
+		"--setting-sources", "project",
 		"--permission-mode", "dontAsk",
 		"--allowedTools",
 		"Read(//home/u/src/assay/**)",
@@ -42,7 +44,8 @@ func TestCommand(t *testing.T) {
 		"Bash(/opt/herdr/plugins/agentisan/bin/herdr-agentisan events:*)",
 		"mcp__claude_ai_Linear__get_issue", "mcp__claude_ai_Linear__list_issues", "mcp__claude_ai_Linear__list_comments",
 		"--disallowedTools",
-		"Read(//home/u/src/assay/**/.env*)", "Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch",
+		"Read(//home/u/src/assay/**/.env*)", "Read(//home/u/.config/nerdsrun/local.env)",
+		"Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch",
 	}, got.Args)
 	assert.Equal(t, map[string]string{"HERDR_PLUGIN_CONFIG_DIR": launch.ConfigDir}, got.Env)
 
@@ -53,6 +56,14 @@ func TestCommand(t *testing.T) {
 	for _, a := range got.Args {
 		assert.NotContains(t, a, "ELASTIC", "the launch never carries the trail's URL or key")
 	}
+
+	// An env file reached through a link is denied by both of its names.
+	l := launch
+	l.KeyFiles = []string{"/home/u/.config/nerdsrun/local.env", "/run/user/1000/op/local.env"}
+	got, err = l.Command()
+	require.NoError(t, err)
+	assert.Contains(t, got.Args, "Read(//home/u/.config/nerdsrun/local.env)")
+	assert.Contains(t, got.Args, "Read(//run/user/1000/op/local.env)")
 }
 
 // TestCommandWithoutTheServerDir: a launch that does not know the daemon's
@@ -94,6 +105,16 @@ func TestCommandRefusesUnusablePaths(t *testing.T) {
 		"a NUL":                    func(l *debugger.Launch) { l.ConfigDir = "/home/u/a\x00b" },
 		"invalid UTF-8":            func(l *debugger.Launch) { l.Repo = "/home/u/a\xffb" },
 		"a cut multibyte sequence": func(l *debugger.Launch) { l.Root = "/opt/x\xe5\xaf" },
+		// The key file must lie outside every directory the debugger reads.
+		"no env file":                          func(l *debugger.Launch) { l.KeyFiles = nil },
+		"a relative env file":                  func(l *debugger.Launch) { l.KeyFiles = []string{"local.env"} },
+		"a repo that holds the env file":       func(l *debugger.Launch) { l.Repo = "/home/u" },
+		"the filesystem root as the repo":      func(l *debugger.Launch) { l.Repo = "/" },
+		"the env file as the repo":             func(l *debugger.Launch) { l.Repo = "/home/u/.config/nerdsrun/local.env" },
+		"a server dir that holds the env file": func(l *debugger.Launch) { l.ServerDir = "/home/u/.config" },
+		"a repo that holds the link's target": func(l *debugger.Launch) {
+			l.KeyFiles = append(l.KeyFiles, "/home/u/src/assay/secrets/local.env")
+		},
 	} {
 		l := launch
 		mutate(&l)
@@ -119,7 +140,9 @@ func TestCommandKeepsUsablePathsAsWritten(t *testing.T) {
 		"a dash-led component":    "/home/u/-x",
 		"secret-looking":          "/home/u/password=hunter2",
 		"a Windows-reserved name": "/home/u/CON",
-		"the filesystem root":     "/",
+		// A directory beside the env file's, sharing a prefix, holds no part
+		// of it.
+		"a sibling sharing a prefix": "/home/u/.config/nerd",
 	} {
 		l := launch
 		l.Repo = repo
