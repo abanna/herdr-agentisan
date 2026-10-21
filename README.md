@@ -283,6 +283,29 @@ See [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml)
 `herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json`
 draws a snapshot file instead, outside herdr too.
 
+### Group descriptions
+
+A group's box can carry a one-line purpose under its title, as v12's
+`dashboard-desc.json` gave it (ADR-001 A36). Set it in `herdr-agentisan.toml`
+under the group's name as the dashboard shows it: a tabs team's worker type,
+or a ◆ space's name. A group table may set only a description, and then it
+starts no worker:
+
+```toml
+[groups.coder]                      # every project's coder group
+workers = 3
+slots = 5
+description = "writes fixes and new code"
+
+[projects.agentisan.groups.coders]  # the ◆ coders space
+description = "write fixes + new code · run their own review loop"
+```
+
+A description is one line of at most 80 printable characters, and a repo's
+`.herdr-agentisan.toml` cannot set one. The daemon reads descriptions again
+whenever the file changes, so an edit needs no `daemon-restart`; a file that
+does not resolve keeps the last ones, and `daemon.log` says why.
+
 ### A group's view
 
 Press 1-9, or click a group's title, to open that group's view (ADR-001
