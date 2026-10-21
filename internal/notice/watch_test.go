@@ -1,6 +1,7 @@
 package notice_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -280,12 +281,13 @@ func TestWatchAgentExited(t *testing.T) {
 		prev, next team.Model
 		want       []string
 	}{
-		"an agent exits, its pane stays": {teamOf(nil, pee), teamOf(nil, shell), []string{"pee01's agent exited (pane w1:p2) · ctx 40% · NERD-5325"}},
-		"its status did not change":      {teamOf(nil, unknown), teamOf(nil, shell), []string{"pee01's agent exited (pane w1:p2)"}},
-		"a bound worker":                 {teamOf(nil, bound), teamOf(nil, shell), []string{"ha-coder-2's agent exited (pane w1:p2)"}},
-		"an agent herdr names no name":   {teamOf(nil, unnamed), teamOf(nil, shell), []string{"pane w1:p2's agent exited"}},
-		"the boss's own agent":           {teamOf([]team.Worker{pee}), teamOf([]team.Worker{shell}), nil},
-		"a shell stays a shell":          {teamOf(nil, shell), teamOf(nil, shell), nil},
+		"an agent exits, its pane stays":  {teamOf(nil, pee), teamOf(nil, shell), []string{"pee01's agent exited (pane w1:p2) · ctx 40% · NERD-5325"}},
+		"its status did not change":       {teamOf(nil, unknown), teamOf(nil, shell), []string{"pee01's agent exited (pane w1:p2)"}},
+		"a bound worker":                  {teamOf(nil, bound), teamOf(nil, shell), []string{"ha-coder-2's agent exited (pane w1:p2)"}},
+		"an agent herdr names no name":    {teamOf(nil, unnamed), teamOf(nil, shell), []string{"pane w1:p2's agent exited"}},
+		"the boss's own agent":            {teamOf([]team.Worker{pee}), teamOf([]team.Worker{shell}), nil},
+		"a worker's pane made the boss's": {teamOf(nil, pee), teamOf([]team.Worker{shell}), nil},
+		"a shell stays a shell":           {teamOf(nil, shell), teamOf(nil, shell), nil},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -322,4 +324,73 @@ func TestWatchAgentExitNeedsAgentList(t *testing.T) {
 	assert.Empty(t, w.Observe(build(panes, nil), nil, false), "agent.list failed: nothing is told")
 	assert.Empty(t, w.Observe(build(panes, agents), agents, true), "it answers again")
 	assert.Equal(t, []string{"wN:p1 gone"}, kinds(w.Observe(build(nil, nil), nil, true)), "the real close")
+}
+
+// TestWatchAcrossAFailedAgentList: a poll whose agent.list failed knows no
+// names, so it keeps each agent pane as the last poll judged it. An exit it
+// cannot judge is told by the next poll that answers; a pane that closes,
+// and a status that changes, meanwhile are told under the worker's name.
+// Each model is built as the poll builds it.
+func TestWatchAcrossAFailedAgentList(t *testing.T) {
+	t.Parallel()
+	ws := []herdr.WorkspaceInfo{{WorkspaceID: "wN", Label: "◆ coders"}}
+	pane := func(kind, status string) []herdr.PaneInfo {
+		return []herdr.PaneInfo{{PaneID: "wN:p1", WorkspaceID: "wN", Agent: kind, AgentStatus: status}}
+	}
+	named := []herdr.AgentInfo{{PaneID: "wN:p1", Name: "pee01", TerminalID: "t1"}}
+	type poll struct {
+		panes  []herdr.PaneInfo
+		agents []herdr.AgentInfo
+		named  bool
+	}
+	failed := func(panes []herdr.PaneInfo) poll { return poll{panes, nil, false} }
+	answered := func(panes []herdr.PaneInfo, agents []herdr.AgentInfo) poll { return poll{panes, agents, true} }
+	tests := map[string]struct {
+		polls []poll
+		want  []string // each later poll's notices, joined
+	}{
+		"a detected agent exits as agent.list fails": {
+			[]poll{answered(pane("claude", "working"), named), failed(pane("", "unknown")), answered(pane("", "unknown"), nil)},
+			[]string{"", "pee01's agent exited (pane wN:p1)"},
+		},
+		"a named agent lives through it, then exits": {
+			[]poll{answered(pane("", "working"), named), failed(pane("", "working")), answered(pane("", "unknown"), nil)},
+			[]string{"", "pee01's agent exited (pane wN:p1)"},
+		},
+		"a named agent's pane closes right after it": {
+			[]poll{answered(pane("", "working"), named), failed(pane("", "working")), answered(nil, nil)},
+			[]string{"", "pee01 left the team (pane wN:p1)"},
+		},
+		"a named agent turns blocked as it fails": {
+			[]poll{answered(pane("", "working"), named), failed(pane("", "blocked")), answered(pane("", "blocked"), named)},
+			[]string{"pee01 is blocked", ""},
+		},
+		"agent.list drops the name a poll before pane.list drops the agent": {
+			[]poll{answered(pane("claude", "working"), named), answered(pane("claude", "working"), nil), answered(pane("", "unknown"), nil)},
+			[]string{"", "pee01's agent exited (pane wN:p1)"},
+		},
+		"a named agent lives through it": {
+			[]poll{answered(pane("", "working"), named), failed(pane("", "working")), answered(pane("", "working"), named)},
+			[]string{"", ""},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			w := notice.NewWatch()
+			var got []string
+			for i, p := range tc.polls {
+				ns := w.Observe(team.Build(team.Layout{Workspaces: ws, Panes: p.panes, Agents: p.agents}, team.Spaces{}, nil), p.agents, p.named)
+				if i == 0 {
+					continue
+				}
+				var texts []string
+				for _, n := range ns {
+					texts = append(texts, n.Text)
+				}
+				got = append(got, strings.Join(texts, " | "))
+			}
+			assert.Equal(t, tc.want, got)
+		})
+	}
 }
