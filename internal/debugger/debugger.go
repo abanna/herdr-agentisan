@@ -6,9 +6,13 @@
 package debugger
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -42,8 +46,10 @@ var deniedTools = []string{"Edit", "Write", "NotebookEdit", "WebFetch", "WebSear
 // or read an MCP server's resources. Most of them need no permission (the
 // tools reference), so dontAsk, which denies only a call that would ask,
 // never stops them. A deny rule naming a tool removes it from the session.
+// EnterPlanMode is one: plan mode sends a command through the flow that
+// asks the user, instead of denying it.
 var sessionTools = []string{
-	"Agent", "Workflow", "Monitor", "TaskStop",
+	"Agent", "Workflow", "Monitor", "TaskStop", "EnterPlanMode",
 	"CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "RemoteTrigger",
 	"SendMessage", "ListAgents", "PushNotification", "SendUserFile", "SendFeedback",
 	"Artifact", "ArtifactData", "ArtifactComments", "DesignSync",
@@ -51,12 +57,22 @@ var sessionTools = []string{
 	"ListMcpResourcesTool", "ReadMcpResourceTool",
 }
 
-// FenceSettings is the launch's --settings: Claude Code's file tools refuse
-// reads outside the working directories in every permission mode, and its
-// file-reading Bash commands then ask, which dontAsk denies (Claude Code
-// 2.1.257 or later). Without it, its built-in read-only commands, such as
-// cat and grep, read any file the user can, with no allow rule.
-const FenceSettings = `{"permissions":{"blockReadsOutsideWorkingDirectories":true}}`
+// mcpFile is a project's MCP config. Claude Code reads one in the directory
+// a session starts in and in each directory above it, the root excepted.
+const mcpFile = ".mcp.json"
+
+// launchSettings is the launch's --settings. The fence: Claude Code's file
+// tools refuse reads outside the working directories in every permission
+// mode, and its file-reading Bash commands then ask, which dontAsk denies
+// (Claude Code 2.1.257 or later). Without it, its built-in read-only
+// commands, such as cat and grep, read any file the user can, with no
+// allow rule. And the project's MCP servers, rejected by name.
+type launchSettings struct {
+	Permissions struct {
+		BlockReadsOutsideWorkingDirectories bool `json:"blockReadsOutsideWorkingDirectories"`
+	} `json:"permissions"`
+	DisabledMcpjsonServers []string `json:"disabledMcpjsonServers,omitempty"`
+}
 
 // Launch is what a debugger's launch is built from: the plugin's checkout
 // (Root) and binary (Bin), the project's repo it runs in, the daemon's
@@ -91,9 +107,10 @@ type Command struct {
 // reads Linear. The tools that never ask and act past that (sessionTools)
 // are denied by name. Its reads are fenced to its working directories, the
 // repo it starts in (Dir) and the daemon's directory (--add-dir), by
-// FenceSettings. No MCP server loads from the repo's .mcp.json, the user's
-// config or a plugin (--strict-mcp-config with no --mcp-config), so none is
-// offered or asks for approval at start. Only the project's settings load
+// launchSettings, which also rejects every server the project's MCP
+// configs name (projectServers), so none loads or asks for approval at
+// start. claude.ai's connectors, Linear's among them, still load:
+// --strict-mcp-config would keep them out too. Only the project's settings load
 // (D12's bundle), so the allow rules that pile up in the user's and the
 // repo's local settings never widen it; the repo's .claude/settings.json,
 // tracked by git or not, and managed policy still apply. Each key file is
@@ -137,14 +154,25 @@ func (l Launch) Command() (Command, error) {
 	deny = append(deny, deniedTools...)
 	deny = append(deny, sessionTools...)
 
-	args := make([]string, 0, 15+len(allow)+len(deny))
+	var set launchSettings
+	set.Permissions.BlockReadsOutsideWorkingDirectories = true
+	servers, err := projectServers(l.Repo)
+	if err != nil {
+		return Command{}, err
+	}
+	set.DisabledMcpjsonServers = servers
+	settingsJSON, err := json.Marshal(set)
+	if err != nil {
+		return Command{}, fmt.Errorf("%w: the settings: %w", ErrInvalid, err)
+	}
+
+	args := make([]string, 0, 14+len(allow)+len(deny))
 	args = append(args,
 		"--append-system-prompt-file", filepath.Join(l.Root, RoleFile),
 		"--append-system-prompt", l.facts(),
 		"--setting-sources", "project",
 		"--permission-mode", "dontAsk",
-		"--settings", FenceSettings,
-		"--strict-mcp-config")
+		"--settings", string(settingsJSON))
 	if l.ServerDir != "" {
 		args = append(args, "--add-dir", l.ServerDir)
 	}
@@ -153,6 +181,50 @@ func (l Launch) Command() (Command, error) {
 	args = append(args, "--disallowedTools")
 	args = append(args, deny...)
 	return Command{Dir: l.Repo, Args: args, Env: map[string]string{trail.ConfigDirEnv: l.ConfigDir}}, nil
+}
+
+// projectServers is every server named in the MCP configs a session started
+// in dir reads: the .mcp.json in dir and in each directory above it, the
+// root excepted. Claude Code asks before it loads a server from one that it
+// has not been told about; a server named in disabledMcpjsonServers is
+// rejected instead, with no question. A config that is not a regular file,
+// or cannot be read or parsed, refuses the launch, since what it would load
+// is unknown; a FIFO is never opened, so it cannot hang the launch. A server
+// added after the launch is built would ask.
+func projectServers(dir string) ([]string, error) {
+	var names []string
+	for ; dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+		path := filepath.Join(dir, mcpFile)
+		info, err := os.Stat(path)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err == nil && !info.Mode().IsRegular() {
+			err = errors.New("not a regular file")
+		}
+		var data []byte
+		if err == nil {
+			data, err = os.ReadFile(path)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%w: the MCP config %s cannot be read: %w", ErrInvalid, path, err)
+		}
+		var config map[string]json.RawMessage
+		var servers map[string]json.RawMessage
+		if err := json.Unmarshal(data, &config); err != nil {
+			return nil, fmt.Errorf("%w: the MCP config %s is not a JSON object: %w", ErrInvalid, path, err)
+		}
+		if raw, ok := config["mcpServers"]; ok {
+			if err := json.Unmarshal(raw, &servers); err != nil {
+				return nil, fmt.Errorf("%w: the MCP config %s: mcpServers is not an object: %w", ErrInvalid, path, err)
+			}
+		}
+		for name := range servers {
+			names = append(names, name)
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names), nil
 }
 
 // holds reports whether dir is path or one of its ancestors. Both are

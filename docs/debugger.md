@@ -103,7 +103,7 @@ same as `dir`, `env` and `argv`. The parts of the launch:
   so it is denied too. The launch refuses a repo or daemon directory that
   holds the env file, such as your home directory, and needs `env_file` set.
 - **Denied by name, Claude Code's own tools that act without asking:**
-  `Agent`, `Workflow`, `Monitor`, `TaskStop`, the `Cron` tools,
+  `Agent`, `Workflow`, `Monitor`, `TaskStop`, `EnterPlanMode`, the `Cron` tools,
   `ScheduleWakeup`, `RemoteTrigger`, `SendMessage`, `ListAgents`,
   `PushNotification`, `SendUserFile`, `SendFeedback`, the `Artifact` tools,
   `DesignSync`, `EnterWorktree`, `ExitWorktree` and the MCP resource tools.
@@ -111,15 +111,18 @@ same as `dir`, `env` and `argv`. The parts of the launch:
   `CronList` running before they were denied. A deny rule naming a tool
   removes it from the session. A tool a later Claude Code adds runs until it
   is listed here, unless it asks.
-- **`--strict-mcp-config`,** with no `--mcp-config`: no MCP server loads
-  from the repo's `.mcp.json`, your own config or a plugin, so none is
-  offered, and the session starts without asking you to approve the repo's
-  servers. The docs do not say whether claude.ai's connectors, Linear among
-  them, still load under it. Any connector that does offers all of its
-  tools, and `dontAsk` refuses each one without an allow rule.
-- **The read fence:** `--settings
-  '{"permissions":{"blockReadsOutsideWorkingDirectories":true}}'`, and
-  `--add-dir <the daemon's directory>`. Without it, Claude Code's built-in
+- **The project's MCP servers, rejected by name:** the launch reads the
+  `.mcp.json` in the repo and in each directory above it, as Claude Code
+  does, and names every server in them in `--settings`'
+  `disabledMcpjsonServers`. So none loads, and the session starts without
+  asking you to approve them. A `.mcp.json` it cannot read or parse refuses
+  the launch, and a server added after the launch was printed would ask.
+  It does not pass `--strict-mcp-config`: that keeps claude.ai's
+  connectors out too, and the debugger reads Linear through one. Your own
+  MCP servers, a plugin's and your other connectors still load; their
+  tools are offered, and `dontAsk` refuses each one without an allow rule.
+- **The read fence:** `{"permissions":{"blockReadsOutsideWorkingDirectories":true}}`
+  in `--settings`, and `--add-dir <the daemon's directory>`. Without it, Claude Code's built-in
   read-only commands, such as `cat` and `grep`, would read any file you can,
   with no allow rule. With it, the file tools refuse a read outside the
   working directories (the repo and the daemon's directory), except the
@@ -144,7 +147,7 @@ same as `dir`, `env` and `argv`. The parts of the launch:
   file. There is no URL and no key in it.
 
 It is still Claude in the project's repo, so D12 holds and the repo's
-Agentisan bundle loads. With no allow rule its skills cannot run, which is
+Agentisan bundle loads, but not its MCP servers. With no allow rule its skills cannot run, which is
 intended.
 
 What still reaches past the allow list and the fence:

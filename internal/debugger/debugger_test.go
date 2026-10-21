@@ -2,8 +2,11 @@ package debugger_test
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -26,8 +29,8 @@ var launch = debugger.Launch{
 // second prompt gives the paths, and dontAsk denies every call that would
 // ask: the debugger reads the repo and the daemon's directory, runs
 // `events` and the built-in read-only commands, reads Linear, and does
-// nothing else. The session tools that never ask are denied by name, and
-// no MCP server loads but those --mcp-config names, which is none. Its
+// nothing else. The session tools that never ask are denied by name. With
+// no MCP config above the repo, the settings are the fence alone. Its
 // reads are fenced to its working directories: the repo it starts in and
 // the daemon's directory. The env names the config dir, where `events`
 // finds its env file, and never a URL or a key.
@@ -44,7 +47,6 @@ func TestCommand(t *testing.T) {
 		"--setting-sources", "project",
 		"--permission-mode", "dontAsk",
 		"--settings", `{"permissions":{"blockReadsOutsideWorkingDirectories":true}}`,
-		"--strict-mcp-config",
 		"--add-dir", "/home/u/.local/state/herdr/plugins/agentisan/srv-0123456789ab",
 		"--allowedTools",
 		"Read(//home/u/src/assay/**)",
@@ -54,7 +56,7 @@ func TestCommand(t *testing.T) {
 		"--disallowedTools",
 		"Read(//home/u/src/assay/**/.env*)", "Read(//home/u/.config/nerdsrun/local.env)",
 		"Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch",
-		"Agent", "Workflow", "Monitor", "TaskStop",
+		"Agent", "Workflow", "Monitor", "TaskStop", "EnterPlanMode",
 		"CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "RemoteTrigger",
 		"SendMessage", "ListAgents", "PushNotification", "SendUserFile", "SendFeedback",
 		"Artifact", "ArtifactData", "ArtifactComments", "DesignSync",
@@ -69,6 +71,7 @@ func TestCommand(t *testing.T) {
 	for _, flag := range []string{"--model", "-m", "--name", "-n", "--bare", "--dangerously-skip-permissions", "--mcp-config"} {
 		assert.NotContains(t, got.Args, flag, "the workforce sets --model and --name; nothing widens the session")
 	}
+	assert.NotContains(t, got.Args, "--strict-mcp-config", "it would keep claude.ai's connectors out, and Linear's with them")
 	for _, a := range got.Args {
 		assert.NotContains(t, a, "ELASTIC", "the launch never carries the trail's URL or key")
 	}
@@ -95,6 +98,72 @@ func assertFenced(t *testing.T, args []string) {
 	}
 	require.NoError(t, json.Unmarshal([]byte(args[i+1]), &s))
 	assert.Equal(t, map[string]any{"blockReadsOutsideWorkingDirectories": true}, s.Permissions)
+}
+
+// TestCommandRejectsTheProjectsMCPServers: every server named in the
+// .mcp.json of the repo or a directory above it is rejected by name in the
+// settings, beside the fence, so none loads or asks at start; a config
+// with no servers adds nothing, and one that cannot be read or parsed
+// refuses the launch, naming the file.
+func TestCommandRejectsTheProjectsMCPServers(t *testing.T) {
+	t.Parallel()
+	parent := t.TempDir()
+	repo := filepath.Join(parent, "assay")
+	sub := filepath.Join(repo, "svc")
+	require.NoError(t, os.MkdirAll(sub, 0o700))
+	writeMCP := func(dir, body string) {
+		t.Helper()
+		require.NoError(t, os.WriteFile(filepath.Join(dir, ".mcp.json"), []byte(body), 0o600))
+	}
+	writeMCP(parent, `{"mcpServers":{"outer":{"command":"o"},"agentisan":{"command":"a"}}}`)
+	writeMCP(repo, `{"mcpServers":{"agentisan":{"command":"a"},"b":{"type":"http","url":"https://b.example/mcp"}},"MCPSERVERS":{"not-one":{}}}`)
+	writeMCP(sub, `{"mcpServers":{"below":{}}}`)
+	l := launch
+	l.Repo, l.ServerDir = repo, ""
+
+	got, err := l.Command()
+	require.NoError(t, err)
+	assertFenced(t, got.Args)
+	assert.Equal(t, []string{"agentisan", "b", "outer"}, rejectedServers(t, got.Args), "the repo's and its parents', once each; not a config below it, nor a key that is not mcpServers")
+
+	writeMCP(repo, `{"projects":{}}`)
+	writeMCP(parent, `{"mcpServers":null}`)
+	got, err = l.Command()
+	require.NoError(t, err)
+	assert.Contains(t, got.Args, `{"permissions":{"blockReadsOutsideWorkingDirectories":true}}`, "no servers, no key")
+
+	for name, body := range map[string]string{"not JSON": `{"mcpServers":`, "not an object": `[]`, "servers not an object": `{"mcpServers":["a"]}`} {
+		writeMCP(parent, body)
+		_, err = l.Command()
+		require.ErrorIs(t, err, debugger.ErrInvalid, name)
+		assert.Contains(t, err.Error(), filepath.Join(parent, ".mcp.json"), name)
+	}
+
+	for name, create := range map[string]func(string) error{
+		"a directory": func(p string) error { return os.Mkdir(p, 0o700) },
+		"a FIFO":      func(p string) error { return syscall.Mkfifo(p, 0o600) },
+	} {
+		path := filepath.Join(parent, ".mcp.json")
+		require.NoError(t, os.RemoveAll(path))
+		require.NoError(t, create(path), name)
+		_, err = l.Command()
+		require.ErrorIs(t, err, debugger.ErrInvalid, "%s is refused, and a FIFO is never opened", name)
+		assert.Contains(t, err.Error(), "not a regular file", name)
+	}
+}
+
+// rejectedServers is the servers args' settings reject, read by the key's
+// exact name: Claude Code ignores a key it does not know.
+func rejectedServers(t *testing.T, args []string) []string {
+	t.Helper()
+	i := slices.Index(args, "--settings")
+	require.GreaterOrEqual(t, i, 0, "the launch passes --settings")
+	require.Less(t, i+1, len(args))
+	var s map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(args[i+1]), &s))
+	var names []string
+	require.NoError(t, json.Unmarshal(s["disabledMcpjsonServers"], &names))
+	return names
 }
 
 // TestCommandWithoutTheServerDir: a launch that does not know the daemon's
