@@ -7,11 +7,13 @@ package notice
 
 import (
 	"context"
+	"slices"
 	"time"
 )
 
 // Kind is what a notice reports. The names are the configuration's
-// (`[projects.<p>.notices] skip`).
+// (`[projects.<p>.notices] skip`). It is open: a new source brings kinds of
+// its own, which the Batcher paces like any other.
 type Kind string
 
 const (
@@ -30,10 +32,31 @@ const (
 	// Started is the daemon starting, once per team: what happened while it
 	// was down is not reported.
 	Started Kind = "started"
+	// CtxSoft is a worker's context crossing D7's soft level. The context
+	// levels are NERD-5261's source; they are named here so a team's
+	// configuration can skip the soft and hard ones.
+	CtxSoft Kind = "ctx_soft"
+	// CtxHard is a worker's context crossing D7's hard level.
+	CtxHard Kind = "ctx_hard"
+	// CtxCeiling is a worker's context reaching D7's ceiling, which is never
+	// skipped.
+	CtxCeiling Kind = "ctx_ceiling"
 )
 
 // Kinds are every kind, in the order the configuration documents them.
-var Kinds = []Kind{TurnEnded, Blocked, Unknown, Gone, Started}
+var Kinds = []Kind{TurnEnded, Blocked, Unknown, Gone, Started, CtxSoft, CtxHard, CtxCeiling}
+
+// Skippable reports whether a team's configuration can skip k: every kind
+// but the context ceiling, which always reaches the boss (D7).
+func (k Kind) Skippable() bool { return k != CtxCeiling }
+
+// Repeats reports whether a notice of k again inside the repeat window is
+// dropped. A turn's end and a start are events, never repeats, and the
+// context levels are not either: their source keeps a memory of its own
+// per level, and a level crossed again after it re-armed is news.
+func (k Kind) Repeats() bool {
+	return !slices.Contains([]Kind{TurnEnded, Started, CtxSoft, CtxHard, CtxCeiling}, k)
+}
 
 // Notice is one line for one team's boss.
 type Notice struct {
@@ -53,13 +76,14 @@ type Notice struct {
 
 // Config is how one team's boss is told.
 type Config struct {
-	// Skip holds the kinds the boss is not told about.
+	// Skip holds the kinds the boss is not told about; a kind that is not
+	// Skippable is told all the same.
 	Skip map[Kind]bool
 	// Gap is the least time between two messages to the boss: notices that
 	// come sooner wait and go out together. Zero sends every poll's.
 	Gap time.Duration
 	// Repeat is how long the same subject and kind is dropped after it was
-	// let through, except a turn ending, or a start. Zero drops none.
+	// let through, for a kind that repeats (Kind.Repeats). Zero drops none.
 	Repeat time.Duration
 }
 

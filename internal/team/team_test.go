@@ -51,15 +51,15 @@ func TestBuildTheModel(t *testing.T) {
 		Name:       "agentisan",
 		Workspaces: []string{"w12", "wJ", "wN", "wY"},
 		Order:      team.Spaces{}.GroupOrder(),
-		Boss:       []team.Worker{{ID: "boss", Bound: true, Pane: team.Pane{ID: "wJ:p1", Agent: "claude", Status: team.StatusWorking}}},
+		Boss:       []team.Worker{{ID: "boss", Bound: true, Pane: team.Pane{ID: "wJ:p1", TerminalID: "term_wJ:p1", Agent: "claude", Status: team.StatusWorking}}},
 		Groups: []team.Group{
 			{Name: "coders", Targets: []team.Target{wN}, Workers: []team.Worker{
-				{ID: "coders-1", Bound: true, Target: wN, Pane: team.Pane{ID: "wN:p1", Agent: "claude", Status: team.StatusWorking}},
-				{ID: "wN:p2", Target: wN, Pane: team.Pane{ID: "wN:p2", Agent: "claude", Status: team.StatusDone, Handoff: true, Ctx: "40"}},
-				{ID: "wN:p3", Target: wN, Pane: team.Pane{ID: "wN:p3", Status: team.StatusUnknown}},
+				{ID: "coders-1", Bound: true, Target: wN, Pane: team.Pane{ID: "wN:p1", TerminalID: "term_wN:p1", Agent: "claude", Status: team.StatusWorking}},
+				{ID: "wN:p2", Target: wN, Pane: team.Pane{ID: "wN:p2", TerminalID: "term_wN:p2", Agent: "claude", Status: team.StatusDone, Handoff: true, Ctx: "40"}},
+				{ID: "wN:p3", Target: wN, Pane: team.Pane{ID: "wN:p3", TerminalID: "term_wN:p3", Status: team.StatusUnknown}},
 			}},
 			{Name: "qa", Targets: []team.Target{wY}, Workers: []team.Worker{
-				{ID: "wY:p1", Target: wY, Pane: team.Pane{ID: "wY:p1", Agent: "claude", Status: team.StatusIdle}},
+				{ID: "wY:p1", Target: wY, Pane: team.Pane{ID: "wY:p1", TerminalID: "term_wY:p1", Agent: "claude", Status: team.StatusIdle}},
 			}},
 		},
 	}}}, got)

@@ -93,7 +93,9 @@ func waitLine(t *testing.T, logs *lockedLog, want string) int {
 	count := func() int {
 		return len(slices.DeleteFunc(noticeLines(logs), func(l string) bool { return !strings.Contains(l, want) }))
 	}
-	require.Eventually(t, func() bool { return count() > 0 }, ready, 5*time.Millisecond, "no notice %q in %v", want, noticeLines(logs))
+	if !assert.Eventually(t, func() bool { return count() > 0 }, ready, 5*time.Millisecond, "no notice %q in %v", want, noticeLines(logs)) {
+		t.Fatalf("the daemon's log:\n%s", logs.String())
+	}
 	return count()
 }
 
@@ -113,7 +115,11 @@ func TestNoticesReachTheLog(t *testing.T) {
 	require.Equal(t, []noticeMsg{{Project: "", Notices: []string{"agentisan: the daemon started; turns that ended while it was down are not reported"}}}, noticesIn(&logs),
 		"the first poll is the baseline: no blocked pane or ready agent is told")
 
+	// The status first, seen by a whole poll: one poll's pane.list and
+	// agent.list are two calls, and a turn seen between them would read
+	// "(working)", as it can in herdr.
 	th.setPane("wN:p1", "agent_status", "done")
+	polled(t, th.srv, 2)
 	th.setAgents(turned("wJ:p1", "boss", 9), turned("wN:p1", "pee01", 7), turned("wY:p1", "", 3))
 	waitLine(t, &logs, "pee01 finished a turn (done) · ctx 40%")
 

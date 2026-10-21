@@ -122,6 +122,9 @@ type Pane struct {
 	ID string
 	// TabID is the tab herdr lists the pane in; "" when it lists none.
 	TabID string
+	// TerminalID is the terminal pane.list says the pane shows, which a
+	// reissued pane id does not carry over (A35); "" when it lists none.
+	TerminalID string
 	// Name is the name herdr knows the pane's agent by (agent.list), the
 	// name agent.focus takes; "" for a shell or an agent nobody named.
 	Name string
@@ -306,7 +309,7 @@ func worker(p herdr.PaneInfo, t Target, ids, names map[string]string) Worker {
 		ID: p.PaneID, Name: names[p.PaneID], Label: p.Label, Agent: p.Agent,
 		Status: statusOf(p.AgentStatus), Handoff: p.Tokens[HandoffKey] != "",
 		Ctx: ctxOf(p), Item: p.Tokens[report.ItemKey], Stage: p.Tokens[report.StageKey],
-		TabID: p.TabID,
+		TabID: p.TabID, TerminalID: p.TerminalID,
 	}}
 	if id, ok := ids[p.TerminalID]; ok {
 		w.ID, w.Bound = id, true

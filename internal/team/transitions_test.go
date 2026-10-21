@@ -44,7 +44,7 @@ func TestTransitions(t *testing.T) {
 	before := build(liveLayout(), rows)
 	wN := team.Target{WorkspaceID: "wN"}
 	coder1 := func(status team.Status) team.Worker {
-		return team.Worker{ID: "coders-1", Bound: true, Target: wN, Pane: team.Pane{ID: "wN:p1", Agent: "claude", Status: status}}
+		return team.Worker{ID: "coders-1", Bound: true, Target: wN, Pane: team.Pane{ID: "wN:p1", TerminalID: "term_wN:p1", Agent: "claude", Status: status}}
 	}
 
 	tests := map[string]struct {
@@ -60,7 +60,7 @@ func TestTransitions(t *testing.T) {
 			prev: before, next: build(with(map[string]string{"wJ:p1": "idle"}, nil), rows),
 			want: []team.Transition{{
 				Project: "agentisan", Boss: true,
-				Worker: team.Worker{ID: "boss", Bound: true, Pane: team.Pane{ID: "wJ:p1", Agent: "claude", Status: team.StatusIdle}},
+				Worker: team.Worker{ID: "boss", Bound: true, Pane: team.Pane{ID: "wJ:p1", TerminalID: "term_wJ:p1", Agent: "claude", Status: team.StatusIdle}},
 				From:   "working", To: "idle",
 			}},
 		},
@@ -68,7 +68,7 @@ func TestTransitions(t *testing.T) {
 			prev: before, next: build(with(nil, nil, p("wY:p2", "wY", "working")), rows),
 			want: []team.Transition{{
 				Project: "agentisan", Group: "qa",
-				Worker: team.Worker{ID: "wY:p2", Target: team.Target{WorkspaceID: "wY"}, Pane: team.Pane{ID: "wY:p2", Agent: "claude", Status: team.StatusWorking}},
+				Worker: team.Worker{ID: "wY:p2", Target: team.Target{WorkspaceID: "wY"}, Pane: team.Pane{ID: "wY:p2", TerminalID: "term_wY:p2", Agent: "claude", Status: team.StatusWorking}},
 				From:   team.Absent, To: "working",
 			}},
 		},
@@ -80,7 +80,7 @@ func TestTransitions(t *testing.T) {
 			prev: before,
 			next: build(with(nil, []string{"wN:p1"}, p("wN:p9", "wN", "working")), []store.Worker{{LogicalID: "boss", PaneID: "wJ:p1", TerminalID: "term_wJ:p1"}, {LogicalID: "coders-1", PaneID: "wN:p9", TerminalID: "term_wN:p9"}}),
 			want: []team.Transition{
-				{Project: "agentisan", Group: "coders", Worker: team.Worker{ID: "coders-1", Bound: true, Target: wN, Pane: team.Pane{ID: "wN:p9", Agent: "claude", Status: team.StatusWorking}}, From: team.Absent, To: "working"},
+				{Project: "agentisan", Group: "coders", Worker: team.Worker{ID: "coders-1", Bound: true, Target: wN, Pane: team.Pane{ID: "wN:p9", TerminalID: "term_wN:p9", Agent: "claude", Status: team.StatusWorking}}, From: team.Absent, To: "working"},
 				{Project: "agentisan", Group: "coders", Worker: coder1(team.StatusWorking), From: "working", To: team.Absent},
 			},
 		},
@@ -95,7 +95,7 @@ func TestTransitions(t *testing.T) {
 			prev: team.Model{}, next: build(team.Layout{Workspaces: liveLayout().Workspaces, Panes: []herdr.PaneInfo{p("wY:p1", "wY", "idle")}}, nil),
 			want: []team.Transition{{
 				Project: "agentisan", Group: "qa",
-				Worker: team.Worker{ID: "wY:p1", Target: team.Target{WorkspaceID: "wY"}, Pane: team.Pane{ID: "wY:p1", Agent: "claude", Status: team.StatusIdle}},
+				Worker: team.Worker{ID: "wY:p1", Target: team.Target{WorkspaceID: "wY"}, Pane: team.Pane{ID: "wY:p1", TerminalID: "term_wY:p1", Agent: "claude", Status: team.StatusIdle}},
 				From:   team.Absent, To: "idle",
 			}},
 		},

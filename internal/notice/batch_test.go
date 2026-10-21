@@ -79,29 +79,49 @@ func TestBatcherRepeat(t *testing.T) {
 		blocked("ha", "p1"), blocked("ha", "p2"), note("ha", "p1", notice.Gone, "gone"),
 		note("ha", "p1", notice.TurnEnded, "t1"), note("ha", "p1", notice.TurnEnded, "t2"),
 		note("ha", "ha", notice.Started, "s"), note("ha", "ha", notice.Started, "s"),
+		note("ha", "p1", notice.CtxHard, "h"), note("ha", "p1", notice.CtxHard, "h"),
 		blocked("never", "p1"), blocked("never", "p1"),
 	})
 	assert.Equal(t, 1, acked, "the repeat is acknowledged as it is dropped")
 	got := lines(b.Flush(t0.Add(notice.DefaultRepeat - time.Nanosecond)))
-	assert.Equal(t, []string{"p1 is blocked", "p2 is blocked", "gone", "t1", "t2", "s", "s"}, got["ha"])
+	assert.Equal(t, []string{"p1 is blocked", "p2 is blocked", "gone", "t1", "t2", "s", "s", "h", "h"}, got["ha"],
+		"a turn's end, a start and a context level are never repeats")
 	assert.Equal(t, []string{"p1 is blocked", "p1 is blocked"}, got["never"], "a repeat of 0 or less drops nothing")
 
 	b.Add(t0.Add(notice.DefaultRepeat), []notice.Notice{blocked("ha", "p1")})
 	assert.Equal(t, []string{"p1 is blocked"}, lines(b.Flush(t0.Add(notice.DefaultRepeat)))["ha"], "at the window's end it is let through")
 }
 
-// TestBatcherSkip drops and acknowledges the kinds a team skips.
+// TestBatcherSkip drops and acknowledges the kinds a team skips, except the
+// context ceiling, which always goes (D7).
 func TestBatcherSkip(t *testing.T) {
 	t.Parallel()
 	b := notice.NewBatcher(notice.Configs{Default: notice.DefaultConfig(), Projects: map[string]notice.Config{
-		"ha": {Skip: map[notice.Kind]bool{notice.TurnEnded: true}},
+		"ha": {Skip: map[notice.Kind]bool{notice.TurnEnded: true, notice.CtxSoft: true, notice.CtxCeiling: true}},
 	}})
 	acked := false
 	n := note("ha", "p1", notice.TurnEnded, "t")
 	n.Ack = func() { acked = true }
-	b.Add(t0, []notice.Notice{n, note("ha", "p1", notice.Blocked, "b"), note("other", "p1", notice.TurnEnded, "t")})
+	b.Add(t0, []notice.Notice{
+		n, note("ha", "p1", notice.Blocked, "b"), note("other", "p1", notice.TurnEnded, "t"),
+		note("ha", "p1", notice.CtxSoft, "soft"), note("ha", "p1", notice.CtxCeiling, "ceiling"),
+	})
 	assert.True(t, acked)
-	assert.Equal(t, map[string][]string{"ha": {"b"}, "other": {"t"}}, lines(b.Flush(t0)))
+	assert.Equal(t, map[string][]string{"ha": {"b", "ceiling"}, "other": {"t"}}, lines(b.Flush(t0)))
+}
+
+// TestKindRules: which kinds a team can skip and which repeat. Kind is
+// open: a kind no source here sends is paced like blocked.
+func TestKindRules(t *testing.T) {
+	t.Parallel()
+	for _, k := range notice.Kinds {
+		assert.Equal(t, k != notice.CtxCeiling, k.Skippable(), "%s skippable", k)
+	}
+	repeats := map[notice.Kind]bool{notice.Blocked: true, notice.Unknown: true, notice.Gone: true, "a_new_source": true}
+	for _, k := range append(notice.Kinds, "a_new_source") {
+		assert.Equal(t, repeats[k], k.Repeats(), "%s repeats", k)
+	}
+	assert.True(t, notice.Kind("a_new_source").Skippable())
 }
 
 // TestBatcherSettle: a message's notices are acknowledged when the caller

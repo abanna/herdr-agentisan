@@ -19,9 +19,13 @@ const (
 	MaxNoticeRepeat = 86400
 )
 
-// NoticeKinds are what notices.skip can name: the daemon's notice kinds
-// (notice.Kinds), which a test there keeps in step.
-var NoticeKinds = []string{"turn_ended", "blocked", "unknown", "gone", "started"}
+// NoticeKinds are the daemon's notice kinds (notice.Kinds), which a test
+// there keeps in step. notices.skip can name each but noticeAlways.
+var NoticeKinds = []string{"turn_ended", "blocked", "unknown", "gone", "started", "ctx_soft", "ctx_hard", "ctx_ceiling"}
+
+// noticeAlways is the kind no team can skip: a worker's context reaching the
+// ceiling always reaches its boss (D7).
+const noticeAlways = "ctx_ceiling"
 
 // NoticeConfig is one project's notices settings.
 type NoticeConfig struct {
@@ -48,8 +52,10 @@ func (m merged) checkNotices() error {
 		skip, _ := v.([]string)
 		for i, k := range skip {
 			switch {
+			case k == noticeAlways:
+				return m.invalidf(noticesSkipPath, "entry %d, %s, cannot be skipped: the context ceiling always reaches the boss", i+1, FormatValue(k))
 			case !slices.Contains(NoticeKinds, k):
-				return m.invalidf(noticesSkipPath, "entry %d, %s, is not one of %s", i+1, FormatValue(k), strings.Join(NoticeKinds, ", "))
+				return m.invalidf(noticesSkipPath, "entry %d, %s, is not one of %s", i+1, FormatValue(k), strings.Join(slices.DeleteFunc(slices.Clone(NoticeKinds), func(s string) bool { return s == noticeAlways }), ", "))
 			case slices.Contains(skip[:i], k):
 				return m.invalidf(noticesSkipPath, "entry %d, %s, is already listed", i+1, FormatValue(k))
 			}

@@ -241,7 +241,11 @@ func TestTabsTeamsResolveExactly(t *testing.T) {
 	got := team.Build(l, r, nil)
 
 	worker := func(id, ws, tab string, st team.Status, agent string, handoff bool) team.Worker {
-		return team.Worker{ID: id, Target: team.Target{WorkspaceID: ws}, Pane: team.Pane{ID: id, TabID: tab, Agent: agent, Status: st, Handoff: handoff}}
+		w := team.Worker{ID: id, Target: team.Target{WorkspaceID: ws}, Pane: team.Pane{ID: id, TabID: tab, Agent: agent, Status: st, Handoff: handoff}}
+		if agent != "" {
+			w.Pane.TerminalID = "term_" + id
+		}
+		return w
 	}
 	withCtx := func(w team.Worker, ctx string) team.Worker {
 		w.Pane.Ctx = ctx
@@ -256,12 +260,12 @@ func TestTabsTeamsResolveExactly(t *testing.T) {
 		},
 		{
 			Name: "assay", Short: "as", Workspaces: []string{"w20"}, Order: order, Target: team.Target{WorkspaceID: "w20"},
-			Boss: []team.Worker{{ID: "w20:p1", Pane: team.Pane{ID: "w20:p1", TabID: "w20:t1", Agent: "claude", Status: team.StatusIdle}}},
+			Boss: []team.Worker{{ID: "w20:p1", Pane: team.Pane{ID: "w20:p1", TerminalID: "term_w20:p1", TabID: "w20:t1", Agent: "claude", Status: team.StatusIdle}}},
 		},
 		{
 			Name: "herdr-agentisan", Short: "ha", Color: "#7c3aed", Workspaces: []string{"w14"}, Order: order, Target: w14,
 			Boss: []team.Worker{
-				{ID: "w14:p1", Pane: team.Pane{ID: "w14:p1", TabID: "w14:t1", Agent: "claude", Status: team.StatusWorking}},
+				{ID: "w14:p1", Pane: team.Pane{ID: "w14:p1", TerminalID: "term_w14:p1", TabID: "w14:t1", Agent: "claude", Status: team.StatusWorking}},
 				{ID: "w14:pD", Pane: team.Pane{ID: "w14:pD", TabID: "w14:t1", Status: team.StatusUnknown}},
 			},
 			Groups: []team.Group{

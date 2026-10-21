@@ -45,13 +45,14 @@ func TestNoticesForTheDaemon(t *testing.T) {
 			},
 		},
 		"every kind, and the bounds": {
-			file: "[projects.app]\nrepo = \"/x\"\nshort = \"a\"\n[projects.app.notices]\nskip = [\"turn_ended\", \"blocked\", \"unknown\", \"gone\", \"started\"]\ngap = 3600\nrepeat = 86400\n[projects.web]\nrepo = \"/y\"\nshort = \"w\"\nnotices = { gap = 0, repeat = 0 }\n",
+			file: "[projects.app]\nrepo = \"/x\"\nshort = \"a\"\n[projects.app.notices]\nskip = [\"turn_ended\", \"blocked\", \"unknown\", \"gone\", \"started\", \"ctx_soft\", \"ctx_hard\"]\ngap = 3600\nrepeat = 86400\n[projects.web]\nrepo = \"/y\"\nshort = \"w\"\nnotices = { gap = 0, repeat = 0 }\n",
 			want: settings.NoticeSettings{Default: defaultNotices, Projects: map[string]settings.NoticeConfig{
-				"app": {Skip: []string{"turn_ended", "blocked", "unknown", "gone", "started"}, Gap: time.Hour, Repeat: 24 * time.Hour},
+				"app": {Skip: []string{"turn_ended", "blocked", "unknown", "gone", "started", "ctx_soft", "ctx_hard"}, Gap: time.Hour, Repeat: 24 * time.Hour},
 				"web": {},
 			}},
 		},
 		"an unknown kind":     {file: "[notices]\nskip = [\"ctx\"]\n", wantErr: settings.ErrInvalid},
+		"the context ceiling": {file: "[notices]\nskip = [\"ctx_hard\", \"ctx_ceiling\"]\n", wantErr: settings.ErrInvalid},
 		"a kind in capitals":  {file: "[notices]\nskip = [\"Blocked\"]\n", wantErr: settings.ErrInvalid},
 		"an empty kind":       {file: "[notices]\nskip = [\"\"]\n", wantErr: settings.ErrInvalid},
 		"a kind twice":        {file: "[notices]\nskip = [\"gone\", \"gone\"]\n", wantErr: settings.ErrInvalid},
@@ -86,6 +87,9 @@ func TestNoticesForTheDaemon(t *testing.T) {
 				require.ErrorIs(t, err, tc.wantErr)
 				if name != "a broken file" && name != "a gap past int64" {
 					assert.Contains(t, err.Error(), "notices", "the error names the key")
+				}
+				if name == "the context ceiling" {
+					assert.Contains(t, err.Error(), "always reaches the boss")
 				}
 				return
 			}

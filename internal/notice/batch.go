@@ -72,11 +72,13 @@ func NewBatcher(configs Configs) *Batcher {
 
 // Add queues ns for their bosses, as of now. A notice of a kind its team
 // skips, or a repeat inside its team's window, is dropped and acknowledged
-// here; a line longer than MaxLine is cut.
+// here; a line longer than MaxLine is cut. Whose pane a notice is about
+// never matters here: a source decides that (the poll's leaves the boss's
+// own panes out; a context source may tell the boss about its own).
 func (b *Batcher) Add(now time.Time, ns []Notice) {
 	for _, n := range ns {
 		cfg := b.configs.For(n.Project)
-		if cfg.Skip[n.Kind] || b.repeat(cfg, n, now) {
+		if (cfg.Skip[n.Kind] && n.Kind.Skippable()) || b.repeat(cfg, n, now) {
 			if n.Ack != nil {
 				n.Ack()
 			}
@@ -88,10 +90,10 @@ func (b *Batcher) Add(now time.Time, ns []Notice) {
 }
 
 // repeat reports whether n repeats a notice let through within its team's
-// window, and otherwise records it as let through now. A turn ending and a
-// start are never repeats.
+// window, and otherwise records it as let through now. Only a kind that
+// Repeats can be a repeat.
 func (b *Batcher) repeat(cfg Config, n Notice, now time.Time) bool {
-	if n.Kind == TurnEnded || n.Kind == Started || cfg.Repeat <= 0 {
+	if !n.Kind.Repeats() || cfg.Repeat <= 0 {
 		return false
 	}
 	k := repeatKey{n.Project, n.Subject, n.Kind}
