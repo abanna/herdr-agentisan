@@ -77,7 +77,7 @@ func TestThreeMessagesDuringAHandoffArriveOnce(t *testing.T) {
 	for _, id := range sent {
 		assert.Equal(t, 1, delivered[id], "%s delivered exactly once", id)
 	}
-	n, err := s.ReturnToBoss(ctx, "ha-coder-2", boss, t1)
+	n, err := s.ReturnToBoss(ctx, "ha-coder-2", "agentisan", boss, t1)
 	require.NoError(t, err)
 	assert.Zero(t, n, "nothing queued for the binding goes to the boss")
 }

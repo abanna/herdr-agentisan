@@ -34,6 +34,9 @@ type teamHerdr struct {
 	workspaces []herdr.WorkspaceInfo
 	tabs       []map[string]any
 	panes      []map[string]any
+	// panesErr makes pane.list fail, for the poll and the focus collector
+	// alike.
+	panesErr bool
 	// agents is agent.list's answer; agentsErr makes it fail instead.
 	agents    []map[string]any
 	agentsErr bool
@@ -48,6 +51,8 @@ type teamHerdr struct {
 	procs map[string][]map[string]any
 	// onCall, when set, runs before each request is answered.
 	onCall func(method string)
+	// prompt, when set, answers agent.prompt (messages_test.go).
+	prompt herdrtest.Handler
 }
 
 // newTeamHerdr serves liveSpaces.
@@ -76,6 +81,9 @@ func (th *teamHerdr) serveTeam(normal herdrtest.Handler) herdrtest.Handler {
 		case "pane.list":
 			th.mu.Lock()
 			defer th.mu.Unlock()
+			if th.panesErr {
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "server_unavailable", Message: "busy"}}
+			}
 			return herdrtest.Reply{Result: map[string]any{"type": "pane_list", "panes": th.panes}}
 		case "workspace.list":
 			th.mu.Lock()
@@ -141,6 +149,13 @@ func (th *teamHerdr) serveTeam(normal herdrtest.Handler) herdrtest.Handler {
 			return herdrtest.Reply{Result: map[string]any{"type": "agent_view", "active": true}}
 		case "agent.view.clear":
 			return herdrtest.Reply{Result: map[string]any{"type": "agent_view", "active": false}}
+		case "agent.prompt":
+			th.mu.Lock()
+			prompt := th.prompt
+			th.mu.Unlock()
+			if prompt != nil {
+				return prompt(r)
+			}
 		}
 		return normal(r)
 	}

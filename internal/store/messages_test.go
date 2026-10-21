@@ -449,8 +449,8 @@ func TestRecoverDispatchingIsOneTransaction(t *testing.T) {
 // TestReturnToBoss: a worker's queued messages go to the boss once the
 // binding they were sent to has ended, when the row is retired or the id
 // was reused at a later generation, and keep their ids and order. A reused
-// id keeps only what was sent to it. A live binding, and a message in
-// flight, keep theirs.
+// id keeps only what was sent to it. A live binding, a message in flight,
+// and a queue asked for under another project keep theirs.
 func TestReturnToBoss(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
@@ -459,7 +459,7 @@ func TestReturnToBoss(t *testing.T) {
 	old1 := send(t, s, worker("w"), pane, "old 1")
 	old2 := send(t, s, worker("w"), pane, "old 2")
 
-	n, err := s.ReturnToBoss(ctx, "w", boss, t1)
+	n, err := s.ReturnToBoss(ctx, "w", "agentisan", boss, t1)
 	require.NoError(t, err)
 	assert.Zero(t, n, "the binding is live")
 
@@ -471,7 +471,10 @@ func TestReturnToBoss(t *testing.T) {
 	fresh := send(t, s, worker("w"), pane, "fresh")
 	assert.Equal(t, int64(1), fresh.Generation)
 
-	n, err = s.ReturnToBoss(ctx, "w", boss, t1)
+	n, err = s.ReturnToBoss(ctx, "w", "elsewhere", boss, t1)
+	require.NoError(t, err)
+	assert.Zero(t, n, "another project's ended queue goes to that project's boss")
+	n, err = s.ReturnToBoss(ctx, "w", "agentisan", boss, t1)
 	require.NoError(t, err)
 	assert.EqualValues(t, 2, n)
 	for _, id := range []string{old1.ID, old2.ID} {
@@ -485,7 +488,7 @@ func TestReturnToBoss(t *testing.T) {
 	assert.Equal(t, store.MessageDispatching, message(t, s, inFlight.ID).State, "in flight stays")
 	assert.Equal(t, worker("w"), message(t, s, fresh.ID).To, "the new binding keeps what was sent to it")
 
-	_, err = s.ReturnToBoss(ctx, "w", worker("x"), t1)
+	_, err = s.ReturnToBoss(ctx, "w", "agentisan", worker("x"), t1)
 	require.ErrorIs(t, err, store.ErrInvalid, "only a boss takes them back")
 }
 

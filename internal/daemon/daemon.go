@@ -137,6 +137,10 @@ type Options struct {
 	Hooks  Hooks
 	// Team turns on the team poll and the $team push; nil leaves it off.
 	Team *TeamOptions
+
+	// closeStore closes the state database when Run exits; nil is
+	// (*store.Store).Close.
+	closeStore func(*store.Store) error
 }
 
 func (o Options) withDefaults() Options {
@@ -163,6 +167,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.Hooks.StartTime == nil {
 		o.Hooks.StartTime = startTimeFrom(report.SystemStat())
+	}
+	if o.closeStore == nil {
+		o.closeStore = (*store.Store).Close
 	}
 	return o
 }
@@ -224,7 +231,9 @@ func (o Options) liveHolder(path string) (LockInfo, bool, error) {
 // handoff the new server's startup hook can run before the old daemon notices
 // its server has gone (A3). A state database it cannot open, or one a newer
 // build has migrated (store.ErrSchemaTooNew), stops it before it serves.
-func Run(ctx context.Context, o Options) error {
+// Once the state database is open, Run closes it last whichever way it
+// exits, and a close that fails is returned too, joined with its own result.
+func Run(ctx context.Context, o Options) (err error) {
 	o = o.withDefaults()
 	paths, err := PathsFor(o.StateDir, o.HerdrSocket)
 	if err != nil {
@@ -267,10 +276,11 @@ func Run(ctx context.Context, o Options) error {
 	// Deferred first, so it runs last: after focus collection has stopped
 	// and the socket's handlers have finished, nothing uses the store.
 	defer func() {
-		if err := st.Close(); err != nil {
-			o.Logger.Warn().Err(err).Msg("close the state database")
+		if cerr := o.closeStore(st); cerr != nil {
+			err = errors.Join(err, fmt.Errorf("daemon state: %w", cerr))
 		}
 	}()
+	o.recoverDispatching(ctx, st)
 
 	w := newWalker() // shared: the collector tells it where focus goes
 	snapshots := &snapshotCache{}

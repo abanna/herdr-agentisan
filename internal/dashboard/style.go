@@ -42,13 +42,22 @@ var (
 	stageRedStyle   = lipgloss.NewStyle().Bold(true).Foreground(colRed)
 )
 
-// stageStyle is a stage's colour, v12's rules made case-insensitive and
-// word-bounded (ADR-001 A38), tried in v12's order: bold green when a word
-// is "ready"; else bold red when one is "red" or "blocked"; else yellow when
-// one is "waiting" or "queued"; else dim. A word is a run of letters, marks
-// and digits, so "ready_to_merge" is ready, "already" is not, and "restored"
-// is not red.
+// stageStyle is a stage's colour in a row and on the boss line: its rule's
+// (stageRule), or dim when it matches none.
 func stageStyle(stage string) lipgloss.Style {
+	if st, ok := stageRule(stage); ok {
+		return st
+	}
+	return dimStyle
+}
+
+// stageRule is the colour of the first of v12's rules a stage matches,
+// made case-insensitive and word-bounded (ADR-001 A38), tried in v12's
+// order: bold green when a word is "ready"; else bold red when one is "red"
+// or "blocked"; else yellow when one is "waiting" or "queued". ok is false
+// when it matches none. A word is a run of letters, marks and digits, so
+// "ready_to_merge" is ready, "already" is not, and "restored" is not red.
+func stageRule(stage string) (st lipgloss.Style, ok bool) {
 	words := strings.FieldsFunc(stage, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsMark(r) && !unicode.IsDigit(r)
 	})
@@ -59,13 +68,13 @@ func stageStyle(stage string) lipgloss.Style {
 	}
 	switch {
 	case has("ready"):
-		return stageReadyStyle
+		return stageReadyStyle, true
 	case has("red", "blocked"):
-		return stageRedStyle
+		return stageRedStyle, true
 	case has("waiting", "queued"):
-		return noteStyle
+		return noteStyle, true
 	default:
-		return dimStyle
+		return plainStyle, false
 	}
 }
 
@@ -216,8 +225,9 @@ func statusStyle(s snapshot.Status) lipgloss.Style {
 
 // ShortModel is the model as a row shows it, four cells at most: opus, son,
 // hai or fab for Claude's families wherever they appear in the name, cdx for
-// a Codex model, otherwise the first word, lower-cased, cut to four cells
-// (two wide characters).
+// a Codex model, the variant of a gpt- model whose name ends in one (luna for
+// gpt-6-luna), otherwise the first word, lower-cased, cut to four cells (two
+// wide characters).
 func ShortModel(model string) string {
 	m := strings.ToLower(clean(model))
 	switch {
@@ -236,7 +246,25 @@ func ShortModel(model string) string {
 	if len(words) == 0 {
 		return ""
 	}
+	if v, ok := gptVariant(words[0]); ok {
+		return ansi.Truncate(v, modelCells, "")
+	}
 	return ansi.Truncate(words[0], modelCells, "")
+}
+
+// gptVariant is the last part of a gpt- name when that part is a word, such
+// as sol in gpt-6.1-sol: every such name starts gpt-, so its first four
+// cells would draw gpt-6-luna, gpt-6.1-sol and gpt-6-astra alike.
+func gptVariant(name string) (string, bool) {
+	rest, ok := strings.CutPrefix(name, "gpt-")
+	if !ok {
+		return "", false
+	}
+	v := rest[strings.LastIndexByte(rest, '-')+1:]
+	if v == "" || strings.ContainsFunc(v, func(r rune) bool { return !unicode.IsLetter(r) }) {
+		return "", false
+	}
+	return v, true
 }
 
 // clean makes snapshot text safe to draw: control characters, escape
