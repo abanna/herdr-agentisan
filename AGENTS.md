@@ -135,7 +135,7 @@ exempts whatever is later added under that name.
   (`descriptions.go`, A36), and sends each status change since the last
   poll as a workflow event (`events.go`). It keeps herdr's agent view on the
   focused team, which focus events and the poll feed it, and clears it
-  outside every team and on a clean stop (`view.go`, the A28 addendum).
+  outside every team and on a clean stop (`view.go`, the A28 addendum, A49).
   `daemon start` spawns a detached `daemon run` and waits for its health or
   its exit (A48); herdr's `[[startup]]` hook runs it, and the
   `daemon-restart` action covers linking. Tests run daemons in process
