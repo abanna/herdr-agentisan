@@ -797,6 +797,27 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
 
 Budget: an agent pane carries `ctx`, `item`, `stage`, `handoff` and the three bands, 7 keys, and a push sets 3; still well inside 16 per report and 32 per target.
 
+#### A28 addendum: the agent view
+
+*Overrides:* A28's "The rows" for agents line 2. *Adds to:* D5, A28 and the token contract. Recorded with NERD-5309, checked against the herdr source at v0.9.3.
+
+- **The view.** The daemon sets herdr's agent view (`agent.view.set`, source `plugin:nerdsrun.agentisan`) to the team that holds the focused workspace (`internal/daemon/view.go`, `team.View`):
+  - filter: `any[ in workspace_id [every workspace the team holds, ◆ herdr included], in status [blocked] ]`. Blocked agents from other teams, or from none, follow you; finished ones (`done`) do not. herdr takes 1 to 32 values in an `in` and 64 nodes in a filter (`src/app/agent_view.rs:12-15`), so the workspaces are split across as many `in` nodes as they need;
+  - label: the project's name, `◆ spaces` when `[spaces] project` names none, and a name past 32 characters cut to 31 and `…`, since herdr refuses a longer label and keeps the view it had (`agent_view.rs:193-205`);
+  - sort: the team's order key, ascending.
+- **The order key.** `order_<short>` for a tabs team, `order-spaces` for the spaces: no short code has a dash, so they never collide. Each agent pane a team places carries its place in the team under its key: the boss first, then the groups in the snapshot's order, each group's workers in the model's order, three digits, wider only past 999. herdr sorts a pane without the token after every pane with it, stably (`src/agent_view_eval.rs`), so the focused team's panes come first and the blocked others follow in herdr's order. The key rides the ctx push, in the same report, with its source and 9 s TTL. A pane carries only its own team's key: one from a team it left expires with the TTL, and the filter, not the key, says which team a pane is in. ◆ herdr's panes are in no group, so they carry none and sort with the others.
+- **When it is sent.** On every `pane.focused`, which herdr sends, with the workspace, whenever the active workspace or its focused pane changes (`src/app/api.rs:790-838`), and on every poll, but only when the view differs from the one last sent; the first decision after a start always sends, replacing a view a crashed daemon left. Outside every team it clears the view (`agent.view.clear` with its source, which clears only that source's view, `src/app/api/agent_view.rs:43-72`), bringing back herdr's own order and its grouped/priority toggle.
+  - herdr has no call to read the view, and takes a set from any source (`:7-41`). So the daemon forgets what it sent after a call that fails, and whenever the focus collector resyncs, after resubscribing or `events_lost`, and sends it again. A view another source sets in between stays until the focused team changes.
+  - herdr refuses a view while the plugin is not linked (`plugin_not_found`), is disabled (`plugin_disabled`) or when the view is invalid (`invalid_agent_view`), and keeps the view it had. The daemon logs a refusal when its reason changes, not every poll, and tries again every poll.
+- **Stop, and the rows.** Agents, line 2, is now `$item` and `$stage`; the workspace goes, as A28 planned. A clean stop clears the view, on a 2 s context of its own, after checking the socket still names the daemon's server. A server that is gone or replaced took its view with it, and a replacement belongs to the next daemon, so then nothing is sent and nothing logged. Every view call also goes through a client whose `Dialed` hook checks the identity (A3).
+- **The ctx renewals' cost** (from the NERD-5252 QA). herdr's `pane.report_metadata` patch compares each token's value and expiry, so every renewal fires `pane.updated` and the plugins' event hooks (`src/app/api/panes.rs:1832-1860`, `src/app/api.rs:761-773`): about 6.7 events a second at 20 agent panes. `$team`'s workspace renewals do not (`api.rs:775-784`). The order key adds no report. If the events come to matter, the daemon can push only on a change, with a longer TTL.
+
+| Key | Writer | Target | Format | TTL |
+| --- | --- | --- | --- | --- |
+| `order_<short>`, `order-spaces` | Daemon | Every agent pane a team places | The pane's place in its team, three digits or more | About 9,000 ms, with the ctx display |
+
+Budget: an agent pane a team places carries 8 keys, and a push sets 4.
+
 ### A29. The header's GitHub collection
 
 *Adds to:* D3, D5 and A18. *Overrides:* A18's "PRs, issues and slots stay unreported until item 9", for the PRs and the issue count. Recorded with item 9, part a (NERD-5257). The test slots and the boss's runtime are part b.

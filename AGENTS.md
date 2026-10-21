@@ -126,10 +126,12 @@ exempts whatever is later added under that name.
   by project or workspace, so the op never calls herdr (A18, A24,
   `snapshot.go`, with `SnapshotSource`, the dashboard's client), and sends
   each status change since the last poll as a workflow event
-  (`events.go`). `daemon start` spawns a detached `daemon run`; herdr's
-  `[[startup]]` hook runs it, and the `daemon-restart` action covers
-  linking. Tests run daemons in process against herdrtest and a scratch
-  state dir, never the real ones.
+  (`events.go`). It keeps herdr's agent view on the focused team, which
+  focus events and the poll feed it, and clears it outside every team and
+  on a clean stop (`view.go`, the A28 addendum). `daemon start` spawns a
+  detached `daemon run`; herdr's `[[startup]]` hook runs it, and the
+  `daemon-restart` action covers linking. Tests run daemons in process
+  against herdrtest and a scratch state dir, never the real ones.
 - `internal/team/` — the team domain model (ADR-001 D5, A17): project → group
   → logical worker → current pane, built from `pane.list`, `workspace.list`,
   `tab.list`, `agent.list` and `state.db`'s `workers` rows. A `Resolver` maps

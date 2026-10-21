@@ -54,12 +54,7 @@ func Snapshot(m Model, project string, at time.Time, clock *StageClock) snapshot
 			break
 		}
 	}
-	groups := slices.Clone(pr.Groups)
-	slices.SortStableFunc(groups, func(a, b Group) int {
-		ra, rb := rank(pr.Order, a.Name), rank(pr.Order, b.Name)
-		return cmp.Or(cmp.Compare(ra, rb), strings.Compare(a.Name, b.Name))
-	})
-	for _, g := range groups {
+	for _, g := range orderedGroups(pr) {
 		out := snapshot.Group{Name: g.Name, Agents: make([]snapshot.Agent, 0, len(g.Workers))}
 		for _, w := range g.Workers {
 			out.Agents = append(out.Agents, row(w.Pane, clock))
@@ -67,6 +62,17 @@ func Snapshot(m Model, project string, at time.Time, clock *StageClock) snapshot
 		s.Groups = append(s.Groups, out)
 	}
 	return s
+}
+
+// orderedGroups are pr's groups in the order they are shown: those its Order
+// names first, in that order, then the rest by name.
+func orderedGroups(pr Project) []Group {
+	groups := slices.Clone(pr.Groups)
+	slices.SortStableFunc(groups, func(a, b Group) int {
+		ra, rb := rank(pr.Order, a.Name), rank(pr.Order, b.Name)
+		return cmp.Or(cmp.Compare(ra, rb), strings.Compare(a.Name, b.Name))
+	})
+	return groups
 }
 
 // rank is name's place in order, matched exactly, or past its end.
