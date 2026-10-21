@@ -930,3 +930,22 @@ Budget: an agent pane a team places carries 8 keys, and a push sets 4.
 - **Logs, not events.** A rebind or a re-key is logged at info. A lost row, and a candidate with another shell, are logged at warn. Workflow events for them can follow as an addition to `docs/telemetry.md`.
 - **A19's tab race is narrower.** herdr 0.9.3 maps a tab's position to its saved number (`src/app/ids.rs:19-25`), so a tab opened or closed between `pane.list` and `tab.list` cannot put a neighbour's label on a pane. Only a tab renamed between the two calls can mislabel a pane, for that one poll.
 - **Out of scope.** The focus history (Back already skips unlisted panes, A16), messages to a bare pane, and the tokens a live handoff erases.
+
+### A37. A group's view, and two more agent keys
+
+*Adds to:* D4, D5, A18's snapshot contract and A23's idle clock. *Overrides:* D5's "clicking a group box" under Jump: a click on a group's title now opens its view, and a click on an agent jumps. Recorded with NERD-5322 (G4 of the parity inventory). The user chose a view built from reported data only, over dropping v12's per-group view or reading a screen tail on demand.
+
+- **Opening and leaving.** 1-9, outside a search, open the n-th group in the snapshot's order; a digit past the last group does nothing, and inside a search digits are query text. A left click on a group's title row opens that group, by name, so a click during a search ends the search and opens the whole group. Esc, ← or a click on `◀ back` returns to the overview; Esc closes the help first. `/` returns and starts the overview's search, since filtering inside one group adds little. There is no `b`, so nothing reads like prefix+b's Back.
+- **The boxes.** One box per agent in the group's order, eight lines tall: one column, or two to a row, left to right, from 110 cells with more than one agent (v12's rule). A box shows:
+  - the status icon, name and status in its top border, and `⟳ READY` at its right when the agent is ready to restart;
+  - the model, when reported (G1), then the ctx gauge;
+  - the item;
+  - the whole stage wrapped at words to two lines, the second ending in `…` when there is more; with none, "no stage reported";
+  - "in stage 12m · idle 3m", each part only when known;
+  - "pane w2:p4 · tab w2:t1".
+  The group's description sits under the view's title when the snapshot has one (G3). The selected box's title is in reverse video, and a blocked agent's box is red.
+- **Refreshes.** The view follows its group by name and the selection its agent, as A18's rows are followed; an agent gone from the group leaves the selection in its place. A group gone from the snapshot returns to the overview with a footer note, which the next key or click clears. No team where the dashboard runs (A24) closes the view without one; any other source error keeps the last frame, as on the overview.
+- **Nothing read from a screen (D4).** v12's view showed each agent's last four screen lines and its terminal title. The view shows neither: its boxes are the snapshot, so the stage each agent reports (D4's `report stage`, and the team rule to report one by hand) says what it is doing, and Jump shows the real terminal. A screen tail read on demand stays possible later, as its own amendment.
+- **`tab_id`, a new optional key.** The tab `pane.list` lists the pane in. herdr 0.9.3 numbers a tab by its place in its workspace (A19), so it is shown and never a focus target.
+- **`idle_since`, a new optional key.** When the daemon first saw an agent at rest, idle or done: when its last turn ended. It comes from A23's idle clock, fed by every poll from `pane.list`'s statuses, so it restarts with the daemon. A plain shell never carries it, whatever status herdr gives it, and neither does an agent at work.
+- **The contract.** Both keys are additive and optional, in the boss too, with A18's `unnamed` as the precedent: absent means not reported, so every earlier snapshot keeps its meaning. Decoding stays strict: a re-cased key, a `tab_id` that is not a string or an `idle_since` that is not RFC 3339 is refused. So a reader built before this amendment refuses a snapshot carrying either key, `unknown key "tab_id"`, as one built before A18 refused `unnamed`. The dashboard and the daemon ship in one binary, but a dashboard split already open when the binary is installed and the daemon restarted keeps running the old one: it shows that error in its footer over its last frame until it is closed and opened again. Reopen open dashboards after installing.

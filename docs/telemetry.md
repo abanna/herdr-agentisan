@@ -3,12 +3,14 @@
 The daemon records what happens to the team as workflow events (ADR-001 D10,
 A21). They go over OTLP/HTTP as log records, each with an event name, so
 Elastic stores them in its logs data streams, where the debugger agent
-(item 12) queries them. Log records are not sampled, so unlike traces no event
-is dropped by `HERDR_AGENTISAN_TRACE_SAMPLE_RATIO`.
+(item 12, [`debugger.md`](debugger.md)) reads them with `herdr-agentisan
+events`. Log records are not sampled, so unlike traces no event is dropped by
+`HERDR_AGENTISAN_TRACE_SAMPLE_RATIO`.
 
 This page is the schema's contract. A saved query on the Elastic side matches
 these names, so renaming an event or a key is a contract change: update this
-page, `internal/telemetry/events.go` and its test together.
+page, `internal/telemetry/events.go` and its test together. The debugger's
+recipes in `internal/trail` build their queries from the same constants.
 
 ## Where they go
 
