@@ -570,6 +570,33 @@ func TestSpawnTimesOut(t *testing.T) {
 	}
 }
 
+// TestSpawnKeepsAWorkerThatCameUp: a sibling that runs the op to its
+// deadline fails alone; a worker already up stays active, its tab open.
+func TestSpawnKeepsAWorkerThatCameUp(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	f.svc.ReadyPoll = 20 * time.Millisecond
+	f.h.onCall = func(string) {
+		for _, p := range f.h.panes {
+			if p.name == "ha-coder-2" {
+				p.polls = math.MinInt32 // never settles
+			}
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+
+	res, err := f.svc.Spawn(ctx, workforce.SpawnRequest{Group: "coder", Count: 2})
+	require.ErrorIs(t, err, workforce.ErrSpawnFailed)
+	assert.NotContains(t, err.Error(), "ha-coder-1")
+	require.Len(t, res.Workers, 1)
+	assert.Equal(t, "ha-coder-1", res.Workers[0].ID)
+	assert.Equal(t, store.StatusActive, f.row(t, "ha-coder-1").Status)
+	assert.NotNil(t, f.h.tabByLabel("ha-coder-1"))
+	assert.Equal(t, store.StatusFailed, f.row(t, "ha-coder-2").Status)
+	assert.Nil(t, f.h.tabByLabel("ha-coder-2"))
+}
+
 // TestSpawnWaitsForTheShellPrompt: with spawn.shell_prompt set, agent.start
 // waits until a line of the screen matches it. The keys are sent during that
 // wait, but only while a program, not the shell, has the terminal: while the

@@ -8,10 +8,8 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/store"
 )
 
-// agentName is herdr's agent name grammar (src/app/agents.rs valid_agent_name
-// at v0.9.3): a lower-case letter, then up to 31 lower-case letters, digits,
-// dashes or underscores. A logical id is a herdr agent name, so it must be
-// one.
+// agentName is herdr's agent-name grammar (src/app/agents.rs valid_agent_name
+// at v0.9.3), which a logical id, also its agent's name, must match.
 var agentName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
 // LogicalID is the n-th worker of type typ in the team with short code
@@ -52,8 +50,7 @@ func (st state) taken() map[string]bool {
 }
 
 // nextIDs returns count ids of type typ, each the lowest n from 1 not in
-// taken, and marks them taken. A retired worker's id is free again, and
-// reusing it rebinds its row.
+// taken, and marks them taken; a retired worker's id is free again.
 func nextIDs(short, typ string, count int, taken map[string]bool) ([]string, error) {
 	out := make([]string, 0, count)
 	for n := 1; len(out) < count; n++ {

@@ -55,21 +55,17 @@ var (
 	ErrHandoffTimeout = errors.New("no handoff in time")
 	// ErrHerdr means a herdr call failed.
 	ErrHerdr = errors.New("herdr call failed")
-	// ErrNoTarget means the project has no tabs team to spawn into: the ◆
-	// spaces project is staffed by hand.
+	// ErrNoTarget means no tabs team to spawn into: the ◆ spaces are hand-run.
 	ErrNoTarget = errors.New("no team to spawn into")
-	// ErrUnknownGroup means the type has no group in the project's
-	// configuration, so it has no slots.
+	// ErrUnknownGroup means the type is no worker group of the project.
 	ErrUnknownGroup = errors.New("no such group")
 	// ErrSlotCap means the spawn would take a group past its slots.
 	ErrSlotCap = errors.New("slot cap reached")
 	// ErrInvalidID means a worker's logical id is not a herdr agent name.
 	ErrInvalidID = errors.New("logical id is not a valid herdr agent name")
-	// ErrSpawnFailed means a worker's agent did not come up; its pane was
-	// closed.
+	// ErrSpawnFailed means an agent did not come up; its pane is closed.
 	ErrSpawnFailed = errors.New("spawn failed")
-	// ErrPreflight means the project's repo fails a spawn precondition (D12,
-	// A34), such as tdaddy in a Go repo; nothing was opened.
+	// ErrPreflight means the repo fails a spawn precondition (D12, A34).
 	ErrPreflight = errors.New("the spawn preflight failed")
 )
 
@@ -78,9 +74,8 @@ const (
 	// DefaultReadyPoll is how often spawn asks herdr whether an agent is up:
 	// the herdr CLI's own 100 ms, relaxed for a daemon starting several.
 	DefaultReadyPoll = 250 * time.Millisecond
-	// DefaultBusyWindow is how long spawn retries a pane whose shell is not
-	// at its foreground yet. The herdr CLI's 2 s is short for a fresh shell
-	// on a loaded machine.
+	// DefaultBusyWindow is how long spawn retries a busy pane: the herdr
+	// CLI's 2 s is short for a fresh shell on a loaded machine.
 	DefaultBusyWindow = 10 * time.Second
 	// DefaultHandoffPoll is how often retire --after-handoff looks for the
 	// worker's handoff token.

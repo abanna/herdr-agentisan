@@ -45,13 +45,11 @@ type SpawnResult struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
-// Spawn adds req.Count workers of one type to a tabs team, all or none: a
-// repo failing the preflight (A34), or a count past the group's slots, is
-// refused before anything opens. Each gets the lowest free logical id, a tab
-// of its own in the team's workspace (the workspace itself when the team has
-// none yet), and its agent, waited for until herdr reports it ready. A worker
-// whose agent does not come up has its pane closed and its row marked
-// failed, and the spawn reports ErrSpawnFailed naming it; the others stay.
+// Spawn adds req.Count workers of one type to a tabs team, refused whole
+// before anything opens past the group's slots or on a failed preflight (A34).
+// Each gets the lowest free id, a tab of its own (the team's workspace first
+// when it has none) and its agent; one whose agent does not come up has its
+// pane closed and its row failed, named in ErrSpawnFailed; the others stay.
 func (s *Service) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, error) {
 	if req.Count < 1 {
 		return SpawnResult{}, fmt.Errorf("%w: --count %d is below 1", ErrBadRequest, req.Count)
@@ -125,10 +123,8 @@ type opened struct {
 }
 
 // planAndOpen holds the workforce lock while it reads the team, plans with
-// planFn and opens every planned worker's tab, binding its row as starting:
-// once the lock is released another op sees those tabs and rows, so it can
-// neither reuse an id nor count past a cap. The agents are started after,
-// outside the lock.
+// planFn, opens each tab and binds its row as starting, so no other op reuses
+// an id or counts past a cap; the agents start after, outside the lock.
 func (s *Service) planAndOpen(ctx context.Context, sel Selector, planFn func(state) ([]planned, error)) ([]opened, state, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -195,9 +191,8 @@ func (s *Service) abandon(ctx context.Context, ws []opened) error {
 // the op's own deadline is what failed it.
 const cleanupBudget = 10 * time.Second
 
-// fail closes a worker's pane and marks its row failed, on a context of its
-// own: an op that ran out of time must still leave no pane open and no row
-// starting.
+// fail closes w's pane and marks its row failed on a context of its own, so
+// an op out of time still leaves no pane open and no row starting.
 func (s *Service) fail(ctx context.Context, w opened) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupBudget)
 	defer cancel()
@@ -223,11 +218,15 @@ func (s *Service) bringUp(ctx context.Context, cfg settings.Spawn, ws []opened) 
 		wg.Go(func() { errs[i] = s.startAndWait(ctx, cfg, w) })
 	}
 	wg.Wait()
+	// The rows settle on a context of their own, as fail's cleanup does: a
+	// sibling that ran the op to its deadline must not fail a worker that is up.
+	settle, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupBudget)
+	defer cancel()
 	out := []Spawned{}
 	var failed []error
 	for i, w := range ws {
 		if errs[i] == nil {
-			errs[i] = s.Store.SetWorkerStatus(ctx, w.row(), store.StatusActive, s.now())
+			errs[i] = s.Store.SetWorkerStatus(settle, w.row(), store.StatusActive, s.now())
 		}
 		if errs[i] != nil {
 			failed = append(failed, fmt.Errorf("%s: %w", w.id, errors.Join(errs[i], s.fail(ctx, w))))
@@ -255,9 +254,8 @@ type launch struct {
 	args []string
 }
 
-// choice is the model and effort ("" for none) a spawn's agents start with,
-// chosen before plan: from --model or the type's agent, until NERD-5289's
-// routing chooses at plan's one call.
+// choice is the model and effort ("" for none) a spawn's agents start with:
+// --model or the type's, until NERD-5289's routing chooses at plan's one call.
 type choice struct {
 	model, effort string
 }
@@ -265,11 +263,10 @@ type choice struct {
 // effortPattern is an effort, such as high or xhigh: safe in any shell.
 var effortPattern = regexp.MustCompile(`^[a-z]{1,16}$`)
 
-// plan builds each id's launch from the type's agent command and c: the kind
-// is the command's executable, named bare since herdr runs it from the
-// shell's PATH itself, and the arguments are the command's own, then
-// --no-daemon for Codex when the command lacks it, c's model and effort and,
-// for Claude, --name with the logical id. codex has no --name; herdr names it.
+// plan builds each id's launch: the kind is the command's bare executable,
+// which herdr runs from the shell's PATH, and the arguments the command's own,
+// --no-daemon for Codex if absent, c's model and effort and, for Claude only,
+// --name with the id (herdr names a Codex).
 func plan(p *settings.Profile, typ string, c choice, ids []string) ([]planned, error) {
 	agent := p.AgentFor(typ)
 	if err := settings.CheckAgentCommand(agent.Command); err != nil {
@@ -314,17 +311,10 @@ func plan(p *settings.Profile, typ string, c choice, ids []string) ([]planned, e
 	return out, nil
 }
 
-// startAndWait brings one worker's agent up, within ctx.
-//
-//  1. With a shell prompt configured, it waits for a line of the screen to
-//     match it: herdr's own check only sees which program has the
-//     terminal, and a shell asking a question at startup still has it.
-//  2. agent.start, retried while the pane is busy, for BusyWindow. When
-//     the shell is still not ready after ShellReadyAfter and a program has
-//     the terminal (a password prompt, say), ShellReadyKeys are sent, once.
-//  3. agent.get by name until herdr reports the agent ready, failing as the
-//     herdr CLI does when it is blocked, exits, is another kind, or its
-//     name or terminal is lost.
+// startAndWait brings one worker's agent up, within ctx: it waits for the
+// shell prompt when one is configured (herdr only sees which program has the
+// terminal, and a shell asking a question still has it), starts the agent,
+// retrying a busy pane, then waits for herdr to report it ready.
 func (s *Service) startAndWait(ctx context.Context, cfg settings.Spawn, w opened) error {
 	keys := keySender{s: s, w: w, cfg: cfg, started: time.Now()}
 	if cfg.ShellPrompt != "" {
@@ -439,11 +429,9 @@ func (s *Service) start(ctx context.Context, w opened, keys *keySender) error {
 	}
 }
 
-// waitReady polls agent.get until the agent is ready or fails, as the herdr
-// CLI's agent start does (src/cli/agent.rs:562-638 at v0.9.3). An error
-// answer from herdr (the name not registered yet) or a failed exchange is
-// polled again until ctx ends; any other failure, a server that is no longer
-// the daemon's or an answer the schema does not allow, ends the wait.
+// waitReady polls agent.get until the agent is ready or fails, as herdr's CLI
+// does (src/cli/agent.rs:562-638 at v0.9.3): an error answer or an unreachable
+// herdr is polled again until ctx ends, and any other failure ends the wait.
 func (s *Service) waitReady(ctx context.Context, w opened) error {
 	for {
 		a, err := s.Herdr.GetAgent(ctx, w.id)
