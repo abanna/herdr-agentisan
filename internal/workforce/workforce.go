@@ -18,6 +18,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
@@ -37,11 +38,30 @@ var (
 	ErrUnknownProject = errors.New("no such project")
 	// ErrConfig means herdr-agentisan.toml does not resolve for the project.
 	ErrConfig = errors.New("the configuration does not resolve")
+	// ErrUnknownWorker means retire's target names no worker or pane.
+	ErrUnknownWorker = errors.New("no such worker")
+	// ErrNotAWorker means retire's target is the boss's, not a worker's.
+	ErrNotAWorker = errors.New("not a worker")
+	// ErrPaneChanged means retire's pane no longer shows the terminal it
+	// read, which herdr lists elsewhere: nothing was closed, and a retry
+	// reads the panes afresh.
+	ErrPaneChanged = errors.New("the pane changed since it was read")
+	// ErrHandoffPending means retire would end a row whose handoff is still
+	// pending, which would strand the handoff and hold the worker's inbox.
+	ErrHandoffPending = errors.New("the worker's handoff is pending")
+	// ErrHandoffTimeout means the worker wrote no handoff in time; its pane
+	// stays open.
+	ErrHandoffTimeout = errors.New("no handoff in time")
 	// ErrHerdr means a herdr call failed.
 	ErrHerdr = errors.New("herdr call failed")
 )
 
-// Service runs the workforce ops. The daemon holds one.
+// DefaultHandoffPoll is how often retire --after-handoff looks for the
+// worker's handoff token; Service.HandoffPoll overrides it.
+const DefaultHandoffPoll = 2 * time.Second
+
+// Service runs the workforce ops. The daemon holds one; its lock serializes
+// every change to a team.
 type Service struct {
 	// Herdr reaches the daemon's own server. The daemon gives one whose
 	// Dialed hook proves the server's identity on every call (A3).
@@ -54,8 +74,13 @@ type Service struct {
 	Stat      func(string) (fs.FileInfo, error)
 	// Idle is the poll's idle clock, for team status.
 	Idle *team.IdleClock
-	// Now is the clock idle times are read with; nil means time.Now.
+	// Now is the clock rows are stamped and idle times read with; nil means
+	// time.Now.
 	Now func() time.Time
+	// HandoffPoll overrides DefaultHandoffPoll.
+	HandoffPoll time.Duration
+
+	mu sync.Mutex
 }
 
 func (s *Service) now() time.Time {
@@ -63,6 +88,34 @@ func (s *Service) now() time.Time {
 		return s.Now()
 	}
 	return time.Now()
+}
+
+func orDefault(d, def time.Duration) time.Duration {
+	if d > 0 {
+		return d
+	}
+	return def
+}
+
+// sleep waits d, or until ctx ends.
+func sleep(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err() //nolint:wrapcheck // the caller wraps with what it waited for
+	case <-t.C:
+		return nil
+	}
+}
+
+// ignoreGone is err, unless it says the row is not live any more: another op
+// ended it first, which is no failure of this one.
+func ignoreGone(err error) error {
+	if errors.Is(err, store.ErrNoWorker) {
+		return nil
+	}
+	return err
 }
 
 // Selector picks the team an op acts on: Project when set, else the tabs
@@ -92,6 +145,16 @@ func FindCallerPane(ctx context.Context, h report.PaneFinder, pane report.Pane) 
 		return "", herdrFailed("find the caller's pane", err)
 	}
 	return id, nil
+}
+
+// SelectorFor is the team a command means: project when set, without asking
+// herdr; else the caller's pane, as FindCallerPane confirms it.
+func SelectorFor(ctx context.Context, h report.PaneFinder, project string, pane report.Pane) (Selector, error) {
+	if project != "" {
+		return Selector{Project: project}, nil
+	}
+	caller, err := FindCallerPane(ctx, h, pane)
+	return Selector{CallerPane: caller}, err
 }
 
 // layout is herdr's answers one op works from.

@@ -280,14 +280,19 @@ func Run(ctx context.Context, o Options) error {
 	if svc := o.newWorkforce(st, ident, idle); svc != nil {
 		ops = workforceOps(svc, ready)
 	}
-	srv, err := listen(ctx, paths.Socket, o.health(ctx, st, HealthInfo{
+	opsCtx, stopOps := context.WithCancel(ctx)
+	srv, err := listen(opsCtx, paths.Socket, o.health(ctx, st, HealthInfo{
 		PID: os.Getpid(), Version: o.Version, Commit: o.Commit, StartedAt: startedAt,
 		HerdrProtocol: pong.Protocol, HerdrSocket: o.HerdrSocket, Herdr: ident,
 	}), func() (BackResult, error) { return o.back(ctx, st, w) }, snapshots.load, ops, o.Logger)
 	if err != nil {
+		stopOps()
 		return err
 	}
 	defer srv.close()
+	// Deferred after the close, so it runs first: an op waiting out a
+	// handoff ends now rather than holding the close.
+	defer stopOps()
 
 	focusCtx, stopFocus := context.WithCancel(ctx)
 	var focus sync.WaitGroup
