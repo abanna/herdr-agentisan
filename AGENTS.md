@@ -227,8 +227,11 @@ exempts whatever is later added under that name.
   pane's workspace to a team (A24). `/` narrows the agents to a search query in
   place (`search.go`, ADR-001 A20), and 1-9 or a click on a group's title
   opens the group's view, a box per agent from the snapshot alone
-  (`groupview.go`, A37). Goldens in `testdata/`
-  (`go test ./internal/dashboard/ -update`, then read every one).
+  (`groupview.go`, A37). Also the team's one line for herdr's tab
+  bar (`tabbar.go`, A41), which `status line` prints, with its
+  `tab_bar_right` entry `docs/config/herdr-tab-bar.example.toml`, for herdr's
+  own config (`TestTabBarSnippet` in `internal/cli` runs it). Goldens in
+  `testdata/` (`go test ./internal/dashboard/ -update`, then read every one).
 - `internal/devctl/` — the `devctl` cobra tree: the coverage floor, the
   docs-parity check and the large-file ceiling, none of which the Go toolchain
   provides.
