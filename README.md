@@ -220,16 +220,18 @@ See ADR-001 A19.
 
 ## The workforce commands
 
-The boss reads its team with a command the daemon runs (ADR-001 D11, A23);
-the `herdr-workforce` skill drives it. `worker retire`, `worker spawn` and
-`team up` follow in later parts of NERD-5254.
+The boss reads its team and retires workers with commands the daemon runs
+(ADR-001 D11, A23); the `herdr-workforce` skill drives them. `worker spawn`
+and `team up` follow in later parts of NERD-5254.
 
 | Command | What it does |
 | --- | --- |
 | `team status [--project p]` | Every group's counts and open slots, and each worker's status, ctx, item, stage and idle time |
+| `worker retire <id> [--after-handoff]` | Closes a worker's pane, by logical id or pane id; with the flag, once its handoff is written |
 
-It prints one JSON object and exits 1 when refused. Without `--project` it
-reads the team whose workspace the command runs in, else the only tabs team.
+Each prints one JSON object and exits 1 when refused. Without `--project`
+status reads the team whose workspace the command runs in, else the only
+tabs team.
 A tabs team's worker is named by its logical id, `<short>-<type>-<n>`, its
 tab's label; a pane of the ◆ spaces by its pane id. Idle times start when
 the daemon does, and a team added to the configuration since gets them
@@ -269,7 +271,37 @@ with `q`. Add `--direction down` to split below the focused pane instead.
 See [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml).
 
 `herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json`
-draws a snapshot file instead, outside herdr too.
+draws a snapshot file instead, outside herdr too. A fixture's time is fixed,
+so its footer always reads `data Ns old`.
+
+The dashboard keeps v12's cues (ADR-001 A38). A stage that says READY is
+bold green, RED or blocked bold red, and waiting or queued yellow, matched
+by whole word in any case. The footer says `data Ns old` once the snapshot
+drawn is more than 15 s old, so a stalled daemon never passes for a live
+one. A plain shell is drawn as `▸ shell`.
+
+### Group descriptions
+
+A group's box can carry a one-line purpose under its title, as v12's
+`dashboard-desc.json` gave it (ADR-001 A36). Set it in `herdr-agentisan.toml`
+under the group's name as the dashboard shows it: a tabs team's worker type,
+or a ◆ space's name. A group table may set only a description, and then it
+starts no worker:
+
+```toml
+[groups.coder]                      # every project's coder group
+workers = 3
+slots = 5
+description = "writes fixes and new code"
+
+[projects.agentisan.groups.coders]  # the ◆ coders space
+description = "write fixes + new code · run their own review loop"
+```
+
+A description is one line of at most 80 printable characters, and a repo's
+`.herdr-agentisan.toml` cannot set one. The daemon reads descriptions again
+whenever the file changes, so an edit needs no `daemon-restart`; a file that
+does not resolve keeps the last ones, and `daemon.log` says why.
 
 ### A group's view
 

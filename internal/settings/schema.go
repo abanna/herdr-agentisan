@@ -49,8 +49,9 @@ var profileSchema = &node{kind: kindTable, fields: map[string]*node{
 	"github": leafOf(kindString),
 	"agent":  agentSchema(),
 	"groups": {kind: kindNames, elem: &node{kind: kindTable, fields: map[string]*node{
-		"workers": leafOf(kindInt),
-		"slots":   leafOf(kindInt),
+		"workers":     leafOf(kindInt),
+		"slots":       leafOf(kindInt),
+		"description": leafOf(kindString),
 		// agent is the group's own agent (A23, Profile.AgentFor).
 		agentKey: agentSchema(),
 	}}},

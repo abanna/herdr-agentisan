@@ -90,6 +90,11 @@ const settleTimeout = 5 * time.Second
 // return, before the server has accepted the connection or read the line, so
 // a client having returned proves nothing.
 //
+// It waits for each request to be recorded, not answered: the handler is
+// called after, and may still be running, or blocked, when Settle returns,
+// which a handler that blocks on purpose relies on. A test that counts what
+// its handler did reads the answer on its own connection first.
+//
 // Settle dials a connection of its own and sends nothing on it. The listener
 // accepts connections in the order they were made, so once the server has
 // read the end of that connection, it has accepted every connection made

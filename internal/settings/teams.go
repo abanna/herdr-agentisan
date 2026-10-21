@@ -37,6 +37,9 @@ type Team struct {
 	Layout string
 	// Color is the project's colour as #rrggbb; "" when unset.
 	Color string
+	// Descriptions are the project's group descriptions, keyed by group
+	// name, the ones set to "" left out; nil when there are none (A36).
+	Descriptions map[string]string
 }
 
 // Teams reads every configured project's team from the shared file in
@@ -65,6 +68,24 @@ func projectViews(shared *source, projects map[string]*source, flags []*source) 
 	return views
 }
 
+// descriptions are the group descriptions m sets, keyed by group name; nil
+// when it sets none but "".
+func (m merged) descriptions() map[string]string {
+	v, _ := m.get("groups")
+	groups, _ := v.(map[string]any)
+	var out map[string]string
+	for name, raw := range groups {
+		g, _ := raw.(map[string]any)
+		if d, _ := g["description"].(string); d != "" {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[name] = d
+		}
+	}
+	return out
+}
+
 // str is a string leaf; "" when unset.
 func (m merged) str(path string) string {
 	v, _ := m.get(path)
@@ -85,7 +106,7 @@ func (m merged) teams(names []string, views map[string]merged) ([]Team, error) {
 	owner := map[string]string{}
 	for _, name := range names {
 		v := views[name]
-		t := Team{Project: name, Short: v.str("short"), Layout: LayoutTabs, Color: v.str("color")}
+		t := Team{Project: name, Short: v.str("short"), Layout: LayoutTabs, Color: v.str("color"), Descriptions: v.descriptions()}
 		layout, set := v.get("layout")
 		switch {
 		case set && layout != LayoutTabs && layout != LayoutSpaces:
