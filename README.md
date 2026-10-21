@@ -26,7 +26,7 @@ task plugin:unlink
 `herdr plugin link` never builds, which is why `task plugin:link` does. The
 binary also runs by hand: `task run:cli -- version --json`.
 
-Requires Go 1.26.9+ and [Task](https://taskfile.dev). Linters and scanners are
+Requires Go 1.26.10+ and [Task](https://taskfile.dev). Linters and scanners are
 pinned in `go.mod` under the `tool` directive — nothing to install globally.
 
 ## Report `$ctx` from Claude's statusline
@@ -300,7 +300,7 @@ See the Layout section of [AGENTS.md](AGENTS.md).
 
 ## Dev container
 
-`.devcontainer/` builds the local workflow into one image: Go 1.26.9, Task, uv
+`.devcontainer/` builds the local workflow into one image: Go 1.26.10, Task, uv
 (which is how `uvx pre-commit` runs).
 Everything `go tool` already resolves — golangci-lint, gosec, govulncheck,
 modernize, gitleaks — is deliberately absent; go.mod is where those are pinned.

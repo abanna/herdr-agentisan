@@ -16,8 +16,9 @@ govulncheck, modernize) are pinned in `go.mod` under the `tool` directive and
 resolve through `go tool` — there is nothing to install globally and no
 version to keep in sync by hand. `task tools` lists what is pinned.
 
-Requires Go 1.26.9+ (pinned by the `toolchain` directive in `go.mod`; earlier
-1.26 patches carry reachable stdlib advisories that `govulncheck` fails on)
+Requires Go 1.26.10+ (pinned by the `toolchain` directive in `go.mod`; earlier
+1.26 patches carry reachable stdlib advisories that `govulncheck` fails on,
+most recently GO-2026-6809 in `crypto/x509`, fixed in 1.26.10)
 and [Task](https://taskfile.dev). `task --list` shows
 everything.
 
@@ -197,7 +198,7 @@ exempts whatever is later added under that name.
   events into Elasticsearch is `docs/config/otelcol-agentisan.yaml`, run by
   `task otelcol:up`; `collector_test.go` pins its keys and the task's
   `docker run`.
-- `.devcontainer/` — the reproducible dev environment: Go 1.26.9 plus the
+- `.devcontainer/` — the reproducible dev environment: Go 1.26.10 plus the
   two tools `go tool` does not resolve (Task, uv).
 - `docs/architecture.md` — why the pieces are shaped this way, and the
   deliberate limits.

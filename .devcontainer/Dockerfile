@@ -1,18 +1,18 @@
 # syntax=docker/dockerfile:1
 
-# Base: golang:1.26.9-bookworm, not the Microsoft devcontainers Go image.
+# Base: golang:1.26.10-bookworm, not the Microsoft devcontainers Go image.
 #
 # `mcr.microsoft.com/devcontainers/go:1-1.26-bookworm` does not exist — that
 # registry is on its 2.x line and tags as <image>-<go-minor>-<distro>
 # (`2.1-1.26-bookworm`), which floats the Go PATCH. Floating the patch is the
-# one thing this repo cannot tolerate: go.mod pins `toolchain go1.26.9`, so a
+# one thing this repo cannot tolerate: go.mod pins `toolchain go1.26.10`, so a
 # base shipping an older patch makes every `go` invocation download a second
-# toolchain at first use, and AGENTS.md pins 1.26.9 because earlier 1.26
+# toolchain at first use, and AGENTS.md pins 1.26.10 because earlier 1.26
 # patches carry reachable stdlib advisories `govulncheck` fails on.
-# golang:1.26.9-bookworm is exactly that patch, so `go version` in here is the
+# golang:1.26.10-bookworm is exactly that patch, so `go version` in here is the
 # version the gates run against. The price is doing the devcontainer chores by
 # hand — non-root user, sudo, GOPATH ownership — which is the rest of this file.
-FROM golang:1.26.9-bookworm
+FROM golang:1.26.10-bookworm
 
 # BuildKit populates this. Declaring it keeps one Dockerfile working on both
 # amd64 and arm64 hosts; every download below is parameterised on it, and an
