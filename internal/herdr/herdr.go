@@ -81,6 +81,9 @@ func (e *APIError) Is(target error) bool {
 	if target == ErrEventsLost {
 		return e.Code == codeEventsLost
 	}
+	if s, ok := workforceCodes[e.Code]; ok {
+		return target == s
+	}
 	return false
 }
 
