@@ -81,7 +81,7 @@ type TeamCache struct{ c snapshotCache }
 // Store caches every team in m, built at at, with spaces the team an op
 // selecting nothing gets.
 func (t *TeamCache) Store(m team.Model, spaces string, at time.Time) error {
-	return t.c.store(m, spaces, at, nil, nil)
+	return t.c.store(m, spaces, at, nil, nil, nil)
 }
 
 // Load is what the snapshot op answers sel with.

@@ -194,7 +194,9 @@ exempts whatever is later added under that name.
   an unnamed row by its pane id. From the daemon it shows its own team:
   `locate.go` finds the pane running it by its pid, and the daemon maps that
   pane's workspace to a team (A24). `/` narrows the agents to a search query in
-  place (`search.go`, ADR-001 A20). Goldens in `testdata/`
+  place (`search.go`, ADR-001 A20), and 1-9 or a click on a group's title
+  opens the group's view, a box per agent from the snapshot alone
+  (`groupview.go`, A37). Goldens in `testdata/`
   (`go test ./internal/dashboard/ -update`, then read every one).
 - `internal/devctl/` — the `devctl` cobra tree: the coverage floor, the
   docs-parity check and the large-file ceiling, none of which the Go toolchain
@@ -217,6 +219,12 @@ exempts whatever is later added under that name.
   events into Elasticsearch is `docs/config/otelcol-agentisan.yaml`, run by
   `task otelcol:up`; `collector_test.go` pins its keys and the task's
   `docker run`.
+- `internal/trail/` — the trail read back (ADR-001 item 12): an ES|QL client
+  over `logs-agentisan.otel-*`, the debugger's recipes, and the env file its
+  URL and read key come from, `[debugger] env_file` in the shared config,
+  read at each query. No caller chooses the URL, the variables or the file.
+  Tests run an httptest Elasticsearch on a recorded answer
+  (`testdata/worker-trail.json`).
 - `.devcontainer/` — the reproducible dev environment: Go 1.26.10 plus the
   two tools `go tool` does not resolve (Task, uv).
 - `docs/architecture.md` — why the pieces are shaped this way, and the

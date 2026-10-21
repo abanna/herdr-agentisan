@@ -38,7 +38,7 @@ func oneRow(t *testing.T, p herdr.PaneInfo, name string) snapshot.Agent {
 	if name != "" {
 		l.Agents = []herdr.AgentInfo{{PaneID: p.PaneID, Name: name}}
 	}
-	s := team.Snapshot(team.Build(l, team.Spaces{}, nil), "", at, nil)
+	s := team.Snapshot(team.Build(l, team.Spaces{}, nil), "", at, nil, nil)
 	require.Len(t, s.Groups, 1)
 	require.Len(t, s.Groups[0].Agents, 1)
 	return s.Groups[0].Agents[0]
@@ -266,6 +266,61 @@ func TestSnapshotRowItemAndStage(t *testing.T) {
 	}
 }
 
+// TestSnapshotRowTabAndIdle: a row carries pane.list's tab, and, for an
+// agent at rest, when the idle clock first saw it resting, in UTC (ADR-001
+// A37). Working, blocked and unknown agents carry no rest, and neither does
+// a plain shell, whatever status herdr gives it; with no clock nothing does.
+func TestSnapshotRowTabAndIdle(t *testing.T) {
+	t.Parallel()
+
+	inTab := func(p herdr.PaneInfo, tab string) herdr.PaneInfo { p.TabID = tab; return p }
+	layout := team.Layout{
+		Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wJ", Label: "◆ boss"}, {WorkspaceID: "wN", Label: "◆ coders"}},
+		Panes: []herdr.PaneInfo{
+			inTab(pane("wJ:p1", "wJ", "claude", "idle", nil), "wJ:t1"),
+			inTab(pane("wN:p1", "wN", "claude", "idle", nil), "wN:t1"),
+			inTab(pane("wN:p2", "wN", "claude", "done", map[string]string{"handoff": "⟳ READY"}), "wN:t2"),
+			inTab(pane("wN:p3", "wN", "claude", "working", nil), "wN:t3"),
+			inTab(pane("wN:p4", "wN", "claude", "blocked", nil), "wN:t4"),
+			inTab(pane("wN:p5", "wN", "", "idle", nil), "wN:t5"),
+			pane("wN:p6", "wN", "codex", "unknown", nil),
+		},
+	}
+	m := team.Build(layout, team.Spaces{}, nil)
+	rested := at.In(time.FixedZone("x", -7*3600))
+	clock := &team.IdleClock{}
+	clock.Observe(m, rested)
+	clock.Observe(m, at.Add(time.Minute))
+
+	s := team.Snapshot(m, "", at.Add(time.Minute), nil, clock)
+	require.NotNil(t, s.Boss)
+	require.Len(t, s.Groups, 1)
+	rows := append([]snapshot.Agent{s.Boss.Agent}, s.Groups[0].Agents...)
+	want := map[string]struct {
+		tab     string
+		resting bool
+	}{
+		"wJ:p1": {"wJ:t1", true}, "wN:p1": {"wN:t1", true}, "wN:p2": {"wN:t2", true},
+		"wN:p3": {"wN:t3", false}, "wN:p4": {"wN:t4", false}, "wN:p5": {"wN:t5", false}, "wN:p6": {"", false},
+	}
+	require.Len(t, rows, len(want))
+	for _, r := range rows {
+		w := want[r.PaneID]
+		assert.Equal(t, w.tab, r.TabID, r.PaneID)
+		if !w.resting {
+			assert.Nil(t, r.IdleSince, r.PaneID)
+			continue
+		}
+		require.NotNil(t, r.IdleSince, r.PaneID)
+		assert.True(t, r.IdleSince.Equal(rested), r.PaneID)
+		assert.Equal(t, time.UTC, r.IdleSince.Location(), r.PaneID)
+	}
+
+	for _, r := range team.Snapshot(m, "", at, nil, nil).Groups[0].Agents {
+		assert.Nil(t, r.IdleSince, "no clock: no rest, %s", r.PaneID)
+	}
+}
+
 // groupsLayout is one ◆ space per name, each with one agent, listed in the
 // order given.
 func groupsLayout(names ...string) team.Layout {
@@ -319,7 +374,7 @@ func TestSnapshotGroupOrder(t *testing.T) {
 			for i := range m.Projects {
 				m.Projects[i].Order = tc.order
 			}
-			s := team.Snapshot(m, "", at, nil)
+			s := team.Snapshot(m, "", at, nil, nil)
 			assert.Equal(t, tc.want, groupNames(s))
 			assert.NotNil(t, s.Groups, "groups is a list, never null")
 		})
@@ -377,7 +432,7 @@ func TestSnapshotBoss(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			l := team.Layout{Workspaces: tc.workspaces, Panes: tc.panes, Agents: tc.agents}
-			s := team.Snapshot(team.Build(l, team.Spaces{}, nil), "", at, nil)
+			s := team.Snapshot(team.Build(l, team.Spaces{}, nil), "", at, nil, nil)
 			assert.Equal(t, tc.want, s.Boss)
 			for _, g := range s.Groups {
 				for _, a := range g.Agents {
@@ -407,7 +462,7 @@ func TestSnapshotProject(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			m := team.Build(groupsLayout("coders"), team.Spaces{Project: tc.project, Color: tc.color}, nil)
-			s := team.Snapshot(m, tc.project, at, nil)
+			s := team.Snapshot(m, tc.project, at, nil, nil)
 			assert.Equal(t, tc.project, s.Team)
 			assert.Equal(t, tc.want, s.Project)
 			assert.Equal(t, []string{"coders"}, groupNames(s))
@@ -416,7 +471,7 @@ func TestSnapshotProject(t *testing.T) {
 	t.Run("another project's panes are not the team's", func(t *testing.T) {
 		t.Parallel()
 		m := team.Build(groupsLayout("coders"), team.Spaces{Project: "a", Color: "#7c3aed"}, nil)
-		s := team.Snapshot(m, "b", at, nil)
+		s := team.Snapshot(m, "b", at, nil, nil)
 		assert.Equal(t, "b", s.Team)
 		assert.Empty(t, s.Groups)
 		assert.Nil(t, s.Boss)
@@ -452,10 +507,10 @@ func TestSnapshotDecodesStrictly(t *testing.T) {
 	clock.Observe(m, at)
 
 	tests := map[string]snapshot.Snapshot{
-		"a full team":      team.Snapshot(m, "agentisan", at, clock),
-		"no group spaces":  team.Snapshot(team.Model{}, "", at, clock),
-		"a nil clock":      team.Snapshot(m, "agentisan", at, nil),
-		"a local-time now": team.Snapshot(m, "agentisan", at.In(time.FixedZone("x", -7*3600)), clock),
+		"a full team":      team.Snapshot(m, "agentisan", at, clock, nil),
+		"no group spaces":  team.Snapshot(team.Model{}, "", at, clock, nil),
+		"a nil clock":      team.Snapshot(m, "agentisan", at, nil, nil),
+		"a local-time now": team.Snapshot(m, "agentisan", at.In(time.FixedZone("x", -7*3600)), clock, nil),
 	}
 	for name, s := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -580,7 +635,7 @@ func TestStageClock(t *testing.T) {
 		m := l(map[string]string{"wN:p1": "build", "wJ:p1": "plan"})
 		c.Observe(m, local)
 		c.Observe(m, t2)
-		s := team.Snapshot(m, "", t2, c)
+		s := team.Snapshot(m, "", t2, c, nil)
 		require.NotNil(t, s.Boss)
 		require.NotNil(t, s.Boss.StageStartedAt)
 		assert.Equal(t, t0, *s.Boss.StageStartedAt)
@@ -693,19 +748,19 @@ func TestStageClockBossStart(t *testing.T) {
 		c.Observe(l(one("wJ:p2"), ""), t0.In(time.FixedZone("x", 5*3600)))
 		m := l(map[string]string{"wJ:p1": "claude", "wJ:p2": "claude"}, "")
 		c.Observe(m, t1)
-		s := team.Snapshot(m, "", t2, c)
+		s := team.Snapshot(m, "", t2, c, nil)
 		require.NotNil(t, s.Boss)
 		assert.Equal(t, "wJ:p1", s.Boss.PaneID, "the first agent pane by id")
 		require.NotNil(t, s.Boss.StartedAt)
 		assert.Equal(t, t1, *s.Boss.StartedAt, "its own start, not the other pane's")
 		assert.Equal(t, time.UTC, s.Boss.StartedAt.Location())
-		assert.Nil(t, team.Snapshot(m, "", t2, nil).Boss.StartedAt, "no clock, no start")
+		assert.Nil(t, team.Snapshot(m, "", t2, nil, nil).Boss.StartedAt, "no clock, no start")
 	})
 	t.Run("a local start is reported in UTC", func(t *testing.T) {
 		t.Parallel()
 		c := &team.StageClock{}
 		c.Observe(l(one("wJ:p1"), ""), t0.In(time.FixedZone("x", 5*3600)))
-		s := team.Snapshot(l(one("wJ:p1"), ""), "", t2, c)
+		s := team.Snapshot(l(one("wJ:p1"), ""), "", t2, c, nil)
 		require.NotNil(t, s.Boss.StartedAt)
 		assert.Equal(t, t0, *s.Boss.StartedAt)
 		assert.Equal(t, time.UTC, s.Boss.StartedAt.Location())

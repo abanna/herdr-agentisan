@@ -199,6 +199,15 @@ the last write wins; after, the daemon's next push, within 3 s, replaces the
 value v12 left on each group space. The daemon never writes `◆ herdr`, so
 v12's last value there clears itself when its 30 s TTL runs out.
 
+## The trail, read back
+
+`herdr-agentisan events worker <id>` answers "what happened to worker X in
+the last hour" from the workflow events in Elasticsearch, and `events query
+'<ES|QL>'` runs any read of them. They are the debugger agent's tools
+(ADR-001 item 12). They take Elasticsearch's URL and read key from the env
+file `[debugger] env_file` names, at each query, so the key never enters an
+agent's environment. See [`docs/debugger.md`](docs/debugger.md).
+
 ## Teams: one workspace, one tab per worker
 
 Every configured project but the `[spaces] project` is a team: one herdr
@@ -284,6 +293,17 @@ A description is one line of at most 80 printable characters, and a repo's
 `.herdr-agentisan.toml` cannot set one. The daemon reads descriptions again
 whenever the file changes, so an edit needs no `daemon-restart`; a file that
 does not resolve keeps the last ones, and `daemon.log` says why.
+
+### A group's view
+
+Press 1-9, or click a group's title, to open that group's view (ADR-001
+A37): a box per agent, two to a row from 110 columns, with its model and
+ctx, item, the whole stage (two lines, then `…`), how long it has been in
+that stage and at rest, and the pane and tab it runs in. Everything in it is
+what the agents report and the daemon times; nothing is read from a screen,
+so a worker's stage line is what says what it is doing. Enter or a click
+jumps to the agent, as on the overview; Esc, ← or `◀ back` returns, and `/`
+returns and starts a search.
 
 ### PRs and issues in the header
 
