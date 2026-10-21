@@ -857,6 +857,26 @@ Budget: an agent pane a team places carries 8 keys, and a push sets 4.
 - **No contract change.** `project.slots` and `boss.started_at` have been in snapshot v1 since item 8, and the dashboard already draws `slots u/t` and `up 2h14m`.
 - **Cutover.** With part b in, herdr-status.sh shows nothing the header lacks. Retire it, and herdr's `tab_bar_right` command, after the live check.
 
+### A32. The debugger ships with the plugin
+
+*Refines:* D9's "Canonical role instructions stay in agentisan-skills". Recorded with item 12, part 1b (NERD-5260); part 1a shipped the `events` commands.
+
+The user's decision (2026-10-20): roles the plugin needs to work without Agentisan ship with the plugin, and agentisan-skills may add overlays later.
+
+- **The first is the debugger.** Its role is `roles/debugger.md` in the plugin checkout. It is launched as `claude --append-system-prompt-file <HERDR_PLUGIN_ROOT>/roles/debugger.md`, with a second, short `--append-system-prompt` giving the paths only the launch knows: the plugin binary, the repo and `daemon.log`.
+- **Read-only.** It runs with `--permission-mode dontAsk` and an allow list:
+  - reading the project's repo and the daemon's directory for its server;
+  - running `<bin> events`;
+  - Linear's read tools.
+
+  `.env*` files in the repo, Edit, Write, NotebookEdit, WebFetch and WebSearch are denied outright. It can change nothing.
+
+  The `events` rule admits no command behind an environment assignment. Claude Code's allow rules match past a leading assignment only of the variables it counts as safe, and `env` is not one of the wrappers it strips (the permissions reference, "Wrappers"). So `HERDR_PLUGIN_CONFIG_DIR=… <bin> events …`, which would read another env file, and `HOME=… <bin> events …` are denied. The reference does not list the safe set.
+- **The trail, through the plugin.** `herdr-agentisan events worker <id>` and `events query '<ES|QL>'` are an ES|QL client over `logs-agentisan.otel-*`. A query must start `FROM logs-agentisan.otel-*`, followed by a pipe or nothing, and holds neither `LOOKUP` nor `ENRICH`, so it reads no second source; the read key's privileges bound the rest. `events worker` matches the id as the worker id or the pane id, since a worker's events carry its pane id until it is bound. It keeps the newest 1,000 changes and says when it cut older ones.
+- **The key never enters the agent's environment.** The URL and the read key are `ELASTIC_URL` and `ELASTIC_API_KEY`, read at each query from the env file the shared config's `[debugger] env_file` names. That is a machine's absolute path, never a repo's, and the debugger finds it through `HERDR_PLUGIN_CONFIG_DIR`. Only those two names are taken from the file. The key goes to that file's URL and nowhere else: never through a proxy, and never after a redirect, which is an error. A file that does not answer, such as a locked 1Password mount, fails the query within 10 s. No flag of `events` names a URL, a variable or a file, so the agent can never send the key anywhere else; a test walks the flag set.
+- **D12 still holds.** The debugger is claude, launched in the project's repo, so the repo's Agentisan bundle loads.
+- **Launch.** `internal/debugger` builds the launch from the plugin root and binary, the repo, the daemon's server directory and the config dir. `worker spawn --group debugger` (item 4) will build it from there, in part 2. `herdr-agentisan debugger args` prints it for a launch by hand.
+
 ### A34. D12's tdaddy preflight: tdaddy must run
 
 *Refines:* D12, I8 and A10. Recorded with NERD-5254, part 6 of 6, which lands ahead of parts 4 and 5, the parts that call it: the check is a package of its own, `internal/preflight`, and part 4 wires it into the spawn.

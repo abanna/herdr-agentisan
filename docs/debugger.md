@@ -1,12 +1,17 @@
-# The debugger's trail
+# The debugger
 
 The debugger is a Claude agent that answers questions about the team's
-workflow from evidence (ADR-001 item 12). Its first tools ship here:
-`herdr-agentisan events` reads the workflow event trail
-([`telemetry.md`](telemetry.md)) back out of Elasticsearch. The debugger's
-role and its read-only launch follow, and `worker spawn --group debugger`
-will start it (item 4). The commands work for anyone with the env file below:
-a person, the boss, or the debugger.
+workflow from evidence (ADR-001 item 12, A32). It ships with the plugin:
+
+- its role is [`roles/debugger.md`](../roles/debugger.md);
+- `herdr-agentisan events` reads the workflow event trail
+  ([`telemetry.md`](telemetry.md)) back out of Elasticsearch;
+- `internal/debugger` builds its read-only launch, and `worker spawn --group
+  debugger` will start it (item 4).
+
+It reads the trail, the daemon's log, the project's repo and Linear, and it
+can change nothing. The `events` commands work for anyone with the env file
+below: a person, the boss, or the debugger.
 
 ## `herdr-agentisan events`
 
@@ -55,3 +60,41 @@ env_file = "~/.config/nerdsrun/local.env"
 From a shell outside herdr, export the config dir first:
 `HERDR_PLUGIN_CONFIG_DIR=<herdr's plugin config dir> herdr-agentisan events
 worker <id>`.
+
+## Launching it
+
+`worker spawn --group debugger` launches it in the project's repo (part 2,
+after item 4). Until then, `herdr-agentisan debugger args` prints the same
+launch for a start by hand:
+
+```
+herdr-agentisan debugger args --repo ~/src/project --server-dir <the daemon's srv-… dir> [--config-dir <dir>] [--json]
+```
+
+That prints one shell line: `HERDR_PLUGIN_CONFIG_DIR=… claude …`. Run it
+from the project's repo. The parts of the launch:
+
+- **The role,** appended from the plugin checkout with
+  `--append-system-prompt-file <root>/roles/debugger.md`. `--root` defaults to
+  `$HERDR_PLUGIN_ROOT`, then to the checkout the binary was built in.
+- **The session's facts,** in a second prompt: the plugin binary's path,
+  the repo, and `daemon.log` when `--server-dir` names the daemon's directory
+  (`$HERDR_PLUGIN_STATE_DIR/srv-<id>`).
+- **`--permission-mode dontAsk`,** which denies every tool without an allow
+  rule, with no prompt. The allow rules are:
+  - reading the repo and the daemon's directory;
+  - running `<bin> events`;
+  - Linear's read tools (an issue, issues, an issue's comments).
+
+  The `events` rule matches no command behind an environment assignment,
+  such as `HERDR_PLUGIN_CONFIG_DIR=… <bin> events …`, or behind `env`: an
+  allow rule matches past an assignment only of the variables Claude Code
+  counts as safe, so the debugger cannot point `events` at another env file.
+- **Denied outright:** reading the repo's `.env*` files, Edit, Write,
+  NotebookEdit, WebFetch and WebSearch.
+- **The environment:** `HERDR_PLUGIN_CONFIG_DIR`, so `events` finds the env
+  file. There is no URL and no key in it.
+
+It is still Claude in the project's repo, so D12 holds and the repo's
+Agentisan bundle loads. With no allow rule its skills cannot run, which is
+intended.

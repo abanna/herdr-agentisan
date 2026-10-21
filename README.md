@@ -199,14 +199,16 @@ the last write wins; after, the daemon's next push, within 3 s, replaces the
 value v12 left on each group space. The daemon never writes `◆ herdr`, so
 v12's last value there clears itself when its 30 s TTL runs out.
 
-## The trail, read back
+## The debugger
 
-`herdr-agentisan events worker <id>` answers "what happened to worker X in
-the last hour" from the workflow events in Elasticsearch, and `events query
-'<ES|QL>'` runs any read of them. They are the debugger agent's tools
-(ADR-001 item 12). They take Elasticsearch's URL and read key from the env
-file `[debugger] env_file` names, at each query, so the key never enters an
-agent's environment. See [`docs/debugger.md`](docs/debugger.md).
+A read-only Claude agent that answers "what happened to worker X in the last
+hour" from the workflow events (ADR-001 item 12, A32). Its role ships here,
+in `roles/debugger.md`. `herdr-agentisan events worker <id>` and `events
+query '<ES|QL>'` read the events in Elasticsearch. They take its URL and read
+key from the env file `[debugger] env_file` names, at each query, so the key
+never enters an agent's environment. `herdr-agentisan debugger args` prints
+the claude command that starts it read-only; `worker spawn --group debugger`
+will launch it. See [`docs/debugger.md`](docs/debugger.md).
 
 ## Teams: one workspace, one tab per worker
 
