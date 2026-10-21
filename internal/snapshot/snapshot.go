@@ -89,7 +89,11 @@ type Agent struct {
 	// means what it meant (ADR-001 A18).
 	Unnamed bool   `json:"unnamed,omitempty"`
 	PaneID  string `json:"pane_id"`
-	Status  Status `json:"status"`
+	// TabID is the tab the pane is in, as herdr names it; empty, and left
+	// out, when not reported. herdr 0.9.3 numbers a tab by its place in its
+	// workspace, so it is shown, never focused (ADR-001 A37).
+	TabID  string `json:"tab_id,omitempty"`
+	Status Status `json:"status"`
 	// Model is the model as the agent reports it, e.g. "claude-opus-4-1";
 	// empty, and left out, when it is not reported.
 	Model string `json:"model,omitempty"`
@@ -100,6 +104,10 @@ type Agent struct {
 	// StageStartedAt is when the agent entered Stage. Nil means not
 	// reported.
 	StageStartedAt *time.Time `json:"stage_started_at,omitempty"`
+	// IdleSince is when the agent last came to rest, idle or done: when its
+	// last turn ended. Nil means not reported, as for an agent at work
+	// (ADR-001 A37).
+	IdleSince *time.Time `json:"idle_since,omitempty"`
 }
 
 // Boss is the team's boss: an agent, plus what only the boss reports.
@@ -392,8 +400,11 @@ type shape struct {
 }
 
 var (
-	timeShape  = &shape{time: true}
-	agentKeys  = map[string]*shape{"name": nil, "unnamed": nil, "pane_id": nil, "status": nil, "model": nil, "ctx": nil, "item": nil, "stage": nil, "stage_started_at": timeShape}
+	timeShape = &shape{time: true}
+	agentKeys = map[string]*shape{
+		"name": nil, "unnamed": nil, "pane_id": nil, "tab_id": nil, "status": nil, "model": nil, "ctx": nil, "item": nil, "stage": nil,
+		"stage_started_at": timeShape, "idle_since": timeShape,
+	}
 	agentShape = &shape{keys: agentKeys}
 	bossShape  = &shape{keys: union(agentKeys, map[string]*shape{"watchers": nil, "started_at": timeShape})}
 	groupShape = &shape{keys: map[string]*shape{
