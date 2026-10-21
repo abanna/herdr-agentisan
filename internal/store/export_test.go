@@ -4,11 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"io/fs"
+	"time"
 )
 
 // DB returns the store's connection, so a test can check the schema's own
 // constraints on rows the store's methods do not write yet.
 func DB(s *Store) *sql.DB { return s.db }
+
+// SetCloseWait sets how long Close waits for the store's connection.
+func SetCloseWait(s *Store, d time.Duration) { s.closeWait = d }
 
 // OpenWith opens path migrated by the numbered SQL files at the root of
 // migrations instead of the embedded ones.
