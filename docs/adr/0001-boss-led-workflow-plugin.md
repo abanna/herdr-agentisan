@@ -967,7 +967,7 @@ Budget: an agent pane a team places carries 8 keys, and a push sets 4.
 
 - **The daemon only informs.** A notice tells the boss what herdr shows. The daemon never acts on one (D1): it does not prompt, rotate, restart or retire a worker. Stall detection is limited to a blocked status; transcript ages and process checks stay in agentisan.
 - **What is told.** Each poll diffs its model against the last one, as A21's status events do:
-  - a worker that turned blocked, or left the team (its pane closed, or moved out of every place the team's resolver knows), at once;
+  - a worker that turned blocked, or left the team (its pane closed, or moved out of every place the team's resolver knows, or its agent exited and left the pane a shell, which agent.list no longer names), at once. An exit is told whether or not the pane's status changed with it: `<worker>'s agent exited (pane <id>)`;
   - a worker that turned unknown and still is at the next poll;
   - a worker whose turn ended: its terminal's `completion_seq` in `agent.list` changed to a new value. herdr sets it when an agent goes from working or blocked to idle, and clears it at the agent's next change (`src/app/actions.rs:22-29,1720-1728`), so it is compared, never ordered. A terminal is compared only with itself: a reissued pane id, a terminal seen for the first time and one that came back are each a baseline. A poll whose `agent.list` failed compares no turns and keeps them. A turn that ends and a next one that starts within one poll is not seen.
   - Covered: every agent pane a team places in a group, bound or not. Never: the boss's own panes, or plain shells.

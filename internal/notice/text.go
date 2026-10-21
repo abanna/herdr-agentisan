@@ -67,6 +67,15 @@ func goneText(w team.Worker) string {
 	return fmt.Sprintf("%s left the team (pane %s)%s", who(w), field(w.Pane.ID), details(w.Pane))
 }
 
+// exitedText is goneText for a worker whose agent exited, its pane still
+// open: w as the last poll that ran the agent saw it.
+func exitedText(w team.Worker) string {
+	if !w.Bound && w.Pane.Name == "" {
+		return who(w) + "'s agent exited" + details(w.Pane)
+	}
+	return fmt.Sprintf("%s's agent exited (pane %s)%s", who(w), field(w.Pane.ID), details(w.Pane))
+}
+
 // field is s as one line's part: valid UTF-8, every control or format
 // character a space, runs of spaces one, trimmed, and at most maxField
 // runes, the last "…" when it was longer. A worker writes its own item and

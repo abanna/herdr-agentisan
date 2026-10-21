@@ -372,3 +372,22 @@ func TestNoticesFollowEachProjectsTable(t *testing.T) {
 		}
 	}
 }
+
+// TestNoticesTellAnAgentExiting: an agent that exits while its pane stays
+// open, a plain shell now that agent.list no longer names, is told as the
+// worker leaving the team, once, with the ctx it last reported.
+func TestNoticesTellAnAgentExiting(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	th.setAgents(turned("wN:p1", "pee01", 1))
+	var logs lockedLog
+	noticeRun(t, th, noticesConfig(t, "gap = 0\n"), &logs)
+	waitLine(t, &logs, "the daemon started")
+	polled(t, th.srv, 2)
+	th.setPane("wN:p1", "agent", nil)
+	th.setPane("wN:p1", "agent_status", "unknown")
+	th.setAgents()
+	assert.Equal(t, 1, waitLine(t, &logs, "pee01's agent exited (pane wN:p1) · ctx 40%"))
+	polled(t, th.srv, 3)
+	assert.Equal(t, 1, waitLine(t, &logs, "agent exited"), "told once")
+}

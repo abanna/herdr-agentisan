@@ -205,7 +205,8 @@ The daemon tells each team's boss what its team poll sees (ADR-001 A44):
 - a worker finished a turn: herdr's `completion_seq` for its terminal changed;
 - it turned blocked;
 - it turned unknown and still is at the next poll;
-- it left the team.
+- it left the team: its pane closed or moved away, or its agent exited and
+  left a shell.
 
 It also tells each boss, once, that the daemon started. Turns that end while
 the daemon is down are not reported. The boss's own panes and plain shells are

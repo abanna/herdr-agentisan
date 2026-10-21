@@ -9,9 +9,10 @@ import (
 // against the last one, as A21's status events do, and reads agent.list for
 // the end of each turn. Only one goroutine uses it, the team poll's.
 //
-// It covers every agent pane a team places in a group, bound or not. A
-// plain shell's status is noise, and the boss's own panes are left out, or
-// every notice the boss handled would tell it about itself.
+// It covers every agent pane a team places in a group, bound or not, and
+// one whose agent exited, leaving a shell. A plain shell's status is noise,
+// and the boss's own panes are left out, or every notice the boss handled
+// would tell it about itself.
 type Watch struct {
 	// last is the last model observed; nil before the first.
 	last *team.Model
@@ -31,7 +32,8 @@ func NewWatch() *Watch {
 // Observe is what changed from the last model observed to m, as notices:
 //   - the first call only takes m as its baseline, and is one Started
 //     notice per team in m;
-//   - a worker that turned blocked, or left the team, at once;
+//   - a worker that turned blocked, or left the team, at once: its pane
+//     closed or moved away, or its agent exited and left a shell;
 //   - a worker that turned unknown, when it still is at the next call;
 //   - a worker whose terminal's completion_seq changed to a new value,
 //     when agents is agent.list's answer for this poll (named). A terminal
@@ -80,9 +82,21 @@ func (w *Watch) statuses(prev, m team.Model) []Notice {
 		}
 		out = append(out, n)
 	}
+	agents := map[string]team.Worker{}
+	for _, g := range groupWorkers(prev) {
+		if g.worker.Pane.IsAgent() {
+			agents[g.worker.Pane.ID] = g.worker
+		}
+	}
 	for _, g := range groupWorkers(m) {
 		if held[g.worker.Pane.ID] && g.worker.Pane.Status == team.StatusUnknown && g.worker.Pane.IsAgent() {
 			out = append(out, Notice{Project: g.project, Subject: g.worker.Pane.ID, Kind: Unknown, Text: unknownText(g.worker)})
+		}
+		// An agent that exits leaves its pane a shell: the worker has left
+		// the team as surely as if the pane had closed, whether or not the
+		// status changed with it.
+		if was, ok := agents[g.worker.Pane.ID]; ok && !g.worker.Pane.IsAgent() {
+			out = append(out, Notice{Project: g.project, Subject: g.worker.Pane.ID, Kind: Gone, Text: exitedText(was)})
 		}
 	}
 	return out

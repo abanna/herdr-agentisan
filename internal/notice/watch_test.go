@@ -261,3 +261,45 @@ func TestWatchGoneText(t *testing.T) {
 		})
 	}
 }
+
+// TestWatchAgentExited: an agent that exits while its pane stays open turns
+// the pane into a shell, and that is a worker leaving the team: Gone, at
+// once, named as the last poll knew it, its status changed or not. The
+// boss's own agent and a shell that stays one tell nothing, nor does the
+// shell's pane closing later.
+func TestWatchAgentExited(t *testing.T) {
+	t.Parallel()
+	shell := team.Worker{ID: "w1:p2", Pane: team.Pane{ID: "w1:p2", Status: team.StatusUnknown}}
+	pee := agentPane("w1:p2", "pee01", team.StatusIdle)
+	pee.Pane.Ctx, pee.Pane.Item = "40", "NERD-5325"
+	unknown := agentPane("w1:p2", "pee01", team.StatusUnknown)
+	bound := agentPane("w1:p2", "", team.StatusWorking)
+	bound.ID, bound.Bound = "ha-coder-2", true
+	unnamed := agentPane("w1:p2", "", team.StatusDone)
+	tests := map[string]struct {
+		prev, next team.Model
+		want       []string
+	}{
+		"an agent exits, its pane stays": {teamOf(nil, pee), teamOf(nil, shell), []string{"pee01's agent exited (pane w1:p2) · ctx 40% · NERD-5325"}},
+		"its status did not change":      {teamOf(nil, unknown), teamOf(nil, shell), []string{"pee01's agent exited (pane w1:p2)"}},
+		"a bound worker":                 {teamOf(nil, bound), teamOf(nil, shell), []string{"ha-coder-2's agent exited (pane w1:p2)"}},
+		"an agent herdr names no name":   {teamOf(nil, unnamed), teamOf(nil, shell), []string{"pane w1:p2's agent exited"}},
+		"the boss's own agent":           {teamOf([]team.Worker{pee}), teamOf([]team.Worker{shell}), nil},
+		"a shell stays a shell":          {teamOf(nil, shell), teamOf(nil, shell), nil},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			w := notice.NewWatch()
+			w.Observe(tc.prev, nil, false)
+			var got []string
+			for _, n := range w.Observe(tc.next, nil, false) {
+				assert.Equal(t, notice.Gone, n.Kind)
+				assert.Equal(t, "w1:p2", n.Subject)
+				got = append(got, n.Text)
+			}
+			assert.Equal(t, tc.want, got)
+			assert.Empty(t, w.Observe(teamOf(nil), nil, false), "the shell's pane closing later tells nothing more")
+		})
+	}
+}

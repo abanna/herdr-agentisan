@@ -149,11 +149,11 @@ exempts whatever is later added under that name.
   idle clock (A23).
 - `internal/notice/` — boss notices (ADR-001 A44): the team poll's source
   (`Watch`: a turn's end from `agent.list`'s `completion_seq`, blocked,
-  unknown for two polls, gone, and the daemon's start), the per-boss pacing
-  (`Batcher`: coalesced, at most one message per gap, repeats dropped, 8 KiB
-  a message) and the `Sink` that delivers it. The daemon's sink writes
-  daemon.log until the inbox delivers (NERD-5256). Pure: tests build models
-  by hand.
+  unknown for two polls, gone (a pane closed or moved, or its agent exited),
+  and the daemon's start), the per-boss pacing (`Batcher`: coalesced, at
+  most one message per gap, repeats dropped, 8 KiB a message) and the `Sink`
+  that delivers it. The daemon's sink writes daemon.log until the inbox
+  delivers (NERD-5256). Pure: tests build models by hand.
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
   `team status` so far: each group's counts and members on a tabs team or
   the ◆ spaces, with idle times from the daemon's clock and the rows no pane
