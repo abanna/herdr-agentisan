@@ -14,6 +14,8 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
+	"github.com/abanna/herdr-agentisan/internal/telemetry"
+	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
 // The dispatcher (ADR-001 D8, A2, A30) types each queued message into its
@@ -24,14 +26,17 @@ import (
 // what proves the name is where it should be (B2); the store's claim holds
 // what must wait: a handoff, a lost or starting worker, an ended binding.
 
-// spacesBoss is the name of the ◆ spaces' boss agent (A7).
-const spacesBoss = "boss"
-
 // recoveredReason is why a message a crash left dispatching failed.
 const recoveredReason = "the daemon stopped mid-dispatch"
 
 // settleTimeout bounds the write that records how a dispatch ended.
 const settleTimeout = store.BusyTimeout
+
+// paneWait is how long a message to a pane waits for an agent there to take
+// it before it is failed (A30): a pane sender's notice whose pane runs a
+// shell, which herdr refuses on every pass, would otherwise wait forever,
+// and the prune never removes a queued message.
+const paneWait = time.Hour
 
 // refusals are herdr's agent.prompt codes that refuse before any byte
 // reaches the pane (0.9.5 validate_agent_prompt).
@@ -74,7 +79,7 @@ func newInbox() *inbox { return &inbox{wake: make(chan struct{}, 1)} }
 // configure records each team's boss: <short>-boss for a tabs team, boss for
 // the ◆ spaces (UQ2).
 func (in *inbox) configure(c teamConfig) {
-	bosses := map[string]string{c.spaces.Project: spacesBoss}
+	bosses := map[string]string{c.spaces.Project: team.SpacesBoss}
 	for _, t := range c.tabs {
 		bosses[t.Project] = t.BossTab()
 	}
@@ -98,6 +103,16 @@ func (in *inbox) polled(m *team.Model) {
 	in.Wake()
 }
 
+// queued is what send does with each message it queues (A30): it wakes the
+// dispatcher through in, and records the message's queued event. o runs
+// the team poll, since only then is there a send op.
+func (o Options) queued(in *inbox) func(context.Context, workforce.SendResult) {
+	return func(ctx context.Context, r workforce.SendResult) {
+		in.Wake()
+		o.Team.Events.MessageQueued(ctx, telemetry.Message{ID: r.ID, FromKind: r.From.Kind, From: r.From.ID, ToKind: r.To.Kind, To: r.To.ID})
+	}
+}
+
 // Wake asks the dispatcher for a pass. It never blocks, and wakes that come
 // before the pass starts are one.
 func (in *inbox) Wake() {
@@ -116,11 +131,12 @@ func (in *inbox) view() (*team.Model, map[string]string) {
 // dispatcher delivers state.db's queued messages, one prompt in flight at a
 // time (Q2). Only its goroutine touches it.
 type dispatcher struct {
-	st  *store.Store
-	c   herdr.Client
-	in  *inbox
-	log zerolog.Logger
-	now func() time.Time
+	st     *store.Store
+	c      herdr.Client
+	in     *inbox
+	events *telemetry.Events
+	log    zerolog.Logger
+	now    func() time.Time
 	// warned is, by recipient, why its messages last waited: logged at warn
 	// when it begins, then at debug while it lasts (Q3), until the reason
 	// changes or the recipient has nothing queued.
@@ -134,7 +150,7 @@ type dispatcher struct {
 func (o Options) newDispatcher(st *store.Store, in *inbox) *dispatcher {
 	c, _ := o.Herdr.(herdr.Client)
 	return &dispatcher{
-		st: st, c: c, in: in, log: o.Logger, now: o.Now,
+		st: st, c: c, in: in, events: o.Team.Events, log: o.Logger, now: o.Now,
 		warned: map[store.Address]string{},
 	}
 }
@@ -170,13 +186,28 @@ func (d *dispatcher) pass(ctx context.Context) {
 		return
 	}
 	d.forget(queued)
+	var panes map[string]string // listed once a pass, for the pane recipients
 	for _, to := range queued {
 		if kept[to] {
 			continue // sent to a binding that ended; the sweep said why
 		}
-		target, held := targetOf(*m, bosses, to)
+		var (
+			target, held string
+			why          error
+		)
+		if to.Kind == store.KindPane {
+			if panes == nil {
+				panes, why = d.terminals(ctx)
+			}
+			target = panes[to.ID]
+			if why != nil {
+				held = "messages wait: herdr did not list the panes their terminals are in"
+			}
+		} else {
+			target, held = targetOf(*m, bosses, to)
+		}
 		if held != "" {
-			d.note(to, held, held, nil)
+			d.note(to, held, held, why)
 			continue
 		}
 		if !d.serve(ctx, to, target) {
@@ -225,7 +256,24 @@ func targetOf(m team.Model, bosses map[string]string, to store.Address) (target,
 		}
 		return "", "messages wait: no agent of the boss's name is in its team's boss place"
 	}
-	return "", "messages wait: a pane recipient is not delivered to yet"
+	return "", "messages wait: no recipient of kind " + to.Kind + " is delivered to"
+}
+
+// terminals maps each terminal herdr lists to the pane showing it, the
+// pane a pane recipient is typed to (B3): listed when it is served, so the
+// pane id is the one herdr gives the terminal now, not one it reissued.
+func (d *dispatcher) terminals(ctx context.Context) (map[string]string, error) {
+	panes, err := d.c.ListPanes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list panes: %w", err)
+	}
+	out := make(map[string]string, len(panes))
+	for _, p := range panes {
+		if p.TerminalID != "" {
+			out[p.TerminalID] = p.PaneID
+		}
+	}
+	return out, nil
 }
 
 // serve delivers to's messages, oldest first, while they land. A refusal or
@@ -239,7 +287,14 @@ func (d *dispatcher) serve(ctx context.Context, to store.Address, target string)
 			d.warnUnlessStopping(ctx, err, "messages: claim "+to.ID+"'s next message")
 			return true
 		}
-		if !ok || !d.deliver(ctx, m, target) {
+		if !ok {
+			return true
+		}
+		if why := d.undeliverable(m, target); why != "" {
+			d.drop(ctx, m, why)
+			continue
+		}
+		if !d.deliver(ctx, m, target) {
 			return true
 		}
 	}
@@ -260,7 +315,9 @@ func (d *dispatcher) deliver(ctx context.Context, m store.Message, target string
 	defer cancel()
 	log := d.log.With().Str("message", m.ID).Str("recipient", m.To.ID).Str("kind", m.To.Kind).Int("attempts", m.Attempts).Logger()
 	if err == nil {
-		d.settled(log, d.st.Delivered(sctx, m.ID, d.now()), "delivered")
+		if d.settled(log, d.st.Delivered(sctx, m.ID, d.now()), "delivered") {
+			d.events.MessageDelivered(ctx, messageEvent(m, ""))
+		}
 		return true
 	}
 	if code := refusal(err); code != "" {
@@ -269,17 +326,51 @@ func (d *dispatcher) deliver(ctx context.Context, m store.Message, target string
 		return false
 	}
 	log.Warn().Err(err).Msg("messages: the prompt may have been typed; the message is failed and its sender told, never retried (A2)")
-	d.settled(log, d.st.Fail(sctx, m.ID, err.Error(), d.now()), "failed")
+	if d.settled(log, d.st.Fail(sctx, m.ID, err.Error(), d.now()), "failed") {
+		d.events.MessageFailed(ctx, messageEvent(m, err.Error()))
+	}
 	return false
 }
 
-// settled logs a write recording how a dispatch ended that failed. It
-// leaves the message dispatching, which holds its recipient's queue, until
-// the next daemon start fails it: never typed twice.
-func (d *dispatcher) settled(log zerolog.Logger, err error, what string) {
+// undeliverable is why m, claimed for a pane recipient, is failed without a
+// prompt, or "" (B3, A30): no pane shows its terminal any more, which herdr
+// never gives another pane, or it has waited paneWait.
+func (d *dispatcher) undeliverable(m store.Message, target string) string {
+	switch {
+	case m.To.Kind != store.KindPane:
+		return ""
+	case target == "":
+		return "no pane shows the terminal it was sent to"
+	case d.now().Sub(m.CreatedAt) >= paneWait:
+		return "no agent in the pane took it within " + paneWait.String()
+	}
+	return ""
+}
+
+// drop fails m, claimed, without a prompt, why being the reason: nothing
+// was typed, but neither will it be. Like deliver, it records that even
+// once the daemon is stopping, so m never stays dispatching.
+func (d *dispatcher) drop(ctx context.Context, m store.Message, why string) {
+	ctx = context.WithoutCancel(ctx)
+	sctx, cancel := context.WithTimeout(ctx, settleTimeout)
+	defer cancel()
+	log := d.log.With().Str("message", m.ID).Str("recipient", m.To.ID).Str("kind", m.To.Kind).Int("attempts", m.Attempts).Logger()
+	log.Info().Str("reason", why).Msg("messages: a message to a pane is failed without a prompt")
+	if d.settled(log, d.st.Fail(sctx, m.ID, why, d.now()), "failed") {
+		d.events.MessageFailed(ctx, messageEvent(m, why))
+	}
+}
+
+// settled reports whether the write recording how a dispatch ended landed.
+// One that did not leaves the message dispatching, which holds its
+// recipient's queue, until the next daemon start fails it: never typed
+// twice.
+func (d *dispatcher) settled(log zerolog.Logger, err error, what string) bool {
 	if err != nil {
 		log.Error().Err(err).Msg("messages: record the message " + what + "; it stays dispatching until the daemon restarts and fails it")
+		return false
 	}
+	return true
 }
 
 // sweep returns every ended binding's queue to its project's boss (Q7): a
@@ -304,13 +395,16 @@ func (d *dispatcher) sweep(ctx context.Context, bosses map[string]string) (kept 
 			kept[to] = true
 			continue
 		}
-		n, err := d.st.ReturnToBoss(ctx, q.Worker, q.Project, store.Address{Kind: store.KindBoss, ID: boss}, d.now())
+		returned, err := d.st.ReturnToBoss(ctx, q.Worker, q.Project, store.Address{Kind: store.KindBoss, ID: boss}, d.now())
 		if err != nil {
 			d.warnUnlessStopping(ctx, err, "messages: return "+q.Worker+"'s queue to "+boss)
 			continue
 		}
-		if n > 0 {
-			d.log.Info().Str("worker", q.Worker).Str("boss", boss).Int64("messages", n).
+		for _, m := range returned {
+			d.events.MessageReturned(ctx, messageEvent(m, ""))
+		}
+		if len(returned) > 0 {
+			d.log.Info().Str("worker", q.Worker).Str("boss", boss).Int("messages", len(returned)).
 				Msg("messages: an ended worker's queue is returned to its boss")
 		}
 	}
@@ -386,6 +480,15 @@ func cleanText(text string) string {
 	}, strings.ReplaceAll(text, "\r\n", "\n"))
 }
 
+// messageEvent is m as a message event carries it, with reason. Never its
+// body.
+func messageEvent(m store.Message, reason string) telemetry.Message {
+	return telemetry.Message{
+		ID: m.ID, FromKind: m.From.Kind, From: m.From.ID, ToKind: m.To.Kind, To: m.To.ID,
+		ReturnedFrom: m.ReturnedFrom, Attempts: m.Attempts, Reason: reason,
+	}
+}
+
 // recoverDispatching fails every message a crash left dispatching, and tells
 // their senders, before anything can claim one: such a dispatch may or may
 // not have reached its pane, so it is never redelivered (A2). It runs
@@ -393,12 +496,18 @@ func cleanText(text string) string {
 // dispatching, which holds their recipients' queues, until a start that
 // recovers them.
 func (o Options) recoverDispatching(ctx context.Context, st *store.Store) {
-	n, err := st.RecoverDispatching(ctx, recoveredReason, o.Now())
-	switch {
-	case err != nil:
+	failed, err := st.RecoverDispatching(ctx, recoveredReason, o.Now())
+	if err != nil {
 		o.Logger.Error().Err(err).Msg("messages: fail the dispatches the last daemon did not finish; their recipients' queues wait for the next start")
-	case n > 0:
-		o.Logger.Warn().Int64("messages", n).
-			Msg("messages: the last daemon stopped mid-dispatch; those messages are failed and their senders told, never retried (A2)")
+		return
+	}
+	var events *telemetry.Events
+	if o.Team != nil {
+		events = o.Team.Events
+	}
+	for _, m := range failed {
+		o.Logger.Warn().Str("message", m.ID).Str("recipient", m.To.ID).Str("kind", m.To.Kind).
+			Msg("messages: the last daemon stopped mid-dispatch; the message is failed and its sender told, never retried (A2)")
+		events.MessageFailed(ctx, messageEvent(m, recoveredReason))
 	}
 }

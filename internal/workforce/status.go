@@ -105,11 +105,7 @@ func (s *Service) Status(ctx context.Context, req StatusRequest) (StatusResult, 
 	if err != nil {
 		return StatusResult{}, fmt.Errorf("read workers: %w", err)
 	}
-	var r team.Resolver = tabsOf(t)
-	if t.Layout == settings.LayoutSpaces {
-		r = team.Spaces{Project: t.Project, Color: t.Color}
-	}
-	m := team.Build(l.Layout, r, rows)
+	m := team.Build(l.Layout, resolverOf(t), rows)
 	var pr team.Project
 	if i := slices.IndexFunc(m.Projects, func(p team.Project) bool { return p.Name == t.Project }); i >= 0 {
 		pr = m.Projects[i]

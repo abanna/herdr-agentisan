@@ -281,6 +281,14 @@ A46). Agent commands, `[spawn]`, `verify`, `[integrations]` and every other
 key belong in `herdr-agentisan.toml` or `--set`. A repo file that sets one
 is refused, and names the key. A model, from any layer, is a letter or
 digit, then letters, digits and `. _ - : / @ [ ]`, such as `opus[1m]`.
+
+## Messaging
+
+`herdr-agentisan send <to> <body|->` queues a message in the daemon, which
+types it into the recipient's agent once, holds it through a worker's
+handoff, and tells the sender when a prompt may not have arrived (ADR-001
+A30). `boss` is your own team's boss. See [`docs/messaging.md`](docs/messaging.md).
+
 ## The dashboard
 
 `herdr-agentisan dashboard` draws a team from the daemon (ADR-001 D5,
