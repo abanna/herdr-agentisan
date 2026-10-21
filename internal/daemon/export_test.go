@@ -3,6 +3,8 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	"maps"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -115,6 +117,11 @@ func DefaultStartTime() func(pid int) (uint64, error) {
 // which the server enforces; OpBudget is the client's copy.
 func ServedBudget(op string, args json.RawMessage) time.Duration {
 	return workforceOps(&workforce.Service{}, new(atomic.Bool))[op].budget(args)
+}
+
+// WorkforceOpNames is every op the daemon's workforce op map serves.
+func WorkforceOpNames() []string {
+	return slices.Sorted(maps.Keys(workforceOps(&workforce.Service{}, new(atomic.Bool))))
 }
 
 // WorkforceCode is the refusal code a workforce op answers err with.

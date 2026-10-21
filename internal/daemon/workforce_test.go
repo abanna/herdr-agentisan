@@ -457,4 +457,8 @@ func TestOpBudgets(t *testing.T) {
 		assert.Equal(t, tc.want, daemon.ServedBudget(tc.op, args), "the budget the daemon enforces: %s %s", tc.op, tc.args)
 	}
 	assert.Zero(t, daemon.OpBudget("health", nil))
+	assert.Equal(t, []string{daemon.OpTeamStatus, daemon.OpWorkerRetire}, daemon.WorkforceOpNames())
+	for _, op := range daemon.WorkforceOpNames() {
+		assert.Positive(t, daemon.ServedBudget(op, nil), "%s has a budget in the table, not a nil one", op)
+	}
 }
