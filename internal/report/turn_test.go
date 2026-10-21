@@ -78,6 +78,7 @@ func TestStatedClasses(t *testing.T) {
 		"an item line past 80 characters":   {event: prompt, text: "item: " + strings.Repeat("審", 90), item: strings.Repeat("審", 79) + "…"},
 		"only markup after the prefix":      {event: stop, text: "BOSS: ** ``"},
 		"a status alone after a blank line": {event: stop, text: "BOSS: old\n\nBOSS: new", stage: "new"},
+		"a status inside a closing fence":   {event: stop, text: "Done.\n\n```\nSTATUS: x\n```"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -155,9 +156,9 @@ func TestTurnPushesTheTokenContract(t *testing.T) {
 func TestTurnANewItemClearsTheStage(t *testing.T) {
 	t.Parallel()
 	tests := map[string]struct {
-		carried, payload string
-		cleared          bool
-		tokens           map[string]string
+		carried, payload, pane string
+		cleared                bool
+		tokens                 map[string]string
 	}{
 		"a dispatch of another item":      {carried: "NERD-5260", payload: claudePrompt("item: NERD-5334\nRead the Stage 3."), cleared: true, tokens: map[string]string{"item": "NERD-5334", "stage": ""}},
 		"a pane with no item yet":         {payload: claudePrompt("item: NERD-5334"), cleared: true, tokens: map[string]string{"item": "NERD-5334", "stage": ""}},
@@ -168,12 +169,18 @@ func TestTurnANewItemClearsTheStage(t *testing.T) {
 		// is another item.
 		"the item re-cased":        {carried: "NERD-5334", payload: claudePrompt("item: nerd-5334"), cleared: true, tokens: map[string]string{"item": "nerd-5334", "stage": ""}},
 		"the item in NFD, not NFC": {carried: "caf\u00e9", payload: claudePrompt("item: cafe\u0301"), cleared: true, tokens: map[string]string{"item": "cafe\u0301", "stage": ""}},
+		// With no lineage HERDR_PANE_ID is trusted, and may be an alias that
+		// pane.list never shows: its item is unknown, so the stage stays.
+		"a pane pane.list does not show": {carried: "NERD-5334", pane: "w9:p1", payload: claudePrompt("item: NERD-5334"), tokens: map[string]string{"item": "NERD-5334"}},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			srv := herdrtest.Start(t, itemHerdr(tc.carried))
 			pane := report.Pane{SocketPath: srv.Path, PaneID: "w14:p1"}
+			if tc.pane != "" {
+				pane.PaneID = tc.pane
+			}
 
 			got, err := report.Turn(t.Context(), herdr.Client{SocketPath: srv.Path}, pane, strings.NewReader(tc.payload))
 			require.NoError(t, err)

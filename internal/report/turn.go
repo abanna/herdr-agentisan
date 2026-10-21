@@ -99,12 +99,15 @@ func Stated(event, text string) (item, stage string) {
 		}
 		return "", ""
 	}
+	// A paragraph ends at a line of white space only: a code fence's line
+	// is not one, so a fenced block never reads as the closing paragraph.
+	blank := func(l string) bool { return strings.TrimSpace(l) == "" }
 	end := len(lines)
-	for end > 0 && clean(lines[end-1]) == "" {
+	for end > 0 && blank(lines[end-1]) {
 		end--
 	}
 	start := end
-	for start > 0 && clean(lines[start-1]) != "" {
+	for start > 0 && !blank(lines[start-1]) {
 		start--
 	}
 	closing := lines[start:end]
@@ -176,7 +179,8 @@ type TurnResult struct {
 // to the pane the reporting process runs in, with source agentisan and the
 // StageTTL, and returns what it pushed where. Only the keys stated are set,
 // but an item stated with no stage that is not the item the pane carries
-// also clears the stage, which belonged to the old item.
+// also clears the stage, which belonged to the old item. A pane pane.list
+// does not show, as an alias trusted with no lineage, keeps its stage.
 //
 // Outside a pane it returns ErrNotInPane, inside a subagent ErrSubagent, for
 // an event other than EventPromptSubmit and EventStop ErrMalformed, and for a
@@ -219,11 +223,11 @@ func Turn(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (TurnResult
 	if item != "" {
 		tokens[ItemKey] = item
 		if stage == "" {
-			current, err := paneItem(ctx, rep, target)
+			current, listed, err := paneItem(ctx, rep, target)
 			if err != nil {
 				return TurnResult{}, err
 			}
-			if current != item {
+			if listed && current != item {
 				// herdr clears a token reported empty.
 				tokens[StageKey], res.Cleared = "", true
 			}
@@ -238,18 +242,19 @@ func Turn(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (TurnResult
 	return res, nil
 }
 
-// paneItem returns the item token pane carries, "" when it has none.
-func paneItem(ctx context.Context, rep PaneFinder, pane string) (string, error) {
+// paneItem returns the item token pane carries, "" when it has none, and
+// whether pane.list shows pane at all.
+func paneItem(ctx context.Context, rep PaneFinder, pane string) (item string, listed bool, err error) {
 	panes, err := rep.ListPanes(ctx)
 	if err != nil {
-		return "", fmt.Errorf("read %s's %s: %w", pane, ItemKey, err)
+		return "", false, fmt.Errorf("read %s's %s: %w", pane, ItemKey, err)
 	}
 	for _, p := range panes {
 		if p.PaneID == pane {
-			return p.Tokens[ItemKey], nil
+			return p.Tokens[ItemKey], true, nil
 		}
 	}
-	return "", nil
+	return "", false, nil
 }
 
 // checkTurnHost is the check a turn report must pass before it calls herdr.
