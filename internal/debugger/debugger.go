@@ -65,8 +65,7 @@ type Command struct {
 // runs `<Bin> events`, and reads Linear. Only the project's settings load
 // (D12's bundle), so the allow rules that pile up in the user's and the
 // repo's local settings never widen it; the repo's .claude/settings.json,
-// tracked or installed (the Agentisan bundle), and managed policy still
-// apply. Each key file is denied to Read, and neither
+// tracked by git or not, and managed policy still apply. Each key file is denied to Read, and neither
 // the repo nor the daemon's directory may hold one. It carries no --model
 // or --name: the workforce sets those.
 func (l Launch) Command() (Command, error) {

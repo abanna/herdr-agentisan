@@ -98,8 +98,8 @@ from the project's repo. The parts of the launch:
   so it is denied too. The launch refuses a repo or daemon directory that
   holds the env file, such as your home directory, and needs `env_file` set.
 - **`--setting-sources project`:** only the repo's `.claude/settings.json`
-  loads, tracked or not (here it is the Agentisan bundle, installed out of
-  band and gitignored),
+  loads, whether git tracks it or not (here it does: it is the repo's own
+  config, not the Agentisan bundle's),
   so the "don't ask again" rules that pile up in `.claude/settings.local.json`
   and your own `~/.claude/settings.json` never widen it. Your statusline and
   hooks do not run in it either, so its pane shows no `ctx`. That file and
