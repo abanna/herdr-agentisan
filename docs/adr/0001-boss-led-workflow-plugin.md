@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A29 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A29 and A42 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -821,3 +821,23 @@ Budget: an agent pane carries `ctx`, `item`, `stage`, `handoff` and the three ba
 - **No contract change.** `project.prs` and `project.issues` have been in snapshot v1 since item 8; no key is added.
 - **Per-team snapshots (A24).** The collected state is held per project name and copied into a snapshot at one place, so a per-project snapshot takes it the same way. Two teams of one project share a header.
 - **Cutover.** herdr-status.sh, run as herdr's `tab_bar_right`, also shows the test slots, which come in part b. Retire it, and the `tab_bar_right` command, once part b ships.
+
+### A42. Item and stage from every role's own turns
+
+*Amends:* D4's "Agentisan pushes item and stage", A6's "Agentisan stays their only writer", the `item` and `stage` writer cells of the token contract, and Report commands. Recorded with NERD-5334 part 1. The Codex side was checked against the codex-rs source at `rust-v0.161.0`, the Claude side against the Claude Code hooks reference.
+
+- **A second command, the same writer.** `report turn` runs as an async `UserPromptSubmit` and `Stop` hook under Claude or Codex, and sets the tokens `report stage` sets, with source `agentisan` and the 24 h TTL (A5). Both are the agent reporting itself from its own pane, so D4's one writer per key holds: the agent writes, through Agentisan's steps and through its turn hooks. herdr's last write wins, so a turn's closing status replaces the stage of the step before it.
+- **The lines.** The agent states its item and stage in its own text; nothing is inferred.
+  - The stage is the final message's closing line when it opens `BOSS:` or `STATUS:`, less the prefix, so `BOSS: blocked: 1Password agent` reports `blocked: 1Password agent`. It is the closing paragraph's last line, or the line just before that paragraph's trailing `item:` lines. `BOSS:` is the line a worker ends each turn with; `STATUS:` is for a pane with no boss above it, such as the boss's own.
+  - The item is an `item: <id>` line: the first in a prompt, as the boss's dispatch carries it, or the last in the final message's closing paragraph, as the boss names its own.
+  - A line counts once `*` and backticks are dropped, so Markdown bold and code ticks may wrap it. White space runs become one space, other unprintable characters are dropped, and a value over 80 characters is cut to 79 and `…`. A value is never refused for its characters, unlike `report stage`'s, because the agent cannot be told.
+- **A new item clears the stage.** An item stated with no stage that differs from the item the pane carries (read from `pane.list`) also reports `stage` empty, which herdr takes as a clear, because that stage belonged to the old item. The same item only renews its TTL.
+- **What reports nothing:**
+  - a turn that states neither: clearing then would wipe a pipeline step's stage every turn;
+  - a hook inside a subagent, which carries `agent_id` under either agent (`SubagentCommandInputFields` in `hooks/src/schema.rs`; Claude's common input fields);
+  - an event other than the two;
+  - a Claude turn the user interrupts, which runs no `Stop`, and one that ends on an API error, which runs `StopFailure` instead;
+  - a Codex memory consolidation's `Stop`, which runs no user, project, session-flag or plugin hook at all (`select_handlers` in `hooks/src/events/stop.rs`).
+- **Placement.** The payload proves nothing about which agent ran the hook, so the lineage decides. A lineage with a Codex process or an app-server in it, or one whose arguments cannot all be read, must pass `CheckCodexHost` (A25), so a hook the shared app-server runs reports nothing and Codex needs `codex --no-daemon`. Codex runs a hook as `$SHELL -lc` in a session of its own, with no sandbox (`build_command` in `hooks/src/engine/command_runner.rs`), so the report reaches herdr under the default sandbox, which A25's `report stage` from a tool command cannot. Any other lineage lands through `ResolvePane` (NERD-5268), as Claude's statusline does. A nil lineage, off Linux and darwin, trusts `HERDR_PANE_ID` unless `CODEX_THREAD_ID` is set.
+- **Opt-in.** The hooks are sample config, `docs/config/claude-hooks.example.json` and `docs/config/codex-hooks.example.toml`, and agents write the lines only when their instructions say so. Spawn passing the hooks to its workers is NERD-5254 part 4.
+- **Not yet.** An old stage ageing is NERD-5334 part 2: a `stage_at` row, the sidebar's `stage_now` and `stage_old`, and the snapshot's `stage_stale`. It extends this amendment.

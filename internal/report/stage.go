@@ -13,8 +13,9 @@ import (
 )
 
 // The item and stage token contract (ADR-001 token contract, amended by A5).
-// Agentisan is the only writer of both keys (D4, A6): it runs `report stage`
-// on every pipeline step transition.
+// The agent is the one writer of both keys (D4, A6, A42), by two commands:
+// Agentisan runs `report stage` on every pipeline step transition, and the
+// agent's turn hooks run `report turn` (turn.go).
 const (
 	// ItemKey is the pane token holding the ticket the agent works on, such
 	// as NERD-5253.

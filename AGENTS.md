@@ -109,8 +109,11 @@ exempts whatever is later added under that name.
   (A22, hooks sampled in `docs/config/codex-hooks.example.toml`), with a
   24 h TTL (A27), and
   `report stage` pushes `item` and `stage` on each agentisan step
-  transition. They read `HERDR_PANE_ID`, a pane-shell variable, which is why
-  it is not in `plugin.Env`.
+  transition, and `report turn` pushes them from the `item:` and
+  `BOSS:`/`STATUS:` lines of a Claude or Codex turn (A42, hooks sampled in
+  `docs/config/claude-hooks.example.json` and the Codex sample). They read
+  `HERDR_PANE_ID`, a pane-shell variable, which is why it is not in
+  `plugin.Env`.
 - `internal/daemon/` — the daemon's lifecycle (ADR-001 D3, A3, A4): one daemon
   per herdr server, enforced by a flock'd `daemon.lock` that records the
   server's socket inode; the protocol pin; `daemon.log` capped at 10 MB; the

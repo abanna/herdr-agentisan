@@ -1,6 +1,7 @@
 # Codex hooks that report each Codex agent's context use to its herdr pane as
-# the `ctx` token (ADR-001 A22, A27). Add them to ~/.codex/config.toml, or to
-# a trusted project's .codex/config.toml.
+# the `ctx` token (`report codex`, ADR-001 A22, A27), and the item and stage
+# its turns state as `item` and `stage` (`report turn`, A42). Add them to
+# ~/.codex/config.toml, or to a trusted project's .codex/config.toml.
 #
 # - Start Codex with `codex --no-daemon`. A hook run by the shared app-server
 #   daemon carries the daemon's environment, not the pane's, so the report
@@ -15,6 +16,10 @@
 # - PostCompact reports again after a compaction, such as /compact. Codex may
 #   not have written the new count yet when the hook reads it; the next turn
 #   corrects it.
+# - `report turn` reports only what a turn states: an `item: <id>` line in the
+#   prompt or in the final message's closing paragraph, and a final
+#   `BOSS: <status>` or `STATUS: <status>` line. Tell your agents to write
+#   them (README, "Report `$item` and `$stage` from every turn").
 
 [[hooks.PostToolUse]]
 matcher = "*"
@@ -33,10 +38,24 @@ command = "herdr-agentisan report codex"
 timeout = 10
 async = true
 
+[[hooks.Stop.hooks]]
+type = "command"
+command = "herdr-agentisan report turn"
+timeout = 10
+async = true
+
 [[hooks.PostCompact]]
 
 [[hooks.PostCompact.hooks]]
 type = "command"
 command = "herdr-agentisan report codex"
+timeout = 10
+async = true
+
+[[hooks.UserPromptSubmit]]
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "herdr-agentisan report turn"
 timeout = 10
 async = true
