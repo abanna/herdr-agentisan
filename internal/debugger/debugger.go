@@ -36,6 +36,21 @@ var LinearReadTools = []string{
 // setting allows: a deny rule wins over every allow rule.
 var deniedTools = []string{"Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch"}
 
+// sessionTools are Claude Code's own tools that act past the reads the
+// launch allows: they start agents and workflows, schedule prompts, reach
+// other sessions, send to claude.ai or the user's devices, switch worktrees
+// or read an MCP server's resources. Most of them need no permission (the
+// tools reference), so dontAsk, which denies only a call that would ask,
+// never stops them. A deny rule naming a tool removes it from the session.
+var sessionTools = []string{
+	"Agent", "Workflow", "Monitor", "TaskStop",
+	"CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "RemoteTrigger",
+	"SendMessage", "ListAgents", "PushNotification", "SendUserFile", "SendFeedback",
+	"Artifact", "ArtifactData", "ArtifactComments", "DesignSync",
+	"EnterWorktree", "ExitWorktree",
+	"ListMcpResourcesTool", "ReadMcpResourceTool",
+}
+
 // FenceSettings is the launch's --settings: Claude Code's file tools refuse
 // reads outside the working directories in every permission mode, and its
 // file-reading Bash commands then ask, which dontAsk denies (Claude Code
@@ -70,11 +85,15 @@ type Command struct {
 
 // Command builds the launch. The role is appended from the plugin root as
 // written; a second, short prompt gives the paths only the launch knows.
-// In dontAsk mode a tool with no allow rule is denied without asking: the
+// In dontAsk mode a call that would ask is denied without asking: the
 // debugger reads the repo (not its .env files) and the daemon's directory,
-// runs `<Bin> events`, and reads Linear. Its reads are fenced to its
-// working directories, the repo it starts in (Dir) and the daemon's
-// directory (--add-dir), by FenceSettings. Only the project's settings load
+// runs `<Bin> events` and Claude Code's built-in read-only commands, and
+// reads Linear. The tools that never ask and act past that (sessionTools)
+// are denied by name. Its reads are fenced to its working directories, the
+// repo it starts in (Dir) and the daemon's directory (--add-dir), by
+// FenceSettings. No MCP server loads from the repo's .mcp.json, the user's
+// config or a plugin (--strict-mcp-config with no --mcp-config), so none is
+// offered or asks for approval at start. Only the project's settings load
 // (D12's bundle), so the allow rules that pile up in the user's and the
 // repo's local settings never widen it; the repo's .claude/settings.json,
 // tracked by git or not, and managed policy still apply. Each key file is
@@ -116,14 +135,16 @@ func (l Launch) Command() (Command, error) {
 		deny = append(deny, "Read(/"+k+")")
 	}
 	deny = append(deny, deniedTools...)
+	deny = append(deny, sessionTools...)
 
-	args := make([]string, 0, 14+len(allow)+len(deny))
+	args := make([]string, 0, 15+len(allow)+len(deny))
 	args = append(args,
 		"--append-system-prompt-file", filepath.Join(l.Root, RoleFile),
 		"--append-system-prompt", l.facts(),
 		"--setting-sources", "project",
 		"--permission-mode", "dontAsk",
-		"--settings", FenceSettings)
+		"--settings", FenceSettings,
+		"--strict-mcp-config")
 	if l.ServerDir != "" {
 		args = append(args, "--add-dir", l.ServerDir)
 	}

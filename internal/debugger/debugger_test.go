@@ -23,12 +23,14 @@ var launch = debugger.Launch{
 }
 
 // TestCommand: the launch, exactly. The role comes from the plugin root, a
-// second prompt gives the paths, and dontAsk denies every tool with no
-// allow rule: the debugger reads the repo and the daemon's directory, runs
-// `events`, reads Linear, and does nothing else. Its reads are fenced to
-// its working directories: the repo it starts in and the daemon's
-// directory. The env names the config dir, where `events` finds its env
-// file, and never a URL or a key.
+// second prompt gives the paths, and dontAsk denies every call that would
+// ask: the debugger reads the repo and the daemon's directory, runs
+// `events` and the built-in read-only commands, reads Linear, and does
+// nothing else. The session tools that never ask are denied by name, and
+// no MCP server loads but those --mcp-config names, which is none. Its
+// reads are fenced to its working directories: the repo it starts in and
+// the daemon's directory. The env names the config dir, where `events`
+// finds its env file, and never a URL or a key.
 func TestCommand(t *testing.T) {
 	t.Parallel()
 	got, err := launch.Command()
@@ -42,6 +44,7 @@ func TestCommand(t *testing.T) {
 		"--setting-sources", "project",
 		"--permission-mode", "dontAsk",
 		"--settings", `{"permissions":{"blockReadsOutsideWorkingDirectories":true}}`,
+		"--strict-mcp-config",
 		"--add-dir", "/home/u/.local/state/herdr/plugins/agentisan/srv-0123456789ab",
 		"--allowedTools",
 		"Read(//home/u/src/assay/**)",
@@ -51,13 +54,19 @@ func TestCommand(t *testing.T) {
 		"--disallowedTools",
 		"Read(//home/u/src/assay/**/.env*)", "Read(//home/u/.config/nerdsrun/local.env)",
 		"Edit", "Write", "NotebookEdit", "WebFetch", "WebSearch",
+		"Agent", "Workflow", "Monitor", "TaskStop",
+		"CronCreate", "CronDelete", "CronList", "ScheduleWakeup", "RemoteTrigger",
+		"SendMessage", "ListAgents", "PushNotification", "SendUserFile", "SendFeedback",
+		"Artifact", "ArtifactData", "ArtifactComments", "DesignSync",
+		"EnterWorktree", "ExitWorktree",
+		"ListMcpResourcesTool", "ReadMcpResourceTool",
 	}, got.Args)
 	assert.Equal(t, map[string]string{"HERDR_PLUGIN_CONFIG_DIR": launch.ConfigDir}, got.Env)
 	assert.Equal(t, launch.Repo, got.Dir, "it starts in the repo: the directory it starts in is a working directory")
 	assertFenced(t, got.Args)
 
 	require.NoError(t, settings.CheckAgentCommand(append([]string{"claude"}, got.Args...)), "D12: claude, the repo's bundle still loads")
-	for _, flag := range []string{"--model", "-m", "--name", "-n", "--bare", "--dangerously-skip-permissions"} {
+	for _, flag := range []string{"--model", "-m", "--name", "-n", "--bare", "--dangerously-skip-permissions", "--mcp-config"} {
 		assert.NotContains(t, got.Args, flag, "the workforce sets --model and --name; nothing widens the session")
 	}
 	for _, a := range got.Args {

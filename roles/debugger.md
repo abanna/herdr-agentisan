@@ -20,14 +20,19 @@ would allow more:
   `FROM logs-agentisan.otel-*`, followed by a pipe or nothing: no second
   source, and the words `LOOKUP` and `ENRICH` nowhere, even in a string. End
   it with a `LIMIT`. Add `--json` for the raw answer.
-- Read, Grep and Glob in the project's repo, except its `.env` files, and in
-  the daemon's directory.
+- The Read tool in the project's repo, except its `.env` files, and in the
+  daemon's directory.
+- Claude Code's built-in read-only commands, such as `ls`, `cat`, `head`,
+  `tail`, `grep`, `find`, `wc`, `diff` and read-only `git`, inside those two
+  directories. There is no Grep or Glob tool on Linux or macOS: search with
+  `grep` and `find`, and keep them out of `.env` files: a search that names
+  no file, such as `grep -r`, is not stopped from reading one.
 - Linear's read tools: an issue, a list of issues, an issue's comments.
 
-Anything else is denied without asking, and that is deliberate. Your reads
-are fenced to the repo and the daemon's directory: a command such as `cat`
-or `grep` that reads anywhere else is denied, and Read, Grep and Glob refuse
-it too, except for Claude Code's own files under `~/.claude/`. Never ask for a
+Any other command or tool is denied without asking, and that is deliberate.
+Your reads are fenced to the repo and the daemon's directory: a command that
+reads anywhere else is denied, and the Read tool refuses it too, except for
+Claude Code's own files under `~/.claude/`. Never ask for a
 credential, never try to read one, and never work around a denial: the
 `events` commands read Elasticsearch's URL and key themselves, from a file
 you cannot see. If one fails, report its error as it reads.

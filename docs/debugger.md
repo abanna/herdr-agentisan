@@ -85,8 +85,10 @@ same as `dir`, `env` and `argv`. The parts of the launch:
 - **The session's facts,** in a second prompt: the plugin binary's path,
   the repo, and `daemon.log` when `--server-dir` names the daemon's directory
   (`$HERDR_PLUGIN_STATE_DIR/srv-<id>`).
-- **`--permission-mode dontAsk`,** which denies every tool without an allow
-  rule, with no prompt. The allow rules are:
+- **`--permission-mode dontAsk`,** which denies, with no prompt, every call
+  that would ask. Claude Code's built-in read-only commands, such as `ls`,
+  `cat`, `head`, `tail`, `grep`, `find` and read-only `git`, need no rule and
+  run inside the read fence below. The allow rules are:
   - reading the repo and the daemon's directory;
   - running `<bin> events`;
   - Linear's read tools (an issue, issues, an issue's comments).
@@ -100,6 +102,21 @@ same as `dir`, `env` and `argv`. The parts of the launch:
   WebFetch and WebSearch. A redirect such as `> file` is checked as an Edit,
   so it is denied too. The launch refuses a repo or daemon directory that
   holds the env file, such as your home directory, and needs `env_file` set.
+- **Denied by name, Claude Code's own tools that act without asking:**
+  `Agent`, `Workflow`, `Monitor`, `TaskStop`, the `Cron` tools,
+  `ScheduleWakeup`, `RemoteTrigger`, `SendMessage`, `ListAgents`,
+  `PushNotification`, `SendUserFile`, `SendFeedback`, the `Artifact` tools,
+  `DesignSync`, `EnterWorktree`, `ExitWorktree` and the MCP resource tools.
+  Most need no permission, so `dontAsk` never stops them: a live check found
+  `CronList` running before they were denied. A deny rule naming a tool
+  removes it from the session. A tool a later Claude Code adds runs until it
+  is listed here, unless it asks.
+- **`--strict-mcp-config`,** with no `--mcp-config`: no MCP server loads
+  from the repo's `.mcp.json`, your own config or a plugin, so none is
+  offered, and the session starts without asking you to approve the repo's
+  servers. The docs do not say whether claude.ai's connectors, Linear among
+  them, still load under it. Any connector that does offers all of its
+  tools, and `dontAsk` refuses each one without an allow rule.
 - **The read fence:** `--settings
   '{"permissions":{"blockReadsOutsideWorkingDirectories":true}}'`, and
   `--add-dir <the daemon's directory>`. Without it, Claude Code's built-in
@@ -108,11 +125,15 @@ same as `dir`, `env` and `argv`. The parts of the launch:
   working directories (the repo and the daemon's directory), except the
   files Claude Code itself needs under `~/.claude/`, such as its skills and
   `CLAUDE.md`, and a file-reading command outside them asks, which `dontAsk`
-  denies. It needs
-  Claude Code 2.1.257 or later. Inside the fence, a command that reads
-  without naming a file, such as `grep -r` run from a directory, is not
-  checked against the deny rules, so the env file must stay outside both
-  directories, which the launch enforces.
+  denies. It needs Claude Code 2.1.257 or later, and a live check on 2.1.306
+  saw a `cat` outside it refused. On Linux and macOS there is no Grep or
+  Glob tool: Claude Code leaves both out of its default set, so the
+  debugger searches with `grep` and `find` in the shell, as read-only
+  commands inside the fence. Inside the fence, a command that reads without
+  naming a file, such as `grep -r` run from a directory, is not checked
+  against the deny rules: `grep -r` in the repo reads its `.env*` files. So
+  the env file must stay outside both directories, which the launch
+  enforces.
 - **`--setting-sources project`:** of the settings files, only the repo's
   `.claude/settings.json` loads, as it stands in the working tree, whatever
   git tracks, so the "don't ask again" rules that pile up in
