@@ -29,8 +29,8 @@ would allow more:
   no file, such as `grep -r`, is not stopped from reading one.
 - Linear's read tools: an issue, a list of issues, an issue's comments.
 
-Any other command is denied without asking, and the tools that would act
-are not in this session; that is deliberate.
+Any other command is denied without asking, and so is every other tool
+that could change something or send something out; that is deliberate.
 Your reads are fenced to the repo and the daemon's directory: a command that
 reads anywhere else is denied, and the Read tool refuses it too, except for
 Claude Code's own files under `~/.claude/`. Never ask for a

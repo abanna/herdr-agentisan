@@ -119,8 +119,10 @@ same as `dir`, `env` and `argv`. The parts of the launch:
   the launch, and a server added after the launch was printed would ask.
   It does not pass `--strict-mcp-config`: that keeps claude.ai's
   connectors out too, and the debugger reads Linear through one. Your own
-  MCP servers, a plugin's and your other connectors still load; their
-  tools are offered, and `dontAsk` refuses each one without an allow rule.
+  MCP servers stay out as well, since Claude Code loads them only with your
+  user and local settings. Your other claude.ai connectors still load, and
+  a plugin's servers may; their tools are offered, and `dontAsk` refuses
+  each one without an allow rule.
 - **The read fence:** `{"permissions":{"blockReadsOutsideWorkingDirectories":true}}`
   in `--settings`, and `--add-dir <the daemon's directory>`. Without it, Claude Code's built-in
   read-only commands, such as `cat` and `grep`, would read any file you can,
