@@ -1,0 +1,19 @@
+{
+  "v": 1,
+  "at": "2026-10-09T17:19:00Z",
+  "team": "shells",
+  "boss": {"name": "boss", "pane_id": "w1:p1", "status": "working", "model": "claude-fable-5-1", "ctx": 30, "item": "#900", "stage": "waiting: QA",
+           "started_at": "2026-10-09T16:00:00Z"},
+  "groups": [
+    {"name": "coders", "agents": [
+      {"name": "pee01", "pane_id": "w2:p1", "status": "working", "model": "opus", "ctx": 41, "item": "NERD-5320", "stage": "READY for review", "stage_started_at": "2026-10-09T17:10:00Z"},
+      {"name": "scratch", "unnamed": true, "pane_id": "w2:p2", "status": "unknown", "model": "claude-fable-5-1"},
+      {"name": "notes", "unnamed": true, "shell": true, "pane_id": "w2:p3", "status": "unknown"},
+      {"name": "w2:p4", "unnamed": true, "shell": true, "pane_id": "w2:p4", "status": "ready", "stage": "handoff read"}
+    ]},
+    {"name": "codex", "agents": [
+      {"name": "codex", "pane_id": "w3:p1", "status": "blocked", "model": "gpt-5.5-codex", "ctx": 20, "stage": "Blocked: 1Password agent"},
+      {"name": "w3:p2", "unnamed": true, "shell": true, "pane_id": "w3:p2", "status": "unknown"}
+    ]}
+  ]
+}

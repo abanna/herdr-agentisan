@@ -95,7 +95,8 @@ func TestStatusCountsEveryTakenSlot(t *testing.T) {
 }
 
 // TestStatusOrdersTheGroupsItFinds: the team model's types first, then every
-// other type, configured or found in herdr, by name.
+// other type, configured or found in herdr, by name; a team herdr shows no
+// workspace of has no model order, and is by name.
 func TestStatusOrdersTheGroupsItFinds(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, teamConfig+"\n[projects.herdr-agentisan.groups.zeta]\nworkers = 0\nslots = 1\n")
@@ -110,6 +111,15 @@ func TestStatusOrdersTheGroupsItFinds(t *testing.T) {
 		names = append(names, g.Name)
 	}
 	assert.Equal(t, []string{"coder", "qa", "review", "alpha", "beta", "mu", "zeta"}, names)
+
+	g := newFixture(t, teamConfig+"\n[projects.assay]\nrepo = \"REPO\"\nshort = \"as\"\n[projects.assay.groups.research]\nworkers = 0\nslots = 1\n[projects.assay.groups.librarian]\nworkers = 0\nslots = 1\n")
+	got, err = g.svc.Status(t.Context(), workforce.StatusRequest{Selector: workforce.Selector{Project: "assay"}})
+	require.NoError(t, err)
+	names = nil
+	for _, gs := range got.Groups {
+		names = append(names, gs.Name)
+	}
+	assert.Equal(t, []string{"librarian", "research"}, names, "not the types' order, research before librarian")
 }
 
 // TestStatusOfTheSpacesProject: --project names the ◆ spaces project too,
@@ -249,6 +259,24 @@ func TestFindCallerPane(t *testing.T) {
 		require.NoError(t, err, name)
 		assert.Equal(t, tc.want, got, name)
 	}
+}
+
+// TestSelectorFor: --project is the team without asking herdr; else the
+// caller's pane, as FindCallerPane confirms it.
+func TestSelectorFor(t *testing.T) {
+	t.Parallel()
+	lineage := report.ReadLineage(5000, func(int) (report.Stat, error) { return report.Stat{PPID: 1, Start: 40}, nil })
+	pane := report.Pane{SocketPath: "unused", PaneID: "w1:p1", Lineage: lineage}
+	failing := paneFinder{failing: herdr.ErrAPI}
+	got, err := workforce.SelectorFor(t.Context(), failing, "ha", pane)
+	require.NoError(t, err, "herdr is not asked")
+	assert.Equal(t, workforce.Selector{Project: "ha"}, got)
+	_, err = workforce.SelectorFor(t.Context(), failing, "", pane)
+	require.ErrorIs(t, err, workforce.ErrHerdr)
+	ours := paneFinder{panes: map[string]herdr.ProcessInfo{"w1:p1": {PaneID: "w1:p1", ShellPID: 5000}}}
+	got, err = workforce.SelectorFor(t.Context(), ours, "", pane)
+	require.NoError(t, err)
+	assert.Equal(t, workforce.Selector{CallerPane: "w1:p1"}, got)
 }
 
 // TestStatusFailsWhenHerdrDoes: a herdr list that fails is ErrHerdr.

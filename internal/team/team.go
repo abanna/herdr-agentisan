@@ -226,15 +226,7 @@ func (rs Resolvers) Resolve(l Layout) Resolution {
 // agent.list's names join by pane id the same way: an empty name names
 // nothing, and when it lists one pane twice the lowest name takes it.
 func Build(l Layout, r Resolver, workers []store.Worker) Model {
-	ids := map[string]string{}
-	for _, w := range workers {
-		if w.TerminalID == "" || w.Status == store.StatusLost {
-			continue
-		}
-		if id, taken := ids[w.TerminalID]; !taken || w.LogicalID < id {
-			ids[w.TerminalID] = w.LogicalID
-		}
-	}
+	ids := Bindings(workers)
 	names := agentNames(l.Agents)
 
 	projects := map[string]*Project{}
@@ -289,6 +281,22 @@ func Build(l Layout, r Resolver, workers []store.Worker) Model {
 		m.Projects = append(m.Projects, *pr)
 	}
 	return m
+}
+
+// Bindings maps each terminal the workers rows bind to the logical id that
+// binds it, as Build joins them: a lost row, or one with no terminal, binds
+// none, and when two rows bind one terminal the lowest logical id takes it.
+func Bindings(workers []store.Worker) map[string]string {
+	ids := map[string]string{}
+	for _, w := range workers {
+		if w.TerminalID == "" || w.Status == store.StatusLost {
+			continue
+		}
+		if id, taken := ids[w.TerminalID]; !taken || w.LogicalID < id {
+			ids[w.TerminalID] = w.LogicalID
+		}
+	}
+	return ids
 }
 
 // agentNames gives each pane agent.list's name for its agent: an empty name
