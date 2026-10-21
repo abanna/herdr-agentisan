@@ -160,12 +160,7 @@ func (m merged) checkGroups() error {
 			}
 		}
 		if describesOnly(g) {
-			// It describes a group and starts no worker (A36), so an agent
-			// of its own would never launch.
-			if err := m.checkNoAgent(name); err != nil {
-				return err
-			}
-			continue
+			continue // it describes a group and starts no worker (A36)
 		}
 		workers, ok := g["workers"].(int)
 		if !ok {
@@ -197,16 +192,25 @@ func describesOnly(g map[string]any) bool {
 	return described && !hasWorkers && !hasSlots
 }
 
-// checkNoAgent refuses an agent on a group that only describes, whichever
-// layer sets it: any key of its agent table, the command first, but a model
-// of "", which is none.
-func (m merged) checkNoAgent(group string) error {
-	table := "groups." + group + "." + agentKey
-	v, _ := m.get(table)
-	agent, _ := v.(map[string]any)
-	for _, key := range slices.Sorted(maps.Keys(agent)) {
-		if agent[key] != "" {
-			return m.invalidf(table+"."+key, "the group only describes, so it starts no worker and takes no agent; give it workers and slots, or leave the agent out")
+// checkDescribers refuses an agent on every group that only describes, which
+// never launches (A36): any key of its agent table, the command first, but a
+// model of "", which is none, from whichever layer sets it. Only a project's
+// whole merge can tell that a group only describes, since a later layer, the
+// repo file included, may give it counts; so Load runs this on that merge
+// alone, never on the partial ones checkFields also lints.
+func (m merged) checkDescribers() error {
+	v, _ := m.get("groups")
+	groups, _ := v.(map[string]any)
+	for _, name := range slices.Sorted(maps.Keys(groups)) {
+		g, _ := groups[name].(map[string]any)
+		if !describesOnly(g) {
+			continue
+		}
+		agent, _ := g[agentKey].(map[string]any)
+		for _, key := range slices.Sorted(maps.Keys(agent)) {
+			if agent[key] != "" {
+				return m.invalidf("groups."+name+"."+agentKey+"."+key, "the group only describes, so it starts no worker and takes no agent; give it workers and slots, or leave the agent out")
+			}
 		}
 	}
 	return nil

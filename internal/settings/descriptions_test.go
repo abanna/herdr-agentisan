@@ -77,6 +77,16 @@ func TestGroupDescriptions(t *testing.T) {
 			want: settings.Group{Workers: 1, Slots: 2, Description: "runs the gates"}, layer: settings.LayerShared,
 			teams: map[string]string{"qa": "runs the gates"},
 		},
+		"a shared group that describes, with an agent, given counts by the project": {
+			file: "[groups.qa]\ndescription = \"runs the gates\"\nagent = { model = \"gpt-5.1-codex\" }\n" + app + "[projects.app.groups.qa]\nworkers = 1\nslots = 2\n", group: "qa",
+			want: settings.Group{Workers: 1, Slots: 2, Agent: settings.Agent{Model: "gpt-5.1-codex"}, Description: "runs the gates"}, layer: settings.LayerShared,
+			teams: map[string]string{"qa": "runs the gates"},
+		},
+		"a project group that describes, with an agent, given counts by the repo file": {
+			file: app + "[projects.app.groups.qa]\ndescription = \"runs the gates\"\nagent = { model = \"sonnet\" }\n", repoFile: "[groups.qa]\nworkers = 1\nslots = 2\n", group: "qa",
+			want: settings.Group{Workers: 1, Slots: 2, Agent: settings.Agent{Model: "sonnet"}, Description: "runs the gates"}, layer: settings.LayerProject,
+			teams: map[string]string{"qa": "runs the gates"},
+		},
 		"a group that only describes, with an empty agent table": {
 			file: app + "[projects.app.groups.qa]\ndescription = \"runs the gates\"\nagent = {}\n", group: "qa",
 			want: settings.Group{Description: "runs the gates", DescribesOnly: true}, layer: settings.LayerProject,
@@ -136,8 +146,9 @@ func TestGroupDescriptions(t *testing.T) {
 // TestGroupDescriptionErrors: a description is one line every client draws
 // as written, at most 80 characters; a group that sets workers or slots
 // still needs both; a group that only describes takes no agent, from any
-// layer; boss is never a group; and a repo file cannot set one, since the
-// daemon reads no repo file. Each error names the key path and its
+// layer, judged once the project's whole configuration is merged; boss is
+// never a group; and a repo file cannot set one, since the daemon reads no
+// repo file. Each error names the key path and its
 // layer, never the value, which may carry terminal escapes.
 func TestGroupDescriptionErrors(t *testing.T) {
 	t.Parallel()
@@ -153,6 +164,11 @@ func TestGroupDescriptionErrors(t *testing.T) {
 		wantIn   []string
 		value    string // a part of the value the error must not hold
 		inRepo   bool   // only the repo file is wrong, which the daemon never reads
+		// whole is judged only on a project's whole merge, its repo file's
+		// counts included, which the daemon never builds.
+		whole bool
+		// daemonErr is the daemon's refusal when it is not ErrInvalid.
+		daemonErr error
 		// noProject loads with no project selected, which lints every
 		// project's table, as the daemon's read does.
 		noProject bool
@@ -193,18 +209,22 @@ func TestGroupDescriptionErrors(t *testing.T) {
 		},
 		"an agent's model on a group that only describes": {
 			file:   app + "[projects.app.groups.qa]\ndescription = \"x\"\nagent = { model = \"sonnet\" }\n",
+			whole:  true,
 			wantIn: []string{"projects.app.groups.qa.agent.model (project", "only describes", "starts no worker"},
 		},
 		"an agent's command on a group that only describes": {
 			file:   app + "[projects.app.groups.qa]\ndescription = \"x\"\nagent = { command = [\"claude\"] }\n",
+			whole:  true,
 			wantIn: []string{"projects.app.groups.qa.agent.command (project", "only describes"},
 		},
 		"an empty command on a group that only describes": {
-			file:   app + "[projects.app.groups.qa]\ndescription = \"x\"\nagent = { command = [] }\n",
-			wantIn: []string{"projects.app.groups.qa.agent.command (project", "only describes"},
+			file:      app + "[projects.app.groups.qa]\ndescription = \"x\"\nagent = { command = [] }\n",
+			daemonErr: settings.ErrBypassesAgentisan, // D12 refuses an empty command in every view
+			wantIn:    []string{"projects.app.groups.qa.agent.command (project", "only describes"},
 		},
 		"both, the command named first": {
 			file:   app + "[projects.app.groups.qa]\ndescription = \"x\"\nagent = { command = [\"claude\"], model = \"sonnet\" }\n",
+			whole:  true,
 			wantIn: []string{"projects.app.groups.qa.agent.command (project", "only describes"},
 		},
 		"an agent from --set on a group that only describes": {
@@ -263,6 +283,14 @@ func TestGroupDescriptionErrors(t *testing.T) {
 			_, err = settings.Teams(dir)
 			if tc.inRepo {
 				assert.NoError(t, err, "the daemon reads no repo file")
+				return
+			}
+			if tc.whole {
+				assert.NoError(t, err, "the daemon reads no repo file, so it cannot know the group only describes")
+				return
+			}
+			if tc.daemonErr != nil {
+				assert.ErrorIs(t, err, tc.daemonErr)
 				return
 			}
 			assert.ErrorIs(t, err, settings.ErrInvalid, "the daemon refuses it too")
