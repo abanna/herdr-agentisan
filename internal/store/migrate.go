@@ -148,9 +148,9 @@ func failed(what string, err error) error {
 // A plain read of the version, outside any transaction, decides only whether
 // a step whose busy wait ran out runs again (see Open): it does when the
 // version rose during that wait past every version seen so far, which another
-// opener's migration does. Each retry raises that mark, and a version past
-// len(set) is a newer build's, refused at once, so there are at most len(set)
-// retries.
+// opener's migration does. Each retry raises that mark, so there is at most
+// one retry per version, and a version past len(set) is a newer build's,
+// refused at once.
 func migrate(ctx context.Context, db *sql.DB, set []migration) (int, error) {
 	seen := -1
 	for {

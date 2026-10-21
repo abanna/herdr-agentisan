@@ -111,7 +111,7 @@ type Focus struct {
 // that opener is still making progress. A step whose wait ran out runs once
 // more if, during that wait, the fresh file got its first write (once per
 // Open: in a race that is the other opener's switch to WAL) or the schema
-// version advanced (at most once per migration). A lock held by anything
+// version advanced (at most once per version). A lock held by anything
 // else, such as a person's sqlite3 on a database already written, makes
 // neither change and is ErrOpen after BusyTimeout as before. In production
 // the exception never applies: one daemon opens state.db, under daemon.lock's

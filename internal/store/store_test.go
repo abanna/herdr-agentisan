@@ -384,9 +384,11 @@ func TestOpenWaitsForALockUpToTheBusyTimeout(t *testing.T) {
 // one on the same file waits out the busy timeout behind it when the disk is
 // slow. If the other opener made progress meanwhile, by applying a migration
 // or giving the fresh file its first write (its switch to WAL), Open waits
-// again instead of failing, so racing openers all succeed (NERD-5364). Any
-// other write is no such progress: Open fails with ErrOpen after BusyTimeout,
-// as with a lock held and never used.
+// again instead of failing, so racing openers all succeed (NERD-5364). It
+// waits again once per progress: if the other opener then keeps its lock past
+// that second wait, Open fails with ErrOpen after it. Any other write is no
+// such progress: Open fails with ErrOpen after BusyTimeout, as with a lock
+// held and never used.
 func TestOpenWaitsAgainWhileAnotherOpenerProgresses(t *testing.T) {
 	t.Parallel()
 	const (
@@ -396,6 +398,9 @@ func TestOpenWaitsAgainWhileAnotherOpenerProgresses(t *testing.T) {
 		// on an fsync.
 		progressAt = 1500 * time.Millisecond
 		releaseAt  = store.BusyTimeout + 2*time.Second // past Open's first wait
+		// Past Open's second wait, and inside the third one a retry without
+		// bound would make, which would then succeed.
+		heldUntil = 2*store.BusyTimeout + 3*time.Second
 	)
 	file := func(sql string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(sql)} }
 	one := fstest.MapFS{"0001_a.sql": file("CREATE TABLE a (x INTEGER);")}
@@ -405,6 +410,7 @@ func TestOpenWaitsAgainWhileAnotherOpenerProgresses(t *testing.T) {
 		migrated bool   // the file is at one's version, else empty
 		lock     string // how the other connection takes its lock, before Open
 		progress string // what it runs at progressAt, keeping its lock
+		held     bool   // it keeps the lock until heldUntil, not releaseAt
 		want     error
 	}{
 		"another opener applies the last migration": {
@@ -417,6 +423,16 @@ func TestOpenWaitsAgainWhileAnotherOpenerProgresses(t *testing.T) {
 			// WAL readers out again until the release.
 			lock:     "BEGIN EXCLUSIVE",
 			progress: "COMMIT; PRAGMA journal_mode = WAL; PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE",
+		},
+		"after a migration it waits once more, not twice": {
+			migrated: true, lock: "BEGIN IMMEDIATE",
+			progress: "CREATE TABLE b (y INTEGER); PRAGMA user_version = 2; COMMIT; BEGIN IMMEDIATE",
+			held:     true, want: store.ErrOpen,
+		},
+		"after the first write it waits once more, not twice": {
+			lock:     "BEGIN EXCLUSIVE",
+			progress: "COMMIT; PRAGMA journal_mode = WAL; PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE",
+			held:     true, want: store.ErrOpen,
 		},
 		"a newer build's migration is refused at once": {
 			migrated: true, lock: "BEGIN IMMEDIATE",
@@ -461,7 +477,11 @@ func TestOpenWaitsAgainWhileAnotherOpenerProgresses(t *testing.T) {
 						t.Logf("progress: %v", err)
 					}
 				})
-				released := time.AfterFunc(releaseAt, func() { _ = conn.Close(); _ = other.Close() })
+				release := releaseAt
+				if tc.held {
+					release = heldUntil
+				}
+				released := time.AfterFunc(release, func() { _ = conn.Close(); _ = other.Close() })
 				t.Cleanup(func() { progressed.Stop(); released.Stop(); _ = conn.Close(); _ = other.Close() })
 
 				start := time.Now()
@@ -473,6 +493,12 @@ func TestOpenWaitsAgainWhileAnotherOpenerProgresses(t *testing.T) {
 						require.NoError(t, s.Close())
 					}
 					continue
+				}
+				if tc.held {
+					require.ErrorIs(t, err, tc.want)
+					assert.GreaterOrEqual(t, elapsed, 2*store.BusyTimeout-300*time.Millisecond, "it waited once more after the progress")
+					assert.Less(t, elapsed, heldUntil, "it waited only once more")
+					return
 				}
 				if tc.want != nil {
 					require.ErrorIs(t, err, tc.want)
