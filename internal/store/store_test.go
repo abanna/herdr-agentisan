@@ -927,3 +927,130 @@ func TestClosedStoreFails(t *testing.T) {
 	}
 	assert.Equal(t, store.SchemaVersion(), s.UserVersion(), "the version the store opened at stays readable")
 }
+
+// endless is a statement that never finishes on its own: only an interrupt
+// ends it.
+const endless = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c"
+
+// interrupt cancels a running statement on s's connection mid-flight, the
+// way a daemon stop cancels the statement in flight. A cancel that lands
+// before the statement starts interrupts nothing and leaves the connection
+// in the pool, so that attempt is retried: the driver discards the
+// connection it interrupted (database/sql's IsValid check), which is how the
+// test knows the statement ran.
+func interrupt(t *testing.T, s *store.Store) {
+	t.Helper()
+	db := store.DB(s)
+	for attempt := 0; db.Stats().OpenConnections > 0; attempt++ {
+		require.Less(t, attempt, 50, "no attempt interrupted a running statement")
+		ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+		var n int64
+		err := db.QueryRowContext(ctx, endless).Scan(&n)
+		cancel()
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	}
+}
+
+// TestCloseAfterAnInterruptedStatement: SQLite keeps an interrupt set on its
+// connection until the next statement starts, and the checkpoint it runs when
+// that connection closes fails on it, keeping the WAL. Close still leaves no
+// -wal or -shm behind, so a daemon stopped mid-statement closes state.db
+// cleanly (NERD-5355). A second Close is a no-op.
+func TestCloseAfterAnInterruptedStatement(t *testing.T) {
+	t.Parallel()
+	path := dbPath(t)
+	s, err := store.Open(t.Context(), path)
+	require.NoError(t, err)
+	require.NoError(t, s.RecordFocus(t.Context(), "w1:p1", time.Now()))
+	require.FileExists(t, path+"-wal", "the open store has its WAL")
+
+	interrupt(t, s)
+	require.NoError(t, s.Close())
+	assert.NoFileExists(t, path+"-wal", "the store was closed cleanly")
+	assert.NoFileExists(t, path+"-shm", "the store was closed cleanly")
+	require.NoError(t, s.Close(), "closing again is a no-op")
+	assert.Equal(t, []string{"w1:p1"}, focusPanes(t, path), "what it recorded is durable")
+}
+
+// TestCloseConcurrently: two Closes at once close the store once, and neither
+// fails on the other's close.
+func TestCloseConcurrently(t *testing.T) {
+	t.Parallel()
+	path := dbPath(t)
+	s, err := store.Open(t.Context(), path)
+	require.NoError(t, err)
+	interrupt(t, s)
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i := range errs {
+		wg.Go(func() { errs[i] = s.Close() })
+	}
+	wg.Wait()
+	assert.Equal(t, []error{nil, nil}, errs)
+	assert.NoFileExists(t, path+"-wal", "the store was closed cleanly")
+}
+
+// TestCloseReportsAConnectionItCannotOpen: after an interrupt, Close opens a
+// fresh connection to run its statement. One it cannot open, here because
+// the store's directory is gone, is reported, and the store is closed anyway.
+func TestCloseReportsAConnectionItCannotOpen(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	s, err := store.Open(t.Context(), filepath.Join(dir, "state.db"))
+	require.NoError(t, err)
+	interrupt(t, s)
+	require.NoError(t, os.RemoveAll(dir))
+
+	err = s.Close()
+	require.ErrorIs(t, err, store.ErrStore)
+	assert.NotErrorIs(t, err, context.DeadlineExceeded, "the open failed; nothing waited")
+	require.ErrorIs(t, s.RecordFocus(t.Context(), "w1:p1", time.Now()), store.ErrStore, "the store is closed")
+	require.NoError(t, s.Close(), "closing again is a no-op")
+}
+
+// TestCloseWithTheConnectionHeld: a store user still holding the connection
+// when Close runs makes Close report it after its wait rather than block
+// forever. The database is closed either way: the connection closes when its
+// holder lets go, and then the WAL goes.
+func TestCloseWithTheConnectionHeld(t *testing.T) {
+	t.Parallel()
+	path := dbPath(t)
+	s, err := store.Open(t.Context(), path)
+	require.NoError(t, err)
+	store.SetCloseWait(s, 50*time.Millisecond)
+	conn, err := store.DB(s).Conn(t.Context())
+	require.NoError(t, err)
+
+	closed := make(chan error, 1)
+	go func() { closed <- s.Close() }()
+	select {
+	case err := <-closed:
+		require.ErrorIs(t, err, store.ErrStore)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(10 * time.Second):
+		t.Fatal("Close blocked on the held connection")
+	}
+	require.ErrorIs(t, s.RecordFocus(t.Context(), "w1:p1", time.Now()), store.ErrStore, "the store is closed")
+
+	require.NoError(t, conn.Close())
+	assert.NoFileExists(t, path+"-wal", "the connection closed when its holder let go")
+	require.NoError(t, s.Close(), "closing again is a no-op")
+}
+
+// focusPanes reads the focus history's panes from path with a fresh
+// connection, oldest first.
+func focusPanes(t *testing.T, path string) []string {
+	t.Helper()
+	rows, err := raw(t, path).QueryContext(t.Context(), "SELECT pane_id FROM focus ORDER BY seq")
+	require.NoError(t, err)
+	defer rows.Close() //nolint:errcheck // read-only test query
+	var panes []string
+	for rows.Next() {
+		var p string
+		require.NoError(t, rows.Scan(&p))
+		panes = append(panes, p)
+	}
+	require.NoError(t, rows.Err())
+	return panes
+}
