@@ -176,7 +176,9 @@ exempts whatever is later added under that name.
   a header box, then the groups stacked as boxes with one dense line per
   agent, in the snapshot's group order, scrolling to keep the selection in
   view. It reads the daemon (`DaemonConfig`) or a fixture, and Jump focuses
-  an unnamed row by its pane id. `/` narrows the agents to a search query in
+  an unnamed row by its pane id. From the daemon it shows its own team:
+  `locate.go` finds the pane running it by its pid, and the daemon maps that
+  pane's workspace to a team (A24). `/` narrows the agents to a search query in
   place (`search.go`, ADR-001 A20). Goldens in `testdata/`
   (`go test ./internal/dashboard/ -update`, then read every one).
 - `internal/devctl/` — the `devctl` cobra tree: the coverage floor, the

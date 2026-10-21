@@ -1447,3 +1447,65 @@ func TestRunWithClosedStdin(t *testing.T) {
 		t.Fatal("cancelling the context did not stop the program")
 	}
 }
+
+// TestNoTeamHereDrawsNoBoard: a source saying there is no team where the
+// dashboard runs clears the board, unlike any other failure, which keeps the
+// last good one: no team is better than another place's. The body says so,
+// the footer why, and the next good poll draws the team again.
+func TestNoTeamHereDrawsNoBoard(t *testing.T) {
+	t.Parallel()
+
+	full := fixture(t, "full")
+	src := &script{steps: []func() (snapshot.Snapshot, error){
+		serve(full),
+		fail(fmt.Errorf("this workspace (w9) is not a team's; pass --project: %w", dashboard.ErrNoTeamHere)),
+		serve(full),
+	}}
+	cfg := config(src, &recorder{})
+	cfg.Interval = time.Millisecond
+	m, tick := startedPolling(t, cfg, 120, 40)
+	require.Contains(t, m.View().Content, "pee01")
+
+	m, tick = pollOnce(t, m, tick)
+	out := m.View().Content
+	assert.NotContains(t, out, "pee01", "no board for a place with no team")
+	assert.Contains(t, out, "no team in this workspace")
+	assert.NotContains(t, out, "waiting for the daemon")
+	assert.Contains(t, out, "✖ this workspace (w9) is not a team's; pass --project")
+	_, ok := m.Selected()
+	assert.False(t, ok, "nothing to select")
+	m, cmd := update(t, m, keyDown)
+	assert.Nil(t, cmd)
+	assert.Nil(t, m.Frame().Snapshot)
+	assert.True(t, m.Frame().NoTeam)
+
+	m, _ = pollOnce(t, m, tick)
+	out = m.View().Content
+	assert.Contains(t, out, "pee01")
+	assert.NotContains(t, out, "no team in this workspace")
+	assert.NotContains(t, out, "pass --project")
+}
+
+// noted is a source with a note of its own.
+type noted struct {
+	*script
+	note string
+}
+
+func (n noted) Note() string { return n.note }
+
+// TestSourceNoteInTheFooter: a source's own note, such as herdr not
+// answering where the dashboard runs, joins the standing note.
+func TestSourceNoteInTheFooter(t *testing.T) {
+	t.Parallel()
+	src := noted{script: &script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "full"))}}, note: "herdr not answering: the team of HERDR_WORKSPACE_ID (w2)"}
+	cfg := config(src, &recorder{})
+	cfg.Note = "focus off"
+	m := started(t, cfg, 200, 40)
+	assert.Equal(t, "focus off · herdr not answering: the team of HERDR_WORKSPACE_ID (w2)", m.Frame().Note)
+
+	cfg.Note = ""
+	m = started(t, cfg, 200, 40)
+	assert.Equal(t, "herdr not answering: the team of HERDR_WORKSPACE_ID (w2)", m.Frame().Note)
+	assert.Contains(t, m.View().Content, "herdr not answering: the team of HERDR_WORKSPACE_ID (w2)")
+}
