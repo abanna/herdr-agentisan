@@ -72,19 +72,19 @@ type snapshotCache struct {
 }
 
 // store serves every team in m from now on, each snapshot built at at with
-// clock and then given to fill, when set, with its project (the GitHub
-// header, A29), and spaces to an op that selects nothing. A team whose
-// snapshot would not fit one answer line keeps its last one, and the others
-// are unaffected: the error is ErrSnapshotTooLarge, naming each such team. A
-// team gone from m is gone from the op.
-func (c *snapshotCache) store(m team.Model, spaces string, at time.Time, clock *team.StageClock, fill func(project string, s *snapshot.Snapshot)) error {
+// clock and idle (A37) and then given to fill, when set, with its project
+// (the GitHub header, A29), and spaces to an op that selects nothing. A team
+// whose snapshot would not fit one answer line keeps its last one, and the
+// others are unaffected: the error is ErrSnapshotTooLarge, naming each such
+// team. A team gone from m is gone from the op.
+func (c *snapshotCache) store(m team.Model, spaces string, at time.Time, clock *team.StageClock, idle *team.IdleClock, fill func(project string, s *snapshot.Snapshot)) error {
 	c.mu.Lock()
 	prev := c.cur
 	c.mu.Unlock()
 	next := &teams{snaps: make(map[string]json.RawMessage, len(m.Projects)), teamOf: map[string]string{}, spaces: spaces}
 	var errs []error
 	for _, p := range m.Projects {
-		snap := team.Snapshot(m, p.Name, at, clock)
+		snap := team.Snapshot(m, p.Name, at, clock, idle)
 		if fill != nil {
 			fill(p.Name, &snap)
 		}

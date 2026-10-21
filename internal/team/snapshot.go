@@ -31,9 +31,10 @@ import (
 // a jump goes by pane id. Its status is herdr's, "ready" when it carries a
 // handoff token, and "unknown" for a plain shell. ctx is the token when it is
 // a bare integer from 0 to 100 and left out otherwise; item and stage are
-// the tokens; the stage's start comes from clock, which may be nil. The
-// model is left out: the daemon does not know it.
-func Snapshot(m Model, project string, at time.Time, clock *StageClock) snapshot.Snapshot {
+// the tokens; the stage's start comes from clock, and an agent's rest from
+// idle (A37), either of which may be nil. The tab is herdr's. The model is
+// left out: the daemon does not know it.
+func Snapshot(m Model, project string, at time.Time, clock *StageClock, idle *IdleClock) snapshot.Snapshot {
 	s := snapshot.Snapshot{V: snapshot.Version, At: at.UTC(), Team: project, Groups: []snapshot.Group{}}
 	i := slices.IndexFunc(m.Projects, func(p Project) bool { return p.Name == project })
 	if i < 0 {
@@ -45,7 +46,7 @@ func Snapshot(m Model, project string, at time.Time, clock *StageClock) snapshot
 	}
 	for _, w := range pr.Boss {
 		if w.Pane.IsAgent() {
-			s.Boss = &snapshot.Boss{Agent: row(w.Pane, clock)}
+			s.Boss = &snapshot.Boss{Agent: row(w.Pane, clock, idle)}
 			break
 		}
 	}
@@ -57,7 +58,7 @@ func Snapshot(m Model, project string, at time.Time, clock *StageClock) snapshot
 	for _, g := range groups {
 		out := snapshot.Group{Name: g.Name, Agents: make([]snapshot.Agent, 0, len(g.Workers))}
 		for _, w := range g.Workers {
-			out.Agents = append(out.Agents, row(w.Pane, clock))
+			out.Agents = append(out.Agents, row(w.Pane, clock, idle))
 		}
 		s.Groups = append(s.Groups, out)
 	}
@@ -72,9 +73,10 @@ func rank(order []string, name string) int {
 	return len(order)
 }
 
-// row is one pane as a snapshot row.
-func row(p Pane, clock *StageClock) snapshot.Agent {
-	a := snapshot.Agent{Name: p.Name, PaneID: p.ID, Status: rowStatus(p), Item: p.Item, Stage: p.Stage}
+// row is one pane as a snapshot row. Only an agent rests: a plain shell's
+// status is unknown, so it never carries idle_since, whatever herdr says.
+func row(p Pane, clock *StageClock, idle *IdleClock) snapshot.Agent {
+	a := snapshot.Agent{Name: p.Name, PaneID: p.ID, TabID: p.TabID, Status: rowStatus(p), Item: p.Item, Stage: p.Stage}
 	if a.Name == "" {
 		a.Unnamed = true
 		a.Name = p.ID
@@ -88,6 +90,10 @@ func row(p Pane, clock *StageClock) snapshot.Agent {
 	if since, ok := clock.Since(p.ID, p.Stage); ok {
 		since = since.UTC()
 		a.StageStartedAt = &since
+	}
+	if since, ok := idle.Since(p.ID); ok && p.IsAgent() {
+		since = since.UTC()
+		a.IdleSince = &since
 	}
 	return a
 }

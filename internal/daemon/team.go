@@ -220,7 +220,7 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	if agentsErr == nil {
 		tp.stages.Observe(m, now)
 		header := func(project string, s *snapshot.Snapshot) { tp.header.fill(project, s, now) }
-		if err := tp.cache.store(m, tp.cfg.spaces.Project, now, tp.stages, header); err != nil {
+		if err := tp.cache.store(m, tp.cfg.spaces.Project, now, tp.stages, tp.idle, header); err != nil {
 			o.Logger.Error().Err(err).Msg("team poll: cache the snapshots; a team too large to serve keeps its last one")
 		}
 	}

@@ -2,8 +2,9 @@
 // that draws, from snapshots, a header box (the project's PRs, issues and
 // test slots; the boss), then one box per group stacked under it with one
 // line per agent. Enter or a click focuses an agent; / narrows the agents to
-// a search query (search.go); a click on [ btop ] opens btop in a herdr
-// popup.
+// a search query (search.go); 1-9, or a click on a group's title, opens that
+// group's view, a box per agent (groupview.go); a click on [ btop ] opens
+// btop in a herdr popup.
 //
 // The model polls a snapshot.Source on a tea.Tick. Its View is Render applied
 // to the model's Frame and size, a pure function, so frames are golden-tested
@@ -178,13 +179,21 @@ type Model struct {
 	// sourceNote is the source's own footer note, such as herdr not
 	// answering where the dashboard runs.
 	sourceNote string
+	// group names the group whose view is open, "" for the overview. The
+	// view follows the group by name across refreshes; while it is open
+	// the selection stays in that group.
+	group string
+	// groupNote says the open group's view closed because the group is
+	// gone. The next key or click clears it.
+	groupNote string
 }
 
-// The arrow keys, as tea.KeyPressMsg.String names them. Left and right are
-// unbound: the groups stack, so there is nothing beside the selection.
+// The arrow keys, as tea.KeyPressMsg.String names them. Left leaves a
+// group's view; right is unbound.
 const (
 	keyUp   = "up"
 	keyDown = "down"
+	keyLeft = "left"
 )
 
 // keyEnter is Enter, as tea.KeyPressMsg.String names it: the jump.
@@ -244,8 +253,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.sourceErr = msg.err // keep drawing the last good snapshot
 			if errors.Is(msg.err, ErrNoTeamHere) {
-				// Not this place's team: draw none, never the last one.
+				// Not this place's team: draw none, never the last one,
+				// and no view of one of its groups.
 				m.noTeam = true
+				m.group = ""
 				m.show(nil)
 				m.settle()
 			}
@@ -254,7 +265,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		s := msg.snap
 		m.sourceErr, m.noTeam = nil, false
 		m.show(&s)
-		m.reanchor()
+		m.refollow()
 		m.settle()
 		return m, m.tick()
 	case tickMsg:
@@ -285,23 +296,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	m.groupNote = ""
 	if m.search.on {
 		return m.searchKey(msg)
 	}
-	switch msg.String() {
+	switch k := msg.String(); k {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	case "/":
+		m.closeGroup()
 		m.startSearch()
 	case "?":
 		m.help = !m.help
 	case "esc":
+		// Help closes first; then the view.
+		if !m.help {
+			m.closeGroup()
+		}
 		m.help = false
+	case keyLeft:
+		m.help = false
+		m.closeGroup()
 	case keyUp, keyDown:
-		m.move(msg.String())
+		m.move(k)
 		m.settle()
 	case keyEnter:
 		return m, m.focus()
+	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
+		if m.raw != nil && int(k[0]-'1') < len(m.raw.Groups) {
+			m.openGroup(m.raw.Groups[k[0]-'1'].Name)
+		}
 	}
 	return m, nil
 }
@@ -310,13 +334,15 @@ func (m Model) click(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	if msg.Button != tea.MouseLeft {
 		return m, nil
 	}
+	m.groupNote = ""
 	if m.help {
 		// The overlay hides the groups: a click closes it, and acts on
 		// nothing the reader cannot see.
 		m.help = false
 		return m, nil
 	}
-	what, sel := plan(m.Frame(), m.Width(), m.Height()).hit(msg.X, msg.Y)
+	l := plan(m.Frame(), m.Width(), m.Height())
+	what, sel := l.hit(msg.X, msg.Y)
 	switch what {
 	case hitAgent:
 		m.choose(sel)
@@ -324,6 +350,15 @@ func (m Model) click(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		m.endSearch() // a jump ends a search, as Enter does
 		m.settle()
 		return m, cmd
+	case hitGroup:
+		// By name: a search narrows the groups, so the index the click
+		// found is not the group's index once the search ends.
+		m.endSearch()
+		m.openGroup(l.groups[sel.Group].Name)
+		return m, nil
+	case hitBack:
+		m.closeGroup()
+		return m, nil
 	case hitBtop:
 		return m, m.openBtop()
 	default:
@@ -345,10 +380,12 @@ func (m Model) Frame() Frame {
 	f := Frame{
 		Snapshot: m.snap, Selection: m.sel, Scroll: m.scroll, Now: m.clock,
 		Help: m.help, Btop: m.cfg.Btop != nil, Note: m.cfg.Note, NoTeam: m.noTeam,
-		Search: m.search.on, Query: m.search.query,
+		Search: m.search.on, Query: m.search.query, Group: m.group,
 	}
-	if m.sourceNote != "" {
-		f.Note = strings.TrimPrefix(f.Note+sep+m.sourceNote, sep)
+	for _, note := range []string{m.sourceNote, m.groupNote} {
+		if note != "" {
+			f.Note = strings.TrimPrefix(f.Note+sep+note, sep)
+		}
 	}
 	for _, err := range []error{m.sourceErr, m.focusErr, m.btopErr} {
 		if err != nil {
@@ -506,6 +543,7 @@ func clamp(groups []snapshot.Group, sel Selection) Selection {
 
 // move applies one arrow key. Up and down walk the agents in the snapshot's
 // order, crossing into the previous or next group, and stop at either end.
+// In a group's view they stay in the group.
 func (m *Model) move(key string) {
 	if m.snap == nil {
 		return
@@ -519,17 +557,82 @@ func (m *Model) move(key string) {
 	case keyDown:
 		if sel.Agent+1 < len(groups[sel.Group].Agents) {
 			sel.Agent++
-		} else if g := nextGroup(groups, sel.Group, 1); g >= 0 {
+		} else if g := nextGroup(groups, sel.Group, 1); g >= 0 && m.group == "" {
 			sel = Selection{Group: g}
 		}
 	case keyUp:
 		if sel.Agent > 0 {
 			sel.Agent--
-		} else if g := nextGroup(groups, sel.Group, -1); g >= 0 {
+		} else if g := nextGroup(groups, sel.Group, -1); g >= 0 && m.group == "" {
 			sel = Selection{Group: g, Agent: len(groups[g].Agents) - 1}
 		}
 	}
 	m.choose(sel)
+}
+
+// openGroup opens the view of the group named name, from the overview or
+// another group's view, closing the help, which would hide it. The
+// selection stays when it is in that group, and moves to the group's first
+// agent otherwise.
+func (m *Model) openGroup(name string) {
+	g := -1
+	if m.snap != nil {
+		g = groupIndex(m.snap.Groups, name)
+	}
+	if g < 0 {
+		return
+	}
+	m.help = false
+	m.group = name
+	if m.sel.Group != g || !validSelection(m.snap.Groups, m.sel) {
+		m.choose(Selection{Group: g})
+	}
+	m.scroll = 0
+	m.settle()
+}
+
+// closeGroup returns to the overview, keeping the selection: the agent
+// selected in the view, or, from a group with none, the one before.
+func (m *Model) closeGroup() {
+	if m.group == "" {
+		return
+	}
+	m.group = ""
+	if m.snap != nil {
+		m.reanchor()
+	}
+	m.scroll = 0
+	m.settle()
+}
+
+// refollow puts the selection back after a refresh. On the overview it
+// follows its row anywhere (reanchor). In a group's view the view follows
+// the group by name, and the selection its row within the group, or keeps
+// its place there, clamped; a group that is gone returns to the overview,
+// with a note.
+func (m *Model) refollow() {
+	if m.group == "" {
+		m.reanchor()
+		return
+	}
+	g := groupIndex(m.snap.Groups, m.group)
+	if g < 0 {
+		m.groupNote = fmt.Sprintf("group %q is gone", clean(m.group))
+		m.group = ""
+		m.reanchor()
+		return
+	}
+	agents := m.snap.Groups[g].Agents
+	for a, ag := range agents {
+		if m.anchor != (rowKey{}) && keyOf(ag) == m.anchor {
+			m.sel = Selection{Group: g, Agent: a}
+			return
+		}
+	}
+	m.sel = Selection{Group: g, Agent: min(max(m.sel.Agent, 0), max(len(agents)-1, 0))}
+	if a, ok := m.Selected(); ok {
+		m.anchor = keyOf(a)
+	}
 }
 
 // nextGroup is the next group from g in direction step that has agents, or

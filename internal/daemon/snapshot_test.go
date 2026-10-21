@@ -104,7 +104,7 @@ func fullTeam() ([]herdr.WorkspaceInfo, []map[string]any, []map[string]any) {
 
 // wantFullTeam is fullTeam's snapshot at t0, by hand: the groups in v12's
 // order, then the rest by name; the rows by pane id; every stage first seen
-// at t0.
+// at t0, and every agent at rest first seen resting at t0 (A37).
 func wantFullTeam() snapshot.Snapshot {
 	return snapshot.Snapshot{
 		V: 1, At: t0, Team: "agentisan", Project: &snapshot.Project{Color: "#7c3aed"},
@@ -114,15 +114,15 @@ func wantFullTeam() snapshot.Snapshot {
 		Groups: []snapshot.Group{
 			{Name: "coders", Agents: []snapshot.Agent{
 				{Name: "pee01", PaneID: "wN:p1", Status: "working", Ctx: new(40), Item: "NERD-5255", Stage: "build_test", StageStartedAt: new(t0)},
-				{Name: "pee02", PaneID: "wN:p2", Status: "ready", Ctx: new(61)},
+				{Name: "pee02", PaneID: "wN:p2", Status: "ready", Ctx: new(61), IdleSince: new(t0)},
 				{Name: "pee03", PaneID: "wN:p3", Status: "blocked", Ctx: new(78), Item: "NERD-5247", Stage: "waiting on boss", StageStartedAt: new(t0)},
-				{Name: "scratch", Unnamed: true, PaneID: "wN:p4", Status: "idle"},
+				{Name: "scratch", Unnamed: true, PaneID: "wN:p4", Status: "idle", IdleSince: new(t0)},
 				{Name: "wN:p5", Unnamed: true, PaneID: "wN:p5", Status: "unknown"},
 			}},
 			{Name: "precheck", Agents: []snapshot.Agent{
 				{Name: "wP:p1", Unnamed: true, PaneID: "wP:p1", Status: "working", Ctx: new(100), Stage: "running", StageStartedAt: new(t0)},
 			}},
-			{Name: "qa", Agents: []snapshot.Agent{{Name: "qa", PaneID: "wQ:p1", Status: "idle"}}},
+			{Name: "qa", Agents: []snapshot.Agent{{Name: "qa", PaneID: "wQ:p1", Status: "idle", IdleSince: new(t0)}}},
 			{Name: "research", Agents: []snapshot.Agent{}},
 			{Name: "zeta", Agents: []snapshot.Agent{{Name: "notes", Unnamed: true, PaneID: "wZ:p1", Status: "unknown"}}},
 		},
@@ -762,19 +762,19 @@ func wantTeams() map[string]snapshot.Snapshot {
 		"agentisan": wantFullTeam(),
 		"alpha": {
 			V: 1, At: t0, Team: "alpha", Project: &snapshot.Project{Color: "#16a34a"},
-			Boss: &snapshot.Boss{Agent: snapshot.Agent{Name: "al-boss", PaneID: "w14:p1", Status: "working"}},
+			Boss: &snapshot.Boss{Agent: snapshot.Agent{Name: "al-boss", PaneID: "w14:p1", TabID: "w14:t1", Status: "working"}},
 			Groups: []snapshot.Group{
 				{Name: "coder", Agents: []snapshot.Agent{
-					{Name: "al-coder-1", PaneID: "w14:p3", Status: "working", Ctx: new(50), Item: "NERD-5285", Stage: "build_test", StageStartedAt: new(t0)},
+					{Name: "al-coder-1", PaneID: "w14:p3", TabID: "w14:t3", Status: "working", Ctx: new(50), Item: "NERD-5285", Stage: "build_test", StageStartedAt: new(t0)},
 				}},
-				{Name: "review", Agents: []snapshot.Agent{{Name: "al-review-1", PaneID: "w14:p2", Status: "idle", Ctx: new(12)}}},
+				{Name: "review", Agents: []snapshot.Agent{{Name: "al-review-1", PaneID: "w14:p2", TabID: "w14:t2", Status: "idle", Ctx: new(12), IdleSince: new(t0)}}},
 			},
 		},
 		"beta": {
 			V: 1, At: t0, Team: "beta",
 			Groups: []snapshot.Group{
-				{Name: "research", Agents: []snapshot.Agent{{Name: "be-research-1", PaneID: "w20:p2", Status: "working"}}},
-				{Name: "librarian", Agents: []snapshot.Agent{{Name: "w20:p1", Unnamed: true, PaneID: "w20:p1", Status: "blocked"}}},
+				{Name: "research", Agents: []snapshot.Agent{{Name: "be-research-1", PaneID: "w20:p2", TabID: "w20:t2", Status: "working"}}},
+				{Name: "librarian", Agents: []snapshot.Agent{{Name: "w20:p1", Unnamed: true, PaneID: "w20:p1", TabID: "w20:t1", Status: "blocked"}}},
 			},
 		},
 	}

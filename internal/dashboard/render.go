@@ -99,10 +99,11 @@ type Frame struct {
 	// Snapshot is nil until the first snapshot arrives.
 	Snapshot  *snapshot.Snapshot
 	Selection Selection
-	// Scroll is the first line of the groups the previous frame showed. The
-	// groups stay there unless the selection would leave the screen, so the
-	// view does not jump while the selection moves within it. The model
-	// keeps the value Render settles on (see Model).
+	// Scroll is the first line of the groups the previous frame showed, or
+	// of the boxes in a group's view. They stay there unless the selection
+	// would leave the screen, so the view does not jump while the selection
+	// moves within it. The model keeps the value Render settles on (see
+	// Model).
 	Scroll int
 	// Now is the clock: drawn in the header (HH:MM, in Now's location) and
 	// the end of every stage time and of the boss's runtime.
@@ -124,6 +125,10 @@ type Frame struct {
 	Search bool
 	// Query is the search query as typed.
 	Query string
+	// Group names the group whose view is open (ADR-001 A37); "" is the
+	// overview. A name no group of Snapshot has, or a query being typed,
+	// draws the overview.
+	Group string
 }
 
 // Render draws f for a w x h terminal: exactly h lines, none wider than w,
@@ -152,6 +157,8 @@ func Render(f Frame, w, h int, opts Options) string {
 		canvas[l.top] = line{{" ", plainStyle}, {noMatches, dimStyle}}
 	case len(l.groups) == 0:
 		canvas[l.top] = line{{" ", plainStyle}, {noTeam, dimStyle}}
+	case l.view != nil:
+		l.drawView(canvas, th)
 	default:
 		for i := range l.avail {
 			if l.offset+i >= len(l.rows) {
@@ -234,6 +241,9 @@ type layout struct {
 	cols         columns
 	now          time.Time
 	btop         span
+	// view is the open group's view, nil on the overview. offset is then
+	// its first line.
+	view *groupView
 }
 
 // plan lays f out on a w x h terminal. The header gives way as h shrinks:
@@ -266,6 +276,11 @@ func plan(f Frame, w, h int) layout {
 
 	l.groups = f.Snapshot.Groups
 	l.sel, l.selOK = f.Selection, validSelection(l.groups, f.Selection)
+	if g := groupIndex(l.groups, f.Group); f.Group != "" && !f.Search && g >= 0 {
+		l.view = planView(l, g, f.Scroll)
+		l.offset = l.view.offset
+		return l
+	}
 	l.cols = planColumns(l.groups, f.Now, rowWidth(w))
 	selRow, groupTop, groupBottom := -1, 0, 0
 	for g, grp := range l.groups {
@@ -338,26 +353,45 @@ const (
 	hitNothing target = iota
 	hitAgent
 	hitBtop
+	// hitGroup is a group's title on the overview; its Selection names the
+	// group alone.
+	hitGroup
+	// hitBack is a group view's ◀ back.
+	hitBack
 )
 
 // hit maps a cell to what is drawn there: an agent's row inside its box's
-// borders, the btop button, or nothing.
+// borders, a group's title, the btop button, a group view's ◀ back or one
+// of its boxes, or nothing.
 func (l layout) hit(x, y int) (target, Selection) {
 	if l.btop.ok && y == l.btop.y && x >= l.btop.x0 && x < l.btop.x1 {
 		return hitBtop, Selection{}
 	}
-	if y < l.top || y >= l.top+l.avail || x < 1 || x > l.w-2 {
+	if l.view != nil {
+		return l.view.hit(x, y)
+	}
+	if y < l.top || y >= l.top+l.avail || x < 0 || x > l.w-1 {
 		return hitNothing, Selection{}
 	}
 	i := l.offset + y - l.top
-	if i >= len(l.rows) || l.rows[i].kind != rowAgent {
+	if i >= len(l.rows) {
 		return hitNothing, Selection{}
 	}
-	return hitAgent, Selection{Group: l.rows[i].group, Agent: l.rows[i].agent}
+	switch r := l.rows[i]; {
+	case r.kind == rowTop:
+		return hitGroup, Selection{Group: r.group}
+	case r.kind == rowAgent && x >= 1 && x <= l.w-2:
+		return hitAgent, Selection{Group: r.group, Agent: r.agent}
+	default:
+		return hitNothing, Selection{}
+	}
 }
 
 // outOfView counts the agents above and below what is drawn.
 func (l layout) outOfView() (above, below int) {
+	if l.view != nil {
+		return l.view.outOfView()
+	}
 	for i, r := range l.rows {
 		switch {
 		case r.kind != rowAgent:
@@ -845,7 +879,7 @@ func padLeft(s string, width int) string {
 // at its right the count of agents out of view when the groups scroll.
 func footer(f Frame, l layout) line {
 	left := line{{" ", plainStyle}}
-	for _, s := range footerParts(f) {
+	for _, s := range footerParts(f, l.view != nil) {
 		if len(left) > 1 {
 			left = append(left, seg{sep, dimStyle})
 		}
@@ -872,6 +906,14 @@ func footer(f Frame, l layout) line {
 // searchHints are the keys that work while a query is typed.
 const searchHints = "enter jump · ↑↓ move · esc clear"
 
+// viewHints are the keys that work in a group's view, as hints names them.
+func viewHints(btop bool) string {
+	if btop {
+		return "enter jump · ↑↓ move · esc back · ctrl-b m btop · ? help · q quit"
+	}
+	return "enter jump · ↑↓ move · esc back · ? help · q quit"
+}
+
 // hints are the keys that work, as the footer names them. ctrl-b m is
 // herdr's own popup key for btop in this setup, named only where herdr is
 // reachable.
@@ -882,7 +924,9 @@ func hints(btop bool) string {
 	return "enter jump · ↑↓ move · ? help · q quit"
 }
 
-func footerParts(f Frame) []seg {
+// footerParts are the footer's parts; view is set when a group's view is
+// drawn.
+func footerParts(f Frame, view bool) []seg {
 	var parts []seg
 	if f.Search {
 		// The query leads, so errors never push it off the line.
@@ -896,10 +940,14 @@ func footerParts(f Frame) []seg {
 	if f.Note != "" {
 		parts = append(parts, seg{clean(f.Note), noteStyle})
 	}
-	if f.Search {
+	switch {
+	case f.Search:
 		return append(parts, seg{searchHints, dimStyle})
+	case view:
+		return append(parts, seg{viewHints(f.Btop), dimStyle})
+	default:
+		return append(parts, seg{hints(f.Btop), dimStyle})
 	}
-	return append(parts, seg{hints(f.Btop), dimStyle})
 }
 
 // helpRows are the help overlay's keys and what they do: only keys that
@@ -908,7 +956,9 @@ func helpRows(btop bool) [][2]string {
 	rows := [][2]string{
 		{"↑ ↓", "move through the agents"},
 		{keyEnter, "jump: focus and zoom"},
-		{"click", "jump: focus and zoom"},
+		{"click", "jump; a title opens its group"},
+		{"1-9", "open that group's view"},
+		{"esc ←", "back from a group's view"},
 		{"/", "search name, group, item, stage"},
 	}
 	if btop {
