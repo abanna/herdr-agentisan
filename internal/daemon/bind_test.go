@@ -691,6 +691,24 @@ VALUES ('ha-coder-1', 'w14:p2', 'w14:p9', 0, 'term_w14:p9', 1, 1)`)
 		assert.Equal(t, 2, strings.Count(logs.String(), anotherShell), "logged again once it came back")
 		assert.Equal(t, workerRow{Pane: "w14:p2", Terminal: "term_before", Status: "active", ShellPID: 4242, ShellStart: 9}, row(t, dir, th, "ha-coder-1"), "pending: never lost")
 	})
+	t.Run("a bound row's shell herdr cannot read", func(t *testing.T) {
+		t.Parallel()
+		th := newTeamHerdr(t)
+		withTeam(th)
+		dir := shortDir(t)
+		// Bound by its terminal with no shell yet, so every poll reads its
+		// pane's shell, which herdr cannot describe.
+		seedRow(t, dir, th, "ha-coder-1", "w14:p2", "term_w14:p2", 0, 0)
+		th.setShell("w14:p2", 4242, true)
+		var logs lockedLog
+		o := teamOpts(t, dir, th, workforceConfig(t))
+		o.Logger = zerolog.New(&logs)
+		o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 4242: 9}}).startTime
+		run(t, o)
+		polled(t, th.srv, 3)
+		assert.Equal(t, 1, strings.Count(logs.String(), unread), "logged once over three polls")
+		assert.Equal(t, workerRow{Pane: "w14:p2", Terminal: "term_w14:p2", Status: "active"}, row(t, dir, th, "ha-coder-1"), "still bound, with no shell")
+	})
 	t.Run("one pane two rows read in the same poll", func(t *testing.T) {
 		t.Parallel()
 		th := newTeamHerdr(t)

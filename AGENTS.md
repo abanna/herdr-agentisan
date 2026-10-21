@@ -132,7 +132,9 @@ exempts whatever is later added under that name.
   herdr's panes (`bind.go`, A35), rebuilds the team model, pushes `$team`
   and every agent pane's ctx display (`team.go`, A28) and caches every team's
   snapshot, each row with its agent's launch model from the pane's processes
-  (`models.go`, A39), with the workspaces each holds, which the `snapshot` op
+  (`models.go`, A39), sharing one `pane.process_info` reply per pane per poll
+  with the reconcile (`processinfo.go`),
+  with the workspaces each holds, which the `snapshot` op
   serves by project or workspace, so the op never calls herdr (A18, A24,
   `snapshot.go`, with `SnapshotSource`, the dashboard's client), each group
   with its description, re-read when the shared file changes

@@ -405,6 +405,94 @@ func TestLaunchModelsBudget(t *testing.T) {
 	assert.NotContains(t, logs.String(), "read a pane's processes", "running out of time is not a failed ask")
 }
 
+// budgetDial is a client of ph whose first dial spends the whole budget by
+// clk, as an answer that comes back on the deadline does, while the ask's
+// context, on the wall clock, is a second from expiring.
+func budgetDial(ph *procHerdr, clk *clock) herdr.Client {
+	var once sync.Once
+	return herdr.Client{SocketPath: ph.srv.Path, Dialed: func() error {
+		once.Do(func() { clk.advance(daemon.ModelBudget) })
+		return nil
+	}}
+}
+
+// TestLaunchModelsBudgetByTheClock: the budget is spent by the clock as well
+// as by the ask's context (A39), so a refusal that comes back after the
+// deadline, before the context records it, is not a failed ask, and no pane
+// after it is asked that poll. The next poll has a budget of its own.
+func TestLaunchModelsBudgetByTheClock(t *testing.T) {
+	t.Parallel()
+	ph := newProcHerdr(t)
+	ph.refuse("w1:p1", "server_error")
+	ph.set("w1:p2", agentProc(201, "claude", "--model", "sonnet"))
+	pt := &procs{start: map[int]uint64{201: 1}}
+	clk := &clock{now: t0}
+	lm := daemon.NewLaunchModels()
+	lm.SetClock(clk.Now)
+	var logs lockedLog
+	log := zerolog.New(&logs)
+	c := budgetDial(ph, clk)
+	panes := []herdr.PaneInfo{agentPane("w1:p1", "t1", "claude"), agentPane("w1:p2", "t2", "claude")}
+	failed := func() int { return strings.Count(logs.String(), "read a pane's processes") }
+
+	got, err := lm.Refresh(t.Context(), c, panes, pt.startTime, t0, log)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+	assert.Equal(t, map[string]int{"w1:p1": 1}, processAsks(ph.srv), "the pane after the deadline waits")
+	assert.Zero(t, failed(), "an answer after the deadline is not a failed ask")
+	assert.Equal(t, 1, strings.Count(logs.String(), "herdr is slow"), "the overrun is logged")
+
+	got, err = lm.Refresh(t.Context(), c, panes, pt.startTime, t0, log)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"w1:p2": "sonnet"}, got, "a new poll, a new budget")
+	assert.Equal(t, 1, failed(), "the same refusal within the budget is a failed ask")
+}
+
+// TestLaunchModelsHeldReplyPastTheBudget: a reply the poll already holds, as
+// the reconcile's shell read leaves it, gives its pane's model even once the
+// budget is spent, since reading it asks herdr nothing (A39); a held failure
+// is a failed ask, logged, not the budget's overrun. A pane with no reply
+// held still waits for a later poll.
+func TestLaunchModelsHeldReplyPastTheBudget(t *testing.T) {
+	t.Parallel()
+	ph := newProcHerdr(t)
+	ph.set("w1:p1", agentProc(101, "claude", "--model", "opus"))
+	ph.set("w1:p2", agentProc(201, "claude", "--model", "sonnet"))
+	ph.set("w1:p3", agentProc(301, "claude", "--model", "haiku"))
+	ph.refuse("w1:p4", "server_error")
+	pt := &procs{start: map[int]uint64{101: 1, 201: 1, 301: 1}}
+	pp := daemon.NewPaneProcesses()
+	reconcile := herdr.Client{SocketPath: ph.srv.Path}
+	for _, pane := range []string{"w1:p3", "w1:p4"} {
+		_, _ = pp.Ask(t.Context(), reconcile, pane)
+	}
+	clk := &clock{now: t0}
+	lm := daemon.NewLaunchModels()
+	lm.SetClock(clk.Now)
+	var logs lockedLog
+	panes := []herdr.PaneInfo{
+		agentPane("w1:p1", "t1", "claude"), agentPane("w1:p2", "t2", "claude"),
+		agentPane("w1:p3", "t3", "claude"), agentPane("w1:p4", "t4", "claude"),
+	}
+
+	got, err := lm.RefreshHeld(t.Context(), budgetDial(ph, clk), pp, panes, pt.startTime, t0, zerolog.New(&logs))
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"w1:p1": "opus", "w1:p3": "haiku"}, got, "the held reply gives its model past the budget")
+	assert.Equal(t, map[string]int{"w1:p1": 1, "w1:p3": 1, "w1:p4": 1}, processAsks(ph.srv), "nothing is asked past the budget")
+	assert.Equal(t, 1, strings.Count(logs.String(), "read a pane's processes"), "the held refusal is a failed ask")
+	assert.Contains(t, logs.String(), `"pane":"w1:p4"`)
+	assert.Equal(t, 1, strings.Count(logs.String(), "herdr is slow"), "w1:p2, left out, is the overrun")
+
+	before, logged := len(ph.srv.Requests()), logs.String()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	got, err = daemon.NewLaunchModels().RefreshHeld(ctx, budgetDial(ph, &clock{now: t0}), pp, panes, pt.startTime, t0, zerolog.New(&logs))
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"w1:p1": "opus", "w1:p3": "haiku"}, got, "a stopping poll still reads what it holds, w1:p1's now too")
+	assert.Len(t, ph.srv.Requests(), before, "and asks nothing")
+	assert.Equal(t, logged, logs.String(), "and logs nothing, the held refusal included")
+}
+
 // TestAgentPanes: a team's agent panes, workers and bosses, as pane.list
 // lists them; never a shell, nor a pane in no team.
 func TestAgentPanes(t *testing.T) {
@@ -463,6 +551,48 @@ func TestOneProcessInfoAskPerPanePerPoll(t *testing.T) {
 	polled(t, th.srv, 3)
 	asks := processAsks(th.srv)
 	assert.Equal(t, 1, asks["w14:p2"], "the coder's pane is asked once for its shell and its model")
+	for pane, n := range asks {
+		assert.Equal(t, 1, n, "pane %s: one ask, then none while nothing changes", pane)
+	}
+}
+
+// TestOneProcessInfoAskOnAReKeyPoll: after a live handoff renews every
+// terminal, the poll that re-keys a worker reads its candidate pane's shell
+// and its new agent's model from one process_info reply (A39, Q5), as the
+// first poll after a spawn does.
+func TestOneProcessInfoAskOnAReKeyPoll(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	withTeam(th)
+	dir := shortDir(t)
+	seedRow(t, dir, th, "ha-coder-1", "w14:p2", "term_w14:p2", 4242, 9)
+	th.renewTerminals()
+	th.setShell("w14:p2", 4242, false)
+	th.mu.Lock()
+	th.procs = map[string][]map[string]any{
+		"w14:p1": {agentProc(1001, "claude", "--model", "opus")},
+		"w14:p2": {agentProc(1002, "claude", "--model", "claude-opus-5-5")},
+	}
+	th.mu.Unlock()
+	o := teamOpts(t, dir, th, workforceConfig(t))
+	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 4242: 9, 1001: 1, 1002: 2}}).startTime
+	run(t, o)
+	sock := socketPath(t, dir, th.path)
+
+	eventually(t, dir, th, "ha-coder-1", workerRow{Pane: "w14:p2", Terminal: "renewed_w14:p2", Status: "active", ShellPID: 4242, ShellStart: 9})
+	servedTeam(t, sock, "ha", func(s snapshot.Snapshot) bool {
+		for _, g := range s.Groups {
+			for _, a := range g.Agents {
+				if a.PaneID == "w14:p2" {
+					return a.Model == "claude-opus-5-5"
+				}
+			}
+		}
+		return false
+	})
+	polled(t, th.srv, 3)
+	asks := processAsks(th.srv)
+	assert.Equal(t, 1, asks["w14:p2"], "the re-keyed pane is asked once for its shell and its model")
 	for pane, n := range asks {
 		assert.Equal(t, 1, n, "pane %s: one ask, then none while nothing changes", pane)
 	}
