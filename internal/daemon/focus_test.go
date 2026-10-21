@@ -568,8 +568,8 @@ func TestRunStoreFailures(t *testing.T) {
 			assert.NoFileExists(t, p.Socket, "a daemon without its store never serves")
 
 			tc.fix(t, p.DB)
-			run(t, opts(t, dir, h))
-			assert.Equal(t, store.SchemaVersion(), healthy(t, dir, h).StoreVersion)
+			r = run(t, restarted(opts(t, dir, h)))
+			assert.Equal(t, store.SchemaVersion(), r.healthy(t, dir, h).StoreVersion)
 		})
 	}
 }

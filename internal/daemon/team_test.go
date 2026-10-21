@@ -26,7 +26,8 @@ import (
 // teamHerdr is a fakeHerdr that also answers what the team poll asks: a
 // layout of workspaces, tabs, panes and agents, workspace.report_metadata and
 // pane.report_metadata, which it refuses for the workspaces and panes in
-// refuse.
+// refuse; and the agent view's set, which it refuses with viewErr's code
+// when that is set, and clear.
 type teamHerdr struct {
 	*fakeHerdr
 	mu         sync.Mutex
@@ -37,6 +38,7 @@ type teamHerdr struct {
 	agents    []map[string]any
 	agentsErr bool
 	refuse    map[string]bool
+	viewErr   string
 	// onCall, when set, runs before each request is answered.
 	onCall func(method string)
 }
@@ -105,6 +107,15 @@ func (th *teamHerdr) serveTeam(normal herdrtest.Handler) herdrtest.Handler {
 				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "workspace_not_found", Message: "workspace " + params.WorkspaceID + " not found"}}
 			}
 			return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
+		case "agent.view.set":
+			th.mu.Lock()
+			defer th.mu.Unlock()
+			if th.viewErr != "" {
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: th.viewErr, Message: "refused: " + th.viewErr}}
+			}
+			return herdrtest.Reply{Result: map[string]any{"type": "agent_view", "active": true}}
+		case "agent.view.clear":
+			return herdrtest.Reply{Result: map[string]any{"type": "agent_view", "active": false}}
 		}
 		return normal(r)
 	}
@@ -167,8 +178,9 @@ func lists(srv *herdrtest.Server) int {
 	return n
 }
 
-// teamCalls returns the requests srv got that only the team poll makes:
-// workspace.list, tab.list, agent.list and the pushes. The daemon's own
+// teamCalls returns the requests srv got that only the team poll and the
+// agent view's sync make: workspace.list, tab.list, agent.list, the pushes
+// and the view's set and clear. The daemon's own
 // client (HerdrClient) makes none of them. It is what a replacement is held
 // to while Run's poll runs: Run's ping has no Dialed hook and finds a
 // replaced socket by stillServed's own identity check, so a ping dialled just
@@ -179,7 +191,8 @@ func lists(srv *herdrtest.Server) int {
 func teamCalls(srv *herdrtest.Server) []string {
 	var out []string
 	for _, r := range srv.Requests() {
-		if r.Method == "workspace.list" || r.Method == "tab.list" || r.Method == "agent.list" || r.Method == "workspace.report_metadata" || r.Method == "pane.report_metadata" {
+		switch r.Method {
+		case "workspace.list", "tab.list", "agent.list", "workspace.report_metadata", "pane.report_metadata", "agent.view.set", "agent.view.clear":
 			out = append(out, r.Method)
 		}
 	}
@@ -270,25 +283,32 @@ func TestRunPushesTeamToEachGroupSpace(t *testing.T) {
 }
 
 // ctxPush is the exact params of the ctx display push to pane: value in the
-// band key, the other two bands cleared, source agentisan, TTL 9000 ms.
-// Written out by hand rather than from the package's constants.
-func ctxPush(pane, key, value string) string {
+// band key, the other two bands cleared, and, unless place is "", the
+// pane's place in the spaces under order-spaces (A28 addendum); source
+// agentisan, TTL 9000 ms. Written out by hand rather than from the
+// package's constants.
+func ctxPush(pane, key, value, place string) string {
 	bands := map[string]string{"ctx_ok": "", "ctx_warn": "", "ctx_hot": ""}
 	bands[key] = value
-	return fmt.Sprintf(`{"pane_id":%q,"source":"agentisan","tokens":{"ctx_ok":%q,"ctx_warn":%q,"ctx_hot":%q},"ttl_ms":9000}`,
-		pane, bands["ctx_ok"], bands["ctx_warn"], bands["ctx_hot"])
+	order := ""
+	if place != "" {
+		order = fmt.Sprintf(`,"order-spaces":%q`, place)
+	}
+	return fmt.Sprintf(`{"pane_id":%q,"source":"agentisan","tokens":{"ctx_ok":%q,"ctx_warn":%q,"ctx_hot":%q%s},"ttl_ms":9000}`,
+		pane, bands["ctx_ok"], bands["ctx_warn"], bands["ctx_hot"], order)
 }
 
 // wantCtx are the ctx display pushes liveSpaces' agent panes receive, every
 // poll: every pane with an agent, the boss's and one outside every team
-// included, and no shell.
+// included, and no shell. Those the spaces place carry their place: the
+// boss, then coders, then qa, the shell in coders not counted.
 var wantCtx = map[string]string{
-	"wJ:p1": ctxPush("wJ:p1", "ctx_ok", "ctx  --"),
-	"wN:p1": ctxPush("wN:p1", "ctx_ok", "ctx 40%"),
-	"wN:p2": ctxPush("wN:p2", "ctx_ok", "ctx  --"),
-	"wN:p3": ctxPush("wN:p3", "ctx_ok", "ctx  --"),
-	"wY:p1": ctxPush("wY:p1", "ctx_ok", "ctx  --"),
-	"w2:p1": ctxPush("w2:p1", "ctx_ok", "ctx  --"),
+	"wJ:p1": ctxPush("wJ:p1", "ctx_ok", "ctx  --", "000"),
+	"wN:p1": ctxPush("wN:p1", "ctx_ok", "ctx 40%", "001"),
+	"wN:p2": ctxPush("wN:p2", "ctx_ok", "ctx  --", "002"),
+	"wN:p3": ctxPush("wN:p3", "ctx_ok", "ctx  --", "003"),
+	"wY:p1": ctxPush("wY:p1", "ctx_ok", "ctx  --", "004"),
+	"w2:p1": ctxPush("w2:p1", "ctx_ok", "ctx  --", ""),
 }
 
 // setToken sets a token on the pane th lists as id, or removes it when value
@@ -332,9 +352,9 @@ func TestRunPushesTheCtxDisplayToEveryAgentPane(t *testing.T) {
 
 	polled(t, th.srv, 2)
 	want := maps.Clone(wantCtx)
-	want["wN:p3"] = ctxPush("wN:p3", "ctx_hot", "ctx 70%")
-	want["wY:p1"] = ctxPush("wY:p1", "ctx_warn", "ctx 58%")
-	want["w12:p1"] = ctxPush("w12:p1", "ctx_ok", "ctx  --")
+	want["wN:p3"] = ctxPush("wN:p3", "ctx_hot", "ctx 70%", "003")
+	want["wY:p1"] = ctxPush("wY:p1", "ctx_warn", "ctx 58%", "004")
+	want["w12:p1"] = ctxPush("w12:p1", "ctx_ok", "ctx  --", "") // ◆ herdr: the team's workspace, no group's place
 	got := panePushes(t, th.srv)
 	assert.ElementsMatch(t, slices.Collect(maps.Keys(want)), slices.Collect(maps.Keys(got)), "every agent pane, and no shell")
 	for pane, params := range got {
@@ -349,7 +369,37 @@ func TestRunPushesTheCtxDisplayToEveryAgentPane(t *testing.T) {
 	before := len(panePushes(t, th.srv)["wN:p3"])
 	polled(t, th.srv, 1)
 	for _, p := range panePushes(t, th.srv)["wN:p3"][before:] {
-		assert.JSONEq(t, ctxPush("wN:p3", "ctx_ok", "ctx  --"), p, "an expired ctx moves the pane back to the ok band")
+		assert.JSONEq(t, ctxPush("wN:p3", "ctx_ok", "ctx  --", "003"), p, "an expired ctx moves the pane back to the ok band")
+	}
+}
+
+// TestRunReportsEachAgentPaneOnceAPoll: the order key rides the ctx push (A28
+// addendum), so a poll reports each agent pane once, never twice.
+func TestRunReportsEachAgentPaneOnceAPoll(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	run(t, teamOpts(t, shortDir(t), th, ""))
+	polled(t, th.srv, 3)
+
+	var polls []map[string]int // each poll starts with its workspace.list
+	for _, r := range th.srv.Requests() {
+		switch {
+		case r.Method == "workspace.list":
+			polls = append(polls, map[string]int{})
+		case r.Method == "pane.report_metadata" && len(polls) > 0:
+			var p struct {
+				PaneID string `json:"pane_id"`
+			}
+			require.NoError(t, json.Unmarshal(r.Params, &p))
+			polls[len(polls)-1][p.PaneID]++
+		}
+	}
+	require.GreaterOrEqual(t, len(polls), 3)
+	for _, pushes := range polls[:len(polls)-1] { // the last may still be pushing
+		assert.NotEmpty(t, pushes)
+		for pane, n := range pushes {
+			assert.Equal(t, 1, n, "%s is reported once a poll", pane)
+		}
 	}
 }
 
