@@ -88,8 +88,12 @@ func agentPanes(m team.Model, panes []herdr.PaneInfo) []herdr.PaneInfo {
 // startTime reads a process's start time; nil, off Linux and darwin, keeps
 // an entry until its pane's terminal or agent changes.
 func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, panes []herdr.PaneInfo, startTime func(pid int) (uint64, error), now time.Time, log zerolog.Logger) (map[string]string, error) {
-	ask, cancel := context.WithTimeout(ctx, ModelBudget)
+	deadline := time.Now().Add(ModelBudget)
+	ask, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()
+	// spent is checked by the clock too: a read cut off by the deadline can
+	// return before the context records that it has passed.
+	spent := func() bool { return ask.Err() != nil || !time.Now().Before(deadline) }
 	out := map[string]string{}
 	listed := make(map[string]bool, len(panes))
 	left := false
@@ -102,7 +106,7 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, panes []her
 			continue
 		}
 		delete(lm.byPane, p.PaneID)
-		if ask.Err() != nil {
+		if spent() {
 			left = true
 			continue
 		}
@@ -111,7 +115,7 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, panes []her
 			return nil, fmt.Errorf("read pane %s's processes: %w", p.PaneID, err)
 		}
 		if err != nil {
-			if ask.Err() != nil {
+			if spent() {
 				left = true
 				continue
 			}
