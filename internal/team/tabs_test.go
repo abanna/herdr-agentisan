@@ -240,8 +240,8 @@ func TestTabsTeamsResolveExactly(t *testing.T) {
 
 	got := team.Build(l, r, nil)
 
-	worker := func(id, tab string, st team.Status, agent string, handoff bool) team.Worker {
-		return team.Worker{ID: id, Target: team.Target{WorkspaceID: tab}, Pane: team.Pane{ID: id, Agent: agent, Status: st, Handoff: handoff}}
+	worker := func(id, ws, tab string, st team.Status, agent string, handoff bool) team.Worker {
+		return team.Worker{ID: id, Target: team.Target{WorkspaceID: ws}, Pane: team.Pane{ID: id, TabID: tab, Agent: agent, Status: st, Handoff: handoff}}
 	}
 	withCtx := func(w team.Worker, ctx string) team.Worker {
 		w.Pane.Ctx = ctx
@@ -252,25 +252,25 @@ func TestTabsTeamsResolveExactly(t *testing.T) {
 	assert.Equal(t, team.Model{Projects: []team.Project{
 		{
 			Name: "agentisan", Color: "#0ea5e9", Workspaces: []string{"wN"}, Order: team.Spaces{}.GroupOrder(),
-			Groups: []team.Group{{Name: "coders", Targets: []team.Target{wN}, Workers: []team.Worker{worker("wN:p1", "wN", team.StatusWorking, "claude", false)}}},
+			Groups: []team.Group{{Name: "coders", Targets: []team.Target{wN}, Workers: []team.Worker{worker("wN:p1", "wN", "wN:t1", team.StatusWorking, "claude", false)}}},
 		},
 		{
 			Name: "assay", Short: "as", Workspaces: []string{"w20"}, Order: order, Target: team.Target{WorkspaceID: "w20"},
-			Boss: []team.Worker{{ID: "w20:p1", Pane: team.Pane{ID: "w20:p1", Agent: "claude", Status: team.StatusIdle}}},
+			Boss: []team.Worker{{ID: "w20:p1", Pane: team.Pane{ID: "w20:p1", TabID: "w20:t1", Agent: "claude", Status: team.StatusIdle}}},
 		},
 		{
 			Name: "herdr-agentisan", Short: "ha", Color: "#7c3aed", Workspaces: []string{"w14"}, Order: order, Target: w14,
 			Boss: []team.Worker{
-				{ID: "w14:p1", Pane: team.Pane{ID: "w14:p1", Agent: "claude", Status: team.StatusWorking}},
-				{ID: "w14:pD", Pane: team.Pane{ID: "w14:pD", Status: team.StatusUnknown}},
+				{ID: "w14:p1", Pane: team.Pane{ID: "w14:p1", TabID: "w14:t1", Agent: "claude", Status: team.StatusWorking}},
+				{ID: "w14:pD", Pane: team.Pane{ID: "w14:pD", TabID: "w14:t1", Status: team.StatusUnknown}},
 			},
 			Groups: []team.Group{
 				{Name: "coder", Targets: []team.Target{w14}, Workers: []team.Worker{
-					worker("w14:p2", "w14", team.StatusWorking, "claude", false), withCtx(worker("w14:p3", "w14", team.StatusIdle, "claude", true), "40"),
+					worker("w14:p2", "w14", "w14:t2", team.StatusWorking, "claude", false), withCtx(worker("w14:p3", "w14", "w14:t3", team.StatusIdle, "claude", true), "40"),
 				}},
-				{Name: "designer", Targets: []team.Target{w14}, Workers: []team.Worker{worker("w14:p6", "w14", team.StatusUnknown, "", false)}},
-				{Name: "qa", Targets: []team.Target{w14}, Workers: []team.Worker{worker("w14:p4", "w14", team.StatusBlocked, "claude", false)}},
-				{Name: "review", Targets: []team.Target{w14}, Workers: []team.Worker{worker("w14:p5", "w14", team.StatusDone, "claude", false)}},
+				{Name: "designer", Targets: []team.Target{w14}, Workers: []team.Worker{worker("w14:p6", "w14", "w14:t6", team.StatusUnknown, "", false)}},
+				{Name: "qa", Targets: []team.Target{w14}, Workers: []team.Worker{worker("w14:p4", "w14", "w14:t4", team.StatusBlocked, "claude", false)}},
+				{Name: "review", Targets: []team.Target{w14}, Workers: []team.Worker{worker("w14:p5", "w14", "w14:t5", team.StatusDone, "claude", false)}},
 			},
 		},
 	}}, got)
