@@ -147,7 +147,8 @@ func TestThePollsWritesAreCompareAndSet(t *testing.T) {
 	assert.Equal(t, "term_after", got.TerminalID)
 	assert.Equal(t, uint32(4242), got.ShellPID, "a re-key keeps the shell it proved")
 	// Each writer is refused on the terminal before the re-key alone: read
-	// differs from the row by nothing else.
+	// has the row's generation, and otherwise differs from it only in
+	// columns no write compares (its pane and shell).
 	for name, err := range map[string]error{
 		"rebind": s.RebindWorker(ctx, read, "w21:p1"),
 		"shell":  s.SetWorkerShell(ctx, read, 1, 1),
@@ -200,6 +201,20 @@ func TestThePollsWritesAreCompareAndSet(t *testing.T) {
 
 	retire(t, s, "w")
 	require.ErrorIs(t, s.RebindWorker(ctx, got, "w21:p1"), store.ErrWorkerChanged, "a retired row")
+
+	// And each on a row retired, not lost, since it was read: retired
+	// alone.
+	seedWorker(t, s, "v", "w14:p5", 3)
+	v := liveRow(t, s, "v")
+	retire(t, s, "v")
+	for name, err := range map[string]error{
+		"rebind": s.RebindWorker(ctx, v, "w21:p1"),
+		"shell":  s.SetWorkerShell(ctx, v, 1, 1),
+		"re-key": s.RekeyWorker(ctx, v, "w21:p1", "term_y"),
+		"lost":   s.MarkWorkerLost(ctx, v),
+	} {
+		require.ErrorIs(t, err, store.ErrWorkerChanged, "retired since it was read: %s", name)
+	}
 }
 
 // TestAPendingHandoffIsNeverLost: while a handoff of the worker is pending,

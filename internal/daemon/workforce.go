@@ -128,7 +128,9 @@ func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleCl
 // reconciled its workers rows since it started answers not_ready at once
 // (A35); Workforce asks again, within that same wait, so a command run just
 // after a daemon start waits for its first poll and still never waits longer
-// than its budget and an exchange.
+// than its budget and an exchange. A deadline or a cancel that cuts short an
+// ask after a not_ready refusal returns that refusal: the daemon answered,
+// and was not ready, which no restart would change.
 func Workforce(ctx context.Context, socket, op string, args any) (json.RawMessage, error) {
 	raw, err := json.Marshal(args)
 	if err != nil {
@@ -137,11 +139,16 @@ func Workforce(ctx context.Context, socket, op string, args any) (json.RawMessag
 	wait := OpBudget(op, raw) + ioTimeout
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
+	var refused error
 	for {
 		data, err := callWith(ctx, socket, op, raw, wait)
+		if refused != nil && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+			return nil, refused
+		}
 		if !errors.Is(err, ErrNotReady) {
 			return data, err
 		}
+		refused = err
 		select {
 		case <-ctx.Done():
 			return nil, err

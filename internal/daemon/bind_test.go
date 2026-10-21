@@ -1,12 +1,14 @@
 package daemon_test
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"net/url"
 	"os"
 	"slices"
@@ -386,6 +388,78 @@ func TestWorkforceRetriesNotReady(t *testing.T) {
 	assert.Positive(t, asked)
 	time.Sleep(300 * time.Millisecond)
 	assert.Equal(t, asked, calls.Load(), "no ask after the wait ended")
+}
+
+// TestWorkforceKeepsNotReadyPastTheDeadline: a deadline that cuts short an
+// ask after a not_ready refusal is that refusal, not a daemon gone. The
+// daemon answered, so `team status` must not tell the boss to restart it
+// (QA #48, N2b; NERD-5344's review). So is a cancel. A daemon that goes
+// after a refusal is gone.
+func TestWorkforceKeepsNotReadyPastTheDeadline(t *testing.T) {
+	t.Parallel()
+	for name, end := range map[string]string{
+		"the deadline cuts the next ask short": "deadline",
+		"a cancel cuts the next ask short":     "cancel",
+		"the daemon goes after it":             "gone",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			gone := end == "gone"
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			sock := shortDir(t) + "/d.sock"
+			ln, err := net.Listen("unix", sock)
+			require.NoError(t, err)
+			var asks atomic.Int32
+			held := make(chan net.Conn, 16)
+			done := make(chan struct{})
+			t.Cleanup(func() {
+				_ = ln.Close()
+				<-done
+				close(held)
+				for c := range held {
+					_ = c.Close()
+				}
+			})
+			go func() {
+				defer close(done)
+				for {
+					conn, err := ln.Accept()
+					if err != nil {
+						return
+					}
+					_, _ = bufio.NewReader(conn).ReadString('\n')
+					if asks.Add(1) > 1 {
+						held <- conn // never answered: the deadline or a cancel ends this ask
+						if end == "cancel" {
+							cancel()
+						}
+						continue
+					}
+					_, _ = conn.Write([]byte(`{"ok":false,"error":{"code":"not_ready","message":"not yet"}}` + "\n"))
+					_ = conn.Close()
+					if gone {
+						_ = ln.Close() // and its socket with it
+					}
+				}
+			}()
+			start := time.Now()
+			_, err = daemon.Workforce(ctx, sock, daemon.OpTeamStatus, struct{}{})
+			if gone {
+				require.ErrorIs(t, err, daemon.ErrUnavailable)
+				assert.NotErrorIs(t, err, daemon.ErrNotReady, "gone, not still not ready")
+				assert.NotErrorIs(t, err, context.DeadlineExceeded, "found gone at once, not at the deadline")
+				assert.Equal(t, int32(1), asks.Load())
+				return
+			}
+			require.ErrorIs(t, err, daemon.ErrNotReady)
+			assert.NotErrorIs(t, err, daemon.ErrUnavailable, "not a daemon gone")
+			assert.Equal(t, int32(2), asks.Load(), "the second ask was the one cut short")
+			if end == "cancel" {
+				assert.Less(t, time.Since(start), time.Second, "ended by the cancel, not the deadline")
+			}
+		})
+	}
 }
 
 // midPoll runs change once, between the poll's workers read and its writes:
