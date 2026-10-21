@@ -50,9 +50,15 @@ func TestSampleConfigResolves(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(home, ".config", "herdr-agentisan", "elastic.env"), envFile, "the sample names the debugger's env file")
 	assert.Equal(t, []settings.Team{
-		{Project: "agentisan", Layout: settings.LayoutSpaces, Color: "#7c3aed"},
-		{Project: "assay", Short: "as", Layout: settings.LayoutTabs, Color: "#0ea5e9"},
-	}, all.Teams, "the spaces' project and one tabs team")
+		{Project: "agentisan", Layout: settings.LayoutSpaces, Color: "#7c3aed", Descriptions: map[string]string{
+			"precheck": "a pre-Codex adversarial pass on finalized heads",
+			"qa":       "runs the pre-PR test gates and owns the test-slot queue",
+			"coders":   "write fixes + new code · run their own review loop",
+		}},
+		{Project: "assay", Short: "as", Layout: settings.LayoutTabs, Color: "#0ea5e9", Descriptions: map[string]string{
+			"precheck": "a pre-Codex adversarial pass on finalized heads",
+		}},
+	}, all.Teams, "the spaces' project and one tabs team, each with its group descriptions")
 
 	for name, repo := range repos {
 		t.Run(name, func(t *testing.T) {

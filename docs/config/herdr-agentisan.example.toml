@@ -63,6 +63,13 @@ repeat = 300
 # cap the boss can scale to (64 >= slots >= workers >= 0). boss is not a
 # type: the boss has its own tab.
 #
+# description is the group's one-line purpose, drawn under its title on the
+# dashboard (ADR-001 A36): at most 80 printable characters. It goes with the
+# group's name as the dashboard shows it, a tabs team's worker type or a ◆
+# space's name, and a group table may set it alone (see agentisan's coders
+# below). The daemon reads descriptions again whenever this file changes, so
+# an edit needs no restart; a repo's .herdr-agentisan.toml cannot set one.
+#
 # A group's own agent (ADR-001 A23), which `worker spawn` launches (it lands
 # in a later part of NERD-5254; the key resolves now): with a command of its
 # own, a type runs that command and that model only, never the [agent] model
@@ -73,6 +80,7 @@ repeat = 300
 [groups.precheck]
 workers = 1
 slots = 1
+description = "a pre-Codex adversarial pass on finalized heads"
 agent = { model = "sonnet" }
 
 [groups.librarian]
@@ -177,6 +185,12 @@ slots = 5
 [projects.agentisan.groups.qa]
 workers = 1
 slots = 2
+description = "runs the pre-PR test gates and owns the test-slot queue"
+
+# agentisan's team is the ◆ spaces, so its groups are the spaces' names: this
+# describes ◆ coders and starts no worker (the workers are the coder type's).
+[projects.agentisan.groups.coders]
+description = "write fixes + new code · run their own review loop"
 
 [projects.agentisan.groups.review]
 workers = 1

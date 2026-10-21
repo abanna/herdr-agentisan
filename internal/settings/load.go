@@ -248,7 +248,25 @@ func loadRepoFile(path string) (*source, error) {
 	if err := s.load(doc); err != nil {
 		return nil, err
 	}
+	if err := s.checkNoDescriptions(); err != nil {
+		return nil, err
+	}
 	return s, nil
+}
+
+// checkNoDescriptions refuses a group description in a repo file: the
+// daemon, which draws descriptions, reads no repo file (A36), so one set
+// there would show in config resolve and never on the dashboard.
+func (s *source) checkNoDescriptions() error {
+	v, _ := lookup(s.values, "groups")
+	groups, _ := v.(map[string]any)
+	for _, name := range slices.Sorted(maps.Keys(groups)) {
+		g, _ := groups[name].(map[string]any)
+		if _, ok := g["description"]; ok {
+			return fmt.Errorf("%s: %w: the daemon reads no repo file, so set it in %s", s.at("groups."+name+".description"), ErrInvalid, FileName)
+		}
+	}
+	return nil
 }
 
 // parseFlags turns each --set into a layer of its own, applied in order.

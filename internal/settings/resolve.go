@@ -1,6 +1,7 @@
 package settings
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"maps"
@@ -8,6 +9,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 var (
@@ -150,7 +153,17 @@ func (m merged) checkGroups() error {
 		if name == BossType {
 			return m.invalidf(workersPath, "%s is the boss's tab, <short>-%s, not a worker type", name, name)
 		}
+		description, described := g["description"].(string)
+		if described {
+			if err := checkDescription(description); err != nil {
+				return m.invalidf("groups."+name+".description", "%v", err)
+			}
+		}
 		workers, ok := g["workers"].(int)
+		_, hasSlots := g["slots"].(int)
+		if !ok && !hasSlots && described {
+			continue // it describes a group and starts no worker (A36)
+		}
 		if !ok {
 			return m.invalidf(workersPath, "every group needs workers")
 		}
@@ -166,6 +179,27 @@ func (m merged) checkGroups() error {
 		}
 		if slots > MaxSlots {
 			return m.invalidf(slotsPath, "slots %d is above %d", slots, MaxSlots)
+		}
+	}
+	return nil
+}
+
+// checkDescription reports whether d can be a group's description: one line
+// every client draws as written, at most MaxDescriptionChars characters, and
+// printable throughout (letters, marks, numbers, punctuation, symbols and the
+// ASCII space), so no control character, format character or other space.
+// "" is no description. The error names the reason, never the value, which
+// may carry terminal escapes.
+func checkDescription(d string) error {
+	if !utf8.ValidString(d) {
+		return errors.New("the description is not valid UTF-8")
+	}
+	if n := utf8.RuneCountInString(d); n > MaxDescriptionChars {
+		return fmt.Errorf("the description is %d characters, more than %d", n, MaxDescriptionChars)
+	}
+	for i, r := range d {
+		if !unicode.IsPrint(r) {
+			return fmt.Errorf("the description has the unprintable character %U at byte %d", r, i)
 		}
 	}
 	return nil
@@ -267,7 +301,8 @@ func buildProfile(name string, values map[string]any) *Profile {
 			g, _ := raw.(map[string]any)
 			workers, _ := g["workers"].(int)
 			slots, _ := g["slots"].(int)
-			p.Groups[n] = Group{Workers: workers, Slots: slots, Agent: groupAgent(g)}
+			description, _ := g["description"].(string)
+			p.Groups[n] = Group{Workers: workers, Slots: slots, Agent: groupAgent(g), Description: description}
 		}
 	}
 	if v, ok := lookup(values, "integrations"); ok {
