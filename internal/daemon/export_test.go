@@ -174,3 +174,34 @@ var CallWith = callWith
 func WorkforceOf(o Options, ident Identity) *workforce.Service {
 	return o.newWorkforce(nil, ident, &team.IdleClock{})
 }
+
+// ViewSync is the agent view's state between the goroutines that feed it and
+// syncView (A28 addendum, A49), for tests of its bookkeeping.
+type ViewSync struct{ v *viewSync }
+
+// NewViewSync is a fresh view state: no focus, no model, nothing sent.
+func NewViewSync() ViewSync { return ViewSync{v: newViewSync()} }
+
+// Focus is a focus event the collector reads.
+func (s ViewSync) Focus(workspace string) { s.v.focus(workspace) }
+
+// Resynced is the collector reading focus afresh.
+func (s ViewSync) Resynced(workspace string) { s.v.resynced(workspace) }
+
+// Seen is what a poll reads before it lists the panes.
+func (s ViewSync) Seen() uint64 { return s.v.focusSeen() }
+
+// Polled is a poll's model and the workspace its list had focused, read
+// after seen.
+func (s ViewSync) Polled(m team.Model, workspace string, seen uint64) { s.v.polled(m, workspace, seen) }
+
+// Forget is a call that failed.
+func (s ViewSync) Forget() { s.v.forget() }
+
+// Next is syncView's decision: whether a view is due, whether it is a
+// clear, and the function that records it sent, as a call that succeeds
+// does.
+func (s ViewSync) Next() (clear bool, sent func(), ok bool) {
+	want, forgets, ok := s.v.next()
+	return want.clear, func() { s.v.sentAt(want, forgets) }, ok
+}

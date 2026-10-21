@@ -93,31 +93,35 @@ func window(d time.Duration) string {
 }
 
 func printWorkerTrail(w io.Writer, t workerTrail) error {
+	// Each value goes through cell, as events query's do, so none can break
+	// its line or forge another: the id may hold a tab or a line break.
 	var b strings.Builder
+	id := cell(t.ID)
 	switch len(t.Changes) {
 	case 0:
-		fmt.Fprintf(&b, "%s, the last %s: no status changes\n", t.ID, t.Since)
+		fmt.Fprintf(&b, "%s, the last %s: no status changes\n", id, t.Since)
 	case 1:
-		fmt.Fprintf(&b, "%s, the last %s: 1 status change\n", t.ID, t.Since)
+		fmt.Fprintf(&b, "%s, the last %s: 1 status change\n", id, t.Since)
 	default:
-		fmt.Fprintf(&b, "%s, the last %s: %d status changes\n", t.ID, t.Since, len(t.Changes))
+		fmt.Fprintf(&b, "%s, the last %s: %d status changes\n", id, t.Since, len(t.Changes))
 	}
 	for _, c := range t.Changes {
-		who := c.WorkerID
+		who := cell(c.WorkerID)
 		if c.PaneID != "" && c.PaneID != c.WorkerID {
-			who += " (" + c.PaneID + ")"
+			who += " (" + cell(c.PaneID) + ")"
 		}
-		group, bound := c.Group, "unbound"
+		group, bound := cell(c.Group), "unbound"
 		if group == "" {
 			group = "-"
 		}
 		if c.Bound {
 			bound = "bound"
 		}
-		fmt.Fprintf(&b, "%s  %s  %s → %s  %s  %s\n", c.At, who, c.From, c.To, group, bound)
+		fmt.Fprintf(&b, "%s  %s  %s → %s  %s  %s\n", cell(c.At), who, cell(c.From), cell(c.To), group, bound)
 	}
 	if t.Cut {
-		fmt.Fprintf(&b, "cut: only the newest %d are shown; narrow --since for the older ones\n", trail.RowLimit)
+		// The newest are kept, so a narrower --since never reaches the older.
+		fmt.Fprintf(&b, "cut: only the newest %d are shown; read older ones with events query and a WHERE on @timestamp\n", trail.RowLimit)
 	}
 	if t.Partial {
 		b.WriteString("partial: Elasticsearch did not search everything it was asked to\n")

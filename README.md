@@ -26,6 +26,18 @@ task plugin:unlink
 `herdr plugin link` never builds, which is why `task plugin:link` does. The
 binary also runs by hand: `task run:cli -- version --json`.
 
+herdr's startup hook runs `daemon start`, and the `daemon-restart` action
+`daemon restart`. Each waits for the daemon to answer health, for up to 13 s,
+and then says one of three things (ADR-001 A48):
+
+- `daemon running (pid N)`;
+- `daemon starting (pid N) but not answering health yet`, exit 0, since it
+  may still come up;
+- an error, exit non-zero, when the daemon exited before it answered.
+
+`herdr plugin log list --plugin nerdsrun.agentisan` shows which, and the
+`daemon.log` the message names says why.
+
 Requires Go 1.26.10+ and [Task](https://taskfile.dev). Linters and scanners are
 pinned in `go.mod` under the `tool` directive — nothing to install globally.
 
@@ -48,10 +60,22 @@ statusline has no context percentage yet, it reports nothing. Set
 ## Report `$ctx` from Codex
 
 Each Codex agent pushes the same `ctx` token through three Codex hooks, with
-the number Codex itself shows as "Context N% used". Add them to
-`~/.codex/config.toml`, or to a trusted project's `.codex/config.toml`
-([sample](docs/config/codex-hooks.example.toml)), and trust them once when
-Codex asks:
+the number Codex itself shows as "Context N% used". Install them once:
+
+```bash
+herdr-agentisan codex hooks
+```
+
+It adds them to Codex's hooks file, `~/.codex/hooks.json`
+(`$CODEX_HOME/hooks.json`), after any hooks already there, and writes nothing
+else. Then trust them once: start `codex --no-daemon` and choose "Trust all
+and continue", or trust them in `/hooks`. Codex runs a hook only once you
+trust it, and asks again when one changes. Codex also trusts each folder by
+its exact path, so it asks once in every repo a Codex worker runs in.
+`herdr-agentisan codex hooks --check` says where each hook is, and exits 1
+unless all three are installed. To keep them in `config.toml` instead, paste
+them at its end ([sample](docs/config/codex-hooks.example.toml)); the command
+then refuses to add a second copy:
 
 ```toml
 [[hooks.PostToolUse]]
@@ -84,7 +108,8 @@ Start Codex with `codex --no-daemon`. By default Codex runs its sessions in a
 shared background server whose hooks carry the environment of whichever pane
 started it, so the report cannot tell which pane it belongs to and reports
 nothing. Like `report statusline`, it prints nothing and always exits 0.
-`HERDR_AGENTISAN_LOG_LEVEL=debug` logs why nothing was reported.
+`HERDR_AGENTISAN_LOG_LEVEL=debug` logs why nothing was reported. Codex runs
+its hooks outside its sandbox, so `ctx` works whatever the sandbox.
 
 Codex's context changes only in a turn or a compaction, and those are when
 its hooks run, so the token lasts 24 h, set again by every report: an idle
@@ -116,6 +141,13 @@ the pane's own Codex started as `codex --no-daemon --sandbox danger-full-access`
 Under the shared app-server daemon, with Codex's default sandbox (even for an
 approved escalation), or on an OS other than Linux and macOS, it reports
 nothing (ADR-001 A25, A26).
+
+Codex workers run under your own Codex sandbox setting, so by default they
+show `ctx` but no item or stage. To have a group's Codex workers report them,
+add `--sandbox danger-full-access` to the agent command they launch with.
+That runs their commands with no sandbox and no reviewer, since Codex's
+automatic review sees only escalations, which that mode never makes: a weaker
+guard than Claude's auto mode (ADR-001 A43).
 
 ## Search on prefix+/ and in the dashboard
 

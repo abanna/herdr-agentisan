@@ -778,7 +778,7 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
   - A `SessionEnd` hook that cleared `ctx` was tried and dropped. Codex 0.161 runs `SessionEnd` whenever a root thread shuts down (`core/src/session/handlers.rs:325`), not only when it exits, and its payload's `reason` is always `other` (`hooks/src/events/session_end.rs:24`).
   - Under `--no-daemon` the embedded app-server shuts down a thread that has had no subscribers and been idle for `thread_unload_delay`, 60 s by default (`app-server/src/request_processors/thread_lifecycle.rs:363-393`, `core/src/config/mod.rs:3922`). `/new`, `/resume` and a fork leave the old thread in that state, so a clear would blank the new session's `ctx` about a minute later.
   - The opt-in memory consolidation (`features.memories`) shuts its internal thread down the same way (`memories/write/src/runtime.rs:398-456`). The same decision covers it.
-- **D7 and the dashboard are to count `ctx` only on a pane where Herdr detects an agent**, so the value a Codex left behind, after a clean exit or a crash, is ignored. The team model reads `ctx` only from such a pane (`ctxOf`, NERD-5318), so the snapshot, `team status` and the sidebar's ctx display (A28) all ignore it, and a pane `agent.list` still names shows `ctx  --`. An expired `ctx` is unknown, as before. A notice is to fire when `ctx` crosses a level, not when it reappears (NERD-5261).
+- **D7 and the dashboard are to count `ctx` only on a pane where Herdr detects an agent**, so the value a Codex left behind, after a clean exit or a crash, is ignored. The team model and the sidebar's ctx display read `ctx` only from such a pane (`ctxOf`, NERD-5318), so the snapshot, `team status` and the sidebar (A28) all ignore it, and a pane `agent.list` still names shows `ctx  --`. An expired `ctx` is unknown, as before. A notice is to fire when `ctx` crosses a level, not when it reappears (NERD-5261).
 - This changes a token-contract cell by amendment, as A5 did. D4's one writer per key is unchanged.
 
 ### A28. The sidebar: the ctx display and `$team` in words
@@ -991,3 +991,73 @@ Budget: an agent pane a team places carries 8 keys, and a push sets 4.
 - **In a group's view (A37).** A box's title draws a plain shell as `▸ name · shell`, as its row does, and the box's stage takes the stage colours on both of its lines. A stage not reported stays dim.
 - **Watchers.** The boss line no longer draws `watchers`. Nothing counts them: the daemon cannot see a session's background monitors. The v1 key stays, decoded and range-checked, so every v1 document that carries it still decodes.
 - **Short model names.** Fable is `fab`, beside `opus`, `son` and `hai`, and a model whose name says `codex` is `cdx`. Any other model is still its first word, cut to four cells.
+
+### A43. Codex workers run embedded, with the ctx hooks installed once
+
+*Settles:* A22's "Workers run `codex --no-daemon`" and "Trust" bullets, and A25's "The worker launch settings belong to NERD-5278". *Adds to:* D7, D11 and Report commands. Recorded with NERD-5278. Verified against the codex-rs source at `rust-v0.161.0`, and herdr 0.9.3 and 0.9.5.
+
+- **Every Codex launch is embedded.**
+  - `worker spawn` adds `--no-daemon` to a Codex worker's command when the command lacks it, since Codex refuses the flag twice. That covers a group's own command, the top-level one and review's built-in alike, so `--replaces` launches the same. It lands with spawn (NERD-5254 part 4).
+  - No launch path uses `codex resume` or `codex fork`: a rotation starts a fresh session that reads the handoff (D7).
+  - A Codex resumed or forked by hand needs `--no-daemon` too, and both take it. Without it, its hooks run under the shared daemon and report nothing (`ErrCodexDaemon`).
+- **The hooks are installed by a command, once.** `herdr-agentisan codex hooks` writes the three hooks of `docs/config/codex-hooks.example.toml` into Codex's user hooks file, `$CODEX_HOME/hooks.json` (by default `~/.codex`).
+  - **Why that file.**
+    - Codex reads hooks from each config layer's `config.toml` and from a `hooks.json` beside it (`hooks/src/engine/discovery.rs:339-344`). It only reads `hooks.json`, while it writes `config.toml` itself, the trust it records included.
+    - A user-level file covers every repo and worktree. A project's `.codex/config.toml` covers only its own repo. It loads only once Codex trusts that project, and it would have to be committed to every repo, or copied into each. Codex keys a hook's trust by its file's path, its event and its position (`discovery.rs:666-681`). It reads a linked worktree's project hooks from the root checkout (`config/src/loader/local.rs:219-244`), so a repo's worktrees share that trust.
+  - **Other tools share it.** herdr's own `integration install codex` keeps a SessionStart hook there (`src/integration/targets.rs:160-223` in 0.9.3 and 0.9.5).
+    - Every entry that is not ours is kept as written, and ours go last in each event, so adding them never moves another hook.
+    - A tool that removes a hook placed before ours in one of our events moves ours, and Codex asks once more.
+  - **Ours.** A `report codex` group is one whose one handler runs `herdr-agentisan report codex`, by any path. One that differs is brought in line in place, keeping its command. The file is written only when that changes it, through a temporary file and a rename, and it keeps its mode, 0600 when new.
+  - **Refused, with nothing changed:**
+    - a hooks file that is not a regular file, is over 1 MiB, or is not valid UTF-8 JSON in a shape Codex reads. Codex ignores a hooks file with any key other than `description` and `hooks`;
+    - `report codex` beside another hook in one group, or twice in one event;
+    - a hooks file with other hard links, or one the user may not write. A rename would get around both, as herdr's own installer also refuses;
+    - a `config.toml` that already runs `report codex`, since a second copy would run every report twice.
+  - **`--check`** reports each hook, from `hooks.json` or else `config.toml`, writes nothing, and exits 1 unless all three are as the command writes them. Both forms say when `config.toml` sets `features.hooks = false`, under which Codex runs no hook at all.
+  - **Trust stays the user's.**
+    - Codex runs a hook only once the user trusts it. A new or changed one stops a new Codex at "Hooks need review" until they do (`tui/src/startup_hooks_review.rs`).
+    - The command never writes that trust. Nothing passes `--dangerously-bypass-hook-trust`, which runs every enabled hook untrusted, a cloned repo's project hooks included.
+    - The command's output names the one step: start `codex --no-daemon` once and choose Trust all, or trust the hooks in `/hooks`.
+    - A release that changes the hooks asks once more, as A27's PostCompact did.
+  - **Directory trust.** Codex trusts a folder by the exact path of the working directory or its repo root, with no parent walk (`config/src/project_trust.rs:50-97`), and asks once in each new one.
+    - herdr 0.9.5 reads that question as blocked. It does not read the hook review as blocked (`src/detect/manifests/codex.toml`).
+    - **Spawn (part 4)** is therefore to:
+      - read a new Codex worker's screen for "Hooks need review" before its first prompt, and fail with the step to take rather than type into that menu;
+      - on a blocked start, name both trust steps;
+      - warn, without refusing, when the hooks are missing, since a Codex worker without `ctx` still works and rotates only when the boss directs it (A22).
+    - The daemon's check reads the daemon's `CODEX_HOME`, so a pane whose shell sets another one is checked in the wrong place. The cost is a wrong warning.
+- **The sandbox is Codex's own setting.** The workforce adds no sandbox flag: a Codex worker runs under the user's Codex configuration, today `workspace-write`, with `auto_review` for escalations.
+  - **Hooks run outside the sandbox,** as `$SHELL -lc` in a session of their own (`hooks/src/engine/command_runner.rs:383-436`), so `ctx` works under any sandbox.
+  - **Tool commands do not.** Under the sandbox, `report stage` reports nothing (A25), and neither do NERD-5261's `handoff ready` and `handoff ack`, so the boss marks a Codex worker's handoff.
+  - **The opt-in.** `--sandbox danger-full-access` in the agent command a group's workers launch with makes them report.
+    - Its cost: no OS sandbox, and no reviewer, since `auto_review` sees only escalations, which that mode never makes.
+    - That is a weaker guard than the Claude workers have: they run in Claude's auto mode, a classifier on each action.
+    - `workspace-write` with `network_access = true` gains nothing for a stage, because the sandbox's pid namespace still hides the pane.
+  - **A25's check of `CODEX_SANDBOX_NETWORK_DISABLED` stays.** Dropping it would let only a command whose escalation was approved report, so a stage would show only some of the time.
+  - **A backlog issue:** relaying a sandboxed stage through the ctx hook, which runs outside the sandbox.
+- **The live check follows spawn** (NERD-5254 part 4): a spawned review worker's codex runs with `--no-daemon` once, and after a turn its `ctx` equals its TUI's "Context N% used".
+
+### A48. D3: `daemon start` waits for the daemon, not a clock
+
+*Adds to:* D3 and A3. *Overrides:* the fixed 3 s that `daemon start` waited for health, kept by the user's decision since NERD-5247 (#14). The user reversed it on 2026-10-21 (NERD-5345).
+
+- **Why 3 s was too short.** During a live handoff (A3) the new daemon waits for the old daemon's lock, and the old daemon notices the replaced socket only at its next poll, up to `PollInterval` (3 s) later. So a handoff start is that wait, plus the old daemon's shutdown, plus the new daemon's start, and a 3 s wait misses a share of handoffs on any disk.
+  - Measured on the real binary against a fake herdr at a load average of 110–155: 3 of 21 handoffs took over 3 s, and 2 of 14 under fsync load, up to 3.40 s.
+  - The live startup hook's handoff at 2026-10-21T07:35Z took 2.23 s.
+  - A fresh `state.db` under fsync load has taken up to 5.3 s to open (#14).
+- **The wait.** `daemon start` returns as soon as the daemon of this server answers health. Until then it waits on the daemon. While the lock record names a live daemon of this server, that daemon is starting, whichever start spawned it. Otherwise it waits on the process it spawned, which may still be waiting for the lock. The ceiling, `DefaultStartWait`, is `PollInterval` + `herdr.CallTimeout` + `store.BusyTimeout`, 13 s: one poll for an old daemon to let go, then the new daemon's ping and store bounds.
+- **Three outcomes.**
+  - It answers: "daemon running (pid N)", as before.
+  - It is still starting at the ceiling: "daemon starting (pid N) but not answering health yet", naming `daemon.log`, and exit 0, since it may yet come up.
+  - It exits before it answers, and no other daemon of this server holds the lock: `ErrDaemonExited`, naming `daemon.log`, and a non-zero exit, so herdr's plugin log records the startup hook or the `daemon-restart` action as failed. Before, this waited out the 3 s and printed the same "not answering health yet" as a daemon still starting.
+- **Knowing it exited.** `daemon start` waits on the process it spawns, rather than releasing it, only to learn when it exits. The daemon still leads its own session and outlives the command, reparented.
+- **The lock is read, not probed.** While it waits, `daemon start` reads the lock record without taking the lock. A probe takes a free lock for an instant. A daemon trying the lock in that instant could read the record of one that has let go but not yet exited, take it for a live holder, and exit as already running.
+
+### A49. Focus from the poll
+
+*Adds to:* the A28 addendum's "When it is sent". Recorded with NERD-5346, the QA debt from NERD-5309.
+
+- **The poll is a source of focus.** herdr moves focus without a `pane.focused` event when a terminal client navigates: a client connects in `ClientShell` mode (`src/server/headless.rs:1897-1898`), and its navigation ends in `accept_current_focus_without_events` (`src/server/headless/client_views.rs:472, :938`, `src/server/headless.rs:2551`, `src/server/headless/notifications.rs:607`), which records the new focus as already announced and emits nothing (`src/app/api.rs:790-797`), so no later sync announces it either (`:842-875`). Whether the user's own keys and clicks take that path is NERD-5309's live check. So each team poll also takes the workspace of the pane its `pane.list` lists focused, and the view follows a move no event announced within one poll (`polled`, `internal/daemon/view.go`). A list with no pane focused changes nothing.
+- **An event is newer than a list.** The poll reads how many focused workspaces the focus collector has recorded before it lists the panes, and takes the list's focus only when the collector has recorded none since. An event or a resync that lands while the poll is listing wins, so a list read before it never moves the view back; the next poll's list agrees with it.
+- **A poll forgets nothing.** Unlike a resync, a poll that finds focus where it was leaves the view last sent as sent, so it sends nothing: the same view is sent again only after a failed call or a resync, as before.
+- **Back is unchanged.** The focus history in `state.db`, and Back's walker, still take only events and resyncs: a poll's focus says where focus is, not when the user moved it.

@@ -123,17 +123,24 @@ func (o Options) snapshotFocus(ctx context.Context, st *store.Store, w *walker, 
 	if !o.sameServer(ident) {
 		return fmt.Errorf("%w: the socket was replaced while pane.list was answered", ErrHerdrGone)
 	}
-	workspace := ""
-	for _, p := range panes {
-		if p.Focused {
-			o.recordFocus(ctx, st, w, p.PaneID)
-			workspace = p.WorkspaceID
-			break
-		}
+	focused, ok := focusedPane(panes)
+	if ok {
+		o.recordFocus(ctx, st, w, focused.PaneID)
 	}
 	w.resynced()
-	v.resynced(workspace)
+	v.resynced(focused.WorkspaceID)
 	return nil
+}
+
+// focusedPane is the pane herdr lists focused, and whether it lists one: at
+// most one, the focused pane of the active tab of the active workspace.
+func focusedPane(panes []herdr.PaneInfo) (herdr.PaneInfo, bool) {
+	for _, p := range panes {
+		if p.Focused {
+			return p, true
+		}
+	}
+	return herdr.PaneInfo{}, false
 }
 
 func (o Options) recordFocus(ctx context.Context, st *store.Store, w *walker, pane string) {
