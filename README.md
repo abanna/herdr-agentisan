@@ -304,7 +304,9 @@ reads the team whose workspace the command runs in, else the only tabs team.
 A tabs team's worker is named by its logical id, `<short>-<type>-<n>`, its
 tab's label; a pane of the ◆ spaces by its pane id. Idle times start when
 the daemon does, and a team added to the configuration since gets them
-after a `daemon-restart`.
+after a `daemon-restart`. A worker whose row no pane is bound to, such as one
+lost after a herdr live handoff, is listed under `unbound` (ADR-001 A35).
+Just after the daemon starts, the command waits for its first poll.
 ## The dashboard
 
 `herdr-agentisan dashboard` draws a team from the daemon (ADR-001 D5,
