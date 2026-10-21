@@ -971,6 +971,7 @@ func TestStartClasses(t *testing.T) {
 		healthy(t, dir, h)
 		old.cancel()
 		<-old.exited // it let go; its record names it, still alive
+		awaitLockFree(t, dir, h)
 		gone := make(chan struct{})
 		close(gone)
 		o.Hooks.Spawn = func(context.Context) (daemon.Spawned, error) {
@@ -1017,6 +1018,25 @@ func TestStartClasses(t *testing.T) {
 		_, err := daemon.Start(t.Context(), o)
 		require.ErrorIs(t, err, daemon.ErrHerdrGone)
 	})
+}
+
+// awaitLockFree waits, up to ready, until nothing holds the daemon lock of h
+// in stateDir, taking the free lock for an instant to see, and leaves its
+// record as it is. A child forked while a daemon held the lock keeps a copy
+// until it execs (NERD-5335); once the lock is free, no one else has it.
+func awaitLockFree(t *testing.T, stateDir string, h *fakeHerdr) {
+	t.Helper()
+	p, err := daemon.PathsFor(stateDir, h.path)
+	require.NoError(t, err)
+	f, err := os.OpenFile(p.Lock, os.O_RDWR, 0)
+	require.NoError(t, err)
+	defer func() { _ = f.Close() }()
+	require.Eventually(t, func() bool {
+		if syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
+			return false
+		}
+		return syscall.Flock(int(f.Fd()), syscall.LOCK_UN) == nil
+	}, ready, 5*time.Millisecond, "the old daemon's lock was never let go")
 }
 
 // holdPing makes h hold every ping until release is called, so a daemon that
