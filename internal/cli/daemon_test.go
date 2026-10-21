@@ -171,7 +171,7 @@ func TestDaemonLifecycleCommands(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(out), &info))
 	assert.Equal(t, os.Getpid(), info.PID)
 	assert.EqualValues(t, 22, info.HerdrProtocol)
-	assert.Equal(t, 2, info.StoreVersion)
+	assert.Equal(t, 3, info.StoreVersion)
 
 	out, err = runCtx(ctx, "daemon", "restart")
 	require.NoError(t, err)
@@ -207,7 +207,7 @@ func TestDaemonHealthText(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "pid")
 	assert.Contains(t, out, "protocol 22")
-	assert.Contains(t, out, "state schema 2, 0 focus rows")
+	assert.Contains(t, out, "state schema 3, 0 focus rows")
 }
 
 // TestDaemonCommandsFailClearly: what each command reports when it cannot do

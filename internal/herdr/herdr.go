@@ -321,7 +321,12 @@ func (c Client) ShowNotification(ctx context.Context, n Notification) (Notificat
 
 // PaneInfo is one pane in pane.list, limited to the fields this plugin reads.
 type PaneInfo struct {
-	PaneID      string `json:"pane_id"`
+	PaneID string `json:"pane_id"`
+	// TerminalID is the terminal the pane shows (src/api/schema/panes.rs:451).
+	// herdr never reissues one and keeps it when the pane moves, where a
+	// pane id can change or be reissued, but a live handoff or a restart
+	// gives every pane a new one (ADR-001 A35).
+	TerminalID  string `json:"terminal_id"`
 	WorkspaceID string `json:"workspace_id"`
 	// TabID is the tab the pane is in (src/api/schema/panes.rs:453).
 	TabID string `json:"tab_id"`
