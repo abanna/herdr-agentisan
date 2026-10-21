@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"strconv"
 	"strings"
@@ -51,14 +52,16 @@ type File struct {
 // the opener waiting to break a lease. A line in any other form is ErrLocks.
 func Held(content []byte) (map[File]bool, error) {
 	held := map[File]bool{}
-	for n, line := range bytes.Split(content, []byte("\n")) {
+	n := 0
+	for line := range bytes.Lines(content) {
+		n++
 		fields := strings.Fields(string(line))
 		if len(fields) == 0 {
 			continue
 		}
 		f, holds, err := parseLine(fields)
 		if err != nil {
-			return nil, fmt.Errorf("%w: line %d: %w", ErrLocks, n+1, err)
+			return nil, fmt.Errorf("%w: line %d: %w", ErrLocks, n, err)
 		}
 		if holds {
 			held[f] = true
@@ -139,20 +142,78 @@ func Count(procLocks string, paths []string) (snapshot.Slots, error) {
 	return snapshot.Slots{Used: used, Total: len(paths)}, nil
 }
 
+// read is the locks held in procLocks, the union of three whole reads of
+// it. /proc/locks is a seq_file: each read() call returns at most a page,
+// and the kernel starts each page again from the index where the last one
+// stopped (fs/seq_file.c seq_read_iter, fs/locks.c locks_start). So when
+// another process drops a lock listed before that index between two calls,
+// every later line moves back one, and the next page skips one: a lock held
+// all along reads as free. The skip can only fall where a page begins, so
+// each read asks for a different first size, a page, a third and two
+// thirds of one, which sets its pages a third of a page apart from the
+// others'. A held lock is then missed only if all three reads begin a page
+// on it.
+//
+// Measured with 64 locks held while goroutines took and dropped others
+// (NERD-5341): one read missed a held lock in 1,974 of 3,000 counts with 8
+// of them, two plain reads, whose pages begin in the same places, in 1,244,
+// and three staggered reads in none of 30,000 with 16. The union can count a
+// slot that was released during the reads as used: it was, during the count.
 func read(procLocks string) (map[File]bool, error) {
-	f, err := os.Open(procLocks) // #nosec G304 -- the kernel's lock list, or a test's stand-in for it; only read.
+	open := func() (io.ReadCloser, error) { return os.Open(procLocks) } // #nosec G304 -- the kernel's lock list, or a test's stand-in for it; only read.
+	return readHeld(procLocks, open, os.Getpagesize())
+}
+
+// readHeld is the union of the locks held in three whole reads of what open
+// opens, their first read() calls asking for page, page/3 and 2*page/3
+// bytes. A read that fails or holds a line Held cannot read fails it all: a
+// part of the list must never read as a slot free.
+func readHeld(name string, open func() (io.ReadCloser, error), page int) (map[File]bool, error) {
+	held := map[File]bool{}
+	for _, first := range []int{page, page / 3, 2 * page / 3} {
+		content, err := readWhole(name, open, max(first, 1))
+		if err != nil {
+			return nil, err
+		}
+		h, err := Held(content)
+		if err != nil {
+			return nil, err
+		}
+		maps.Copy(held, h)
+	}
+	return held, nil
+}
+
+// readChunk is how much each read() after the first asks for: at least a
+// page on every page size Linux uses, 4 KiB to 64 KiB, and a page is all
+// /proc/locks gives a call.
+const readChunk = 64 << 10
+
+// readWhole reads what open opens to its end, its first read() call asking
+// for first bytes, and fails past MaxProcLocks.
+func readWhole(name string, open func() (io.ReadCloser, error), first int) ([]byte, error) {
+	f, err := open()
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrLocks, err)
 	}
 	defer func() { _ = f.Close() }()
-	content, err := io.ReadAll(io.LimitReader(f, MaxProcLocks+1))
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrLocks, err)
+	var content []byte
+	buf := make([]byte, max(first, readChunk))
+	ask := first
+	for {
+		n, err := f.Read(buf[:ask])
+		content = append(content, buf[:n]...)
+		if len(content) > MaxProcLocks {
+			return nil, fmt.Errorf("%w: %s is over %d bytes", ErrLocks, name, MaxProcLocks)
+		}
+		if errors.Is(err, io.EOF) {
+			return content, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrLocks, err)
+		}
+		ask = len(buf)
 	}
-	if len(content) > MaxProcLocks {
-		return nil, fmt.Errorf("%w: %s is over %d bytes", ErrLocks, procLocks, MaxProcLocks)
-	}
-	return Held(content)
 }
 
 // fileOf is path's device and inode, and false when there is no file there.
