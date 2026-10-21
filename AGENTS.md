@@ -130,9 +130,10 @@ exempts whatever is later added under that name.
   (`events.go`). It keeps herdr's agent view on the focused team, which
   focus events and the poll feed it, and clears it outside every team and
   on a clean stop (`view.go`, the A28 addendum). `daemon start` spawns a
-  detached `daemon run`; herdr's `[[startup]]` hook runs it, and the
-  `daemon-restart` action covers linking. Tests run daemons in process
-  against herdrtest and a scratch state dir, never the real ones.
+  detached `daemon run` and waits for its health or its exit (A48); herdr's
+  `[[startup]]` hook runs it, and the `daemon-restart` action covers
+  linking. Tests run daemons in process against herdrtest and a scratch
+  state dir, never the real ones.
 - `internal/team/` — the team domain model (ADR-001 D5, A17): project → group
   → logical worker → current pane, built from `pane.list`, `workspace.list`,
   `tab.list`, `agent.list` and `state.db`'s `workers` rows, joined by
