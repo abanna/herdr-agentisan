@@ -81,6 +81,10 @@ token = { env = "GITHUB_TOKEN" }
 #
 #   shell_prompt         a regular expression one line of your prompt
 #                        matches; spawn waits for it. Unset, spawn does not.
+#                        herdr matches it with Rust's regex syntax; resolve
+#                        compiles it with Go's, a first check only, so a
+#                        construct Rust lacks (a literal {, \Q…\E, a nested
+#                        [) passes here and fails the spawn.
 #   shell_ready_keys     keys sent once when the shell is still not ready
 #                        after shell_ready_after_s and a program (a password
 #                        prompt, say) has the terminal. Default none.

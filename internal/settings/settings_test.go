@@ -271,7 +271,8 @@ url = "https://linear.app/nerds-run"
 			"linear": {URL: "https://linear.app/nerds-run"},
 		},
 		Rotation: settings.Rotation{Thresholds: []int{55, 65, 75}},
-		Spawn:    settings.Spawn{ShellReadyAfter: settings.DefaultShellReadyAfter},
+		// 3 s by value: the sample and A23 document "default 3".
+		Spawn: settings.Spawn{ShellReadyAfter: 3 * time.Second},
 	}, *got.Profile)
 	l, ok := leaf(t, got, "repo")
 	require.True(t, ok)

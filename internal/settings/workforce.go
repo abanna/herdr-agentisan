@@ -56,6 +56,9 @@ type Spawn struct {
 	// matches; "" starts the agent as soon as herdr sees a shell at the
 	// pane's foreground, which an interactive question the shell itself
 	// asks at startup (a framework's update prompt, say) does not change.
+	// herdr matches it with Rust's regex syntax. The check here compiles it
+	// with Go's regexp, a first check only: a construct Rust lacks (a
+	// literal {, \Q…\E, a nested [) passes here and fails the spawn.
 	ShellPrompt string
 	// ShellReadyKeys are sent once to a new tab whose shell is still not
 	// ready after ShellReadyAfter and has a program at its foreground: they

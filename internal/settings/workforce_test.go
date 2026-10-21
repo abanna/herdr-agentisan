@@ -91,25 +91,38 @@ agent = { command = ["codex", "--search"] }
 	assert.Equal(t, settings.Agent{Command: []string{"claude"}}, p.AgentFor("coder"))
 }
 
+// earlierGroups sort before qa: coder with its own command, which passes,
+// then librarian with a model and no command.
+const earlierGroups = "[groups.coder]\nworkers = 1\nslots = 1\nagent = { command = [\"claude\"] }\n" +
+	"[groups.librarian]\nworkers = 0\nslots = 1\nagent = { model = \"sonnet\" }\n"
+
 // TestLoadRefusesWorkforceKeys: a group's command bypassing Agentisan, any
 // command carrying a flag the workforce sets, and a [spawn] value that cannot
-// work are each refused with the key that holds them.
+// work are each refused with the key that holds them and its layer, and a
+// launch flag's refusal never shows the flag's value.
 func TestLoadRefusesWorkforceKeys(t *testing.T) {
 	t.Parallel()
 	tests := map[string]struct {
 		body    string
 		wantErr error
 		wantAt  string
+		// wantNot is part of a value the error must never show: a launch
+		// flag's refusal names the flag only.
+		wantNot string
 	}{
 		"a group command that is not claude or codex": {body: "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"aider\"] }\n", wantErr: settings.ErrBypassesAgentisan, wantAt: "groups.qa.agent.command"},
 		"a group command with --bare":                 {body: "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"claude\", \"--bare\"] }\n", wantErr: settings.ErrBypassesAgentisan, wantAt: "groups.qa.agent.command"},
 		"an empty group command":                      {body: "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [] }\n", wantErr: settings.ErrBypassesAgentisan, wantAt: "groups.qa.agent.command"},
 		"a group command with --model":                {body: "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"claude\", \"--model\", \"opus\"] }\n", wantErr: settings.ErrInvalid, wantAt: "groups.qa.agent.command"},
 		"a top-level command with -m":                 {body: "[agent]\ncommand = [\"codex\", \"-m\", \"o3\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command"},
-		"a top-level command with --name=":            {body: "[agent]\ncommand = [\"claude\", \"--name=boss\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command"},
+		"a top-level command with --name=":            {body: "[agent]\ncommand = [\"claude\", \"--name=hunter2\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command", wantNot: "hunter2"},
 		"a top-level command with -n":                 {body: "[agent]\ncommand = [\"claude\", \"-n\", \"x\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command"},
-		"a short flag's value attached":               {body: "[agent]\ncommand = [\"codex\", \"-mo3\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command"},
+		"a short flag's value attached":               {body: "[agent]\ncommand = [\"codex\", \"-mo3secret\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command", wantNot: "o3secret"},
 		"a one-byte value attached":                   {body: "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"codex\", \"-n1\"] }\n", wantErr: settings.ErrInvalid, wantAt: "groups.qa.agent.command"},
+		// Every group is checked, not only the first: the bad command sorts
+		// after a group with a command that passes and one with none.
+		"a bad command in a later group": {body: earlierGroups + "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"aider\"] }\n", wantErr: settings.ErrBypassesAgentisan, wantAt: "groups.qa.agent.command"},
+		"a launch flag in a later group": {body: earlierGroups + "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"claude\", \"--model=opus-secret\"] }\n", wantErr: settings.ErrInvalid, wantAt: "groups.qa.agent.command", wantNot: "opus-secret"},
 		// The check knows no flag's arity, so it refuses a launch flag's name
 		// even where it is another flag's value.
 		"a launch flag's name as a value":      {body: "[agent]\ncommand = [\"claude\", \"--append-system-prompt\", \"--model\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command"},
@@ -117,6 +130,7 @@ func TestLoadRefusesWorkforceKeys(t *testing.T) {
 		"an empty shell prompt":                {body: "[spawn]\nshell_prompt = \"\"\n", wantErr: settings.ErrInvalid, wantAt: "spawn.shell_prompt"},
 		"a shell prompt that does not compile": {body: "[spawn]\nshell_prompt = \"(\"\n", wantErr: settings.ErrInvalid, wantAt: "spawn.shell_prompt"},
 		"an empty key name":                    {body: "[spawn]\nshell_ready_keys = [\"enter\", \" \"]\n", wantErr: settings.ErrInvalid, wantAt: "spawn.shell_ready_keys"},
+		"a key name that is a tab":             {body: "[spawn]\nshell_ready_keys = [\"\\t\"]\n", wantErr: settings.ErrInvalid, wantAt: "spawn.shell_ready_keys"},
 		"a negative wait":                      {body: "[spawn]\nshell_ready_after_s = -1\n", wantErr: settings.ErrInvalid, wantAt: "spawn.shell_ready_after_s"},
 		"a wait over a minute":                 {body: "[spawn]\nshell_ready_after_s = 61\n", wantErr: settings.ErrInvalid, wantAt: "spawn.shell_ready_after_s"},
 		"a wait that is no number":             {body: "[spawn]\nshell_ready_after_s = \"3\"\n", wantErr: settings.ErrInvalid},
@@ -132,7 +146,10 @@ func TestLoadRefusesWorkforceKeys(t *testing.T) {
 			_, err := settings.Load(settings.LoadOptions{ConfigDir: dir, LookupEnv: envOf(nil)})
 			require.ErrorIs(t, err, tc.wantErr)
 			if tc.wantAt != "" {
-				assert.Contains(t, err.Error(), tc.wantAt)
+				assert.Contains(t, err.Error(), tc.wantAt+" ("+settings.LayerShared+", ", "the error names the key and its layer")
+			}
+			if tc.wantNot != "" {
+				assert.NotContains(t, err.Error(), tc.wantNot)
 			}
 		})
 	}
