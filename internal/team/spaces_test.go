@@ -163,15 +163,15 @@ func TestSpacesTeamCarriesItsOrderAndColour(t *testing.T) {
 	assert.Equal(t, "#7c3aed", m.Projects[0].Color)
 	assert.Equal(t, team.Spaces{}.GroupOrder(), m.Projects[0].Order)
 
-	s := team.Snapshot(m, "agentisan", at, nil)
+	s := team.Snapshot(m, "agentisan", at, nil, nil)
 	assert.Equal(t, &snapshot.Project{Color: "#7c3aed"}, s.Project)
 	assert.Equal(t, []string{"coders", "qa"}, groupNames(s))
 
 	m.Projects[0].Color, m.Projects[0].Order = "#000000", []string{"qa"}
-	s = team.Snapshot(m, "agentisan", at, nil)
+	s = team.Snapshot(m, "agentisan", at, nil, nil)
 	assert.Equal(t, &snapshot.Project{Color: "#000000"}, s.Project, "the colour is the entry's")
 	assert.Equal(t, []string{"qa", "coders"}, groupNames(s), "and so is the order")
 
 	m.Projects[0].Color = ""
-	assert.Nil(t, team.Snapshot(m, "agentisan", at, nil).Project, "no colour, no project state")
+	assert.Nil(t, team.Snapshot(m, "agentisan", at, nil, nil).Project, "no colour, no project state")
 }

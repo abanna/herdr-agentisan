@@ -155,12 +155,23 @@ func TestDecodeAcceptsEveryContractValue(t *testing.T) {
 		"many PRs":                   manyPRs(500),
 		// unnamed marks a row herdr knows by no agent name (ADR-001 A18):
 		// absent and false both mean Name is an agent name.
-		"an unnamed agent":    agent(`"status":"unknown","unnamed":true`),
-		"unnamed false":       agent(`"status":"idle","unnamed":false`),
-		"an unnamed boss":     boss(`"unnamed":true`),
-		"no model":            `{"v":1,"team":"t","groups":[{"name":"g","agents":[{"name":"a","pane_id":"w1:p1","status":"idle"}]}]}`,
-		"an empty team name":  `{"v":1,"team":"","groups":[]}`,
-		"an empty agent list": `{"v":1,"team":"t","groups":[{"name":"g","agents":[]}]}`,
+		"an unnamed agent": agent(`"status":"unknown","unnamed":true`),
+		"unnamed false":    agent(`"status":"idle","unnamed":false`),
+		"an unnamed boss":  boss(`"unnamed":true`),
+		// tab_id and idle_since are optional (ADR-001 A37): absent, empty
+		// and null all mean not reported.
+		"a tab id":                       agent(`"status":"idle","tab_id":"w2:t1"`),
+		"an empty tab id":                agent(`"status":"idle","tab_id":""`),
+		"an idle start":                  agent(`"status":"idle","idle_since":"2026-10-09T17:12:30Z"`),
+		"an idle start offset":           agent(`"status":"done","idle_since":"2026-10-09T17:12:30+05:30"`),
+		"a null idle start":              agent(`"status":"idle","idle_since":null`),
+		"a boss's tab and rest":          boss(`"tab_id":"w1:t1","idle_since":"2026-10-09T17:12:30Z"`),
+		"the first instant at rest":      agent(`"status":"idle","idle_since":"0000-01-01T00:00:00Z"`),
+		"the last instant at rest":       agent(`"status":"idle","idle_since":"9999-12-31T23:59:59.999999999Z"`),
+		"a rest with 30 fraction digits": agent(`"status":"idle","idle_since":"2026-10-09T17:12:30.123456789012345678901234567890Z"`),
+		"no model":                       `{"v":1,"team":"t","groups":[{"name":"g","agents":[{"name":"a","pane_id":"w1:p1","status":"idle"}]}]}`,
+		"an empty team name":             `{"v":1,"team":"","groups":[]}`,
+		"an empty agent list":            `{"v":1,"team":"t","groups":[{"name":"g","agents":[]}]}`,
 	}
 	for name, in := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -228,6 +239,11 @@ func TestDecodeRefuses(t *testing.T) {
 		"status in another case":       {in: agent(`"name":"a","status":"Idle"`), want: snapshot.ErrInvalid, contains: []string{`"Idle"`}},
 		"unnamed is not a bool":        {in: agent(`"name":"a","status":"idle","unnamed":"yes"`), want: snapshot.ErrInvalid},
 		"unnamed in another case":      {in: agent(`"name":"a","status":"idle","Unnamed":true`), want: snapshot.ErrInvalid, contains: []string{`"Unnamed"`}},
+		"tab_id is not a string":       {in: agent(`"name":"a","status":"idle","tab_id":7`), want: snapshot.ErrInvalid},
+		"tab_id is an object":          {in: agent(`"name":"a","status":"idle","tab_id":{"id":"w2:t1"}`), want: snapshot.ErrInvalid},
+		"tab_id in another case":       {in: agent(`"name":"a","status":"idle","tabId":"w2:t1"`), want: snapshot.ErrInvalid, contains: []string{`"tabId"`}},
+		"idle_since in another case":   {in: agent(`"name":"a","status":"idle","Idle_Since":"2026-10-09T17:12:30Z"`), want: snapshot.ErrInvalid, contains: []string{`"Idle_Since"`}},
+		"a duplicate idle_since":       {in: agent(`"name":"a","status":"idle","idle_since":null,"idle_since":null`), want: snapshot.ErrInvalid, contains: []string{`"idle_since"`, "twice"}},
 		"v negative":                   {in: `{"v":-1}`, want: snapshot.ErrUnsupportedVersion},
 		"v past int64":                 {in: `{"v":99999999999999999999,"team":"t","groups":[]}`, want: snapshot.ErrInvalid},
 		"v not an integer":             {in: `{"v":1.0,"team":"t","groups":[]}`, want: snapshot.ErrInvalid},
@@ -360,6 +376,12 @@ func TestDecodeRefusesTimesThatAreNotRFC3339(t *testing.T) {
 	stage := func(lit string) string {
 		return `{"v":1,"team":"t","groups":[{"name":"g","agents":[{"name":"a","status":"idle","stage_started_at":` + lit + `}]}]}`
 	}
+	idle := func(lit string) string {
+		return `{"v":1,"team":"t","groups":[{"name":"g","agents":[{"name":"a","status":"idle","idle_since":` + lit + `}]}]}`
+	}
+	bossIdle := func(lit string) string {
+		return `{"v":1,"team":"t","boss":{"name":"boss","status":"idle","idle_since":` + lit + `}}`
+	}
 	tests := map[string]string{
 		"a date without a time":       `"2026-10-09"`,
 		"a time without a zone":       `"2026-10-09T17:19:00"`,
@@ -388,7 +410,9 @@ func TestDecodeRefusesTimesThatAreNotRFC3339(t *testing.T) {
 	for name, lit := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			for field, doc := range map[string]string{"at": at(lit), "started_at": start(lit), "stage_started_at": stage(lit)} {
+			for field, doc := range map[string]string{
+				"at": at(lit), "started_at": start(lit), "stage_started_at": stage(lit), "idle_since": idle(lit), "boss idle_since": bossIdle(lit),
+			} {
 				_, err := snapshot.Decode(strings.NewReader(doc))
 				require.ErrorIs(t, err, snapshot.ErrInvalid, "%s %s", field, lit)
 			}
@@ -489,18 +513,19 @@ func TestDecodeText(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			// The same literal as the team, a group's name and an agent's
-			// name: every string field goes through the same decoder, and
-			// Validate accepts each spelling as a name.
+			// The same literal as the team, a group's name, an agent's
+			// name and its tab: every string field goes through the same
+			// decoder, and Validate accepts each spelling as a name.
 			l := tc.literal
 			got, err := snapshot.Decode(strings.NewReader(
-				`{"v":1,"team":` + l + `,"groups":[{"name":` + l + `,"agents":[{"name":` + l + `,"status":"idle"}]}]}`))
+				`{"v":1,"team":` + l + `,"groups":[{"name":` + l + `,"agents":[{"name":` + l + `,"tab_id":` + l + `,"status":"idle"}]}]}`))
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got.Team)
 			require.Len(t, got.Groups, 1)
 			assert.Equal(t, tc.want, got.Groups[0].Name)
 			require.Len(t, got.Groups[0].Agents, 1)
 			assert.Equal(t, tc.want, got.Groups[0].Agents[0].Name)
+			assert.Equal(t, tc.want, got.Groups[0].Agents[0].TabID)
 		})
 	}
 }
@@ -598,4 +623,30 @@ func TestUnnamedIsLeftOutUnlessSet(t *testing.T) {
 	got, err := snapshot.Decode(bytes.NewReader(raw))
 	require.NoError(t, err)
 	assert.True(t, got.Groups[0].Agents[0].Unnamed)
+}
+
+// TestTabAndIdleAreLeftOutUnlessSet: a writer leaves tab_id and idle_since
+// out when they are not reported (ADR-001 A37), so a snapshot from before
+// the keys existed decodes to the same agent; set, both survive a round
+// trip, the boss's included.
+func TestTabAndIdleAreLeftOutUnlessSet(t *testing.T) {
+	t.Parallel()
+
+	bare, err := json.Marshal(snapshot.Agent{Name: "pee01", PaneID: "w2:p1", Status: snapshot.StatusWorking})
+	require.NoError(t, err)
+	assert.NotContains(t, string(bare), "tab_id")
+	assert.NotContains(t, string(bare), "idle_since")
+
+	since := time.Date(2026, 10, 9, 17, 12, 30, 0, time.UTC)
+	agent := snapshot.Agent{Name: "pee03", PaneID: "w2:p3", TabID: "w2:t3", Status: snapshot.StatusIdle, IdleSince: &since}
+	doc := snapshot.Snapshot{
+		V: snapshot.Version, At: since, Team: "t",
+		Boss:   &snapshot.Boss{Agent: snapshot.Agent{Name: "boss", PaneID: "w1:p1", TabID: "w1:t1", Status: snapshot.StatusDone, IdleSince: &since}},
+		Groups: []snapshot.Group{{Name: "g", Agents: []snapshot.Agent{agent}}},
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	got, err := snapshot.Decode(bytes.NewReader(raw))
+	require.NoError(t, err)
+	assert.Equal(t, doc, got)
 }
