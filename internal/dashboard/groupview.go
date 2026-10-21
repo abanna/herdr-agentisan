@@ -269,9 +269,9 @@ func modelAndCtx(a snapshot.Agent, th Thresholds) line {
 }
 
 // wrapStage is the stage as stageLines lines of at most w cells, wrapped at
-// words, the last ending in "…" when the stage is longer, in the colour the
-// whole stage takes (stageStyle, A38). A stage not reported is noStage, dim,
-// so the gap shows.
+// words, the last ending in "…" when the stage is longer, in the colour of
+// the rule the whole stage matches (stageRule, A38), or plain when it
+// matches none. A stage not reported is noStage, dim, so the gap shows.
 func wrapStage(stage string, w int) [stageLines]line {
 	var out [stageLines]line
 	s := strings.Join(strings.Fields(clean(stage)), " ")
@@ -282,13 +282,19 @@ func wrapStage(stage string, w int) [stageLines]line {
 	if w <= 0 {
 		return out
 	}
-	st := stageStyle(s)
+	st, _ := stageRule(s)
+	// Wrap only breaks s into lines, dropping the space where it breaks at
+	// one, so each line starts what the lines before it leave of s. The last
+	// line is all the rest, cut: a line broken after a hyphen or inside a
+	// word goes on with no space added.
 	parts := strings.Split(ansi.Wrap(s, w, ""), "\n")
+	rest := s
 	for i := range min(len(parts), stageLines-1) {
-		out[i] = line{{strings.TrimRight(parts[i], " "), st}}
+		text := strings.TrimRight(parts[i], " ")
+		out[i] = line{{text, st}}
+		rest = strings.TrimLeft(strings.TrimPrefix(rest, text), " ")
 	}
 	if len(parts) >= stageLines {
-		rest := strings.Join(strings.Fields(strings.Join(parts[stageLines-1:], " ")), " ")
 		out[stageLines-1] = line{{rest, st}}.truncate(w)
 	}
 	return out

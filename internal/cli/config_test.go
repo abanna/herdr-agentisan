@@ -386,6 +386,42 @@ func TestConfigRejectsArguments(t *testing.T) {
 	}
 }
 
+// TestConfigResolveRefusesWhatARepoFileCannotSet: config resolve --project
+// refuses a repo file that sets a key outside the ones it may set, or a model
+// that is not safe to pass, from any layer (ADR-001 A46). The error names the
+// key and its layer, and neither it nor the output holds the value.
+func TestConfigResolveRefusesWhatARepoFileCannotSet(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct {
+		repoFile string
+		set      []string
+		wantIn   string
+	}{
+		"keys to type":           {repoFile: "[spawn]\nshell_ready_keys = [\"from-the-repo\", \"enter\"]\n", wantIn: "spawn.shell_ready_keys (repo, "},
+		"a group command":        {repoFile: "[groups.qa]\nworkers = 1\nslots = 1\nagent = { command = [\"claude\", \"--from-the-repo\"] }\n", wantIn: "groups.qa.agent.command (repo, "},
+		"a model a shell breaks": {repoFile: "[agent]\nmodel = \"\\\\';echo from-the-repo;#\"\n", wantIn: "agent.model (repo, "},
+		"a model like a flag":    {set: []string{"agent.model=--from-the-repo"}, wantIn: "agent.model (flag, "},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir, repo := configFixture(t)
+			if tc.repoFile != "" {
+				require.NoError(t, os.WriteFile(filepath.Join(repo, settings.RepoFileName), []byte("schema_version = 1\n"+tc.repoFile), 0o600))
+			}
+			args := []string{"config", "resolve", "--project", "app", "--config-dir", dir}
+			for _, s := range tc.set {
+				args = append(args, "--set", s)
+			}
+
+			out, err := runCtx(configCtx(t, nil, nil), args...)
+			require.ErrorIs(t, err, settings.ErrInvalid)
+			assert.Contains(t, err.Error(), tc.wantIn)
+			assert.NotContains(t, err.Error()+out, "from-the-repo", "never the value")
+		})
+	}
+}
+
 // TestConfigResolveRendersAnyValue: whatever a value holds, text output stays
 // one line per leaf with the value as a TOML string, and --json stays valid
 // JSON carrying the same string.
@@ -398,10 +434,10 @@ func TestConfigResolveRendersAnyValue(t *testing.T) {
 		wantText string
 		want     string
 	}{
-		"non-ASCII":         {set: "agent.model=café", wantText: `agent.model = "café"  # flag`, want: "café"},
-		"a NUL":             {set: `agent.model="a\u0000b"`, wantText: `agent.model = "a\u0000b"  # flag`, want: "a\x00b"},
-		"a newline and CR":  {set: `agent.model="a\r\nb"`, wantText: `agent.model = "a\r\nb"  # flag`, want: "a\r\nb"},
-		"quotes and spaces": {set: `agent.model="say \"hi\" ; ls"`, wantText: `agent.model = "say \"hi\" ; ls"  # flag`, want: `say "hi" ; ls`},
+		"non-ASCII":         {set: "integrations.wiki.url=café", wantText: `integrations.wiki.url = "café"  # flag`, want: "café"},
+		"a NUL":             {set: `integrations.wiki.url="a\u0000b"`, wantText: `integrations.wiki.url = "a\u0000b"  # flag`, want: "a\x00b"},
+		"a newline and CR":  {set: `integrations.wiki.url="a\r\nb"`, wantText: `integrations.wiki.url = "a\r\nb"  # flag`, want: "a\r\nb"},
+		"quotes and spaces": {set: `integrations.wiki.url="say \"hi\" ; ls"`, wantText: `integrations.wiki.url = "say \"hi\" ; ls"  # flag`, want: `say "hi" ; ls`},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -417,13 +453,15 @@ func TestConfigResolveRendersAnyValue(t *testing.T) {
 			require.NoError(t, err)
 			var got struct {
 				Values struct {
-					Agent struct {
-						Model string `json:"model"`
-					} `json:"agent"`
+					Integrations struct {
+						Wiki struct {
+							URL string `json:"url"`
+						} `json:"wiki"`
+					} `json:"integrations"`
 				} `json:"values"`
 			}
 			require.NoError(t, json.Unmarshal([]byte(out), &got), "output: %s", out)
-			assert.Equal(t, tc.want, got.Values.Agent.Model)
+			assert.Equal(t, tc.want, got.Values.Integrations.Wiki.URL)
 		})
 	}
 }

@@ -22,13 +22,6 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/settings"
 )
 
-// setAgents replaces what herdr answers agent.list with.
-func (th *teamHerdr) setAgents(agents ...map[string]any) {
-	th.mu.Lock()
-	defer th.mu.Unlock()
-	th.agents = agents
-}
-
 // failAgents makes agent.list fail, or answer again.
 func (th *teamHerdr) failAgents(fail bool) {
 	th.mu.Lock()

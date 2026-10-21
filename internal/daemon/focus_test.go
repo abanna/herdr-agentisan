@@ -3,6 +3,7 @@ package daemon_test
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -684,6 +685,41 @@ func TestRunClosesTheStoreOnEveryExit(t *testing.T) {
 			assert.NoFileExists(t, db+"-wal", "the store was closed")
 			assert.NoFileExists(t, db+"-shm", "the store was closed")
 			assert.Equal(t, []string{"w1:p0"}, query(t, db, "SELECT pane_id FROM focus"), "what it recorded is durable")
+		})
+	}
+}
+
+// TestRunReturnsTheStoreCloseError: a close of the state database that fails
+// is returned, not only logged, with ErrHerdrGone when the server went, so
+// `daemon run`'s exit status shows it.
+func TestRunReturnsTheStoreCloseError(t *testing.T) {
+	t.Parallel()
+	broken := errors.New("close failed")
+
+	for name, tc := range map[string]struct {
+		end  func(r *running, h *fakeHerdr)
+		want error
+	}{
+		"cancelled":              {end: func(r *running, _ *fakeHerdr) { r.cancel() }},
+		"herdr's socket removed": {end: func(_ *running, h *fakeHerdr) { h.stop() }, want: daemon.ErrHerdrGone},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := newHerdr(t, 22)
+			h.focus("w1:p0")
+			dir := shortDir(t)
+			r := run(t, daemon.WithStoreClose(opts(t, dir, h), func(st *store.Store) error {
+				return errors.Join(st.Close(), broken)
+			}))
+			h.nextStream(t)
+			focusIs(t, dir, h, "w1:p0") // the store is open
+
+			tc.end(r, h)
+			err := r.wait(t, ready)
+			require.ErrorIs(t, err, broken)
+			if tc.want != nil {
+				require.ErrorIs(t, err, tc.want)
+			}
 		})
 	}
 }

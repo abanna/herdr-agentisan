@@ -70,8 +70,13 @@ type Server struct {
 	ln    net.Listener
 	wg    sync.WaitGroup
 	close sync.Once
-	// done is closed by Close, ending every open stream.
+	// closing is closed as Close begins (Settle).
+	closing chan struct{}
+	// done is closed by Close once the listener is, ending every open stream.
 	done chan struct{}
+	// streamsEnd, when set, runs in Close between the listener closing and
+	// the streams ending (tests).
+	streamsEnd func()
 }
 
 // Requests returns every request received so far, in arrival order.
@@ -172,7 +177,7 @@ func (s *Server) Settle(t testing.TB) {
 // finish.
 func (s *Server) closed() bool {
 	select {
-	case <-s.done:
+	case <-s.closing:
 		s.Close() // returns once the first call's Close has
 		return true
 	default:
@@ -201,7 +206,7 @@ func Start(t testing.TB, handle Handler) *Server {
 func StartAt(t testing.TB, path string, handle Handler) *Server {
 	t.Helper()
 
-	s := &Server{Path: path, done: make(chan struct{})}
+	s := &Server{Path: path, closing: make(chan struct{}), done: make(chan struct{})}
 	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "unix", path)
 	if err != nil {
 		t.Fatalf("herdrtest: listen: %v", err)
@@ -241,10 +246,21 @@ func (s *Server) Crash() {
 // Close stops the server and removes its socket file, as a herdr that exits
 // does. Open streams end, so their subscribers see the connection close. It is
 // safe to call more than once.
+//
+// The listener closes before the streams end: a subscriber that resubscribes
+// when its stream ends must find the server gone, as it would find a herdr
+// that exited, never a server that still accepts, acknowledges the new
+// stream and ends it at once. A unix listener's Close unlinks its socket
+// file first, a metadata write that can stall on a loaded disk, and the
+// accept loop serves on until the listener's descriptor is closed.
 func (s *Server) Close() {
 	s.close.Do(func() {
-		close(s.done)
+		close(s.closing)
 		_ = s.ln.Close() // a unix listener unlinks its socket file on close
+		if s.streamsEnd != nil {
+			s.streamsEnd()
+		}
+		close(s.done)
 		s.wg.Wait()
 	})
 }

@@ -14,7 +14,12 @@
 #   2. the shared tables below: every top-level table except [projects]
 #   3. [projects.<name>], the only place short and layout can be set
 #   4. <repo>/.herdr-agentisan.toml: a profile body with its own
-#      schema_version = 1; it cannot set repo
+#      schema_version = 1. It is committed, so it sets only color,
+#      github, a group's workers and slots, models and
+#      rotation.thresholds (ADR-001 A46). Everything else, what runs or
+#      is typed in your terminals, where a secret goes, a group's
+#      description and any key added later, comes only from this file
+#      and --set.
 #   5. --set key.path=value on the command line, e.g.
 #      --set groups.coder.workers=4  --set 'rotation.thresholds=[50,60,70]'
 #
@@ -38,6 +43,9 @@ schema_version = 1
 # D12: the agent must be claude or codex (by base name), without --bare, and
 # any --setting-sources must include project, so the repo's Agentisan
 # bundle (.claude/version.txt) is loaded.
+# A model, here or in any layer, is a letter or digit, then letters,
+# digits and . _ - : / @ [ ], at most 128 bytes, such as opus[1m]: the
+# workforce passes it to the agent, so nothing a shell would read (A46).
 [agent]
 command = ["claude"]
 model = "opus"
@@ -148,10 +156,11 @@ env_file = "~/.config/herdr-agentisan/elastic.env"
 
 # The test slots the dashboard header shows as "slots used/total" (ADR-001
 # A31): one lock file per slot, as absolute paths; ~ is not expanded. A slot
-# is in use while some process holds a lock on its file. Shared file and
-# --set only, like [telemetry]. agentisan's gate keeps one per
-# AGENTISAN_GATE_CONCURRENCY slot in $XDG_RUNTIME_DIR/agentisan; keep them on
-# tmpfs or ext4.
+# is in use while some process holds a lock on its file, and held, not used,
+# while a `flock <lock> sleep …` holds it (A40). Shared file, a project's own
+# table and --set only; a repo file may not set them. agentisan's gate keeps
+# one per AGENTISAN_GATE_CONCURRENCY slot in $XDG_RUNTIME_DIR/agentisan; keep
+# them on tmpfs or ext4.
 [tests]
 locks = ["/run/user/1000/agentisan/gate.0.lock"]
 
@@ -177,6 +186,11 @@ color = "#7c3aed"
 # this when it starts.
 github = "nerds-run/agentisan-skills"
 verify = [["task", "check"]]
+
+# The project's own test slots replace the shared [tests] locks for its team
+# (A40); locks = [] shows none.
+[projects.agentisan.tests]
+locks = ["/tmp/agentisan-suite-1000.lock", "/tmp/agentisan-suite-1000.slot2.lock", "/tmp/agentisan-suite-1000.slot3.lock"]
 
 [projects.agentisan.groups.coder]
 workers = 3
