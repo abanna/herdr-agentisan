@@ -101,7 +101,7 @@ func lookup(tree map[string]any, path string) (any, bool) {
 // checkFields runs the field rules and the D12 command checks on whatever
 // the merged layers set. None of them needs a selected project.
 func (m merged) checkFields() error {
-	for _, check := range []func() error{m.checkColor, m.checkGitHub, m.checkAgent, m.checkGroups, m.checkVerify, m.checkRotation, m.checkTelemetry, m.checkTests} {
+	for _, check := range []func() error{m.checkColor, m.checkGitHub, m.checkAgent, m.checkGroups, m.checkGroupAgents, m.checkSpawn, m.checkVerify, m.checkRotation, m.checkTelemetry, m.checkTests} {
 		if err := check(); err != nil {
 			return err
 		}
@@ -133,8 +133,16 @@ func (m merged) checkAgent() error {
 	if err := CheckAgentCommand(argv); err != nil {
 		return fmt.Errorf("%s: %w", m.at("agent.command"), err)
 	}
+	if err := checkLaunchFlags(argv); err != nil {
+		return fmt.Errorf("%s: %w", m.at("agent.command"), err)
+	}
 	return nil
 }
+
+// MaxSlots bounds a group's slots. Every slot can be a tab the workforce
+// opens (A23), so the bound keeps a mistyped cap from opening thousands, and
+// keeps every count the workforce sizes from one small.
+const MaxSlots = 64
 
 func (m merged) checkGroups() error {
 	v, _ := m.get("groups")
@@ -168,6 +176,9 @@ func (m merged) checkGroups() error {
 		}
 		if slots < workers {
 			return m.invalidf(slotsPath, "slots %d is below workers %d", slots, workers)
+		}
+		if slots > MaxSlots {
+			return m.invalidf(slotsPath, "slots %d is above %d", slots, MaxSlots)
 		}
 	}
 	return nil
@@ -282,6 +293,7 @@ func buildProfile(name string, values map[string]any) *Profile {
 	if v, ok := lookup(values, "rotation.thresholds"); ok {
 		p.Rotation.Thresholds, _ = v.([]int)
 	}
+	p.Spawn = buildSpawn(values)
 	if v, ok := lookup(values, "groups"); ok {
 		groups, _ := v.(map[string]any)
 		p.Groups = make(map[string]Group, len(groups))
@@ -290,7 +302,7 @@ func buildProfile(name string, values map[string]any) *Profile {
 			workers, _ := g["workers"].(int)
 			slots, _ := g["slots"].(int)
 			description, _ := g["description"].(string)
-			p.Groups[n] = Group{Workers: workers, Slots: slots, Description: description}
+			p.Groups[n] = Group{Workers: workers, Slots: slots, Agent: groupAgent(g), Description: description}
 		}
 	}
 	if v, ok := lookup(values, "integrations"); ok {
