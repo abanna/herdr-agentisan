@@ -45,6 +45,10 @@ func TestStatusLineAsksForTheTeam(t *testing.T) {
 		"a project's team":             {args: []string{"--project", "agentisan"}, env: map[string]string{"HERDR_ACTIVE_WORKSPACE_ID": "w14"}, asked: `{"project":"agentisan"}`, stdout: "PRs #886✓ · slots 1/2 · issues 4\n"},
 		"a workspace's team":           {args: []string{"--workspace", "wN"}, env: map[string]string{"HERDR_ACTIVE_WORKSPACE_ID": "w14"}, asked: `{"workspace_id":"wN"}`, stdout: "PRs #886✓ · slots 1/2 · issues 4\n"},
 		"no focused workspace":         {asked: `{}`, stdout: "PRs #886✓ · slots 1/2 · issues 4\n"},
+		"a held slot": {
+			reply: strings.Replace(statusSnapshot, `"slots":{"used":1,"total":2}`, `"slots":{"used":1,"total":3,"held":1}`, 1),
+			asked: `{}`, stdout: "PRs #886✓ · slots 1/2 (1 held) · issues 4\n",
+		},
 		"a workspace in no team": {
 			env:   map[string]string{"HERDR_ACTIVE_WORKSPACE_ID": "w7"},
 			reply: `{"ok":false,"error":{"code":"no_team","message":"workspace w7 is no team's"}}`, asked: `{"workspace_id":"w7"}`, stdout: "\n",

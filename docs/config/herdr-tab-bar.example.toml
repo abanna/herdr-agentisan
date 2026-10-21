@@ -5,7 +5,8 @@
 # the tab_bar_right you have, and reload herdr's config.
 #
 # The line reads "PRs #878⏳ #886✓ · slots 2/2 · issues 14", each PR with the
-# dashboard header's mark (A29). It comes from the daemon's snapshot, so it
+# dashboard header's mark (A29), and a held slot as the header shows it,
+# "slots 1/2 (1 held)" (A40). It comes from the daemon's snapshot, so it
 # never calls gh or herdr, and it follows the focused workspace: herdr gives
 # the command HERDR_ACTIVE_WORKSPACE_ID, and the line is that workspace's
 # team's. Outside every team the entry hides; what the daemon does not

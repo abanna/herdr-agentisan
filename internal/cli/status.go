@@ -38,8 +38,9 @@ func newStatusLineCmd() *cobra.Command {
 		Short: "Print a team's PRs, test slots and open issues on one line, for herdr's tab_bar_right",
 		Long: "Prints herdr-status.sh's line for a team, \"PRs #878⏳ #886✓ · slots 2/2 ·\n" +
 			"issues 14\", from the daemon's snapshot, never calling gh or herdr (ADR-001\n" +
-			"A41). It fits herdr's 80 characters: the PRs give way to a count first.\n" +
-			"What the daemon does not report is left out.\n\n" +
+			"A41). A held slot reads as in the dashboard's header, \"slots 1/2 (1\n" +
+			"held)\" (A40). It fits herdr's 80 characters: the PRs give way to a\n" +
+			"count first. What the daemon does not report is left out.\n\n" +
 			"The team is --project's, or the one --workspace's workspace is in. With\n" +
 			"neither, it is the team of HERDR_ACTIVE_WORKSPACE_ID, which herdr sets\n" +
 			"for a tab-bar command to the focused workspace, so the line follows\n" +

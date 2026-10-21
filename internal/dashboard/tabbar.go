@@ -63,7 +63,8 @@ func TabBar(ctx context.Context, socket string, sel daemon.Selector) string {
 
 // TabBarLine is herdr-status.sh's line for s: "PRs #878⏳ #886✓ · slots 2/2 ·
 // issues 14", each PR with the header's one mark (prMark), at most
-// TabBarWidth characters. The PRs give way first, to a count, so the slots
+// TabBarWidth characters. The slots read as the header's (slotsText), a
+// held slot included. The PRs give way first, to a count, so the slots
 // and the issues always show. What the snapshot does not report is left
 // out, never shown as zero, and a snapshot that reports nothing is "", which
 // hides the entry. The line names no team: it follows the focused
@@ -75,7 +76,7 @@ func TabBarLine(s snapshot.Snapshot) string {
 	}
 	var tail []string
 	if p.Slots != nil {
-		tail = append(tail, "slots "+strconv.Itoa(p.Slots.Used)+"/"+strconv.Itoa(p.Slots.Total))
+		tail = append(tail, slotsText(*p.Slots))
 	}
 	if p.Issues != nil {
 		tail = append(tail, "issues "+strconv.Itoa(*p.Issues))

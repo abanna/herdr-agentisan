@@ -14,6 +14,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -38,6 +39,7 @@ var (
 )
 
 // TestTabBarLine: herdr-status.sh's line, "PRs … · slots u/t · issues n",
+// with a held slot as the header shows it (A40),
 // each PR with the header's one mark (A29), within the 80 characters herdr
 // shows (A41). What the snapshot does not report is left out; a zero it
 // reports is shown.
@@ -76,6 +78,13 @@ func TestTabBarLine(t *testing.T) {
 		"no project state":          {want: ""},
 		"today's line, too long":    {project: today, want: "PRs 9 · slots 0/2 · issues 13"},
 		"one character past the 80": {project: &snapshot.Project{PRs: prs(pending, 1001, 1002, 1003, 1004, 1005, 101, 102, 103), Slots: &snapshot.Slots{Used: 0, Total: 2}, Issues: new(130)}, want: "PRs 8 · slots 0/2 · issues 130"},
+		// A held slot leaves the count, and the line says so, as the header
+		// does (A40).
+		"a held slot":     {project: &snapshot.Project{PRs: prs(ready, 1), Issues: new(3), Slots: &snapshot.Slots{Used: 1, Total: 3, Held: 1}}, want: "PRs #1✓ · slots 1/2 (1 held) · issues 3"},
+		"every slot held": {project: &snapshot.Project{Issues: new(3), Slots: &snapshot.Slots{Total: 2, Held: 2}}, want: "slots 0/0 (2 held) · issues 3"},
+		// The fills-the-width line, with a slot held: the held count's nine
+		// characters take it past the 80, so the PRs give way.
+		"a hold past the 80": {project: &snapshot.Project{PRs: prs(pending, 1001, 1002, 1003, 1004, 1005, 101, 102, 103), Slots: &snapshot.Slots{Used: 0, Total: 3, Held: 1}, Issues: new(13)}, want: "PRs 8 · slots 0/2 (1 held) · issues 13"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -113,6 +122,29 @@ func TestTabBarLineIsCutAtTheWidth(t *testing.T) {
 	assert.Equal(t, dashboard.TabBarWidth, utf8.RuneCountInString(got))
 	assert.True(t, strings.HasPrefix(got, "PRs 1 · slots 9223372036854775807/"), got)
 	assert.True(t, strings.HasSuffix(got, "…"), got)
+}
+
+// TestTabBarSlotsMatchTheHeader: the tab bar words a team's slots as the
+// header does, held slots included (A40, A41), so the two never disagree.
+func TestTabBarSlotsMatchTheHeader(t *testing.T) {
+	t.Parallel()
+	for name, sl := range map[string]snapshot.Slots{
+		"one free":               {Used: 1, Total: 2},
+		"all used":               {Used: 2, Total: 2},
+		"one free beside a hold": {Used: 1, Total: 3, Held: 1},
+		"the rest used":          {Used: 2, Total: 3, Held: 1},
+		"all held":               {Total: 2, Held: 2},
+		"none at all":            {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := snapshot.Snapshot{V: 1, Team: "t", Project: &snapshot.Project{Slots: &sl}}
+			got := dashboard.TabBarLine(s)
+			require.True(t, strings.HasPrefix(got, "slots "), got)
+			header := ansi.Strip(dashboard.Render(dashboard.Frame{Snapshot: &s, Now: time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)}, 80, 24, dashboard.Options{}))
+			assert.Contains(t, header, "│ t · "+got+" ", "the header's slots")
+		})
+	}
 }
 
 // listenAt is a unix listener at a fresh daemon socket path.

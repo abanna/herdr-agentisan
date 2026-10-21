@@ -389,7 +389,8 @@ restart starts it again.
 
 `herdr-agentisan status line` prints herdr-status.sh's line for a team,
 `PRs #878⏳ #886✓ · slots 2/2 · issues 14`, from the daemon's snapshot, so it
-never calls gh (ADR-001 A41). Run as herdr's `tab_bar_right` command, it
+never calls gh (ADR-001 A41). A held slot reads as in the dashboard's header,
+`slots 1/2 (1 held)` (A40). Run as herdr's `tab_bar_right` command, it
 follows the focused workspace: the line is that workspace's team's, and
 outside every team the entry hides. `--project <name>` shows one team
 everywhere. What the daemon does not report is left out, and the line fits
