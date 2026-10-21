@@ -234,3 +234,34 @@ func TestKindsAndCapsMatch(t *testing.T) {
 	assert.Equal(t, store.MaxBody, notice.MaxBody)
 	assert.Less(t, notice.MaxLine, notice.MaxBody/2)
 }
+
+// TestBatcherRepeatAcrossFlushes: the poll flushes after every Add, and a
+// repeat is still dropped until its window ends.
+func TestBatcherRepeatAcrossFlushes(t *testing.T) {
+	t.Parallel()
+	b := notice.NewBatcher(notice.Configs{Default: notice.Config{Repeat: notice.DefaultRepeat}})
+	blocked := []notice.Notice{note("ha", "p1", notice.Blocked, "p1 is blocked")}
+	b.Add(t0, blocked)
+	require.Len(t, b.Flush(t0), 1)
+	b.Add(t0.Add(time.Minute), blocked)
+	assert.Empty(t, b.Flush(t0.Add(time.Minute)), "a repeat a minute later is dropped")
+	b.Add(t0.Add(notice.DefaultRepeat), blocked)
+	assert.Len(t, b.Flush(t0.Add(notice.DefaultRepeat)), 1, "at the window's end it is let through")
+}
+
+// TestBatcherBodyNeverOverTheCap: whatever the lines' length, a message's
+// body, its dropped line included, fits MaxBody.
+func TestBatcherBodyNeverOverTheCap(t *testing.T) {
+	t.Parallel()
+	for n := notice.MaxLine - 120; n <= notice.MaxLine; n++ {
+		b := notice.NewBatcher(notice.Configs{})
+		var ns []notice.Notice
+		for i := range 40 {
+			ns = append(ns, note("ha", string(rune('a'+i)), notice.TurnEnded, strings.Repeat("x", n)))
+		}
+		b.Add(t0, ns)
+		got := b.Flush(t0)
+		require.Len(t, got, 1)
+		assert.LessOrEqual(t, len(got[0].Body()), notice.MaxBody, "lines of %d bytes", n)
+	}
+}

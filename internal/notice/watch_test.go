@@ -234,16 +234,19 @@ func TestWatchText(t *testing.T) {
 }
 
 // TestWatchGoneText names the pane that left, unless the worker is named
-// by it.
+// by it, then its ctx, item and stage, as every line does (A44).
 func TestWatchGoneText(t *testing.T) {
 	t.Parallel()
 	tests := map[string]struct {
 		worker team.Worker
 		want   string
 	}{
-		"bound":   {team.Worker{ID: "ha-qa-1", Bound: true, Pane: team.Pane{ID: "w1:p7", Agent: "claude", Status: team.StatusIdle, Stage: "qa"}}, "ha-qa-1 left the team (pane w1:p7)"},
+		"bound": {
+			team.Worker{ID: "ha-qa-1", Bound: true, Pane: team.Pane{ID: "w1:p7", Agent: "claude", Status: team.StatusIdle, Ctx: "44", Item: "PR#59", Stage: "qa"}},
+			"ha-qa-1 left the team (pane w1:p7) · ctx 44% · PR#59 · qa",
+		},
 		"named":   {team.Worker{ID: "w1:p7", Pane: team.Pane{ID: "w1:p7", Name: "qa", Agent: "claude", Status: team.StatusIdle}}, "qa left the team (pane w1:p7)"},
-		"unnamed": {team.Worker{ID: "w1:p7", Pane: team.Pane{ID: "w1:p7", Agent: "codex", Status: team.StatusIdle}}, "pane w1:p7 left the team"},
+		"unnamed": {team.Worker{ID: "w1:p7", Pane: team.Pane{ID: "w1:p7", Agent: "codex", Status: team.StatusIdle, Stage: "verify"}}, "pane w1:p7 left the team · verify"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

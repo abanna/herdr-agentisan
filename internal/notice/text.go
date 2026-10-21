@@ -58,12 +58,13 @@ func unknownText(w team.Worker) string {
 	return who(w) + "'s status is unknown" + details(w.Pane)
 }
 
-// goneText names the pane that left too, unless the worker is named by it.
+// goneText names the pane that left too, unless the worker is named by it,
+// then its ctx, item and stage as the last poll that had it saw them.
 func goneText(w team.Worker) string {
 	if !w.Bound && w.Pane.Name == "" {
-		return who(w) + " left the team"
+		return who(w) + " left the team" + details(w.Pane)
 	}
-	return fmt.Sprintf("%s left the team (pane %s)", who(w), field(w.Pane.ID))
+	return fmt.Sprintf("%s left the team (pane %s)%s", who(w), field(w.Pane.ID), details(w.Pane))
 }
 
 // field is s as one line's part: valid UTF-8, every control or format
