@@ -127,12 +127,13 @@ exempts whatever is later added under that name.
   by project or workspace, so the op never calls herdr (A18, A24,
   `snapshot.go`, with `SnapshotSource`, the dashboard's client), and sends
   each status change since the last poll as a workflow event
-  (`events.go`). It keeps herdr's agent view on the focused team, which
-  focus events and the poll feed it, and clears it outside every team and
-  on a clean stop (`view.go`, the A28 addendum). `daemon start` spawns a
-  detached `daemon run`; herdr's `[[startup]]` hook runs it, and the
-  `daemon-restart` action covers linking. Tests run daemons in process
-  against herdrtest and a scratch state dir, never the real ones.
+  (`events.go`), and tells each team's boss what the poll sees, through
+  `internal/notice` (`notices.go`, A44). It keeps herdr's agent view on the
+  focused team, which focus events and the poll feed it, and clears it
+  outside every team and on a clean stop (`view.go`, the A28 addendum).
+  `daemon start` spawns a detached `daemon run`; herdr's `[[startup]]` hook
+  runs it, and the `daemon-restart` action covers linking. Tests run daemons
+  in process against herdrtest and a scratch state dir, never the real ones.
 - `internal/team/` — the team domain model (ADR-001 D5, A17): project → group
   → logical worker → current pane, built from `pane.list`, `workspace.list`,
   `tab.list`, `agent.list` and `state.db`'s `workers` rows, joined by
@@ -144,6 +145,13 @@ exempts whatever is later added under that name.
   herdr's own config (`TestSidebarSnippet`), and the model as a snapshot v1
   in the resolver's group order, with the in-memory stage clock (A18) and
   idle clock (A23).
+- `internal/notice/` — boss notices (ADR-001 A44): the team poll's source
+  (`Watch`: a turn's end from `agent.list`'s `completion_seq`, blocked,
+  unknown for two polls, gone, and the daemon's start), the per-boss pacing
+  (`Batcher`: coalesced, at most one message per gap, repeats dropped, 8 KiB
+  a message) and the `Sink` that delivers it. The daemon's sink writes
+  daemon.log until the inbox delivers (NERD-5256). Pure: tests build models
+  by hand.
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
   `team status` so far: each group's counts and members on a tabs team or
   the ◆ spaces, with idle times from the daemon's clock and the rows no pane

@@ -87,6 +87,8 @@ type teamPoll struct {
 	slots *slotCounter
 	// bind keeps the workers rows bound to their panes (A35).
 	bind *binder
+	// notices tells each team's boss what the poll sees (A44).
+	notices *notices
 }
 
 // startTeam starts the team poll when o.Team is set, and beside it the
@@ -141,7 +143,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 		tabs = append(tabs, t.Project)
 	}
 	o.Logger.Info().Str("project", cfg.spaces.Project).Str("color", cfg.spaces.Color).Strs("tabs_teams", tabs).Msg("team poll running")
-	tp := teamPoll{cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, idle: idle, cache: cache, header: header, slots: o.newSlotCounter(), bind: &binder{ready: ready}}
+	tp := teamPoll{cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, idle: idle, cache: cache, header: header, slots: o.newSlotCounter(), bind: &binder{ready: ready}, notices: o.newNotices()}
 	onServer := o.onServer(ident)
 	c := herdr.Client{SocketPath: o.HerdrSocket, Dialed: onServer}
 	tick := time.NewTicker(o.Poll)
@@ -172,6 +174,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 			last = built
 			views.built(*built)
 		}
+		o.flushNotices(ctx, tp.notices)
 		select {
 		case <-ctx.Done():
 			return
@@ -240,8 +243,9 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	m := team.Build(l, tp.cfg.resolver(), rows)
 	now := o.Now()
 	// A pane's rest is pane.list's status, so a failed agent list does not
-	// stop the idle clock.
+	// stop the idle clock, nor the notices of a status change.
 	tp.idle.Observe(m, now)
+	tp.notices.observe(m, agents, agentsErr == nil, now)
 	if agentsErr == nil {
 		tp.stages.Observe(m, now)
 		// The slots are the machine's: one count for every team, so a list

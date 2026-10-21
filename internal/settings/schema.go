@@ -63,6 +63,13 @@ var profileSchema = &node{kind: kindTable, fields: map[string]*node{
 	"rotation": {kind: kindTable, fields: map[string]*node{
 		"thresholds": leafOf(kindInts),
 	}},
+	// notices is how the daemon tells the boss what its team poll sees
+	// (A44): the kinds it skips, and gap and repeat in seconds.
+	"notices": {kind: kindTable, fields: map[string]*node{
+		"skip":   leafOf(kindStrings),
+		"gap":    leafOf(kindInt),
+		"repeat": leafOf(kindInt),
+	}},
 }}
 
 // projectSchema is a [projects.<name>] table: a profile body plus the keys

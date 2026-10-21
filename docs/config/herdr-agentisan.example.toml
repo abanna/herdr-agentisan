@@ -45,6 +45,18 @@ model = "opus"
 [rotation]
 thresholds = [55, 65, 75]
 
+# What the daemon tells each team's boss from its team poll (ADR-001 A44): a
+# worker's turn ended, it turned blocked or unknown, it left the team, and,
+# once, that the daemon started. skip names the kinds not told: turn_ended,
+# blocked, unknown, gone or started. A boss gets at most one message every
+# gap seconds (0 to 3600) and the same worker and kind again within repeat
+# seconds (0 to 86400) is dropped. Read once when the daemon starts, from
+# this file only, never a repo file.
+[notices]
+skip = []
+gap = 30
+repeat = 300
+
 # Each group is a worker type: coder, precheck, qa, review (Codex), research,
 # librarian or debugger. workers is how many `team up` starts, slots is the
 # cap the boss can scale to (64 >= slots >= workers >= 0). boss is not a
