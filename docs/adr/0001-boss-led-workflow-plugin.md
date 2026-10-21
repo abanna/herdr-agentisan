@@ -916,7 +916,7 @@ Budget: an agent pane a team places carries 8 keys, and a push sets 4.
 - **The hooks are installed by a command, once.** `herdr-agentisan codex hooks` writes the three hooks of `docs/config/codex-hooks.example.toml` into Codex's user hooks file, `$CODEX_HOME/hooks.json` (by default `~/.codex`).
   - **Why that file.**
     - Codex reads hooks from each config layer's `config.toml` and from a `hooks.json` beside it (`hooks/src/engine/discovery.rs:339-344`). It only reads `hooks.json`, while it writes `config.toml` itself, the trust it records included.
-    - A user-level file covers every repo and worktree. A project's `.codex/config.toml` would not: Codex keys a hook's trust by its file's path, its event and its position (`discovery.rs:666-681`), so every generation worktree would ask again.
+    - A user-level file covers every repo and worktree. A project's `.codex/config.toml` covers only its own repo. It loads only once Codex trusts that project, and it would have to be committed to every repo, or copied into each. Codex keys a hook's trust by its file's path, its event and its position (`discovery.rs:666-681`). It reads a linked worktree's project hooks from the root checkout (`config/src/loader/local.rs:219-244`), so a repo's worktrees share that trust.
   - **Other tools share it.** herdr's own `integration install codex` keeps a SessionStart hook there (`src/integration/targets.rs:160-223` in 0.9.3 and 0.9.5).
     - Every entry that is not ours is kept as written, and ours go last in each event, so adding them never moves another hook.
     - A tool that removes a hook placed before ours in one of our events moves ours, and Codex asks once more.
