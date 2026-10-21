@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A29, A31 and A35 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A29, A31, A35 and A43 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -904,3 +904,48 @@ Budget: an agent pane a team places carries 8 keys, and a push sets 4.
 - **Logs, not events.** A rebind or a re-key is logged at info. A lost row, and a candidate with another shell, are logged at warn. Workflow events for them can follow as an addition to `docs/telemetry.md`.
 - **A19's tab race is narrower.** herdr 0.9.3 maps a tab's position to its saved number (`src/app/ids.rs:19-25`), so a tab opened or closed between `pane.list` and `tab.list` cannot put a neighbour's label on a pane. Only a tab renamed between the two calls can mislabel a pane, for that one poll.
 - **Out of scope.** The focus history (Back already skips unlisted panes, A16), messages to a bare pane, and the tokens a live handoff erases.
+
+### A43. Codex workers run embedded, with the ctx hooks installed once
+
+*Settles:* A22's "Workers run `codex --no-daemon`" and "Trust" bullets, and A25's "The worker launch settings belong to NERD-5278". *Adds to:* D7, D11 and Report commands. Recorded with NERD-5278. Verified against the codex-rs source at `rust-v0.161.0`, and herdr 0.9.3 and 0.9.5.
+
+- **Every Codex launch is embedded.**
+  - `worker spawn` adds `--no-daemon` to a Codex worker's command when the command lacks it, since Codex refuses the flag twice. That covers a group's own command, the top-level one and review's built-in alike, so `--replaces` launches the same. It lands with spawn (NERD-5254 part 4).
+  - No launch path uses `codex resume` or `codex fork`: a rotation starts a fresh session that reads the handoff (D7).
+  - A Codex resumed or forked by hand needs `--no-daemon` too, and both take it. Without it, its hooks run under the shared daemon and report nothing (`ErrCodexDaemon`).
+- **The hooks are installed by a command, once.** `herdr-agentisan codex hooks` writes the three hooks of `docs/config/codex-hooks.example.toml` into Codex's user hooks file, `$CODEX_HOME/hooks.json` (by default `~/.codex`).
+  - **Why that file.**
+    - Codex reads hooks from each config layer's `config.toml` and from a `hooks.json` beside it (`hooks/src/engine/discovery.rs:339-344`). It only reads `hooks.json`, while it writes `config.toml` itself, the trust it records included.
+    - A user-level file covers every repo and worktree. A project's `.codex/config.toml` would not: Codex keys a hook's trust by its file's path, its event and its position (`discovery.rs:666-681`), so every generation worktree would ask again.
+  - **Other tools share it.** herdr's own `integration install codex` keeps a SessionStart hook there (`src/integration/targets.rs:160-223` in 0.9.3 and 0.9.5).
+    - Every entry that is not ours is kept as written, and ours go last in each event, so adding them never moves another hook.
+    - A tool that removes a hook placed before ours in one of our events moves ours, and Codex asks once more.
+  - **Ours.** A `report codex` group is one whose one handler runs `herdr-agentisan report codex`, by any path. One that differs is brought in line in place, keeping its command. The file is written only when that changes it, through a temporary file and a rename, and it keeps its mode, 0600 when new.
+  - **Refused, with nothing changed:**
+    - a hooks file that is not a regular file, is over 1 MiB, or is not valid UTF-8 JSON in a shape Codex reads. Codex ignores a hooks file with any key other than `description` and `hooks`;
+    - `report codex` beside another hook in one group, or twice in one event;
+    - a hooks file with other hard links, or one the user may not write. A rename would get around both, as herdr's own installer also refuses;
+    - a `config.toml` that already runs `report codex`, since a second copy would run every report twice.
+  - **`--check`** reports each hook, from `hooks.json` or else `config.toml`, writes nothing, and exits 1 unless all three are as the command writes them. Both forms say when `config.toml` sets `features.hooks = false`, under which Codex runs no hook at all.
+  - **Trust stays the user's.**
+    - Codex runs a hook only once the user trusts it. A new or changed one stops a new Codex at "Hooks need review" until they do (`tui/src/startup_hooks_review.rs`).
+    - The command never writes that trust. Nothing passes `--dangerously-bypass-hook-trust`, which runs every enabled hook untrusted, a cloned repo's project hooks included.
+    - The command's output names the one step: start `codex --no-daemon` once and choose Trust all, or trust the hooks in `/hooks`.
+    - A release that changes the hooks asks once more, as A27's PostCompact did.
+  - **Directory trust.** Codex trusts a folder by the exact path of the working directory or its repo root, with no parent walk (`config/src/project_trust.rs:50-97`), and asks once in each new one.
+    - herdr 0.9.5 reads that question as blocked. It does not read the hook review as blocked (`src/detect/manifests/codex.toml`).
+    - **Spawn (part 4)** is therefore to:
+      - read a new Codex worker's screen for "Hooks need review" before its first prompt, and fail with the step to take rather than type into that menu;
+      - on a blocked start, name both trust steps;
+      - warn, without refusing, when the hooks are missing, since a Codex worker without `ctx` still works and rotates only when the boss directs it (A22).
+    - The daemon's check reads the daemon's `CODEX_HOME`, so a pane whose shell sets another one is checked in the wrong place. The cost is a wrong warning.
+- **The sandbox is Codex's own setting.** The workforce adds no sandbox flag: a Codex worker runs under the user's Codex configuration, today `workspace-write`, with `auto_review` for escalations.
+  - **Hooks run outside the sandbox,** as `$SHELL -lc` in a session of their own (`hooks/src/engine/command_runner.rs:383-436`), so `ctx` works under any sandbox.
+  - **Tool commands do not.** Under the sandbox, `report stage` reports nothing (A25), and neither do NERD-5261's `handoff ready` and `handoff ack`, so the boss marks a Codex worker's handoff.
+  - **The opt-in.** `--sandbox danger-full-access` in the agent command a group's workers launch with makes them report.
+    - Its cost: no OS sandbox, and no reviewer, since `auto_review` sees only escalations, which that mode never makes.
+    - That is a weaker guard than the Claude workers have: they run in Claude's auto mode, a classifier on each action.
+    - `workspace-write` with `network_access = true` gains nothing for a stage, because the sandbox's pid namespace still hides the pane.
+  - **A25's check of `CODEX_SANDBOX_NETWORK_DISABLED` stays.** Dropping it would let only a command whose escalation was approved report, so a stage would show only some of the time.
+  - **A backlog issue:** relaying a sandboxed stage through the ctx hook, which runs outside the sandbox.
+- **The live check follows spawn** (NERD-5254 part 4): a spawned review worker's codex runs with `--no-daemon` once, and after a turn its `ctx` equals its TUI's "Context N% used".

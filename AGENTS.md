@@ -112,6 +112,11 @@ exempts whatever is later added under that name.
   `report stage` pushes `item` and `stage` on each agentisan step
   transition. They read `HERDR_PANE_ID`, a pane-shell variable, which is why
   it is not in `plugin.Env`.
+- `internal/codexhooks/` — installing those Codex hooks (ADR-001 A43):
+  `codex hooks` writes them into `$CODEX_HOME/hooks.json`, after every entry
+  already there, which it keeps as written, and never edits `config.toml` or
+  trusts a hook; `--check` only reports. Tests use temp Codex homes, never
+  the real `~/.codex`.
 - `internal/daemon/` — the daemon's lifecycle (ADR-001 D3, A3, A4): one daemon
   per herdr server, enforced by a flock'd `daemon.lock` that records the
   server's socket inode; the protocol pin; `daemon.log` capped at 10 MB; the
