@@ -189,7 +189,7 @@ type Model struct {
 }
 
 // The arrow keys, as tea.KeyPressMsg.String names them. Left leaves a
-// group's view; right is unbound.
+// group's view, and is unbound on the overview, as right is everywhere.
 const (
 	keyUp   = "up"
 	keyDown = "down"
@@ -315,8 +315,10 @@ func (m Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		m.help = false
 	case keyLeft:
-		m.help = false
-		m.closeGroup()
+		if m.group != "" {
+			m.help = false
+			m.closeGroup()
+		}
 	case keyUp, keyDown:
 		m.move(k)
 		m.settle()

@@ -241,6 +241,10 @@ func TestLeavingTheGroupView(t *testing.T) {
 		assert.Contains(t, v.View().Content, "╭─ CODERS", "%s: the overview is back", name)
 	}
 
+	o, _ := update(t, m, keyHelp)
+	o, _ = update(t, o, keyLeft)
+	assert.True(t, o.Frame().Help, "on the overview ← is unbound: the help stays")
+
 	v, _ := update(t, m, digit('2'))
 	v, _ = update(t, v, keyHelp)
 	v, _ = update(t, v, keyEsc)
