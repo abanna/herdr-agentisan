@@ -131,7 +131,8 @@ type Pane struct {
 	// Handoff is true when the pane carries a non-empty handoff token.
 	Handoff bool
 	// Ctx, Item and Stage are the pane's ctx, item and stage tokens as
-	// their writers left them (ADR-001 token contract); "" when absent.
+	// their writers left them (ADR-001 token contract); "" when absent, and
+	// Ctx "" too when herdr detects no agent in the pane (A27).
 	Ctx, Item, Stage string
 }
 
@@ -295,7 +296,7 @@ func worker(p herdr.PaneInfo, t Target, ids, names map[string]string) Worker {
 	w := Worker{ID: p.PaneID, Target: t, Pane: Pane{
 		ID: p.PaneID, Name: names[p.PaneID], Label: p.Label, Agent: p.Agent,
 		Status: statusOf(p.AgentStatus), Handoff: p.Tokens[HandoffKey] != "",
-		Ctx: p.Tokens[report.CtxKey], Item: p.Tokens[report.ItemKey], Stage: p.Tokens[report.StageKey],
+		Ctx: ctxOf(p), Item: p.Tokens[report.ItemKey], Stage: p.Tokens[report.StageKey],
 	}}
 	if id, ok := ids[p.PaneID]; ok {
 		w.ID, w.Bound = id, true

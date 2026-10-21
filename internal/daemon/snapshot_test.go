@@ -193,6 +193,42 @@ func TestSnapshotOpServesTheTeam(t *testing.T) {
 	assert.NotContains(t, string(data), `"Agentisan dashboard"`, "a shell in ◆ boss is not the boss")
 }
 
+// TestNoCtxWithoutADetectedAgent is A27's rule on a herdrtest team: a pane
+// agent.list names but herdr detects no agent in, carrying the ctx a Codex
+// left behind, gets no ctx in the snapshot and "ctx  --" in the sidebar,
+// while an agent's pane with the same token gets it in both.
+func TestNoCtxWithoutADetectedAgent(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	ws, _, _ := fullTeam()
+	th.layout(ws, []map[string]any{
+		teamPane("wN:p1", "wN", "codex", "idle", "", map[string]string{"ctx": "45"}),
+		teamPane("wN:p2", "wN", "", "unknown", "", map[string]string{"ctx": "45"}),
+	}, []map[string]any{named("wN:p1", "pee01"), named("wN:p2", "pee02")})
+	dir := shortDir(t)
+	run(t, teamOpts(t, dir, th, projectConfig(t)))
+
+	got := served(t, socketPath(t, dir, th.path), anySnapshot)
+	i := slices.IndexFunc(got.Groups, func(g snapshot.Group) bool { return g.Name == "coders" })
+	require.GreaterOrEqual(t, i, 0)
+	assert.Equal(t, []snapshot.Agent{
+		{Name: "pee01", PaneID: "wN:p1", Status: "idle", Ctx: new(45)},
+		{Name: "pee02", PaneID: "wN:p2", Status: "unknown"},
+	}, got.Groups[i].Agents)
+
+	polled(t, th.srv, 1)
+	for pane, want := range map[string]string{"wN:p1": "ctx 45%", "wN:p2": "ctx  --"} {
+		params := panePushes(t, th.srv)[pane]
+		require.NotEmpty(t, params, pane)
+		var push struct {
+			Tokens map[string]string `json:"tokens"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(params[len(params)-1]), &push))
+		bands := map[string]string{"ctx_ok": push.Tokens["ctx_ok"], "ctx_warn": push.Tokens["ctx_warn"], "ctx_hot": push.Tokens["ctx_hot"]}
+		assert.Equal(t, map[string]string{"ctx_ok": want, "ctx_warn": "", "ctx_hot": ""}, bands, pane)
+	}
+}
+
 // TestSnapshotOpBeforeTheFirstPoll: until the team poll has built a
 // snapshot, the op answers not_ready, which the client maps to ErrNotReady,
 // and never waits on herdr. A daemon whose team poll is off is never ready.

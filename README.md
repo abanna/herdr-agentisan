@@ -91,8 +91,9 @@ its hooks run, so the token lasts 24 h, set again by every report: an idle
 Codex agent keeps its `ctx`. PostCompact reports after a compaction, but may
 still read the count from before it; the next turn corrects it. Nothing
 clears `ctx` when Codex exits, cleanly or not: the last value stays until the
-TTL runs out or the next Codex in the pane reports. ADR-001 A22 and A27 have
-the details.
+TTL runs out or the next Codex in the pane reports. The daemon ignores it
+meanwhile: the sidebar, the dashboard and `team status` read `ctx` only from
+a pane where herdr detects an agent. ADR-001 A22 and A27 have the details.
 
 ## Report `$item` and `$stage` from agentisan
 

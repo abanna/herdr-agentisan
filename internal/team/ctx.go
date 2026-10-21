@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/report"
 )
 
@@ -65,7 +66,8 @@ type PaneTokens struct {
 // (Pane.IsAgent), whether or not a resolver places it: the agents of every
 // team and of none. A plain shell gets none. Each carries all three band
 // keys, the two not in use empty, which clears them, so a pane changing band
-// never shows two. They are sorted by pane id.
+// never shows two. A pane herdr detects no agent in shows "ctx  --" (ctxOf).
+// They are sorted by pane id.
 func CtxTokens(l Layout) []PaneTokens {
 	names := agentNames(l.Agents)
 	var out []PaneTokens
@@ -73,11 +75,21 @@ func CtxTokens(l Layout) []PaneTokens {
 		if !(Pane{Agent: p.Agent, Name: names[p.PaneID]}).IsAgent() {
 			continue
 		}
-		key, value := CtxDisplay(p.Tokens[report.CtxKey])
+		key, value := CtxDisplay(ctxOf(p))
 		tokens := map[string]string{CtxOKKey: "", CtxWarnKey: "", CtxHotKey: ""}
 		tokens[key] = value
 		out = append(out, PaneTokens{PaneID: p.PaneID, Tokens: tokens})
 	}
 	slices.SortFunc(out, func(a, b PaneTokens) int { return strings.Compare(a.PaneID, b.PaneID) })
 	return out
+}
+
+// ctxOf is p's ctx token, or "" when herdr detects no agent in p (ADR-001
+// A27): nothing clears a Codex's ctx when it exits, and its 24 h TTL would
+// keep it in a pane agent.list still names, or a plain shell, long after.
+func ctxOf(p herdr.PaneInfo) string {
+	if p.Agent == "" {
+		return ""
+	}
+	return p.Tokens[report.CtxKey]
 }
