@@ -364,8 +364,9 @@ func TestDispatcherIsExactlyOnceAcrossAHandoff(t *testing.T) {
 // TestDispatcherFailsWhatMayHaveBeenTyped is A2's timeout rule and its
 // kin: a prompt that ended in a way that may have come after the text was
 // typed (herdr's timeout or agent_prompt_failed, a connection closed with no
-// answer, no answer within the client's timeout) fails the message, with
-// its sender told and given the body, and is never typed again.
+// answer, an answer over the client's 1 MiB cap, no answer within the
+// client's timeout) fails the message, with its sender told and given the
+// body, and is never typed again.
 func TestDispatcherFailsWhatMayHaveBeenTyped(t *testing.T) {
 	t.Parallel()
 
@@ -378,6 +379,9 @@ func TestDispatcherFailsWhatMayHaveBeenTyped(t *testing.T) {
 		},
 		"a connection closed with no answer": func(_ *testing.T, p *prompter, _ *daemon.Options) {
 			p.setAfter("ha-coder-1", herdrtest.Reply{Silent: true})
+		},
+		"an answer over the client's cap": func(_ *testing.T, p *prompter, _ *daemon.Options) {
+			p.setAfter("ha-coder-1", herdrtest.Reply{Raw: []byte(strings.Repeat("x", 1<<20+16))})
 		},
 		"no answer within the client's timeout": func(t *testing.T, p *prompter, o *daemon.Options) {
 			p.hold(t, "ha-coder-1")
