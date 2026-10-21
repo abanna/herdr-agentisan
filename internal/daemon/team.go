@@ -36,9 +36,9 @@ type TeamOptions struct {
 	// GitHub is the header's GitHub collection (A29), for every project
 	// the same file gives a github repo.
 	GitHub GitHubOptions
-	// procLocks, when set, stands in for /proc/locks in counting the test
-	// slots (tests).
-	procLocks string
+	// procLocks and proc, when set, stand in for /proc/locks and /proc in
+	// counting the test slots (tests).
+	procLocks, proc string
 }
 
 // teamConfig is what the poll reads of the configuration: the project the ◆
@@ -87,7 +87,7 @@ type teamPoll struct {
 	// descriptions are each project's group descriptions, re-read when the
 	// shared file changes (A36).
 	descriptions *groupDescriptions
-	// slots counts the test slots (A31).
+	// slots counts each project's test slots (A31, A40).
 	slots *slotCounter
 	// bind keeps the workers rows bound to their panes (A35).
 	bind *binder
@@ -198,15 +198,16 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 // workspaces, with a tabs team configured tabs, and agents; reconciles the
 // rows with the panes (A35), unless the rows or the agents could not be read;
 // builds the model with the rows; caches every team's snapshot, each with its
-// project's GitHub header (A29), the test slots, counted once for the poll
-// (A31), and group descriptions (A36), and the workspaces each team holds
-// (A24); pushes each group target and tabs team its `$team`; and pushes every
-// agent pane its ctx display. A failed pane, workspace or tab list costs the
-// poll; a failed agent list costs only the snapshots, which `$team` does not
-// need, so the last ones built with names stay served, teams and index alike,
-// and the ctx display of a pane herdr knows only by name; a failed push is
-// logged and the others go on. It returns ErrHerdrGone, and pushes nothing
-// more, once a call finds the socket no longer names the daemon's server.
+// project's GitHub header (A29), its project's test slots, counted once for
+// the poll (A31, A40), and its group descriptions (A36), and the workspaces
+// each team holds (A24); pushes each group target and tabs team its `$team`;
+// and pushes every agent pane its ctx display. A failed pane, workspace or tab
+// list costs the poll; a failed agent list costs only the snapshots, which
+// `$team` does not need, so the last ones built with names stay served, teams
+// and index alike, and the ctx display of a pane herdr knows only by name; a
+// failed push is logged and the others go on. It returns ErrHerdrGone, and
+// pushes nothing more, once a call finds the socket no longer names the
+// daemon's server.
 // The model it returns is nil when a pane, workspace or tab list failed and
 // no model was built; agent names change neither which panes it holds nor
 // their statuses, so a failed agent list still gives the status events their
@@ -259,12 +260,13 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	tp.idle.Observe(m, now)
 	if agentsErr == nil {
 		tp.stages.Observe(m, now)
-		// The slots are the machine's: one count for every team, so a list
-		// that changes mid-poll cannot give two teams two counts.
+		// The held locks are read once for every team, so a list that
+		// changes mid-poll cannot give two teams two counts; each team
+		// counts its own project's lock files (A40).
 		slots := o.countSlots(tp.slots)
 		fill := func(project string, s *snapshot.Snapshot) {
 			tp.header.fill(project, s, now)
-			setSlots(s, slots)
+			setSlots(s, slots(project))
 			team.Describe(s, tp.descriptions.of(project))
 		}
 		if err := tp.cache.store(m, tp.cfg.spaces.Project, now, tp.stages, tp.idle, fill); err != nil {

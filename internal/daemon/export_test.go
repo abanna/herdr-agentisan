@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
@@ -108,6 +109,21 @@ func WithStoreClose(o Options, closeStore func(*store.Store) error) Options {
 // the team poll counts the test slots.
 func WithProcLocks(t TeamOptions, procLocks string) TeamOptions {
 	t.procLocks = procLocks
+	return t
+}
+
+// SlotsOfOnePoll counts the test slots as one team poll does, for locks,
+// with procLocks and proc standing in for /proc/locks and /proc: it reads
+// the lock list once, and gives each project's slots from that reading.
+func SlotsOfOnePoll(procLocks, proc string, locks settings.TestLocks) func(project string) *snapshot.Slots {
+	c := &slotCounter{locks: locks, procLocks: procLocks, proc: proc, failingFor: map[string]string{}}
+	return Options{Logger: zerolog.Nop()}.countSlots(c)
+}
+
+// WithProc returns t with proc standing in for /proc when the team poll
+// tells a hold from its holder.
+func WithProc(t TeamOptions, proc string) TeamOptions {
+	t.proc = proc
 	return t
 }
 

@@ -161,11 +161,12 @@ exempts whatever is later added under that name.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
   references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check,
-  and each group's one-line description (A36), never from a repo file. A
-  repo file is committed, so it sets only colour, github, group counts,
-  models and rotation (A46, `repoFileKeys`, refused by default), and a model
-  from any layer is checked as safe to pass to an agent (`CheckModel`).
-  Sample in `docs/config/herdr-agentisan.example.toml`.
+  each group's one-line description (A36), never from a repo file, and each
+  project's test-slot lock files, which the daemon reads once at start
+  (`tests.go`, A40). A repo file is committed, so it sets only colour, github,
+  group counts, models and rotation (A46, `repoFileKeys`, refused by default),
+  and a model from any layer is checked as safe to pass to an agent
+  (`CheckModel`). Sample in `docs/config/herdr-agentisan.example.toml`.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
   embedded from `migrations/` and tracked by `user_version`. The daemon holds
@@ -188,12 +189,15 @@ exempts whatever is later added under that name.
   it with an environment they build, never the real gh or GitHub. The
   daemon's collector (`internal/daemon/github.go`) runs it every 60 s beside
   the team poll and caches each project's result for the snapshot.
-- `internal/testslots/` — the dashboard header's test slots (ADR-001 A31):
-  which of `[tests] locks` some process holds a lock on, read from the
-  kernel's `/proc/locks` every team poll without opening or locking a lock
-  file, three times with staggered pages, since a page can skip a line
-  while other locks change. Tests hold real locks on temp files and read
-  them back, the parser is tested on its own against written lines, and a
+- `internal/testslots/` — the dashboard header's test slots (ADR-001 A31,
+  A40): which of a project's lock files some process holds a lock on, read
+  from the kernel's `/proc/locks` once every team poll without opening or
+  locking a lock file, three times with staggered pages, since a page can
+  skip a line while other locks change, and which of those a boss's
+  `flock <lock> sleep …` holds, told by the holder's `/proc` cmdline and
+  open files. Tests hold real locks on temp files, and run a real flock(1)
+  hold, and read them back; the parser and the hold check are tested on
+  their own against written lines and a stand-in `/proc`, and a
   page-at-a-time stand-in (`seqfile_test.go`) forces the skip.
 - `internal/snapshot/` — the versioned snapshot contract (ADR-001 D5/D6,
   A18): the groups and agents, the boss, and the project's PRs, issues and

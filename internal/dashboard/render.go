@@ -504,12 +504,17 @@ func projectLine(s *snapshot.Snapshot, width int) line {
 	if p.Issues != nil {
 		tail = append(tail, line{{"issues " + strconv.Itoa(*p.Issues), plainStyle}})
 	}
-	if p.Slots != nil {
-		st := plainStyle
-		if p.Slots.Total > 0 && p.Slots.Used >= p.Slots.Total {
+	if sl := p.Slots; sl != nil {
+		// A held slot is neither in use nor free (A40): it leaves the
+		// count, and the line says how many are held.
+		st, text := plainStyle, fmt.Sprintf("slots %d/%d", sl.Used, sl.Total-sl.Held)
+		if sl.Total > 0 && sl.Used >= sl.Total-sl.Held {
 			st = noteStyle // no slot free
 		}
-		tail = append(tail, line{{fmt.Sprintf("slots %d/%d", p.Slots.Used, p.Slots.Total), st}})
+		if sl.Held > 0 {
+			text += fmt.Sprintf(" (%d held)", sl.Held)
+		}
+		tail = append(tail, line{{text, st}})
 	}
 	var out line
 	for _, d := range []prDetail{prFull, prCompact, prCount} {
