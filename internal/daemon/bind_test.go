@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"net"
 	"net/url"
@@ -427,30 +428,57 @@ func TestWorkforceRetriesNotReady(t *testing.T) {
 		assert.Equal(t, int32(deadlineAt), calls.Load(), "no ask after the wait ended")
 	})
 
-	// The caller's deadline passes 30 ms into the 100 ms wait after the
-	// first refusal: Workforce returns that refusal at once, never the
-	// context's error, and dials no more. The cue is a timer, so on a
-	// machine that delays it past the wait it lands in a later wait or
-	// exchange instead, which ends the same way; only the count is left
-	// unpinned for that (QA #77, F-2).
+	// The caller's deadline passes in the wait after the first refusal:
+	// the server passes the cue once the client has read the refusal and
+	// closed its end, so the client holds it and is in its 100 ms wait.
+	// Workforce returns that refusal at once, never the context's error
+	// (QA #77, F-2). A cue off a timer raced the client's read, and a
+	// deadline that cuts the first ask short is no answer (#77's review).
+	// A machine that stalls the server past the wait lets the next ask in
+	// before the cue; the server never answers it, so the cue cuts it
+	// short after the refusal, which ends the same way.
 	t.Run("the deadline ends the wait between two asks", func(t *testing.T) {
 		t.Parallel()
 		ctx := newCueDeadline(t.Context())
 		var passedAt atomic.Int64
-		sock, calls := serve(t, 1000, func(c int32) {
-			if c == 1 {
-				time.AfterFunc(30*time.Millisecond, func() {
-					passedAt.Store(time.Now().UnixNano())
-					ctx.pass()
-				})
+		sock := shortDir(t) + "/d.sock"
+		ln, err := net.Listen("unix", sock)
+		require.NoError(t, err)
+		var asks atomic.Int32
+		var held []net.Conn
+		done := make(chan struct{})
+		t.Cleanup(func() {
+			_ = ln.Close()
+			<-done
+			for _, c := range held {
+				_ = c.Close()
 			}
 		})
-		_, err := daemon.Workforce(ctx, sock, daemon.OpTeamStatus, struct{}{})
+		go func() {
+			defer close(done)
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				_ = conn.SetReadDeadline(time.Now().Add(daemon.StatusBudget))
+				_, _ = bufio.NewReader(conn).ReadString('\n')
+				if asks.Add(1) > 1 {
+					held = append(held, conn) // never answered: the cue ends this ask
+					continue
+				}
+				_, _ = conn.Write([]byte(`{"ok":false,"error":{"code":"not_ready","message":"not yet"}}` + "\n"))
+				_, _ = io.Copy(io.Discard, conn) // until the client, holding the refusal, closes
+				passedAt.Store(time.Now().UnixNano())
+				ctx.pass()
+				_ = conn.Close()
+			}
+		}()
+		_, err = daemon.Workforce(ctx, sock, daemon.OpTeamStatus, struct{}{})
 		prompt(t, &passedAt)
 		require.ErrorIs(t, err, daemon.ErrNotReady, "the last refusal, not the deadline")
-		asked := calls.Load()
 		time.Sleep(300 * time.Millisecond)
-		assert.Equal(t, asked, calls.Load(), "no ask after the wait ended")
+		assert.LessOrEqual(t, asks.Load(), int32(2), "no ask after the one a stall lets in")
 	})
 }
 
