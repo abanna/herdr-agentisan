@@ -57,11 +57,14 @@ const (
 
 const (
 	// sep separates the parts of a line.
-	sep      = " · "
-	waiting  = "waiting for the daemon…"
-	noTeam   = "no agents in this team"
-	noAgents = "no agents"
-	noBoss   = "not running"
+	sep     = " · "
+	waiting = "waiting for the daemon…"
+	noTeam  = "no agents in this team"
+	// noTeamHere is the body when there is no team where the dashboard
+	// runs; the footer says why.
+	noTeamHere = "no team in this workspace"
+	noAgents   = "no agents"
+	noBoss     = "not running"
 )
 
 // Options tune the renderer. The zero value renders with DefaultThresholds
@@ -110,6 +113,9 @@ type Frame struct {
 	Btop bool
 	// Note is a standing footer note, such as why focus is off.
 	Note string
+	// NoTeam is set when there is no team where the dashboard runs: with no
+	// Snapshot, the body says so instead of waiting for the daemon.
+	NoTeam bool
 	// Errors are shown in the footer, first to last. Nil entries are skipped.
 	Errors []error
 	// Search is set while a query is typed: the footer leads with Query, and
@@ -138,6 +144,8 @@ func Render(f Frame, w, h int, opts Options) string {
 	l.drawHeader(canvas, f, th)
 	switch {
 	case l.avail == 0:
+	case f.Snapshot == nil && f.NoTeam:
+		canvas[l.top] = line{{" ", plainStyle}, {noTeamHere, dimStyle}}
 	case f.Snapshot == nil:
 		canvas[l.top] = line{{" ", plainStyle}, {waiting, dimStyle}}
 	case len(l.groups) == 0 && f.Search && strings.TrimSpace(f.Query) != "":

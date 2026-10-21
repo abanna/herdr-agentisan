@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A29 and A34 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A29, A31 and A34 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -375,7 +375,7 @@ Every generation passes the same gates. Live checks never restart the user's Her
 ### Gates for every generation
 
 1. Tests come first: each acceptance criterion and invariant is a test against herdrtest before implementation.
-2. Run `GOTOOLCHAIN=go1.26.9 task check`, `task tidy` and `task modernize`.
+2. Run `GOTOOLCHAIN=go1.26.10 task check`, `task tidy` and `task modernize`.
 3. Run `task tdaddy:impact`.
 4. go-review: run Job 1 yourself, then Jobs 2 and 3 through a subagent.
 5. validate-workflow passes, then the PR is opened.
@@ -711,12 +711,16 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
 - **The output.** On every path stdout is exactly one JSON object, `{"ok":true,"data":…}` or `{"ok":false,"error":{"code","message"}}`, and the exit is 1 when refused. That includes flag errors (`bad_request`) and a daemon that cannot be reached (`daemon_unavailable`). A command not built yet is absent, so the skill's wrapper reports it unavailable: until their parts, `worker retire`, `worker spawn` and `team up`, and `worker spawn --replaces` (item 5b) and `boss handoff` (item 6) after them.
 - **The tdaddy preflight** (part 6) has its bullets in A34, not here: it is a package of its own, which lands ahead of the parts that call it.
 
-### A24. One snapshot per team
+### A24. One snapshot per team, and each dashboard shows its own
 
-*Amends:* the op and project bullets of A18. *Adds to:* D3 and D6. Recorded with NERD-5285, whose dashboard half, each dashboard finding its own team, follows. The snapshot contract v1 is unchanged.
+*Amends:* the op and project bullets of A18. *Adds to:* D3, D5 and D6. Recorded with NERD-5285. The snapshot contract v1 is unchanged.
 
 - **Every team, every poll.** Each poll with agent names snapshots every project in the model, its order and colour read from its project there (A19) and its GitHub header from its own project's collection (A29), and indexes the workspaces each team holds: a tabs team's one, every ◆ space, ◆ boss and ◆ herdr included. The snapshots and the index are swapped in as one value, so an op never pairs one poll's index with another poll's snapshots, except for a team over the size cap, whose workspaces follow the poll while it keeps its last snapshot. A team gone from the model is dropped from the next poll on. A team whose snapshot would not fit one answer line keeps its own last one, and the others are unaffected. A18's "the last snapshot stays" is now a failed `agent.list`'s alone, and it keeps every team and the index as they were.
 - **The op.** `{"v":1,"op":"snapshot","args":{"project"?,"workspace_id"?}}`. `project` names a team, and wins when both are given; `workspace_id` is looked up in the index; neither is the `[spaces] project`, as before. A team the model does not hold refuses with `no_team` (`daemon.ErrNoTeam`). With no ◆ space at all, asking for neither is now `no_team` too, where it was a team with no groups. Before the first poll every selector is `not_ready`, and so is a team whose snapshot has never fit. Args of the wrong type are `bad_request`; keys the op does not know are ignored.
+- **Where a dashboard runs.** A dashboard finds its own pane by its pid: one `pane.list`, then `pane.process_info` on the pane it found last, or `HERDR_PANE_ID`, believed when the pid is that pane's shell, its foreground job or one of its foreground processes; otherwise on every pane, believed only when exactly one runs the pid. It asks the daemon for that pane's workspace, from the list, and holds no team logic: the daemon does the mapping (D3). It never needs `pane.get`, since the list names each pane's workspace.
+  - `HERDR_PANE_ID` is only a first guess. A pane moves, and herdr reissues ids on a live handoff, so a pane whose processes lack the pid is not trusted. `HERDR_WORKSPACE_ID` is used only when herdr cannot be asked (unreachable, or past the deadline), with a footer note; without it there is no board, and the footer says herdr cannot say where the dashboard runs. A herdr that answers the pane list with an error was asked: no board, and the footer names its answer. When no pane runs the pid there is no board either, and the footer says "this dashboard runs in no herdr pane; pass --project".
+  - It finds its pane when it starts and every 10 s, and at once on a `no_team` for a place not searched since its team was last served, as after a live handoff. The 1 s snapshot poll never calls herdr, so a settled dashboard asks herdr two things every 10 s. That is D3's one exception: a dashboard polls herdr for where it is, and for nothing else.
+  - Outside every team there is no board, and no fallback to another team: the body reads "no team in this workspace" and the footer "this workspace (wN) is not a team's; pass --project". Any other failure keeps the last board, as before. `dashboard --project` shows that project's team and locates nothing.
 
 ### A25. Item and stage from a Codex pane
 
@@ -771,7 +775,7 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
   - A `SessionEnd` hook that cleared `ctx` was tried and dropped. Codex 0.161 runs `SessionEnd` whenever a root thread shuts down (`core/src/session/handlers.rs:325`), not only when it exits, and its payload's `reason` is always `other` (`hooks/src/events/session_end.rs:24`).
   - Under `--no-daemon` the embedded app-server shuts down a thread that has had no subscribers and been idle for `thread_unload_delay`, 60 s by default (`app-server/src/request_processors/thread_lifecycle.rs:363-393`, `core/src/config/mod.rs:3922`). `/new`, `/resume` and a fork leave the old thread in that state, so a clear would blank the new session's `ctx` about a minute later.
   - The opt-in memory consolidation (`features.memories`) shuts its internal thread down the same way (`memories/write/src/runtime.rs:398-456`). The same decision covers it.
-- **D7 and the dashboard are to count `ctx` only on a pane where Herdr detects an agent**, so the value a Codex left behind, after a clean exit or a crash, is ignored. The snapshot on main reads it from every pane (`internal/team/snapshot.go`); that change belongs to NERD-5255. An expired `ctx` is unknown, as before. A notice is to fire when `ctx` crosses a level, not when it reappears (NERD-5261).
+- **D7 and the dashboard are to count `ctx` only on a pane where Herdr detects an agent**, so the value a Codex left behind, after a clean exit or a crash, is ignored. The team model reads `ctx` only from such a pane (`ctxOf`, NERD-5318), so the snapshot, `team status` and the sidebar's ctx display (A28) all ignore it, and a pane `agent.list` still names shows `ctx  --`. An expired `ctx` is unknown, as before. A notice is to fire when `ctx` crosses a level, not when it reappears (NERD-5261).
 - This changes a token-contract cell by amendment, as A5 did. D4's one writer per key is unchanged.
 
 ### A28. The sidebar: the ctx display and `$team` in words
@@ -779,7 +783,7 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
 *Overrides:* A17's `$team` bullet, the `$team` rules row of Verified constraints, and the `team` row of the token contract. *Supersedes:* A5's "Group and project headers" row and A8: the sidebar gets no header rows. *Adds to:* D5 and the token contract. Recorded with item 2e (NERD-5252), checked against the herdr source at v0.9.3.
 
 - **No header rows.** The user turned the header-row design down after previews of their own setup; A8's header tokens never shipped. The agents panel is to show the focused team through herdr's agent view instead, which NERD-5309 adds and records.
-- **The ctx display.** Every poll, the daemon pushes every pane herdr's agents panel lists its context use: a pane with an agent herdr detected, or one `agent.list` names, in a team or not. The value is `ctx` and the whole percentage right-aligned in four cells, so seven characters: `ctx  9%`, `ctx 56%`, `ctx100%`, and `ctx  --` when `ctx` is absent, expired or not a percentage from 0 to 100.
+- **The ctx display.** Every poll, the daemon pushes every pane herdr's agents panel lists its context use: a pane with an agent herdr detected, or one `agent.list` names, in a team or not. The value is `ctx` and the whole percentage right-aligned in four cells, so seven characters: `ctx  9%`, `ctx 56%`, `ctx100%`, and `ctx  --` when `ctx` is absent, expired or not a percentage from 0 to 100, or when herdr detects no agent in the pane (A27).
   - It goes into one of three keys by band: `ctx_ok` up to 55, `ctx_warn` above 55, `ctx_hot` above 65. Each push sets all three, the two not in use empty, which clears them, so a pane never shows two.
   - The user's rows give each band its own colour. A rule cannot band the value itself: `gt` and `lt` match only a value that parses whole as a number (`src/config/sidebar/rules.rs:159-169`), which `ctx 56%` does not.
   - The inner spaces survive: herdr trims only a value's ends (`src/app/api_helpers.rs:267-275`), and draws a token row unwrapped, cutting only its end (`src/client/shell/agent_sidebar.rs:356-372`, `src/ui/text.rs:7-20`).
@@ -793,6 +797,27 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
 | `team` | Daemon | Group target from the resolver, or a tabs team's workspace | `N agents · W working · R ready[ · B blocked]` | Unchanged |
 
 Budget: an agent pane carries `ctx`, `item`, `stage`, `handoff` and the three bands, 7 keys, and a push sets 3; still well inside 16 per report and 32 per target.
+
+#### A28 addendum: the agent view
+
+*Overrides:* A28's "The rows" for agents line 2. *Adds to:* D5, A28 and the token contract. Recorded with NERD-5309, checked against the herdr source at v0.9.3.
+
+- **The view.** The daemon sets herdr's agent view (`agent.view.set`, source `plugin:nerdsrun.agentisan`) to the team that holds the focused workspace (`internal/daemon/view.go`, `team.View`):
+  - filter: `any[ in workspace_id [every workspace the team holds, ◆ herdr included], in status [blocked] ]`. Blocked agents from other teams, or from none, follow you; finished ones (`done`) do not. herdr takes 1 to 32 values in an `in` and 64 nodes in a filter (`src/app/agent_view.rs:12-15`), so the workspaces are split across as many `in` nodes as they need;
+  - label: the project's name, `◆ spaces` when `[spaces] project` names none, and a name past 32 characters cut to 31 and `…`, since herdr refuses a longer label and keeps the view it had (`agent_view.rs:193-205`);
+  - sort: the team's order key, ascending.
+- **The order key.** `order_<short>` for a tabs team, `order-spaces` for the spaces: no short code has a dash, so they never collide. Each agent pane a team places carries its place in the team under its key: the boss first, then the groups in the snapshot's order, each group's workers in the model's order, three digits, wider only past 999. herdr sorts a pane without the token after every pane with it, stably (`src/agent_view_eval.rs`), so the focused team's panes come first and the blocked others follow in herdr's order. The key rides the ctx push, in the same report, with its source and 9 s TTL. A pane carries only its own team's key: one from a team it left expires with the TTL, and the filter, not the key, says which team a pane is in. ◆ herdr's panes are in no group, so they carry none and sort with the others.
+- **When it is sent.** On every `pane.focused`, which herdr sends, with the workspace, whenever the active workspace or its focused pane changes (`src/app/api.rs:790-838`), and on every poll, but only when the view differs from the one last sent; the first decision after a start always sends, replacing a view a crashed daemon left. Outside every team it clears the view (`agent.view.clear` with its source, which clears only that source's view, `src/app/api/agent_view.rs:43-72`), bringing back herdr's own order and its grouped/priority toggle.
+  - herdr has no call to read the view, and takes a set from any source (`:7-41`). So the daemon forgets what it sent after a call that fails, and whenever the focus collector resyncs, after resubscribing or `events_lost`, and sends it again. A view another source sets in between stays until the focused team changes.
+  - herdr refuses a view while the plugin is not linked (`plugin_not_found`), is disabled (`plugin_disabled`) or when the view is invalid (`invalid_agent_view`), and keeps the view it had. The daemon logs a refusal when its reason changes, not every poll, and tries again every poll.
+- **Stop, and the rows.** Agents, line 2, is now `$item` and `$stage`; the workspace goes, as A28 planned. A clean stop clears the view, on a 2 s context of its own, after checking the socket still names the daemon's server. A server that is gone or replaced took its view with it, and a replacement belongs to the next daemon, so then nothing is sent and nothing logged. Every view call also goes through a client whose `Dialed` hook checks the identity (A3).
+- **The ctx renewals' cost** (from the NERD-5252 QA). herdr's `pane.report_metadata` patch compares each token's value and expiry, so every renewal fires `pane.updated` and the plugins' event hooks (`src/app/api/panes.rs:1832-1860`, `src/app/api.rs:761-773`): about 6.7 events a second at 20 agent panes. `$team`'s workspace renewals do not (`api.rs:775-784`). The order key adds no report. If the events come to matter, the daemon can push only on a change, with a longer TTL.
+
+| Key | Writer | Target | Format | TTL |
+| --- | --- | --- | --- | --- |
+| `order_<short>`, `order-spaces` | Daemon | Every agent pane a team places | The pane's place in its team, three digits or more | About 9,000 ms, with the ctx display |
+
+Budget: an agent pane a team places carries 8 keys, and a push sets 4.
 
 ### A29. The header's GitHub collection
 
@@ -818,6 +843,18 @@ Budget: an agent pane carries `ctx`, `item`, `stage`, `handoff` and the three ba
 - **No contract change.** `project.prs` and `project.issues` have been in snapshot v1 since item 8; no key is added.
 - **Per-team snapshots (A24).** The collected state is held per project name and copied into a snapshot at one place, so a per-project snapshot takes it the same way. Two teams of one project share a header.
 - **Cutover.** herdr-status.sh, run as herdr's `tab_bar_right`, also shows the test slots, which come in part b. Retire it, and the `tab_bar_right` command, once part b ships.
+
+### A31. The header's test slots and the boss's runtime
+
+*Adds to:* D5, D9, A18 and A29. *Overrides:* A18's "PRs, issues and slots stay unreported until item 9", for the slots. Recorded with item 9, part b (NERD-5257).
+
+- **`[tests] locks`.** The test slots are lock files, one per slot, named as absolute paths in `[tests] locks`. Only the shared file and `--set` may set it: the slots are the machine's, so in a project table or a repo file it is an unknown key. Each entry must be absolute (`~` is not expanded) and named once after cleaning, with at most 32 of them. Unset or empty, no slots are reported. The daemon reads the list once, at start.
+- **Counting.** Every team poll, the daemon counts how many of those files some process holds a lock on, as `/proc/locks` lists them. flock(2), POSIX and open-file-description locks all count; a waiter, a lease and a delegation do not. A file that does not exist is free. The daemon never opens or locks a lock file itself, so it can neither take a slot nor delay a suite taking one. The count is `project.slots`: used, of the number of files. The slots are the machine's, so every team's snapshot (A24) carries the same count, made once per poll.
+- **Failures.** When `/proc/locks` cannot be read (off Linux), is over 8 MiB, or holds a line in a form the daemon does not know, or a lock file cannot be looked at, no slots are reported, never all free. The daemon logs that when it starts or changes kind, and when it recovers. A waiter's, a lease's or a delegation's line is not read for its file: the kernel names none, `<none>:0`, for an opener waiting to break a lease.
+- **Where the locks live.** A file is matched by the device and inode `stat` gives it. On a filesystem where those can differ from what the kernel lists, such as btrfs subvolumes or overlayfs, a held lock may read as free. Keep the locks on tmpfs or ext4, such as `$XDG_RUNTIME_DIR`, where agentisan's gate keeps them: `$XDG_RUNTIME_DIR/agentisan/gate.<n>.lock`, one per `AGENTISAN_GATE_CONCURRENCY` slot.
+- **The boss's runtime.** `boss.started_at` is when this daemon first saw the boss's pane run an agent in the boss's place, held in memory beside the stage clock (A18). It holds while that pane stays the boss, whatever its stage. A handoff to another pane, an agent started again after the pane was a shell, and a daemon restart each start it again. So the runtime is the boss session as this daemon has seen it, not the session's own start, which herdr does not report. Workers carry none.
+- **No contract change.** `project.slots` and `boss.started_at` have been in snapshot v1 since item 8, and the dashboard already draws `slots u/t` and `up 2h14m`.
+- **Cutover.** With part b in, herdr-status.sh shows nothing the header lacks. Retire it, and herdr's `tab_bar_right` command, after the live check.
 
 ### A34. D12's tdaddy preflight: tdaddy must run
 
