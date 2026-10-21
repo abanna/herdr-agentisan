@@ -118,12 +118,12 @@ func Stated(event, text string) (item, stage string) {
 	}
 	// The status line ends the paragraph, or comes just before its trailing
 	// item lines.
-	for i := len(closing) - 1; i >= 0; i-- {
-		if lineValue(closing[i], ItemPrefix) != "" {
+	for _, l := range slices.Backward(closing) {
+		if lineValue(l, ItemPrefix) != "" {
 			continue
 		}
 		for _, p := range StatusPrefixes {
-			if v := lineValue(closing[i], p); v != "" {
+			if v := lineValue(l, p); v != "" {
 				return item, v
 			}
 		}
