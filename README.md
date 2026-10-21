@@ -268,8 +268,19 @@ daemon with; without it, `daemon.log` says so and the header shows no PRs.
 The daemon reads the repos when it starts, so run the `daemon-restart`
 action after changing them.
 
-herdr-status.sh, herdr's `tab_bar_right`, also shows the test slots, which
-the header gains in a later change. Keep it until then.
+### Test slots and the boss's runtime in the header
+
+The header shows `slots used/total` for the lock files `[tests] locks`
+names in the shared `herdr-agentisan.toml` (ADR-001 A31): a slot is in use
+while some process holds a lock on its file, as `/proc/locks` lists them,
+counted every poll. Give absolute paths on tmpfs or ext4; agentisan's gate
+keeps one per slot in `$XDG_RUNTIME_DIR/agentisan/gate.<n>.lock`. Without
+`[tests]`, or off Linux, no slots are shown. The boss's `up 2h14m` counts
+from when this daemon first saw the boss's pane, so a handoff or a daemon
+restart starts it again.
+
+With both in the header, herdr-status.sh, herdr's `tab_bar_right`, can be
+retired.
 
 ## Gates
 

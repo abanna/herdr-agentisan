@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A29 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with amendments A1 to A29 and A31 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -821,3 +821,15 @@ Budget: an agent pane carries `ctx`, `item`, `stage`, `handoff` and the three ba
 - **No contract change.** `project.prs` and `project.issues` have been in snapshot v1 since item 8; no key is added.
 - **Per-team snapshots (A24).** The collected state is held per project name and copied into a snapshot at one place, so a per-project snapshot takes it the same way. Two teams of one project share a header.
 - **Cutover.** herdr-status.sh, run as herdr's `tab_bar_right`, also shows the test slots, which come in part b. Retire it, and the `tab_bar_right` command, once part b ships.
+
+### A31. The header's test slots and the boss's runtime
+
+*Adds to:* D5, D9, A18 and A29. *Overrides:* A18's "PRs, issues and slots stay unreported until item 9", for the slots. Recorded with item 9, part b (NERD-5257).
+
+- **`[tests] locks`.** The test slots are lock files, one per slot, named as absolute paths in `[tests] locks`. Only the shared file and `--set` may set it: the slots are the machine's, so in a project table or a repo file it is an unknown key. Each entry must be absolute (`~` is not expanded) and named once after cleaning, with at most 32 of them. Unset or empty, no slots are reported. The daemon reads the list once, at start.
+- **Counting.** Every team poll, the daemon counts how many of those files some process holds a lock on, as `/proc/locks` lists them. flock(2), POSIX and open-file-description locks all count; a waiter, a lease and a delegation do not. A file that does not exist is free. The daemon never opens or locks a lock file itself, so it can neither take a slot nor delay a suite taking one. The count is `project.slots`: used, of the number of files. The slots are the machine's, so every team's snapshot (A24) carries the same count, made once per poll.
+- **Failures.** When `/proc/locks` cannot be read (off Linux), is over 8 MiB, or holds a line in a form the daemon does not know, or a lock file cannot be looked at, no slots are reported, never all free. The daemon logs that when it starts or changes kind, and when it recovers. A waiter's, a lease's or a delegation's line is not read for its file: the kernel names none, `<none>:0`, for an opener waiting to break a lease.
+- **Where the locks live.** A file is matched by the device and inode `stat` gives it. On a filesystem where those can differ from what the kernel lists, such as btrfs subvolumes or overlayfs, a held lock may read as free. Keep the locks on tmpfs or ext4, such as `$XDG_RUNTIME_DIR`, where agentisan's gate keeps them: `$XDG_RUNTIME_DIR/agentisan/gate.<n>.lock`, one per `AGENTISAN_GATE_CONCURRENCY` slot.
+- **The boss's runtime.** `boss.started_at` is when this daemon first saw the boss's pane run an agent in the boss's place, held in memory beside the stage clock (A18). It holds while that pane stays the boss, whatever its stage. A handoff to another pane, an agent started again after the pane was a shell, and a daemon restart each start it again. So the runtime is the boss session as this daemon has seen it, not the session's own start, which herdr does not report. Workers carry none.
+- **No contract change.** `project.slots` and `boss.started_at` have been in snapshot v1 since item 8, and the dashboard already draws `slots u/t` and `up 2h14m`.
+- **Cutover.** With part b in, herdr-status.sh shows nothing the header lacks. Retire it, and herdr's `tab_bar_right` command, after the live check.

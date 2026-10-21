@@ -590,3 +590,118 @@ func TestStageClock(t *testing.T) {
 		assert.False(t, ok)
 	})
 }
+
+// TestStageClockBossStart: the clock also knows when it first saw each
+// agent pane in a boss's place: the boss's started_at, its runtime's start
+// (A31). The start holds while the pane stays there running an agent,
+// whatever its stage does. A pane new there starts again, and one that
+// leaves, or turns back into a shell, is forgotten. A worker never has one.
+func TestStageClockBossStart(t *testing.T) {
+	t.Parallel()
+
+	// l is a ◆ boss space holding boss, pane id to agent ("" for a shell),
+	// and a ◆ coders space holding one agent pane, wN:p1.
+	l := func(boss map[string]string, stage string) team.Model {
+		layout := team.Layout{Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wJ", Label: "◆ boss"}, {WorkspaceID: "wN", Label: "◆ coders"}}}
+		for _, id := range slices.Sorted(maps.Keys(boss)) {
+			var tokens map[string]string
+			if stage != "" {
+				tokens = map[string]string{"stage": stage}
+			}
+			layout.Panes = append(layout.Panes, pane(id, "wJ", boss[id], "working", tokens))
+		}
+		layout.Panes = append(layout.Panes, pane("wN:p1", "wN", "claude", "working", nil))
+		return team.Build(layout, team.Spaces{}, nil)
+	}
+	one := func(id string) map[string]string { return map[string]string{id: "claude"} }
+	t0, t1, t2 := at, at.Add(3*time.Second), at.Add(6*time.Second)
+	start := func(c *team.StageClock, id string) time.Time {
+		got, ok := c.BossSince(id)
+		if !ok {
+			return time.Time{}
+		}
+		return got
+	}
+
+	t.Run("kept while the boss stays, whatever its stage", func(t *testing.T) {
+		t.Parallel()
+		c := &team.StageClock{}
+		c.Observe(l(one("wJ:p1"), "plan"), t0)
+		c.Observe(l(one("wJ:p1"), "review"), t1)
+		c.Observe(l(one("wJ:p1"), ""), t2)
+		assert.Equal(t, t0, start(c, "wJ:p1"))
+	})
+	t.Run("a handoff to a new pane starts again", func(t *testing.T) {
+		t.Parallel()
+		c := &team.StageClock{}
+		c.Observe(l(one("wJ:p1"), ""), t0)
+		c.Observe(l(map[string]string{"wJ:p1": "claude", "wJ:p2": "claude"}, ""), t1)
+		c.Observe(l(one("wJ:p2"), ""), t2)
+		assert.Equal(t, t1, start(c, "wJ:p2"), "from when it was first seen there")
+		_, ok := c.BossSince("wJ:p1")
+		assert.False(t, ok, "the old boss is forgotten")
+	})
+	t.Run("a shell has none, and an agent started again starts again", func(t *testing.T) {
+		t.Parallel()
+		c := &team.StageClock{}
+		c.Observe(l(one("wJ:p1"), ""), t0)
+		c.Observe(l(map[string]string{"wJ:p1": ""}, ""), t1)
+		_, ok := c.BossSince("wJ:p1")
+		assert.False(t, ok, "a shell is no boss")
+		c.Observe(l(one("wJ:p1"), ""), t2)
+		assert.Equal(t, t2, start(c, "wJ:p1"))
+	})
+	t.Run("a pane that leaves is forgotten", func(t *testing.T) {
+		t.Parallel()
+		c := &team.StageClock{}
+		c.Observe(l(one("wJ:p1"), ""), t0)
+		c.Observe(l(map[string]string{}, ""), t1)
+		c.Observe(l(one("wJ:p1"), ""), t2)
+		assert.Equal(t, t2, start(c, "wJ:p1"))
+	})
+	t.Run("a worker has none", func(t *testing.T) {
+		t.Parallel()
+		c := &team.StageClock{}
+		c.Observe(l(one("wJ:p1"), ""), t0)
+		_, ok := c.BossSince("wN:p1")
+		assert.False(t, ok)
+	})
+	t.Run("a restart starts fresh", func(t *testing.T) {
+		t.Parallel()
+		before := &team.StageClock{}
+		before.Observe(l(one("wJ:p1"), ""), t0)
+		after := &team.StageClock{}
+		after.Observe(l(one("wJ:p1"), ""), t2)
+		assert.Equal(t, t2, start(after, "wJ:p1"))
+	})
+	t.Run("a nil clock knows none", func(t *testing.T) {
+		t.Parallel()
+		var c *team.StageClock
+		c.Observe(l(one("wJ:p1"), ""), t0)
+		_, ok := c.BossSince("wJ:p1")
+		assert.False(t, ok)
+	})
+	t.Run("the snapshot carries the named boss's, in UTC", func(t *testing.T) {
+		t.Parallel()
+		c := &team.StageClock{}
+		c.Observe(l(one("wJ:p2"), ""), t0.In(time.FixedZone("x", 5*3600)))
+		m := l(map[string]string{"wJ:p1": "claude", "wJ:p2": "claude"}, "")
+		c.Observe(m, t1)
+		s := team.Snapshot(m, "", t2, c)
+		require.NotNil(t, s.Boss)
+		assert.Equal(t, "wJ:p1", s.Boss.PaneID, "the first agent pane by id")
+		require.NotNil(t, s.Boss.StartedAt)
+		assert.Equal(t, t1, *s.Boss.StartedAt, "its own start, not the other pane's")
+		assert.Equal(t, time.UTC, s.Boss.StartedAt.Location())
+		assert.Nil(t, team.Snapshot(m, "", t2, nil).Boss.StartedAt, "no clock, no start")
+	})
+	t.Run("a local start is reported in UTC", func(t *testing.T) {
+		t.Parallel()
+		c := &team.StageClock{}
+		c.Observe(l(one("wJ:p1"), ""), t0.In(time.FixedZone("x", 5*3600)))
+		s := team.Snapshot(l(one("wJ:p1"), ""), "", t2, c)
+		require.NotNil(t, s.Boss.StartedAt)
+		assert.Equal(t, t0, *s.Boss.StartedAt)
+		assert.Equal(t, time.UTC, s.Boss.StartedAt.Location())
+	})
+}

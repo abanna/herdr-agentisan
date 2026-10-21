@@ -94,6 +94,13 @@ func WithGitHubTicks(g GitHubOptions, ticks <-chan time.Time) GitHubOptions {
 	return g
 }
 
+// WithProcLocks returns t with procLocks standing in for /proc/locks when
+// the team poll counts the test slots.
+func WithProcLocks(t TeamOptions, procLocks string) TeamOptions {
+	t.procLocks = procLocks
+	return t
+}
+
 // StartTimeFrom is the StartTime hook a daemon builds from a process table
 // reader: nil when stat is nil.
 var StartTimeFrom = startTimeFrom
