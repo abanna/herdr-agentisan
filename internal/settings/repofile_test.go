@@ -336,7 +336,10 @@ func TestModelsAreSafeToPass(t *testing.T) {
 	}
 }
 
-// TestCheckModel: the check spawn also runs on a requested --model.
+// TestCheckModel: the check spawn also runs on a requested --model. Every
+// ASCII character, and a few that are not, is tried first, in the middle and
+// last: one outside the alphabet is refused wherever it stands, and the
+// punctuation the alphabet allows is refused only first.
 func TestCheckModel(t *testing.T) {
 	t.Parallel()
 	require.NoError(t, settings.CheckModel(""))
@@ -344,4 +347,20 @@ func TestCheckModel(t *testing.T) {
 	err := settings.CheckModel("--dangerously-skip-permissions")
 	require.ErrorIs(t, err, settings.ErrInvalid)
 	assert.NotContains(t, err.Error(), "dangerously")
+
+	chars := []string{"é", " ", " ", "＄"}
+	for b := range 0x80 {
+		chars = append(chars, string(rune(b)))
+	}
+	for _, c := range chars {
+		alnum := len(c) == 1 && ('a' <= c[0] && c[0] <= 'z' || 'A' <= c[0] && c[0] <= 'Z' || '0' <= c[0] && c[0] <= '9')
+		inner := len(c) == 1 && strings.Contains("._:/@[]-", c)
+		for at, model := range map[string]string{"first": c + "ab", "middle": "a" + c + "b", "last": "ab" + c} {
+			if err := settings.CheckModel(model); alnum || inner && at != "first" {
+				assert.NoError(t, err, "%q %s", c, at)
+			} else {
+				assert.ErrorIs(t, err, settings.ErrInvalid, "%q %s", c, at)
+			}
+		}
+	}
 }
