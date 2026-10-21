@@ -20,13 +20,16 @@ import (
 // has a budget of its own, past the 5 s exchange every other op fits in.
 const (
 	OpTeamStatus   = "team.status"
+	OpWorkerSpawn  = "worker.spawn"
 	OpWorkerRetire = "worker.retire"
 )
 
-// The workforce ops' budgets. A handoff wait gets 1,500 s of the skill's
+// The workforce ops' budgets. A spawn waits for agents to start, and the
+// skill's wrapper gives a command 120 s; a handoff wait gets 1,500 s of the
 // wrapper's 1,800.
 const (
 	StatusBudget  = 10 * time.Second
+	SpawnBudget   = 110 * time.Second
 	RetireBudget  = 10 * time.Second
 	HandoffBudget = 1500 * time.Second
 )
@@ -39,6 +42,7 @@ const notReadyRetry = 100 * time.Millisecond
 // server and its client both read.
 var opBudgets = map[string]func(json.RawMessage) time.Duration{
 	OpTeamStatus:   fixed(StatusBudget),
+	OpWorkerSpawn:  fixed(SpawnBudget),
 	OpWorkerRetire: retireBudget,
 }
 
@@ -61,6 +65,12 @@ var workforceCodes = []struct {
 	{workforce.ErrPaneChanged, "pane_changed"},
 	{workforce.ErrHandoffPending, "handoff_pending"},
 	{workforce.ErrHandoffTimeout, "handoff_timeout"},
+	{workforce.ErrNoTarget, "no_target"},
+	{workforce.ErrUnknownGroup, "unknown_group"},
+	{workforce.ErrSlotCap, "slot_cap"},
+	{workforce.ErrInvalidID, "invalid_id"},
+	{workforce.ErrPreflight, "preflight_failed"},
+	{workforce.ErrSpawnFailed, "spawn_failed"},
 	{ErrHerdrGone, "herdr_gone"},
 	{workforce.ErrHerdr, codeHerdrFailed},
 	{store.ErrStore, codeStoreFailed},
@@ -91,6 +101,13 @@ func workforceOps(svc *workforce.Service, ready *atomic.Bool) map[string]op {
 				return nil, err
 			}
 			return svc.Status(ctx, req)
+		}},
+		OpWorkerSpawn: {code: workforceCode, run: func(ctx context.Context, args json.RawMessage) (any, error) {
+			var req workforce.SpawnRequest
+			if err := decodeArgs(args, &req); err != nil {
+				return nil, err
+			}
+			return svc.Spawn(ctx, req)
 		}},
 		OpWorkerRetire: {code: workforceCode, run: func(ctx context.Context, args json.RawMessage) (any, error) {
 			var req workforce.RetireRequest
@@ -160,6 +177,7 @@ func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleCl
 		ConfigDir: o.Team.ConfigDir,
 		Idle:      idle,
 		Now:       o.Now,
+		Preflight: o.Hooks.Preflight,
 	}
 }
 

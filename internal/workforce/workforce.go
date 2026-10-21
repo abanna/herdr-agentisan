@@ -1,6 +1,6 @@
 // Package workforce is the boss's team commands (ADR-001 D11, A23), run by
-// the daemon on a project's team (A19): team status here; worker retire,
-// worker spawn and team up follow. On a tabs team each worker is one tab in
+// the daemon on a project's team (A19): team status, worker retire and
+// worker spawn here; team up follows. On a tabs team each worker is one tab in
 // the team's workspace, labelled with its logical id, <short>-<type>-<n>,
 // which is also its herdr agent name; the workers table binds that id to
 // its pane (I1).
@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/preflight"
 	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
@@ -31,8 +32,8 @@ import (
 // Sentinel errors, one per refusal the boss can act on. The daemon answers
 // each with its own code (daemon/workforce.go).
 var (
-	// ErrBadRequest means the request itself is wrong, such as no way to
-	// tell which team is meant.
+	// ErrBadRequest means the request itself is wrong: a count below 1, no
+	// group, or no way to tell which team is meant.
 	ErrBadRequest = errors.New("bad request")
 	// ErrUnknownProject means --project names no configured project.
 	ErrUnknownProject = errors.New("no such project")
@@ -54,11 +55,46 @@ var (
 	ErrHandoffTimeout = errors.New("no handoff in time")
 	// ErrHerdr means a herdr call failed.
 	ErrHerdr = errors.New("herdr call failed")
+	// ErrNoTarget means the project has no tabs team to spawn into: the ◆
+	// spaces project is staffed by hand.
+	ErrNoTarget = errors.New("no team to spawn into")
+	// ErrUnknownGroup means the type has no group in the project's
+	// configuration, so it has no slots.
+	ErrUnknownGroup = errors.New("no such group")
+	// ErrSlotCap means the spawn would take a group past its slots.
+	ErrSlotCap = errors.New("slot cap reached")
+	// ErrInvalidID means a worker's logical id is not a herdr agent name.
+	ErrInvalidID = errors.New("logical id is not a valid herdr agent name")
+	// ErrSpawnFailed means a worker's agent did not come up; its pane was
+	// closed.
+	ErrSpawnFailed = errors.New("spawn failed")
+	// ErrPreflight means the project's repo fails a spawn precondition (D12,
+	// A34), such as tdaddy in a Go repo; nothing was opened.
+	ErrPreflight = errors.New("the spawn preflight failed")
 )
 
-// DefaultHandoffPoll is how often retire --after-handoff looks for the
-// worker's handoff token; Service.HandoffPoll overrides it.
-const DefaultHandoffPoll = 2 * time.Second
+// Defaults for the waits; Service fields of the same name override them.
+const (
+	// DefaultReadyPoll is how often spawn asks herdr whether an agent is up:
+	// the herdr CLI's own 100 ms, relaxed for a daemon starting several.
+	DefaultReadyPoll = 250 * time.Millisecond
+	// DefaultBusyWindow is how long spawn retries a pane whose shell is not
+	// at its foreground yet. The herdr CLI's 2 s is short for a fresh shell
+	// on a loaded machine.
+	DefaultBusyWindow = 10 * time.Second
+	// DefaultHandoffPoll is how often retire --after-handoff looks for the
+	// worker's handoff token.
+	DefaultHandoffPoll = 2 * time.Second
+	// agentStartTimeout is herdr's own startup timeout for agent.start:
+	// over 3 s and at most 300 s (src/app/agents.rs:202-209).
+	agentStartTimeout    = 90 * time.Second
+	minAgentStartTimeout = 3*time.Second + time.Millisecond
+)
+
+// WorkerEnv is set in every worker tab's shell to the worker's logical id, so
+// a shell profile can tell a worker's shell from the user's and skip what
+// asks a question at startup.
+const WorkerEnv = "HERDR_AGENTISAN_WORKER"
 
 // Service runs the workforce ops. The daemon holds one; its lock serializes
 // every change to a team.
@@ -77,8 +113,14 @@ type Service struct {
 	// Now is the clock rows are stamped and idle times read with; nil means
 	// time.Now.
 	Now func() time.Time
-	// HandoffPoll overrides DefaultHandoffPoll.
-	HandoffPoll time.Duration
+	// Preflight is the check a spawn's repo must pass before any pane opens
+	// (A34); nil means preflight.HostCheck.
+	Preflight preflight.Check
+	// CodexHooks reports whether Codex's ctx hooks are installed; nil
+	// checks nothing. A Codex spawn without them warns (A22, A43).
+	CodexHooks func() (bool, error)
+	// ReadyPoll, BusyWindow and HandoffPoll override the defaults above.
+	ReadyPoll, BusyWindow, HandoffPoll time.Duration
 
 	mu sync.Mutex
 }
@@ -88,6 +130,18 @@ func (s *Service) now() time.Time {
 		return s.Now()
 	}
 	return time.Now()
+}
+
+// preflight runs the spawn preflight on repo.
+func (s *Service) preflight(ctx context.Context, repo string) error {
+	check := s.Preflight
+	if check == nil {
+		check = preflight.HostCheck
+	}
+	if err := check(ctx, repo); err != nil {
+		return fmt.Errorf("%w: %w", ErrPreflight, err)
+	}
+	return nil
 }
 
 func orDefault(d, def time.Duration) time.Duration {
@@ -271,6 +325,69 @@ func (s *Service) profile(project string) (*settings.Profile, error) {
 		return nil, configFailed(err)
 	}
 	return res.Profile, nil
+}
+
+// state is one tabs team as an op finds it.
+type state struct {
+	team    settings.Team
+	profile *settings.Profile
+	layout  layout
+	// workspace is the team's workspace; "" when it has none yet.
+	workspace string
+	model     team.Project
+	rows      []store.Worker
+}
+
+// resolver is the team's resolver.
+func (st state) resolver() team.Tabs { return tabsOf(st.team) }
+
+// resolve finds the tabs team sel names and its profile, reading only.
+func (s *Service) resolve(ctx context.Context, sel Selector) (settings.Team, *settings.Profile, layout, error) {
+	teams, err := s.teams()
+	if err != nil {
+		return settings.Team{}, nil, layout{}, err
+	}
+	l, err := s.readLayout(ctx)
+	if err != nil {
+		return settings.Team{}, nil, layout{}, err
+	}
+	t, err := selectTeam(sel, teams, l)
+	if err != nil {
+		return settings.Team{}, nil, layout{}, err
+	}
+	if t.Layout != settings.LayoutTabs {
+		return settings.Team{}, nil, layout{}, fmt.Errorf("%w: %s is the ◆ spaces project, which is staffed by hand; the workforce runs tabs teams (A19)", ErrNoTarget, t.Project)
+	}
+	p, err := s.profile(t.Project)
+	if err != nil {
+		return settings.Team{}, nil, layout{}, err
+	}
+	return t, p, l, nil
+}
+
+// load reads one team's state for an op that changes it, under the
+// workforce lock.
+func (s *Service) load(ctx context.Context, sel Selector) (state, error) {
+	t, p, l, err := s.resolve(ctx, sel)
+	if err != nil {
+		return state{}, err
+	}
+	return s.stateOf(ctx, t, p, l)
+}
+
+// stateOf builds the team's model from l and the live rows.
+func (s *Service) stateOf(ctx context.Context, t settings.Team, p *settings.Profile, l layout) (state, error) {
+	rows, err := s.Store.Workers(ctx)
+	if err != nil {
+		return state{}, fmt.Errorf("read workers: %w", err)
+	}
+	st := state{team: t, profile: p, layout: l, rows: rows}
+	st.workspace, _ = st.resolver().Workspace(l.Workspaces)
+	m := team.Build(l.Layout, st.resolver(), rows)
+	if i := slices.IndexFunc(m.Projects, func(pr team.Project) bool { return pr.Name == t.Project }); i >= 0 {
+		st.model = m.Projects[i]
+	}
+	return st, nil
 }
 
 // groupOrder is the order groups are reported in: those order names first,

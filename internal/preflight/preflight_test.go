@@ -772,4 +772,26 @@ func TestHostCheckInAGoRepo(t *testing.T) {
 		require.ErrorIs(t, err, preflight.ErrTdaddyMissing)
 		assert.Contains(t, err.Error(), "no tdaddy on the daemon's PATH")
 	})
+	// Host's own os.Stat follows links: a repo reached through one is still
+	// a Go repo, and a go.mod that is a link to nothing counts as none (A34).
+	t.Run("a repo reached through a symlink", func(t *testing.T) {
+		t.Setenv("FAKE_TDADDY_MODE", "ok")
+		own := t.TempDir()
+		t.Setenv("FAKE_TDADDY_DIR", own)
+		link := filepath.Join(t.TempDir(), "link")
+		require.NoError(t, os.Symlink(repoAt(t, taskfile), link))
+		require.NoError(t, preflight.HostCheck(t.Context(), link))
+		_, err := os.Stat(filepath.Join(own, "args"))
+		require.NoError(t, err, "tdaddy ran")
+	})
+	t.Run("a go.mod that is a symlink to nothing", func(t *testing.T) {
+		t.Setenv("FAKE_TDADDY_MODE", "ok")
+		own := t.TempDir()
+		t.Setenv("FAKE_TDADDY_DIR", own)
+		d := t.TempDir()
+		require.NoError(t, os.Symlink(filepath.Join(t.TempDir(), "gone"), filepath.Join(d, "go.mod")))
+		require.NoError(t, preflight.HostCheck(t.Context(), d))
+		_, err := os.Stat(filepath.Join(own, "args"))
+		require.ErrorIs(t, err, fs.ErrNotExist, "tdaddy did not run")
+	})
 }
