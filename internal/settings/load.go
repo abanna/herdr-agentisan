@@ -108,6 +108,9 @@ func Load(opts LoadOptions) (Resolved, error) {
 	}
 	m := merge(slices.Concat(layers, []*source{repoFile}, flags)...)
 	m.values["repo"] = repo
+	if err := m.checkDescribers(); err != nil {
+		return Resolved{}, err
+	}
 	if err := m.checkFields(); err != nil {
 		return Resolved{}, err
 	}
@@ -347,6 +350,9 @@ func parseFlags(sets []string) ([]*source, error) {
 		s := &source{layer: LayerFlag, origin: flagOrigin, schema: sharedSchema}
 		tree, _ := raw.(map[string]any)
 		if err := s.load(tree); err != nil {
+			return nil, err
+		}
+		if err := s.checkNoRoutingOverrides(); err != nil {
 			return nil, err
 		}
 		out = append(out, s)

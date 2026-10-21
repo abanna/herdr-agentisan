@@ -224,3 +224,44 @@ func TestGroupDescriptionsWithoutAConfigDir(t *testing.T) {
 	}
 	assert.NotContains(t, logs.String(), "group descriptions")
 }
+
+// TestGroupDescriptionsLookBeforeTheyRead: an edit that lands just after a
+// poll read the file is read at the next poll, since the poll looks at the
+// file before it reads it, so what it last looked at is never newer than
+// what it read (A36). A poll that read first would take the edited file for
+// the one it read, and never read the edit.
+func TestGroupDescriptionsLookBeforeTheyRead(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, settings.FileName)
+	stamp := time.Unix(1_700_000_000, 0)
+	// save saves d as an editor that renames over the file does, stamped at
+	// the next second.
+	save := func(d string) {
+		t.Helper()
+		tmp := path + ".tmp"
+		require.NoError(t, os.WriteFile(tmp, []byte("schema_version = 1\n[projects.app]\nrepo = \"/x\"\n[projects.app.groups.qa]\ndescription = \""+d+"\"\n"), 0o600))
+		stamp = stamp.Add(time.Second)
+		require.NoError(t, os.Chtimes(tmp, stamp, stamp))
+		require.NoError(t, os.Rename(tmp, path))
+	}
+	save("one")
+	reads := 0
+	g := daemon.NewGroupDescriptionsReading(dir, func(dir string) ([]settings.Team, error) {
+		teams, err := settings.Teams(dir)
+		reads++
+		if reads == 1 {
+			save("two") // the edit lands after the poll's read
+		}
+		return teams, err
+	})
+	qa := func() string { return g.Of("app")["qa"] }
+
+	g.Refresh(zerolog.Nop())
+	require.Equal(t, "one", qa(), "the poll shows what it read, from before the edit")
+	g.Refresh(zerolog.Nop())
+	assert.Equal(t, "two", qa(), "the next poll reads the edit")
+	g.Refresh(zerolog.Nop())
+	assert.Equal(t, "two", qa())
+	assert.Equal(t, 2, reads, "the file is read again once, for the edit")
+}

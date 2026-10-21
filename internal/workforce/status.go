@@ -140,7 +140,7 @@ func (s *Service) Status(ctx context.Context, req StatusRequest) (StatusResult, 
 	// herdr shows no workspace of has none, and is by name.
 	for _, name := range groupOrder(all, pr.Order) {
 		cfg, ok := p.Groups[name]
-		g := GroupStatus{Name: name, Workers: cfg.Workers, Slots: cfg.Slots, Configured: ok, Occupied: occupied(pr, name), Targets: []string{}, Members: []Member{}}
+		g := GroupStatus{Name: name, Workers: cfg.Workers, Slots: cfg.Slots, Configured: ok && !cfg.DescribesOnly, Occupied: occupied(pr, name), Targets: []string{}, Members: []Member{}}
 		g.Open = max(g.Slots-g.Occupied, 0)
 		for _, tg := range found[name].Targets {
 			g.Targets = append(g.Targets, tg.WorkspaceID)

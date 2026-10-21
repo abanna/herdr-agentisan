@@ -54,6 +54,8 @@ func TestSampleConfigResolves(t *testing.T) {
 	envFile, err := settings.DebuggerEnvFile(dir, envOf(map[string]string{"HOME": home}))
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(home, ".config", "herdr-agentisan", "elastic.env"), envFile, "the sample names the debugger's env file")
+	assert.False(t, all.Routing().Enabled, "the sample leaves routing off")
+	assert.Equal(t, settings.LayerShared, all.Sources["routing.enabled"], "the sample sets routing.enabled itself")
 	assert.Equal(t, []settings.Team{
 		{Project: "agentisan", Layout: settings.LayoutSpaces, Color: "#7c3aed", Descriptions: map[string]string{
 			"precheck": "a pre-Codex adversarial pass on finalized heads",

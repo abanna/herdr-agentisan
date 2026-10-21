@@ -19,7 +19,7 @@ var spacesSchema = &node{kind: kindTable, fields: map[string]*node{
 }}
 
 // sharedSchema is the shared file's top level and each --set: a profile body
-// plus [spaces], [telemetry], [tests], [debugger] and [notices].
+// plus [spaces], [telemetry], [tests], [debugger], [notices] and [routing].
 var sharedSchema = func() *node {
 	fields := maps.Clone(profileSchema.fields)
 	fields["spaces"] = spacesSchema
@@ -27,6 +27,7 @@ var sharedSchema = func() *node {
 	fields["tests"] = testsSchema
 	fields["debugger"] = debuggerSchema
 	fields["notices"] = noticesSchema
+	fields["routing"] = routingSchema
 	return &node{kind: kindTable, fields: fields}
 }()
 
