@@ -225,8 +225,9 @@ func statusStyle(s snapshot.Status) lipgloss.Style {
 
 // ShortModel is the model as a row shows it, four cells at most: opus, son,
 // hai or fab for Claude's families wherever they appear in the name, cdx for
-// a Codex model, otherwise the first word, lower-cased, cut to four cells
-// (two wide characters).
+// a Codex model, the variant of a gpt- model whose name ends in one (luna for
+// gpt-6-luna), otherwise the first word, lower-cased, cut to four cells (two
+// wide characters).
 func ShortModel(model string) string {
 	m := strings.ToLower(clean(model))
 	switch {
@@ -245,7 +246,25 @@ func ShortModel(model string) string {
 	if len(words) == 0 {
 		return ""
 	}
+	if v, ok := gptVariant(words[0]); ok {
+		return ansi.Truncate(v, modelCells, "")
+	}
 	return ansi.Truncate(words[0], modelCells, "")
+}
+
+// gptVariant is the last part of a gpt- name when that part is a word, such
+// as sol in gpt-6.1-sol: every such name starts gpt-, so its first four
+// cells would draw gpt-6-luna, gpt-6.1-sol and gpt-6-astra alike.
+func gptVariant(name string) (string, bool) {
+	rest, ok := strings.CutPrefix(name, "gpt-")
+	if !ok {
+		return "", false
+	}
+	v := rest[strings.LastIndexByte(rest, '-')+1:]
+	if v == "" || strings.ContainsFunc(v, func(r rune) bool { return !unicode.IsLetter(r) }) {
+		return "", false
+	}
+	return v, true
 }
 
 // clean makes snapshot text safe to draw: control characters, escape

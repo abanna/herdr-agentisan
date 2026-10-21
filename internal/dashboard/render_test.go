@@ -858,8 +858,21 @@ func TestShortModel(t *testing.T) {
 		"gpt-5.5-codex":     "cdx",
 		"codex-mini-latest": "cdx",
 		"Codex":             "cdx",
-		// Any other model is its first word, cut.
+		// A gpt- model that ends in a word is that word, so the three Codex
+		// models the routing rules bind each draw as their own.
+		"gpt-6-luna":  "luna",
+		"gpt-6.1-sol": "sol",
+		"gpt-6-astra": "astr",
+		"GPT-6-Luna":  "luna",
+		"gpt-5-mini":  "mini",
+		// Any other model is its first word, cut: a gpt- name that does not
+		// end in a word, or a word that is not a gpt- name's.
 		"gpt-5.5":          "gpt-",
+		"gpt-6-1":          "gpt-",
+		"gpt-":             "gpt-",
+		"gpt-6-luna2":      "gpt-",
+		"gpt6-luna":        "gpt6",
+		"chatgpt-6-luna":   "chat",
 		"o3":               "o3",
 		"  Gemini 2.5 Pro": "gemi",
 		"ÉCLAIR":           "écla",
