@@ -180,26 +180,30 @@ func TestResolveRefuses(t *testing.T) {
 		wantErr error
 		wantIn  string
 	}{
-		"a worker type, not a role":               {req: routing.Request{Role: "qa", Provider: routing.Claude}, wantErr: routing.ErrUnknownRole},
-		"no role":                                 {req: routing.Request{Provider: routing.Claude}, wantErr: routing.ErrUnknownRole},
-		"no provider":                             {req: routing.Request{Role: "coder"}, wantErr: routing.ErrProviderMismatch},
-		"a provider's case variant":               {req: routing.Request{Role: "coder", Provider: "Claude"}, wantErr: routing.ErrProviderMismatch},
-		"an effort's case variant":                {req: routing.Request{Role: "coder", Provider: routing.Claude, Effort: "HIGH"}, wantErr: routing.ErrOverrideRefused},
-		"a provider that is neither":              {req: routing.Request{Role: "coder", Provider: "aider"}, wantErr: routing.ErrProviderMismatch},
-		"a premium binding from the boss":         {req: routing.Request{Role: "alex_debugger", Provider: routing.Codex, Model: "codex_premium"}, wantErr: routing.ErrOverrideRefused, wantIn: "only the user chooses"},
-		"a binding the role does not allow":       {req: routing.Request{Role: "clerk", Provider: routing.Claude, Model: "claude_strong"}, wantErr: routing.ErrOverrideRefused, wantIn: "claude_small, codex_small"},
-		"an alias, not a model id":                {req: routing.Request{Role: "coder", Provider: routing.Claude, Model: "Opus 5.5"}, wantErr: routing.ErrOverrideRefused},
-		"a short name":                            {req: routing.Request{Role: "coder", Provider: routing.Claude, Model: "opus"}, wantErr: routing.ErrOverrideRefused},
-		"a binding of the other provider":         {req: routing.Request{Role: "coder", Provider: routing.Claude, Model: "codex_strong"}, wantErr: routing.ErrProviderMismatch, wantIn: "boss's --model"},
-		"an effort the binding does not take":     {req: routing.Request{Role: "clerk", Provider: routing.Claude, Effort: "high"}, wantErr: routing.ErrOverrideRefused, wantIn: "takes low"},
-		"an effort no client takes":               {req: routing.Request{Role: "coder", Provider: routing.Claude, Effort: "turbo"}, wantErr: routing.ErrOverrideRefused},
-		"the boss against the user's choice":      {req: routing.Request{Role: "pre_check", Provider: routing.Claude, Model: "codex_strong"}, wantErr: routing.ErrOverrideRefused, wantIn: "sets pre_check to claude_mid"},
-		"the user's choice of the other provider": {req: routing.Request{Role: "researcher", Provider: routing.Claude}, wantErr: routing.ErrProviderMismatch, wantIn: "user's [routing.overrides]"},
-		"a packet's user_model_override":          {req: routing.Request{Role: "coder", Provider: routing.Claude, Task: found(func(t *routing.Task) { t.UserModelOverride = new("claude_premium") })}, wantErr: routing.ErrOverrideRefused},
-		"a packet for another role":               {req: routing.Request{Role: "coder", Provider: routing.Claude, Task: found(func(t *routing.Task) { t.RequestedRole = "pre_check" })}, wantErr: routing.ErrInvalid},
-		"a packet preferring the other provider":  {req: routing.Request{Role: "coder", Provider: routing.Claude, Task: found(func(t *routing.Task) { t.ProviderPreference = routing.Codex })}, wantErr: routing.ErrProviderMismatch},
-		"a packet with no lookup status":          {req: routing.Request{Role: "coder", Provider: routing.Claude, Task: found(func(t *routing.Task) { t.LookupStatus = "" })}, wantErr: routing.ErrInvalid},
-		"a packet with another lookup status":     {req: routing.Request{Role: "coder", Provider: routing.Claude, Task: found(func(t *routing.Task) { t.LookupStatus = "Found" })}, wantErr: routing.ErrInvalid},
+		"a worker type, not a role":                 {req: routing.Request{Role: "qa", Provider: routing.Claude}, wantErr: routing.ErrUnknownRole},
+		"no role":                                   {req: routing.Request{Provider: routing.Claude}, wantErr: routing.ErrUnknownRole},
+		"no provider":                               {req: routing.Request{Role: "coder"}, wantErr: routing.ErrProviderMismatch},
+		"a provider's case variant":                 {req: routing.Request{Role: "coder", Provider: "Claude"}, wantErr: routing.ErrProviderMismatch},
+		"an effort's case variant":                  {req: routing.Request{Role: "coder", Provider: routing.Claude, Effort: "HIGH"}, wantErr: routing.ErrOverrideRefused},
+		"a provider that is neither":                {req: routing.Request{Role: "coder", Provider: "aider"}, wantErr: routing.ErrProviderMismatch},
+		"a premium binding from the boss":           {req: routing.Request{Role: "alex_debugger", Provider: routing.Codex, Model: "codex_premium"}, wantErr: routing.ErrOverrideRefused, wantIn: "only the user chooses"},
+		"a premium model id from the boss":          {req: routing.Request{Role: "alex_debugger", Provider: routing.Claude, Model: "claude-fable-5-1"}, wantErr: routing.ErrOverrideRefused, wantIn: "only the user chooses"},
+		"a codex premium model id from the boss":    {req: routing.Request{Role: "alex_debugger", Provider: routing.Codex, Model: "gpt-6-astra"}, wantErr: routing.ErrOverrideRefused, wantIn: "only the user chooses"},
+		"a binding the role does not allow":         {req: routing.Request{Role: "clerk", Provider: routing.Claude, Model: "claude_strong"}, wantErr: routing.ErrOverrideRefused, wantIn: "claude_small, codex_small"},
+		"a model id the role does not allow":        {req: routing.Request{Role: "clerk", Provider: routing.Claude, Model: "claude-sonnet-5-5"}, wantErr: routing.ErrOverrideRefused, wantIn: "claude_small, codex_small"},
+		"a model id the boss's role does not allow": {req: routing.Request{Role: "boss", Provider: routing.Claude, Model: "claude-haiku-5-5"}, wantErr: routing.ErrOverrideRefused, wantIn: "claude_strong, codex_strong"},
+		"an alias, not a model id":                  {req: routing.Request{Role: "coder", Provider: routing.Claude, Model: "Opus 5.5"}, wantErr: routing.ErrOverrideRefused},
+		"a short name":                              {req: routing.Request{Role: "coder", Provider: routing.Claude, Model: "opus"}, wantErr: routing.ErrOverrideRefused},
+		"a binding of the other provider":           {req: routing.Request{Role: "coder", Provider: routing.Claude, Model: "codex_strong"}, wantErr: routing.ErrProviderMismatch, wantIn: "boss's --model"},
+		"an effort the binding does not take":       {req: routing.Request{Role: "clerk", Provider: routing.Claude, Effort: "high"}, wantErr: routing.ErrOverrideRefused, wantIn: "takes low"},
+		"an effort no client takes":                 {req: routing.Request{Role: "coder", Provider: routing.Claude, Effort: "turbo"}, wantErr: routing.ErrOverrideRefused},
+		"the boss against the user's choice":        {req: routing.Request{Role: "pre_check", Provider: routing.Claude, Model: "codex_strong"}, wantErr: routing.ErrOverrideRefused, wantIn: "sets pre_check to claude_mid"},
+		"the user's choice of the other provider":   {req: routing.Request{Role: "researcher", Provider: routing.Claude}, wantErr: routing.ErrProviderMismatch, wantIn: "user's [routing.overrides]"},
+		"a packet's user_model_override":            {req: routing.Request{Role: "coder", Provider: routing.Claude, Task: found(func(t *routing.Task) { t.UserModelOverride = new("claude_premium") })}, wantErr: routing.ErrOverrideRefused},
+		"a packet for another role":                 {req: routing.Request{Role: "coder", Provider: routing.Claude, Task: found(func(t *routing.Task) { t.RequestedRole = "pre_check" })}, wantErr: routing.ErrInvalid},
+		"a packet preferring the other provider":    {req: routing.Request{Role: "coder", Provider: routing.Claude, Task: found(func(t *routing.Task) { t.ProviderPreference = routing.Codex })}, wantErr: routing.ErrProviderMismatch},
+		"a packet with no lookup status":            {req: routing.Request{Role: "coder", Provider: routing.Claude, Task: found(func(t *routing.Task) { t.LookupStatus = "" })}, wantErr: routing.ErrInvalid},
+		"a packet with another lookup status":       {req: routing.Request{Role: "coder", Provider: routing.Claude, Task: found(func(t *routing.Task) { t.LookupStatus = "Found" })}, wantErr: routing.ErrInvalid},
 	}
 	for name, tc := range tests {
 		_, err := user.Resolve(tc.req, now)
@@ -354,6 +358,10 @@ func TestAssignmentDigest(t *testing.T) {
 	} {
 		assert.NotEqual(t, base, digest(edit), "%s changes the digest", name)
 	}
+	// Each field's length is set off from its bytes: without the ':' these
+	// two would both hash fifteen 1s, then the criterion.
+	assert.NotEqual(t, digest(func(t *routing.Task) { t.WorkerAssignment, t.Requirements = "1", "11111111111" }),
+		digest(func(t *routing.Task) { t.WorkerAssignment, t.Requirements = "11111111111", "1" }))
 	// Bytes that are not UTF-8 are hashed as they are, never folded into one
 	// replacement character.
 	assert.NotEqual(t, digest(func(t *routing.Task) { t.WorkerAssignment = "\xff" }), digest(func(t *routing.Task) { t.WorkerAssignment = "\xfe" }))

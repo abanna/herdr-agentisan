@@ -1,6 +1,7 @@
 package routing_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"strings"
@@ -169,7 +170,7 @@ func TestNewChecksTheDeployment(t *testing.T) {
 }
 
 // TestPolicyVersion: the version names the rules' schema and changes with
-// the deployment, and only with it.
+// the rules and the deployment, and only with them.
 func TestPolicyVersion(t *testing.T) {
 	t.Parallel()
 	base := policy(t, routing.Deployment{}).Version()
@@ -183,4 +184,13 @@ func TestPolicyVersion(t *testing.T) {
 	} {
 		assert.NotEqual(t, base, policy(t, d).Version(), name)
 	}
+	raw, err := os.ReadFile(rulesFile)
+	require.NoError(t, err)
+	edited := bytes.Replace(raw, []byte("Fable current version is 5.1"), []byte("Fable current version is 5.2"), 1)
+	require.NotEqual(t, raw, edited)
+	other, err := routing.ParseRules(edited)
+	require.NoError(t, err)
+	p, err := routing.New(other, routing.Deployment{})
+	require.NoError(t, err)
+	assert.NotEqual(t, base, p.Version(), "other rules, the same deployment")
 }
