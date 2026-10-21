@@ -136,6 +136,10 @@ exempts whatever is later added under that name.
   poll as a workflow event (`events.go`). It keeps herdr's agent view on the
   focused team, which focus events and the poll feed it, and clears it
   outside every team and on a clean stop (`view.go`, the A28 addendum, A49).
+  It types each queued message into its recipient with `agent.prompt`, by
+  the agent name the poll's last model shows where it belongs, returns an
+  ended binding's queue to its boss, and fails, never retrying, whatever a
+  timeout or a crash may have typed (`messages.go`, A2, A30).
   `daemon start` spawns a detached `daemon run` and waits for its health or
   its exit (A48); herdr's `[[startup]]` hook runs it, and the
   `daemon-restart` action covers linking. Tests run daemons in process

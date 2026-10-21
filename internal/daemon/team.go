@@ -94,22 +94,25 @@ type teamPoll struct {
 }
 
 // startTeam starts the team poll when o.Team is set, and beside it the
-// header's GitHub collection and the agent view's sync (A28 addendum); the
-// poll caches each snapshot in cache, times each pane's rest in idle, gives
-// views each model, and sets ready once it has reconciled the workers rows
-// (A35). The function it returns stops all three and waits for them, so
-// once it returns nothing more is pushed, the view is cleared unless the
-// server is gone, and no gh is left running.
+// header's GitHub collection, the agent view's sync (A28 addendum) and the
+// message dispatcher (A30); the poll caches each snapshot in cache, times
+// each pane's rest in idle, gives views and the dispatcher each model, and
+// sets ready once it has reconciled the workers rows (A35). The function it
+// returns stops all four and waits for them, so once it returns nothing more
+// is pushed or typed, the view is cleared unless the server is gone, and no
+// gh is left running.
 func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, idle *team.IdleClock, views *viewSync, ready *atomic.Bool) (stop func()) {
 	if o.Team == nil {
 		return func() {}
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	header := newHeaderCache(o.Team.GitHub)
+	in := newInbox()
 	var wg sync.WaitGroup
 	wg.Go(func() { o.collectGitHub(ctx, header) })
-	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header, idle, views, ready) })
+	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header, idle, views, ready, in) })
 	wg.Go(func() { o.syncView(ctx, views, ident) })
+	wg.Go(func() { o.newDispatcher(st, in).run(ctx) })
 	return func() {
 		cancel()
 		wg.Wait()
@@ -135,13 +138,17 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 // read answered by the replacement, or a push landing on it, would be the
 // next daemon's business. So the poll is a client of its own, whose Dialed
 // hook checks the identity; a failed check stops the poll (ErrHerdrGone).
-func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, header *headerCache, idle *team.IdleClock, views *viewSync, ready *atomic.Bool) {
+//
+// Each poll gives in its model, or none when it built none, and so wakes the
+// dispatcher.
+func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, header *headerCache, idle *team.IdleClock, views *viewSync, ready *atomic.Bool, in *inbox) {
 	teams, err := settings.Teams(o.Team.ConfigDir)
 	if err != nil {
 		o.Logger.Error().Err(err).Msg("herdr-agentisan.toml does not resolve; the ◆ spaces belong to the unnamed project, and no tabs team is found, until it is fixed and the daemon restarts")
 		teams = nil
 	}
 	cfg := teamConfigOf(teams)
+	in.configure(cfg)
 	tabs := make([]string, 0, len(cfg.tabs))
 	for _, t := range cfg.tabs {
 		tabs = append(tabs, t.Project)
@@ -186,6 +193,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 			last = built
 			views.polled(*built, focused, seen)
 		}
+		in.polled(built)
 		select {
 		case <-ctx.Done():
 			return

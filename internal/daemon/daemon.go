@@ -271,6 +271,7 @@ func Run(ctx context.Context, o Options) error {
 			o.Logger.Warn().Err(err).Msg("close the state database")
 		}
 	}()
+	o.recoverDispatching(ctx, st)
 
 	w := newWalker() // shared: the collector tells it where focus goes
 	snapshots := &snapshotCache{}

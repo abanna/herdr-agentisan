@@ -48,6 +48,8 @@ type teamHerdr struct {
 	infoFails map[string]bool
 	// onCall, when set, runs before each request is answered.
 	onCall func(method string)
+	// prompt, when set, answers agent.prompt (messages_test.go).
+	prompt herdrtest.Handler
 }
 
 // newTeamHerdr serves liveSpaces.
@@ -140,6 +142,13 @@ func (th *teamHerdr) serveTeam(normal herdrtest.Handler) herdrtest.Handler {
 			return herdrtest.Reply{Result: map[string]any{"type": "agent_view", "active": true}}
 		case "agent.view.clear":
 			return herdrtest.Reply{Result: map[string]any{"type": "agent_view", "active": false}}
+		case "agent.prompt":
+			th.mu.Lock()
+			prompt := th.prompt
+			th.mu.Unlock()
+			if prompt != nil {
+				return prompt(r)
+			}
 		}
 		return normal(r)
 	}
