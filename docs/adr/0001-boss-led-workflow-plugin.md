@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A29, A31, A35 and A39 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with the amendments under [Amendments](#amendments). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -702,13 +702,15 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
 
 ### A23. The workforce commands
 
-*Adds to:* D1, D11, I1 and item 4. Recorded with NERD-5254, on A19's team model, in five parts: `team status` (part 1, this amendment's first bullets), `worker retire`, `worker spawn`, `team up` with the team's dashboard, then the tdaddy preflight (I8, A10) and AGENTS.md's tdaddy wording. Each part adds its bullets here.
+*Adds to:* D1, D11, I1 and item 4. Recorded with NERD-5254, on A19's team model, in six parts: `team status` (part 1, this amendment's first bullets), `worker retire`, the configuration `worker spawn` reads, `worker spawn`, `team up` with the team's dashboard, then the tdaddy preflight (I8, A10) and AGENTS.md's tdaddy wording. Each part adds its bullets here.
 
 - **Over the socket.** The workforce commands are daemon ops (`team.status` so far) that take their request as `args`. The command parses, asks and prints. Reading a request keeps the 5 s exchange; each op then has its own budget, 10 s for status, and an op that runs past it answers `timeout`. An op runs under the daemon's lifetime, not its connection, so it finishes when its client has gone.
 - **Every op reads the configuration afresh**, so an edit to `herdr-agentisan.toml` applies to the next one, and it resolves the project's profile with its D12 checks. The team poll still reads it once, at start (A19).
 - **The team.** `--project` names it. Without it, the team is the tabs team whose workspace holds the caller's pane (`HERDR_PANE_ID`, counted only when one of its pane's processes is in the command's own lineage, as a report's pane is, since herdr can reissue a closed workspace's ids), else the only tabs team, else the op is refused with `bad_request`. `team status` reports the `[spaces] project` too when `--project` names it; its groups are its ◆ spaces.
 - **Status.** One record per group, configured or found: its workers, slots, occupied and open counts, targets and members. A slot is occupied by every agent pane of the type, recorded or not, and by every pane a live `workers` row binds there, whose agent may still be starting; open is slots less occupied, never below 0. Each member has its id (its row's, else its tab's label), whether a row binds it, its pane, agent, status, `ctx` (null unless a percentage), `item`, `stage` and `idle_s`, how long the daemon has seen it idle or done. The boss's panes are listed apart, by pane id. `idle_s` comes from an in-memory clock the team poll feeds from `pane.list`'s statuses, so a failed `agent.list` does not stop it; after a restart it starts again, and a team the poll does not know, one added since the daemon started, has none until it restarts.
+- **The configuration `worker spawn` reads.** It resolves, with its checks, before spawn lands, so `config resolve` shows it and a mistake in it is refused now. A group may set its own `agent`: with a command, a type runs that command and that group's model only; otherwise `review` runs `codex --no-daemon`, which A22 requires for a Codex worker's `ctx` (its item and stage also need A25's `--sandbox danger-full-access`, a launch setting NERD-5278 owns), and every other type the top-level `agent.command`, with the group's model or the top-level one. A group's command passes D12's check, and no command, the top-level one included, may carry `--model`, `-m`, `--name` or `-n`, which the workforce sets, even with its value attached (`-mo3`). `[spawn]` holds `shell_prompt` (a regular expression, which herdr matches with Rust's `regex` syntax; resolve compiles it with Go's `regexp`, a first check only, so a construct Rust lacks, such as a literal `{` or `\Q…\E`, passes here and fails the spawn), `shell_ready_keys` (no empty name) and `shell_ready_after_s` (0 to 60, default 3). A group's `slots` is at most 64, so a mistyped cap can open no flood of tabs.
 - **The output.** On every path stdout is exactly one JSON object, `{"ok":true,"data":…}` or `{"ok":false,"error":{"code","message"}}`, and the exit is 1 when refused. That includes flag errors (`bad_request`) and a daemon that cannot be reached (`daemon_unavailable`). A command not built yet is absent, so the skill's wrapper reports it unavailable: until their parts, `worker retire`, `worker spawn` and `team up`, and `worker spawn --replaces` (item 5b) and `boss handoff` (item 6) after them.
+- **The tdaddy preflight** (part 6) has its bullets in A34, not here: it is a package of its own, which lands ahead of the parts that call it.
 
 ### A24. One snapshot per team, and each dashboard shows its own
 
@@ -854,6 +856,28 @@ Budget: an agent pane a team places carries 8 keys, and a push sets 4.
 - **The boss's runtime.** `boss.started_at` is when this daemon first saw the boss's pane run an agent in the boss's place, held in memory beside the stage clock (A18). It holds while that pane stays the boss, whatever its stage. A handoff to another pane, an agent started again after the pane was a shell, and a daemon restart each start it again. So the runtime is the boss session as this daemon has seen it, not the session's own start, which herdr does not report. Workers carry none.
 - **No contract change.** `project.slots` and `boss.started_at` have been in snapshot v1 since item 8, and the dashboard already draws `slots u/t` and `up 2h14m`.
 - **Cutover.** With part b in, herdr-status.sh shows nothing the header lacks. Retire it, and herdr's `tab_bar_right` command, after the live check.
+
+### A34. D12's tdaddy preflight: tdaddy must run
+
+*Refines:* D12, I8 and A10. Recorded with NERD-5254, part 6 of 6, which lands ahead of parts 4 and 5, the parts that call it: the check is a package of its own, `internal/preflight`, and part 4 wires it into the spawn.
+
+- **The check.** In a repo with a `go.mod` at its root, a spawn needs three things:
+  - `tdaddy` is on the daemon's PATH;
+  - `tdaddy --version`, run in the repo, exits 0;
+  - the repo's Taskfile has the top-level tasks `tdaddy:index` and `tdaddy:impact`.
+
+  The repo itself must be a directory the daemon can stat. A repo without a `go.mod` is not checked; a `go.mod` that is a symlink to nothing counts as none, as it does for `go` itself. A10 asked only for tdaddy on the PATH. But a mise shim with no Go version set sits on the PATH and fails every run, as it did on the author's machine. So A10's check alone passed a setup in which `task tdaddy:impact` fails.
+- **The daemon's environment.** The check runs in the daemon, so it searches the PATH herdr started the daemon with. That can differ from what a worker's shell has after its rc files run. A fix to that PATH needs a daemon restart; a fix to the Taskfile does not.
+- **The run.** `tdaddy --version` runs in the repo, with the daemon's environment and a 10 s timeout. It runs as the leader of its own process group, which is killed whole on a timeout or a cancel. The error carries the first line of what it printed, cut to 200 bytes; for a mise shim, that line names the problem (`No version is set for shim: tdaddy`).
+- **The Taskfile.** It is the first of Task's own file names found in the repo root, in Task's order: `Taskfile.yml`, `taskfile.yml`, `Taskfile.yaml`, `taskfile.yaml`, then the `.dist` form of each. That order was checked against Task 3.49.1. Only the names of the top-level tasks count: includes are not followed, and a task's commands are not read. Task also looks in parent directories when the repo root has no Taskfile; the check does not, so it is only ever stricter than Task, and a repo whose Taskfile is above it is refused.
+- **The errors.**
+  - `ErrTdaddyMissing`: tdaddy is not on the PATH, or the run fails. A run that times out is `ErrTimeout` as well, so a caller can tell it from its own deadline.
+  - `ErrTdaddyTasks`: there is no Taskfile, it cannot be read or parsed, or a task is missing.
+  - `ErrRepo`: the check could not tell whether the repo is a Go repo, because the path is relative, is gone or is not a directory, or its `go.mod` cannot be stat'ed or is a directory. The spawn is refused then too.
+
+  When tdaddy and the tasks both fail, one refusal reports both. Each message says what to fix, and none names an install command.
+- **The wiring (parts 4 and 5).** A spawn calls a `preflight.Check`, and `preflight.HostCheck` is the one that checks the daemon's own system. Part 4 adds `Hooks.Preflight`, which defaults to `HostCheck` the way `Hooks.StartTime` defaults to its reader. `worker spawn` (part 4) and `team up` (part 5) call it before they open any pane, so their tests can inject a pass or a refusal.
+- **AGENTS.md.** tdaddy's answer stays advisory and `task check` stays the gate; having tdaddy set up is the precondition. That settles A10's last sentence.
 
 ### A35. A workers row binds its pane by terminal
 
