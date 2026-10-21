@@ -8,7 +8,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 
 | Field | Value |
 | --- | --- |
-| Status | Accepted 2026-10-09, with amendments A1 to A29 and A31 (see [Amendments](#amendments)). Where an amendment and the text above it disagree, the amendment wins |
+| Status | Accepted 2026-10-09, with the amendments under [Amendments](#amendments). Where an amendment and the text above it disagree, the amendment wins |
 | Deciders | Alexander Banna |
 | Design issue | NERD-5244 |
 | Build project | P-NERD-16 |
@@ -702,13 +702,15 @@ Verified on 2026-10-10 against the codex-rs source at `rust-v0.161.0`, the CLI i
 
 ### A23. The workforce commands
 
-*Adds to:* D1, D11, I1 and item 4. Recorded with NERD-5254, on A19's team model, in five parts: `team status` (part 1, this amendment's first bullets), `worker retire`, `worker spawn`, `team up` with the team's dashboard, then the tdaddy preflight (I8, A10) and AGENTS.md's tdaddy wording. Each part adds its bullets here.
+*Adds to:* D1, D11, I1 and item 4. Recorded with NERD-5254, on A19's team model, in six parts: `team status` (part 1, this amendment's first bullets), `worker retire`, the configuration `worker spawn` reads, `worker spawn`, `team up` with the team's dashboard, then the tdaddy preflight (I8, A10) and AGENTS.md's tdaddy wording. Each part adds its bullets here.
 
 - **Over the socket.** The workforce commands are daemon ops (`team.status` so far) that take their request as `args`. The command parses, asks and prints. Reading a request keeps the 5 s exchange; each op then has its own budget, 10 s for status, and an op that runs past it answers `timeout`. An op runs under the daemon's lifetime, not its connection, so it finishes when its client has gone.
 - **Every op reads the configuration afresh**, so an edit to `herdr-agentisan.toml` applies to the next one, and it resolves the project's profile with its D12 checks. The team poll still reads it once, at start (A19).
 - **The team.** `--project` names it. Without it, the team is the tabs team whose workspace holds the caller's pane (`HERDR_PANE_ID`, counted only when one of its pane's processes is in the command's own lineage, as a report's pane is, since herdr can reissue a closed workspace's ids), else the only tabs team, else the op is refused with `bad_request`. `team status` reports the `[spaces] project` too when `--project` names it; its groups are its ◆ spaces.
 - **Status.** One record per group, configured or found: its workers, slots, occupied and open counts, targets and members. A slot is occupied by every agent pane of the type, recorded or not, and by every pane a live `workers` row binds there, whose agent may still be starting; open is slots less occupied, never below 0. Each member has its id (its row's, else its tab's label), whether a row binds it, its pane, agent, status, `ctx` (null unless a percentage), `item`, `stage` and `idle_s`, how long the daemon has seen it idle or done. The boss's panes are listed apart, by pane id. `idle_s` comes from an in-memory clock the team poll feeds from `pane.list`'s statuses, so a failed `agent.list` does not stop it; after a restart it starts again, and a team the poll does not know, one added since the daemon started, has none until it restarts.
+- **The configuration `worker spawn` reads.** It resolves, with its checks, before spawn lands, so `config resolve` shows it and a mistake in it is refused now. A group may set its own `agent`: with a command, a type runs that command and that group's model only; otherwise `review` runs `codex --no-daemon`, which A22 requires for a Codex worker's `ctx` (its item and stage also need A25's `--sandbox danger-full-access`, a launch setting NERD-5278 owns), and every other type the top-level `agent.command`, with the group's model or the top-level one. A group's command passes D12's check, and no command, the top-level one included, may carry `--model`, `-m`, `--name` or `-n`, which the workforce sets, even with its value attached (`-mo3`). `[spawn]` holds `shell_prompt` (a regular expression, which herdr matches with Rust's `regex` syntax; resolve compiles it with Go's `regexp`, a first check only, so a construct Rust lacks, such as a literal `{` or `\Q…\E`, passes here and fails the spawn), `shell_ready_keys` (no empty name) and `shell_ready_after_s` (0 to 60, default 3). A group's `slots` is at most 64, so a mistyped cap can open no flood of tabs.
 - **The output.** On every path stdout is exactly one JSON object, `{"ok":true,"data":…}` or `{"ok":false,"error":{"code","message"}}`, and the exit is 1 when refused. That includes flag errors (`bad_request`) and a daemon that cannot be reached (`daemon_unavailable`). A command not built yet is absent, so the skill's wrapper reports it unavailable: until their parts, `worker retire`, `worker spawn` and `team up`, and `worker spawn --replaces` (item 5b) and `boss handoff` (item 6) after them.
+- **The tdaddy preflight** (part 6) has its bullets in A34, not here: it is a package of its own, which lands ahead of the parts that call it.
 
 ### A24. One snapshot per team, and each dashboard shows its own
 
@@ -854,3 +856,75 @@ Budget: an agent pane a team places carries 8 keys, and a push sets 4.
 - **The boss's runtime.** `boss.started_at` is when this daemon first saw the boss's pane run an agent in the boss's place, held in memory beside the stage clock (A18). It holds while that pane stays the boss, whatever its stage. A handoff to another pane, an agent started again after the pane was a shell, and a daemon restart each start it again. So the runtime is the boss session as this daemon has seen it, not the session's own start, which herdr does not report. Workers carry none.
 - **No contract change.** `project.slots` and `boss.started_at` have been in snapshot v1 since item 8, and the dashboard already draws `slots u/t` and `up 2h14m`.
 - **Cutover.** With part b in, herdr-status.sh shows nothing the header lacks. Retire it, and herdr's `tab_bar_right` command, after the live check.
+
+### A34. D12's tdaddy preflight: tdaddy must run
+
+*Refines:* D12, I8 and A10. Recorded with NERD-5254, part 6 of 6, which lands ahead of parts 4 and 5, the parts that call it: the check is a package of its own, `internal/preflight`, and part 4 wires it into the spawn.
+
+- **The check.** In a repo with a `go.mod` at its root, a spawn needs three things:
+  - `tdaddy` is on the daemon's PATH;
+  - `tdaddy --version`, run in the repo, exits 0;
+  - the repo's Taskfile has the top-level tasks `tdaddy:index` and `tdaddy:impact`.
+
+  The repo itself must be a directory the daemon can stat. A repo without a `go.mod` is not checked; a `go.mod` that is a symlink to nothing counts as none, as it does for `go` itself. A10 asked only for tdaddy on the PATH. But a mise shim with no Go version set sits on the PATH and fails every run, as it did on the author's machine. So A10's check alone passed a setup in which `task tdaddy:impact` fails.
+- **The daemon's environment.** The check runs in the daemon, so it searches the PATH herdr started the daemon with. That can differ from what a worker's shell has after its rc files run. A fix to that PATH needs a daemon restart; a fix to the Taskfile does not.
+- **The run.** `tdaddy --version` runs in the repo, with the daemon's environment and a 10 s timeout. It runs as the leader of its own process group, which is killed whole on a timeout or a cancel. The error carries the first line of what it printed, cut to 200 bytes; for a mise shim, that line names the problem (`No version is set for shim: tdaddy`).
+- **The Taskfile.** It is the first of Task's own file names found in the repo root, in Task's order: `Taskfile.yml`, `taskfile.yml`, `Taskfile.yaml`, `taskfile.yaml`, then the `.dist` form of each. That order was checked against Task 3.49.1. Only the names of the top-level tasks count: includes are not followed, and a task's commands are not read. Task also looks in parent directories when the repo root has no Taskfile; the check does not, so it is only ever stricter than Task, and a repo whose Taskfile is above it is refused.
+- **The errors.**
+  - `ErrTdaddyMissing`: tdaddy is not on the PATH, or the run fails. A run that times out is `ErrTimeout` as well, so a caller can tell it from its own deadline.
+  - `ErrTdaddyTasks`: there is no Taskfile, it cannot be read or parsed, or a task is missing.
+  - `ErrRepo`: the check could not tell whether the repo is a Go repo, because the path is relative, is gone or is not a directory, or its `go.mod` cannot be stat'ed or is a directory. The spawn is refused then too.
+
+  When tdaddy and the tasks both fail, one refusal reports both. Each message says what to fix, and none names an install command.
+- **The wiring (parts 4 and 5).** A spawn calls a `preflight.Check`, and `preflight.HostCheck` is the one that checks the daemon's own system. Part 4 adds `Hooks.Preflight`, which defaults to `HostCheck` the way `Hooks.StartTime` defaults to its reader. `worker spawn` (part 4) and `team up` (part 5) call it before they open any pane, so their tests can inject a pass or a refusal.
+- **AGENTS.md.** tdaddy's answer stays advisory and `task check` stays the gate; having tdaddy set up is the precondition. That settles A10's last sentence.
+
+### A35. A workers row binds its pane by terminal
+
+*Amends:* A1's `workers` and `handoffs` rows, and A17's "joins `state.db`'s `workers` rows by pane id". *Overrides:* A17's "Only the workforce commands (item 4) write `workers`". *Narrows:* A19's sentence on how herdr numbers tabs. *Adds to:* A23. Recorded with NERD-5327 (parity gap G9), before NERD-5254 part 3 writes the first rows. Verified against the herdr source at v0.9.3.
+
+- **Why.** A pane id is not an identity. herdr gives a pane moved to another workspace a new id, and can reissue a closed workspace's ids. A row joined by pane id could give a logical id to another team's pane, and an op acting on it could type into that pane or close it.
+- **What survives what** in herdr 0.9.3. A terminal id is never reissued.
+
+  | Identity | Move in a workspace | Move to another workspace | Live handoff | Restart |
+  | --- | --- | --- | --- | --- |
+  | Pane id | Kept | New; the old one is an alias until the next handoff | Kept | Kept, on a new shell |
+  | `terminal_id` | Kept | Kept | New | New |
+  | Shell pid and start time | Kept | Kept | Kept: the PTY is handed over | New |
+  | Agent name | Kept | Kept | Kept | Only when herdr resumes the agent |
+  | Pane tokens | Kept | Kept | Lost | Lost |
+
+- **The binding.** Migration 0003 gives `workers` the columns `terminal_id`, `shell_pid` and `shell_start`. A row binds the pane `pane.list` lists with its `terminal_id`, wherever that pane is now. `pane_id` is a hint: where the row was last seen. A row written before 0003 has no terminal and binds nothing.
+- **The reconcile.** Every team poll judges each live row against that poll's lists before it builds the model. It reads the rows first and lists second. The workforce commands write a row only once its pane exists, so a pane opened between the two reads is never taken for one that has gone.
+  - **Terminal listed.** Under the row's pane id, the row is bound. Under another id, the pane moved, and `pane_id` follows it.
+  - **No shell yet.** For a bound row with no shell, one `pane.process_info` and one start-time read fill `shell_pid` and `shell_start`. The start time is in `report.SystemStat`'s units, Linux ticks or darwin µs, and is only compared for equality. A pid of 0 (herdr's null) or an unreadable start stores nothing, and the next poll tries again. So a row bound less than a poll before a live handoff has no shell, and goes lost.
+  - **Terminal listed nowhere.** A live handoff or a restart renewed every terminal, or the pane closed. A row with a shell tries its candidates in order, each pane once:
+    - the pane at the row's pane id;
+    - the pane whose agent name is the logical id;
+    - the agent panes of a tab labelled with the logical id.
+
+    A pane with no terminal, or one another live row holds, is not a candidate. A candidate whose shell has the row's pid and start time re-keys the row to its pane and terminal. A candidate with another shell is logged. A row with no match, or with no shell to prove, is marked **lost**.
+  - **Unverified.** A candidate herdr cannot describe leaves the row unverified for that poll, never lost. A row with a handoff pending is never marked lost.
+  - **No reconcile.** A poll whose `workers` read, `pane.list`, `workspace.list`, `tab.list` or `agent.list` failed reconciles nothing.
+- **`lost`** is a new status, and it is not an ending one: `retired_at` stays NULL, and the row keeps its generation and inbox.
+  - It binds no pane, and the poll never writes it again. A false lost costs one re-spawn; binding a stranger would cost another worker's pane.
+  - It ends when the boss retires it or spawns the id again at the next generation (NERD-5254 parts 2 and 3). `worker retire` closes nothing for a lost row, since no pane is proven to hold it.
+  - An agent herdr resumes after a restart is lost too. The boss decides.
+- **The poll writes `workers` now,** which overrides A17. It writes the binding columns and `lost` only, and never creates or retires a row.
+  - Each write is a compare-and-set on the row as the poll read it: its logical id, generation and terminal, still live and not lost.
+  - A row the workforce commands changed meanwhile is left alone, and the next poll judges it as it is then. The poll and the commands share no lock.
+- **Handoffs.**
+  - `BeginHandoff` takes the new pane's terminal, records the worker's generation, and refuses a lost row.
+  - `CompleteHandoff` binds that generation's row to the new pane and terminal, whatever pane hint the poll left meanwhile. It clears the shell for the poll to read, and changes no status.
+  - A handoff begun before 0003 has no generation, so it cannot complete; its caller fails it.
+  - A herdr live handoff while an agentisan handoff is pending renews the new pane's terminal too. Completing then binds the terminal the handoff recorded, and the next poll marks the worker lost: a false lost, never a stranger.
+- **The workforce ops wait for the first reconcile.**
+  - Until the poll has reconciled the rows once since the daemon started, every workforce op refuses with `not_ready` (`daemon.ErrNotReady`). Before then, a worker a live handoff re-keyed would read as a pane no row binds.
+  - `daemon.Workforce`, the CLI's client, asks again within the wait it already has, the op's budget and an exchange. So a command never waits longer than before, and `team status` and the skill's wrapper need no retry of their own.
+- **`team status`** (A23) adds `unbound`: the team's live rows no pane is bound to, each with its id, group, last pane id and status. That is every lost row, and every row whose terminal herdr lists nowhere until the poll re-keys or loses it.
+- **Acting on a pane.** An op acts only on a pane bound in the same read.
+  - Messages go to the agent name, which herdr resolves to the current terminal (NERD-5256 PR 2). The dispatcher holds a lost worker's inbox, since no pane is proven to type into.
+  - `pane.close` (`worker retire`) closes only a bound pane, and re-checks its terminal with `pane.get` just before closing. herdr has no close by terminal, so a window of milliseconds remains; it is accepted, as in A18.
+- **Logs, not events.** A rebind or a re-key is logged at info. A lost row, and a candidate with another shell, are logged at warn. Workflow events for them can follow as an addition to `docs/telemetry.md`.
+- **A19's tab race is narrower.** herdr 0.9.3 maps a tab's position to its saved number (`src/app/ids.rs:19-25`), so a tab opened or closed between `pane.list` and `tab.list` cannot put a neighbour's label on a pane. Only a tab renamed between the two calls can mislabel a pane, for that one poll.
+- **Out of scope.** The focus history (Back already skips unlisted panes, A16), messages to a bare pane, and the tokens a live handoff erases.

@@ -120,8 +120,9 @@ exempts whatever is later added under that name.
   the plugin socket (D6) that answers `health`, `back` (A16: walk the
   focus history, un-zoom the pane left, then focus the target), `snapshot`
   and the workforce ops (A23, `workforce.go`), each with a budget of its
-  own. Every poll it also rebuilds the team model, pushes `$team` and every
-  agent pane's ctx display (`team.go`, A28) and caches every team's
+  own. Every poll it also reconciles `state.db`'s `workers` rows with
+  herdr's panes (`bind.go`, A35), rebuilds the team model, pushes `$team`
+  and every agent pane's ctx display (`team.go`, A28) and caches every team's
   snapshot, with the workspaces each holds, which the `snapshot` op serves
   by project or workspace, so the op never calls herdr (A18, A24,
   `snapshot.go`, with `SnapshotSource`, the dashboard's client), and sends
@@ -134,19 +135,20 @@ exempts whatever is later added under that name.
   against herdrtest and a scratch state dir, never the real ones.
 - `internal/team/` — the team domain model (ADR-001 D5, A17): project → group
   → logical worker → current pane, built from `pane.list`, `workspace.list`,
-  `tab.list`, `agent.list` and `state.db`'s `workers` rows. A `Resolver` maps
-  the layout onto it: `Spaces` for the ◆ spaces, with v12's group order, and
-  `Tabs` for a team's one workspace and one tab per worker (A19). Also the
-  `$team` format and the ctx display's band tokens (A28), with the sidebar
-  rows that show them, `docs/config/herdr-sidebar.example.toml`, for herdr's
-  own config (`TestSidebarSnippet`), and the model as a snapshot v1 in the
-  resolver's group order, with the in-memory stage clock (A18) and idle
-  clock (A23).
+  `tab.list`, `agent.list` and `state.db`'s `workers` rows, joined by
+  terminal, with the poll's reconcile plan (`bind.go`, A35). A `Resolver`
+  maps the layout onto it: `Spaces` for the ◆ spaces, with v12's group
+  order, and `Tabs` for a team's one workspace and one tab per worker (A19).
+  Also the `$team` format and the ctx display's band tokens (A28), with the
+  sidebar rows that show them, `docs/config/herdr-sidebar.example.toml`, for
+  herdr's own config (`TestSidebarSnippet`), and the model as a snapshot v1
+  in the resolver's group order, with the in-memory stage clock (A18) and
+  idle clock (A23).
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
   `team status` so far: each group's counts and members on a tabs team or
-  the ◆ spaces, with idle times from the daemon's clock. The daemon runs
-  them; `internal/cli` only asks it. Tests drive a fake herdr
-  (`fake_test.go`) and a fresh state.db.
+  the ◆ spaces, with idle times from the daemon's clock and the rows no pane
+  is bound to (A35). The daemon runs them; `internal/cli` only asks it.
+  Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
   references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check.
@@ -158,8 +160,10 @@ exempts whatever is later added under that name.
   (`messages.go`, migration 0002, D8 and I3): a recipient's messages are
   claimed one at a time, oldest first, and a pending handoff (`handoffs.go`)
   holds a worker's inbox until it completes, which rebinds the worker in the
-  same transaction. Tests open a fresh database in a temp dir; the store is
-  never mocked.
+  same transaction. A `workers` row binds its pane by terminal, with the
+  shell the team poll read (migration 0003, A35), and the poll's writes are
+  compare-and-sets on the row as it read it. Tests open a fresh database in
+  a temp dir; the store is never mocked.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real
@@ -192,6 +196,11 @@ exempts whatever is later added under that name.
 - `internal/devctl/` — the `devctl` cobra tree: the coverage floor, the
   docs-parity check and the large-file ceiling, none of which the Go toolchain
   provides.
+- `internal/preflight/` — the D12 spawn precondition (ADR-001 I8, A10, A34):
+  in a repo with a `go.mod`, `tdaddy` must run from the daemon's PATH and the
+  Taskfile must have `tdaddy:index` and `tdaddy:impact`; each failure is a
+  sentinel whose message says how to fix it. Tests inject PATH, files and the
+  runner.
 - `internal/config/` — environment-backed config. No secret has a default.
   Also carries build provenance (`Version`, `Commit`, injected at link time):
   it is configuration resolved from the environment the binary was BUILT in,
@@ -252,7 +261,11 @@ roughly constant (BadgerDB open dominates), so the ratio is what decides. Use
 it here for the occasional "what does this actually touch?" question --
 especially the cross-package answer -- and run `task check` for everything else.
 
-**It is advisory, never the gate.** `task check` is the gate.
+**Its answer is advisory, never the gate.** `task check` is the gate,
+whatever tdaddy says a change affects. Having tdaddy set up is not optional,
+though: ADR-001 D12 and I8 require it for every worker in a Go repo, and
+`internal/preflight` checks it (`tdaddy --version` runs from the daemon's
+PATH, and the Taskfile has `tdaddy:index` and `tdaddy:impact`).
 
 Three traps, all encoded as comments in `Taskfile.yml`:
 

@@ -79,6 +79,11 @@ func TestSampleConfigResolves(t *testing.T) {
 			}
 			assert.True(t, env, "the sample shows an env reference")
 			assert.True(t, op, "the sample shows an op:// reference")
+			// The workforce keys (A23): a group's own model, review on
+			// codex, and a shell prompt to wait for, with no keys typed.
+			assert.Equal(t, "sonnet", p.AgentFor("precheck").Model)
+			assert.Equal(t, []string{"codex", "--no-daemon"}, p.AgentFor("review").Command)
+			assert.Equal(t, settings.Spawn{ShellPrompt: `❯\s*$`, ShellReadyAfter: settings.DefaultShellReadyAfter}, p.Spawn)
 		})
 	}
 }

@@ -37,8 +37,8 @@ func TestTransitions(t *testing.T) {
 	t.Parallel()
 	spaces := team.Spaces{Project: "agentisan"}
 	rows := []store.Worker{
-		{LogicalID: "boss", PaneID: "wJ:p1"},
-		{LogicalID: "coders-1", PaneID: "wN:p1"},
+		{LogicalID: "boss", PaneID: "wJ:p1", TerminalID: "term_wJ:p1"},
+		{LogicalID: "coders-1", PaneID: "wN:p1", TerminalID: "term_wN:p1"},
 	}
 	build := func(l team.Layout, rows []store.Worker) team.Model { return team.Build(l, spaces, rows) }
 	before := build(liveLayout(), rows)
@@ -78,7 +78,7 @@ func TestTransitions(t *testing.T) {
 		},
 		"a rotation: the new pane appears and the old leaves, under one logical id": {
 			prev: before,
-			next: build(with(nil, []string{"wN:p1"}, p("wN:p9", "wN", "working")), []store.Worker{{LogicalID: "boss", PaneID: "wJ:p1"}, {LogicalID: "coders-1", PaneID: "wN:p9"}}),
+			next: build(with(nil, []string{"wN:p1"}, p("wN:p9", "wN", "working")), []store.Worker{{LogicalID: "boss", PaneID: "wJ:p1", TerminalID: "term_wJ:p1"}, {LogicalID: "coders-1", PaneID: "wN:p9", TerminalID: "term_wN:p9"}}),
 			want: []team.Transition{
 				{Project: "agentisan", Group: "coders", Worker: team.Worker{ID: "coders-1", Bound: true, Target: wN, Pane: team.Pane{ID: "wN:p9", Agent: "claude", Status: team.StatusWorking}}, From: team.Absent, To: "working"},
 				{Project: "agentisan", Group: "coders", Worker: coder1(team.StatusWorking), From: "working", To: team.Absent},

@@ -1,0 +1,185 @@
+package settings
+
+import (
+	"fmt"
+	"maps"
+	"regexp"
+	"slices"
+	"strings"
+	"time"
+)
+
+// What the workforce commands read of a profile besides its groups' counts
+// (ADR-001 A23): each type's agent, and how a new tab's shell is waited for.
+
+// ReviewType is the worker type that runs Codex unless its group says
+// otherwise.
+const ReviewType = "review"
+
+// reviewCommand is the review type's built-in agent command: codex outside
+// the shared app-server daemon, which A22 requires for its ctx (`report
+// codex` reports nothing under the daemon). It is a rule of the per-type
+// lookup, not a default layer: a default groups.review would be a group
+// without workers.
+var reviewCommand = []string{"codex", "--no-daemon"}
+
+// DefaultShellReadyAfter is how long spawn waits for a new tab's shell before
+// it sends shell_ready_keys, when the profile does not say.
+const DefaultShellReadyAfter = 3 * time.Second
+
+// maxShellReadyAfter bounds shell_ready_after_s: the wait must leave a spawn
+// most of its budget.
+const maxShellReadyAfter = 60
+
+// agentKey is a group's agent table.
+const agentKey = "agent"
+
+// agentSchema is an agent table, top level or a group's.
+func agentSchema() *node {
+	return &node{kind: kindTable, fields: map[string]*node{
+		"command": leafOf(kindStrings),
+		"model":   leafOf(kindString),
+	}}
+}
+
+// spawnSchema is [spawn].
+var spawnSchema = &node{kind: kindTable, fields: map[string]*node{
+	"shell_prompt":        leafOf(kindString),
+	"shell_ready_keys":    leafOf(kindStrings),
+	"shell_ready_after_s": leafOf(kindInt),
+}}
+
+// Spawn is how spawn waits for a new tab's shell before it starts the agent
+// there.
+type Spawn struct {
+	// ShellPrompt is a regular expression one line of the shell's prompt
+	// matches; "" starts the agent as soon as herdr sees a shell at the
+	// pane's foreground, which an interactive question the shell itself
+	// asks at startup (a framework's update prompt, say) does not change.
+	// herdr matches it with Rust's regex syntax. The check here compiles it
+	// with Go's regexp, a first check only: a construct Rust lacks (a
+	// literal {, \Q…\E, a nested [) passes here and fails the spawn.
+	ShellPrompt string
+	// ShellReadyKeys are sent once to a new tab whose shell is still not
+	// ready after ShellReadyAfter and has a program at its foreground: they
+	// answer whatever prompt is up. Empty sends nothing.
+	ShellReadyKeys  []string
+	ShellReadyAfter time.Duration
+}
+
+// AgentFor is the agent a worker of type typ launches: its group's own
+// command and model when its group sets a command, without the top-level
+// model, which belongs to the top-level command; else codex for the review
+// type; else the top-level command, with the group's model or the
+// top-level one.
+func (p Profile) AgentFor(typ string) Agent {
+	g := p.Groups[typ]
+	switch {
+	case len(g.Agent.Command) > 0:
+		return Agent{Command: slices.Clone(g.Agent.Command), Model: g.Agent.Model}
+	case typ == ReviewType:
+		return Agent{Command: slices.Clone(reviewCommand), Model: g.Agent.Model}
+	}
+	model := g.Agent.Model
+	if model == "" {
+		model = p.Agent.Model
+	}
+	return Agent{Command: slices.Clone(p.Agent.Command), Model: model}
+}
+
+// launchFlags are the agent flags the workforce sets itself: a command that
+// carries one would be launched with two.
+var launchFlags = []string{"--model", "-m", "--name", "-n"}
+
+// checkLaunchFlags refuses a command carrying a flag the workforce sets,
+// whether as -m o3, -m=o3 or -mo3: a short flag's value can be attached.
+func checkLaunchFlags(argv []string) error {
+	for _, arg := range argv[min(1, len(argv)):] {
+		name, _, _ := strings.Cut(arg, "=")
+		if !strings.HasPrefix(name, "--") && len(name) > 2 {
+			name = name[:2]
+		}
+		if slices.Contains(launchFlags, name) {
+			return fmt.Errorf("%w: %s is set by the workforce: use the model key, and the worker's name is its logical id", ErrInvalid, name)
+		}
+	}
+	return nil
+}
+
+// checkGroupAgents runs D12 and the launch-flag check on every group's own
+// command.
+func (m merged) checkGroupAgents() error {
+	v, _ := m.get("groups")
+	groups, _ := v.(map[string]any)
+	for _, name := range slices.Sorted(maps.Keys(groups)) {
+		path := "groups." + name + ".agent.command"
+		raw, set := m.get(path)
+		if !set {
+			continue
+		}
+		argv, _ := raw.([]string)
+		if err := CheckAgentCommand(argv); err != nil {
+			return fmt.Errorf("%s: %w", m.at(path), err)
+		}
+		if err := checkLaunchFlags(argv); err != nil {
+			return fmt.Errorf("%s: %w", m.at(path), err)
+		}
+	}
+	return nil
+}
+
+// checkSpawn checks [spawn]: a prompt pattern that compiles, keys that are
+// not empty, and a wait from 0 to maxShellReadyAfter seconds.
+func (m merged) checkSpawn() error {
+	if v, ok := m.get("spawn.shell_prompt"); ok {
+		s, _ := v.(string)
+		if s == "" {
+			return m.invalidf("spawn.shell_prompt", "an empty pattern matches any line; leave it out instead")
+		}
+		if _, err := regexp.Compile(s); err != nil {
+			return m.invalidf("spawn.shell_prompt", "%s is not a regular expression: %v", FormatValue(s), err)
+		}
+	}
+	if v, ok := m.get("spawn.shell_ready_keys"); ok {
+		keys, _ := v.([]string)
+		for _, k := range keys {
+			if strings.TrimSpace(k) == "" {
+				return m.invalidf("spawn.shell_ready_keys", "a key name is empty")
+			}
+		}
+	}
+	if v, ok := m.get("spawn.shell_ready_after_s"); ok {
+		if n, _ := v.(int); n < 0 || n > maxShellReadyAfter {
+			return m.invalidf("spawn.shell_ready_after_s", "%d is outside 0..%d", n, maxShellReadyAfter)
+		}
+	}
+	return nil
+}
+
+// buildSpawn reads [spawn] from the merged tree.
+func buildSpawn(values map[string]any) Spawn {
+	s := Spawn{ShellReadyAfter: DefaultShellReadyAfter}
+	if v, ok := lookup(values, "spawn.shell_prompt"); ok {
+		s.ShellPrompt, _ = v.(string)
+	}
+	if v, ok := lookup(values, "spawn.shell_ready_keys"); ok {
+		keys, _ := v.([]string)
+		s.ShellReadyKeys = slices.Clone(keys)
+	}
+	if v, ok := lookup(values, "spawn.shell_ready_after_s"); ok {
+		n, _ := v.(int)
+		s.ShellReadyAfter = time.Duration(n) * time.Second
+	}
+	return s
+}
+
+// groupAgent reads a group's own agent table.
+func groupAgent(g map[string]any) Agent {
+	a, _ := g[agentKey].(map[string]any)
+	var out Agent
+	if cmd, ok := a["command"].([]string); ok {
+		out.Command = slices.Clone(cmd)
+	}
+	out.Model, _ = a["model"].(string)
+	return out
+}

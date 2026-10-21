@@ -43,8 +43,8 @@ func withTeam(th *teamHerdr) {
 		map[string]any{"tab_id": "w14:t1", "workspace_id": "w14", "label": "ha-boss"},
 		map[string]any{"tab_id": "w14:t2", "workspace_id": "w14", "label": "ha-coder-1"})
 	th.panes = append(th.panes,
-		map[string]any{"pane_id": "w14:p1", "workspace_id": "w14", "tab_id": "w14:t1", "agent": "claude", "agent_status": "working"},
-		map[string]any{"pane_id": "w14:p2", "workspace_id": "w14", "tab_id": "w14:t2", "agent": "claude", "agent_status": "idle", "tokens": map[string]string{"ctx": "31"}})
+		map[string]any{"pane_id": "w14:p1", "terminal_id": "term_w14:p1", "workspace_id": "w14", "tab_id": "w14:t1", "agent": "claude", "agent_status": "working"},
+		map[string]any{"pane_id": "w14:p2", "terminal_id": "term_w14:p2", "workspace_id": "w14", "tab_id": "w14:t2", "agent": "claude", "agent_status": "idle", "tokens": map[string]string{"ctx": "31"}})
 }
 
 // TestWorkforceOpsOverTheSocket: the workforce ops answer over the daemon
@@ -345,14 +345,15 @@ func TestAnOpEndsWithTheDaemon(t *testing.T) {
 func TestWorkforceCodes(t *testing.T) {
 	t.Parallel()
 	for err, code := range map[error]string{
-		workforce.ErrBadRequest:     "bad_request",
-		workforce.ErrUnknownProject: "unknown_project",
+		fmt.Errorf("%w: not reconciled", daemon.ErrNotReady):                     "not_ready",
+		workforce.ErrBadRequest:                                                  "bad_request",
+		workforce.ErrUnknownProject:                                              "unknown_project",
 		fmt.Errorf("%w: %w", workforce.ErrConfig, settings.ErrBypassesAgentisan): "bypasses_agentisan",
-		workforce.ErrConfig: "config_invalid",
-		fmt.Errorf("%w: %w", workforce.ErrHerdr, daemon.ErrHerdrGone): "herdr_gone",
-		workforce.ErrHerdr:          "herdr_failed",
-		store.ErrStore:              "store_failed",
-		errors.New("anything else"): "failed",
+		workforce.ErrConfig:                                                      "config_invalid",
+		fmt.Errorf("%w: %w", workforce.ErrHerdr, daemon.ErrHerdrGone):            "herdr_gone",
+		workforce.ErrHerdr:                                                       "herdr_failed",
+		store.ErrStore:                                                           "store_failed",
+		errors.New("anything else"):                                              "failed",
 	} {
 		assert.Equal(t, code, daemon.WorkforceCode(err), err.Error())
 	}
