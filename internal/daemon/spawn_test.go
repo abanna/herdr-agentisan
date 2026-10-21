@@ -39,6 +39,8 @@ func TestMain(m *testing.M) {
 		helperHold()
 	case "modes":
 		helperModes()
+	case "dispatch":
+		helperDispatch()
 	default:
 		fmt.Fprintln(os.Stderr, "unknown helper", os.Getenv(helperEnv))
 		os.Exit(2)

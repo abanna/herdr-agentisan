@@ -46,6 +46,11 @@ func TestSampleConfigResolves(t *testing.T) {
 	assert.Equal(t, "agentisan", all.SpacesProject(), "the sample names the spaces' project")
 	assert.Equal(t, "127.0.0.1:4328", all.TelemetryEndpoint(), "the sample names the events' collector")
 	assert.Equal(t, []string{"/run/user/1000/agentisan/gate.0.lock"}, all.TestLocks(), "the sample names the test slots' lock")
+	locks, err := settings.ReadTestLocks(dir)
+	require.NoError(t, err)
+	skills := []string{"/tmp/agentisan-suite-1000.lock", "/tmp/agentisan-suite-1000.slot2.lock", "/tmp/agentisan-suite-1000.slot3.lock"}
+	assert.Equal(t, skills, locks.Of("agentisan"), "the sample gives a project its own test slots")
+	assert.Equal(t, []string{"/run/user/1000/agentisan/gate.0.lock"}, locks.Of("assay"), "a project with none of its own counts the shared ones")
 	envFile, err := settings.DebuggerEnvFile(dir, envOf(map[string]string{"HOME": home}))
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(home, ".config", "herdr-agentisan", "elastic.env"), envFile, "the sample names the debugger's env file")

@@ -9,53 +9,107 @@ import (
 )
 
 // slotCounter counts the header's test slots for each snapshot (ADR-001
-// A31): which of [tests] locks some process holds a lock on, read from the
-// kernel's lock list every poll, so a suite that starts or ends shows within
-// one poll. Only the poll's goroutine uses it.
+// A31, A40): which of a project's lock files some process holds a lock on,
+// and which of those a boss's hold keeps, read from the kernel's lock list
+// every poll, so a suite that starts or ends shows within one poll. Only the
+// poll's goroutine uses it.
 type slotCounter struct {
-	locks     []string
-	procLocks string
-	// failing is the kind of failure last logged; "" while counting works.
+	locks settings.TestLocks
+	// procLocks and proc stand for /proc/locks and /proc.
+	procLocks, proc string
+	// failing is the lock list's failure last logged; "" while it reads.
 	failing string
+	// failingFor is each project's failure last logged, while it lasts.
+	failingFor map[string]string
 }
 
-// newSlotCounter reads [tests] locks once, when the poll starts. None, or a
-// file that does not resolve, counts nothing: no slots are reported.
+// newSlotCounter reads every project's lock files once, when the poll
+// starts. None, or a file that does not resolve, counts nothing: no slots
+// are reported.
 func (o Options) newSlotCounter() *slotCounter {
-	locks, err := settings.TestLocks(o.Team.ConfigDir)
+	locks, err := settings.ReadTestLocks(o.Team.ConfigDir)
 	if err != nil {
 		o.Logger.Warn().Err(err).Msg("test slots: herdr-agentisan.toml does not resolve; the header reports no slots until it is fixed and the daemon restarts")
 		return &slotCounter{}
 	}
-	procLocks := o.Team.procLocks
-	if procLocks == "" {
-		procLocks = testslots.ProcLocks
+	c := &slotCounter{locks: locks, procLocks: o.Team.procLocks, proc: o.Team.proc, failingFor: map[string]string{}}
+	if c.procLocks == "" {
+		c.procLocks = testslots.ProcLocks
 	}
-	if len(locks) > 0 {
-		o.Logger.Info().Strs("locks", locks).Msg("test slots: counting")
+	if c.proc == "" {
+		c.proc = testslots.Proc
 	}
-	return &slotCounter{locks: locks, procLocks: procLocks}
+	if c.any() {
+		o.Logger.Info().Strs("locks", locks.Shared).Any("projects", locks.Projects).Msg("test slots: counting")
+	}
+	return c
 }
 
-// countSlots is the test slots for one poll, when there are lock files to
-// count and they can be counted, and nil otherwise. A failure is logged when
-// it starts or changes kind, and a recovery when it comes, not every poll;
-// while it lasts no slots are reported, never all free.
-func (o Options) countSlots(c *slotCounter) *snapshot.Slots {
-	if c == nil || len(c.locks) == 0 {
-		return nil
+// any reports whether some project has lock files to count.
+func (c *slotCounter) any() bool {
+	if len(c.locks.Shared) > 0 {
+		return true
 	}
-	slots, err := testslots.Count(c.procLocks, c.locks)
+	for _, l := range c.locks.Projects {
+		if len(l) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// countSlots reads the kernel's lock list once for the poll and returns each
+// project's test slots, counted from that one reading (A40): nil when the
+// project has no lock files or they cannot be counted. A failure is logged
+// when it starts or changes kind, and a recovery when it comes, not every
+// poll: the lock list's once for every project, a lock file's once for each
+// project that lists it. While it lasts no slots are reported, never all
+// free.
+func (o Options) countSlots(c *slotCounter) func(project string) *snapshot.Slots {
+	none := func(string) *snapshot.Slots { return nil }
+	if c == nil || !c.any() {
+		return none
+	}
+	r, err := testslots.Read(c.procLocks, c.proc)
 	if err != nil {
 		if kind := failureKind(err); kind != c.failing {
 			c.failing = kind
 			o.Logger.Warn().Err(err).Msg("test slots: cannot count them; the header reports none until it can")
 		}
-		return nil
+		return none
 	}
 	if c.failing != "" {
 		c.failing = ""
 		o.Logger.Info().Msg("test slots: counting again")
+	}
+	counted := map[string]*snapshot.Slots{}
+	return func(project string) *snapshot.Slots {
+		if s, ok := counted[project]; ok {
+			return s
+		}
+		s := o.countProject(c, r, project)
+		counted[project] = s
+		return s
+	}
+}
+
+// countProject is project's test slots from the poll's reading r, or nil.
+func (o Options) countProject(c *slotCounter, r *testslots.Reading, project string) *snapshot.Slots {
+	locks := c.locks.Of(project)
+	if len(locks) == 0 {
+		return nil
+	}
+	slots, err := r.Count(locks)
+	if err != nil {
+		if kind := failureKind(err); kind != c.failingFor[project] {
+			c.failingFor[project] = kind
+			o.Logger.Warn().Err(err).Str("project", project).Msg("test slots: cannot count them; the header reports none until it can")
+		}
+		return nil
+	}
+	if _, ok := c.failingFor[project]; ok {
+		delete(c.failingFor, project)
+		o.Logger.Info().Str("project", project).Msg("test slots: counting again")
 	}
 	return &slots
 }

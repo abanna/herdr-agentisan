@@ -389,6 +389,10 @@ func TestRenderContents(t *testing.T) {
 		// Nothing reported, nothing shown: no "PRs ?", no "issues 0".
 		"no project shows the name alone": {frame: from("blocked", 120, 40), match: []string{`│ assay +\[ btop \] │`}, not: []string{"PRs", "issues", "slots"}},
 		"a colour and slots alone":        {frame: from("wide", 120, 40), want: []string{"チーム​ · slots 0/3 "}, not: []string{"PRs", "issues"}},
+		// A held slot leaves the count, and the line says so (A40).
+		"a held slot":     {frame: of(withProject(&snapshot.Project{Slots: &snapshot.Slots{Used: 1, Total: 3, Held: 1}}), 80, 24), want: []string{"│ t · slots 1/2 (1 held) "}},
+		"every slot held": {frame: of(withProject(&snapshot.Project{Slots: &snapshot.Slots{Total: 2, Held: 2}}), 80, 24), want: []string{"│ t · slots 0/0 (2 held) "}},
+		"none held":       {frame: of(withProject(&snapshot.Project{Slots: &snapshot.Slots{Used: 1, Total: 3}}), 80, 24), want: []string{"│ t · slots 1/3 "}, not: []string{"held"}},
 		"every PR state has a mark": {
 			frame: of(withProject(&snapshot.Project{PRs: []snapshot.PR{
 				{Number: 1, CI: snapshot.CIUnknown, Codex: snapshot.CodexUnknown, Merge: snapshot.MergeUnknown},
@@ -1003,6 +1007,35 @@ func TestRenderProjectColour(t *testing.T) {
 	out := dashboard.Render(dashboard.Frame{Snapshot: fixture(t, "full"), Now: at}, 120, 40, dashboard.Options{Profile: colorprofile.TrueColor})
 	assert.Regexp(t, regexp.QuoteMeta(truecolor("#bd93f9"))+`[0-9;]*magentisan`, out)
 	assert.Regexp(t, `^\x1b\[[0-9;]*`+regexp.QuoteMeta(truecolor("#bd93f9"))+`[0-9;]*m╭`, out)
+}
+
+// TestRenderSlotsColour: the slots are drawn as a note when no slot is free,
+// and a held slot is not free (A40).
+func TestRenderSlotsColour(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		slots snapshot.Slots
+		text  string
+		note  bool
+	}{
+		"one free":               {slots: snapshot.Slots{Used: 1, Total: 2}, text: "slots 1/2"},
+		"all used":               {slots: snapshot.Slots{Used: 2, Total: 2}, text: "slots 2/2", note: true},
+		"one free beside a hold": {slots: snapshot.Slots{Used: 1, Total: 3, Held: 1}, text: "slots 1/2 (1 held)"},
+		"the rest used":          {slots: snapshot.Slots{Used: 2, Total: 3, Held: 1}, text: "slots 2/2 (1 held)", note: true},
+		"all held":               {slots: snapshot.Slots{Total: 2, Held: 2}, text: "slots 0/0 (2 held)", note: true},
+		"none at all":            {slots: snapshot.Slots{}, text: "slots 0/0"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			snap := &snapshot.Snapshot{V: 1, Team: "t", Project: &snapshot.Project{Slots: &tc.slots}}
+			out := dashboard.Render(dashboard.Frame{Snapshot: snap, Now: at}, 80, 24, dashboard.Options{Profile: colorprofile.TrueColor})
+			require.Contains(t, ansi.Strip(out), tc.text)
+			note := regexp.MustCompile(regexp.QuoteMeta(truecolor("#f1fa8c")) + `[0-9;]*m` + regexp.QuoteMeta(tc.text))
+			assert.Equal(t, tc.note, note.MatchString(out), "drawn as a note")
+		})
+	}
 }
 
 // TestRenderSelectionIsReverseVideo: the selected agent's row, and only that
