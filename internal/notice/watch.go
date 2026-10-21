@@ -33,7 +33,8 @@ func NewWatch() *Watch {
 //   - the first call only takes m as its baseline, and is one Started
 //     notice per team in m;
 //   - a worker that turned blocked, or left the team, at once: its pane
-//     closed or moved away, or its agent exited and left a shell;
+//     closed or moved away, or, when agents answered (named), its agent
+//     exited and left a shell;
 //   - a worker that turned unknown, when it still is at the next call;
 //   - a worker whose terminal's completion_seq changed to a new value,
 //     when agents is agent.list's answer for this poll (named). A terminal
@@ -50,7 +51,7 @@ func (w *Watch) Observe(m team.Model, agents []herdr.AgentInfo, named bool) []No
 			out = append(out, Notice{Project: p.Name, Subject: p.Name, Kind: Started, Text: startedText})
 		}
 	} else {
-		out = append(out, w.statuses(*w.last, m)...)
+		out = append(out, w.statuses(*w.last, m, named)...)
 	}
 	if named {
 		out = append(out, w.turnsOf(m, agents, first)...)
@@ -59,8 +60,11 @@ func (w *Watch) Observe(m team.Model, agents []herdr.AgentInfo, named bool) []No
 	return out
 }
 
-// statuses are the notices for the status changes from prev to m.
-func (w *Watch) statuses(prev, m team.Model) []Notice {
+// statuses are the notices for the status changes from prev to m. named is
+// whether agent.list answered m's poll: without it every pane is unnamed,
+// so an agent herdr knows only by name reads as a shell, and no exit is
+// judged.
+func (w *Watch) statuses(prev, m team.Model, named bool) []Notice {
 	var out []Notice
 	held := w.unknown
 	w.unknown = map[string]bool{}
@@ -95,7 +99,7 @@ func (w *Watch) statuses(prev, m team.Model) []Notice {
 		// An agent that exits leaves its pane a shell: the worker has left
 		// the team as surely as if the pane had closed, whether or not the
 		// status changed with it.
-		if was, ok := agents[g.worker.Pane.ID]; ok && !g.worker.Pane.IsAgent() {
+		if was, ok := agents[g.worker.Pane.ID]; ok && named && !g.worker.Pane.IsAgent() {
 			out = append(out, Notice{Project: g.project, Subject: g.worker.Pane.ID, Kind: Gone, Text: exitedText(was)})
 		}
 	}

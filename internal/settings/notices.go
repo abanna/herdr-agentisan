@@ -19,6 +19,17 @@ const (
 	MaxNoticeRepeat = 86400
 )
 
+// noticesSchema is how the daemon tells the boss what its team poll sees
+// (A44): the kinds it skips, and gap and repeat in seconds. The shared file
+// and a project's own table set it, never a repo file: the daemon reads no
+// repo file, so a repo's value would show in `config resolve` and never
+// apply.
+var noticesSchema = &node{kind: kindTable, fields: map[string]*node{
+	"skip":   leafOf(kindStrings),
+	"gap":    leafOf(kindInt),
+	"repeat": leafOf(kindInt),
+}}
+
 // NoticeKinds are the daemon's notice kinds (notice.Kinds), which a test
 // there keeps in step. notices.skip can name each but noticeAlways.
 var NoticeKinds = []string{"turn_ended", "blocked", "unknown", "gone", "started", "ctx_soft", "ctx_hard", "ctx_ceiling"}

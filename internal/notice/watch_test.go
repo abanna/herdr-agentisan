@@ -291,15 +291,35 @@ func TestWatchAgentExited(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			w := notice.NewWatch()
-			w.Observe(tc.prev, nil, false)
+			w.Observe(tc.prev, nil, true)
 			var got []string
-			for _, n := range w.Observe(tc.next, nil, false) {
+			for _, n := range w.Observe(tc.next, nil, true) {
 				assert.Equal(t, notice.Gone, n.Kind)
 				assert.Equal(t, "w1:p2", n.Subject)
 				got = append(got, n.Text)
 			}
 			assert.Equal(t, tc.want, got)
-			assert.Empty(t, w.Observe(teamOf(nil), nil, false), "the shell's pane closing later tells nothing more")
+			assert.Empty(t, w.Observe(teamOf(nil), nil, true), "the shell's pane closing later tells nothing more")
 		})
 	}
+}
+
+// TestWatchAgentExitNeedsAgentList: a poll whose agent.list failed builds
+// its model with no names, so an agent herdr knows only by name reads as a
+// shell; that is never told as its agent exiting, and its pane's real close
+// later is told as it leaving. Both models are built as the poll builds
+// them.
+func TestWatchAgentExitNeedsAgentList(t *testing.T) {
+	t.Parallel()
+	ws := []herdr.WorkspaceInfo{{WorkspaceID: "wN", Label: "◆ coders"}}
+	panes := []herdr.PaneInfo{{PaneID: "wN:p1", WorkspaceID: "wN", AgentStatus: "working"}}
+	agents := []herdr.AgentInfo{{PaneID: "wN:p1", Name: "pee01", TerminalID: "t1"}}
+	build := func(panes []herdr.PaneInfo, agents []herdr.AgentInfo) team.Model {
+		return team.Build(team.Layout{Workspaces: ws, Panes: panes, Agents: agents}, team.Spaces{}, nil)
+	}
+	w := notice.NewWatch()
+	w.Observe(build(panes, agents), agents, true)
+	assert.Empty(t, w.Observe(build(panes, nil), nil, false), "agent.list failed: nothing is told")
+	assert.Empty(t, w.Observe(build(panes, agents), agents, true), "it answers again")
+	assert.Equal(t, []string{"wN:p1 gone"}, kinds(w.Observe(build(nil, nil), nil, true)), "the real close")
 }

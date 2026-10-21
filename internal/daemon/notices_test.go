@@ -391,3 +391,24 @@ func TestNoticesTellAnAgentExiting(t *testing.T) {
 	polled(t, th.srv, 3)
 	assert.Equal(t, 1, waitLine(t, &logs, "agent exited"), "told once")
 }
+
+// TestNoticesTellNoExitForAFailedAgentList: a live worker herdr knows only
+// by name reads as a shell on a poll whose agent.list failed; it is never
+// told as exited, and its pane's real close is told.
+func TestNoticesTellNoExitForAFailedAgentList(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	th.setPane("wN:p1", "agent", nil)
+	th.setAgents(turned("wN:p1", "pee01", 1))
+	var logs lockedLog
+	noticeRun(t, th, noticesConfig(t, "gap = 0\n"), &logs)
+	waitLine(t, &logs, "the daemon started")
+	polled(t, th.srv, 2)
+	th.failAgents(true)
+	require.Eventually(t, func() bool { return strings.Count(logs.String(), "team poll: list agents") >= 2 }, ready, 5*time.Millisecond)
+	th.failAgents(false)
+	polled(t, th.srv, 2)
+	th.setPanes(slices.DeleteFunc(th.listedPanes(), func(p map[string]any) bool { return p["pane_id"] == "wN:p1" }))
+	waitLine(t, &logs, "pee01 left the team (pane wN:p1)")
+	assert.NotContains(t, strings.Join(noticeLines(&logs), "\n"), "agent exited")
+}

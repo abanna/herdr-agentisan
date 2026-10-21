@@ -64,23 +64,18 @@ var profileSchema = &node{kind: kindTable, fields: map[string]*node{
 	"rotation": {kind: kindTable, fields: map[string]*node{
 		"thresholds": leafOf(kindInts),
 	}},
-	// notices is how the daemon tells the boss what its team poll sees
-	// (A44): the kinds it skips, and gap and repeat in seconds.
-	"notices": {kind: kindTable, fields: map[string]*node{
-		"skip":   leafOf(kindStrings),
-		"gap":    leafOf(kindInt),
-		"repeat": leafOf(kindInt),
-	}},
 }}
 
 // projectSchema is a [projects.<name>] table: a profile body plus the keys
-// that find the project's team in herdr (ADR-001 A19). Only the project's own
-// table sets them: the daemon reads them without the repo file, and a short
-// code shared by every project would collide.
+// that find the project's team in herdr (ADR-001 A19), and its boss's
+// notices (A44). Only the project's own table sets them: the daemon reads
+// them without the repo file, and a short code shared by every project would
+// collide.
 var projectSchema = func() *node {
 	fields := maps.Clone(profileSchema.fields)
 	fields["short"] = leafOf(kindString)
 	fields["layout"] = leafOf(kindString)
+	fields["notices"] = noticesSchema
 	return &node{kind: kindTable, fields: fields}
 }()
 

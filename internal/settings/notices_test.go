@@ -115,4 +115,9 @@ func TestNoticesResolveWithProvenance(t *testing.T) {
 	_, err = settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", Set: []string{"notices.gap=-1"}, LookupEnv: envOf(nil)})
 	require.ErrorIs(t, err, settings.ErrInvalid)
 	assert.Contains(t, err.Error(), "notices.gap")
+
+	writeFile(t, repo, settings.RepoFileName, "schema_version = 1\n[notices]\ngap = 3600\n", repo)
+	_, err = settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
+	require.ErrorIs(t, err, settings.ErrUnknownKey, "a repo file cannot set notices: the daemon reads no repo file")
+	assert.Contains(t, err.Error(), "notices")
 }
