@@ -960,3 +960,27 @@ Budget: an agent pane a team places carries 8 keys, and a push sets 4.
 - **`tab_id`, a new optional key.** The tab `pane.list` lists the pane in. herdr 0.9.3 numbers a tab by its place in its workspace (A19), so it is shown and never a focus target.
 - **`idle_since`, a new optional key.** When the daemon first saw an agent at rest, idle or done: when its last turn ended. It comes from A23's idle clock, fed by every poll from `pane.list`'s statuses, so it restarts with the daemon. A plain shell never carries it, whatever status herdr gives it, and neither does an agent at work.
 - **The contract.** Both keys are additive and optional, in the boss too, with A18's `unnamed` as the precedent: absent means not reported, so every earlier snapshot keeps its meaning. Decoding stays strict: a re-cased key, a `tab_id` that is not a string or an `idle_since` that is not RFC 3339 is refused. So a reader built before this amendment refuses a snapshot carrying either key, `unknown key "tab_id"`, as one built before A18 refused `unnamed`. The dashboard and the daemon ship in one binary, but a dashboard split already open when the binary is installed and the daemon restarted keeps running the old one: it shows that error in its footer over its last frame until it is closed and opened again. Reopen open dashboards after installing.
+
+### A38. The dashboard's v12 cues
+
+*Adds to:* D5, A18 and the snapshot contract. Recorded with NERD-5320, G2 of the parity inventory: the small cues v12's dashboard has and the plugin's lacked.
+
+- **Stage colours.** v12's rules, made case-insensitive and word-bounded, and tried in v12's order:
+  1. a word `ready` is bold green;
+  2. otherwise a word `red` or `blocked` is bold red;
+  3. otherwise a word `waiting` or `queued` is yellow;
+  4. anything else stays dim, where v12 drew it white.
+
+  A word is a run of letters, marks and digits. So `ready_to_merge` is ready and `already` is not, and `restored` and `unblocked`, which v12's substring test drew red, are not red. By v12's order, `blocked until ready` is green. The colour comes from the whole stage, so a stage cut to its column keeps it. It applies to agent rows and, beyond v12, to the boss line's stage.
+- **Data age.** When the drawn snapshot's `at` is more than 15 whole seconds older than the dashboard's clock, the footer shows `data Ns old` in yellow, always in seconds (an hour reads `data 3600s old`). It comes after a search query and before the errors, the note and the hints, and the footer is cut from the right, so a long error cannot push it off. Nothing is shown with no snapshot, or with an `at` that is after the clock or is the zero time.
+  - The daemon polls every 3 s, so against the daemon the age appears only when the poll stops. A fixture always reads stale.
+  - There is no `r` refresh key: the dashboard already asks the daemon every second.
+- **A new optional key, `shell`.** It is set on a row whose pane runs no agent: herdr detects none and knows none by name. It is not A35's shell, the pane's shell process that a `workers` row is matched by. Absent means false, as for `unnamed` (A18), so every snapshot written before it means what it meant.
+  - A shell has no agent name, so it is always `unnamed`; and a shell is never the boss (A18). The decoder refuses a document that breaks either.
+  - The dashboard draws a shell whose status is `unknown` as `▸` with the state word `shell`, counts it as `▸N` in its group's title, and names it in the help.
+  - A shell with another status keeps that status's glyph. The one case is `ready` from a handoff token, which `$team` counts as ready too.
+  - An unnamed agent is not a shell, so an agent herdr cannot classify yet keeps `?`. The key is what tells the two apart: from `unnamed` and `unknown` alone they look the same.
+  - **Version skew.** A dashboard started before this build refuses a newer daemon's `shell` key (strict v1) until it is reopened, as with `unnamed`. After `daemon-restart`, reopen any open dashboard.
+- **In a group's view (A37).** A box's title draws a plain shell as `▸ name · shell`, as its row does, and the box's stage takes the stage colours on both of its lines. A stage not reported stays dim.
+- **Watchers.** The boss line no longer draws `watchers`. Nothing counts them: the daemon cannot see a session's background monitors. The v1 key stays, decoded and range-checked, so every v1 document that carries it still decodes.
+- **Short model names.** Fable is `fab`, beside `opus`, `son` and `hai`, and a model whose name says `codex` is `cdx`. Any other model is still its first word, cut to four cells.
