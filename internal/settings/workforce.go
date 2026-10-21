@@ -3,10 +3,13 @@ package settings
 import (
 	"fmt"
 	"maps"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/abanna/herdr-agentisan/internal/routing"
 )
 
 // What the workforce commands read of a profile besides its groups' counts
@@ -88,22 +91,55 @@ func (p Profile) AgentFor(typ string) Agent {
 }
 
 // launchFlags are the agent flags the workforce sets itself: a command that
-// carries one would be launched with two.
-var launchFlags = []string{"--model", "-m", "--name", "-n"}
+// carries one would be launched with two. --effort is routing's (A50).
+var launchFlags = []string{"--model", "-m", "--name", "-n", "--effort"}
+
+// codexConfigKeys are the Codex settings routing sets (A50): a codex command
+// setting one with -c or --config would fight the routed model or effort.
+var codexConfigKeys = []string{"model", "model_reasoning_effort"}
 
 // checkLaunchFlags refuses a command carrying a flag the workforce sets,
-// whether as -m o3, -m=o3 or -mo3: a short flag's value can be attached.
+// whether as -m o3, -m=o3 or -mo3: a short flag's value can be attached. A
+// codex command is also refused a -c or --config that sets one of
+// codexConfigKeys, in any of its forms. The error names the flag or key,
+// never its value.
 func checkLaunchFlags(argv []string) error {
-	for _, arg := range argv[min(1, len(argv)):] {
+	codex := len(argv) > 0 && filepath.Base(argv[0]) == routing.Codex
+	for i := 1; i < len(argv); i++ {
+		arg := argv[i]
 		name, _, _ := strings.Cut(arg, "=")
 		if !strings.HasPrefix(name, "--") && len(name) > 2 {
 			name = name[:2]
 		}
 		if slices.Contains(launchFlags, name) {
-			return fmt.Errorf("%w: %s is set by the workforce: use the model key, and the worker's name is its logical id", ErrInvalid, name)
+			return fmt.Errorf("%w: %s is set by the workforce: use the model key or [routing], and the worker's name is its logical id", ErrInvalid, name)
+		}
+		if key := codexConfigKey(argv, i); codex && slices.Contains(codexConfigKeys, key) {
+			return fmt.Errorf("%w: codex's %s is set by the workforce: use the model key or [routing]", ErrInvalid, key)
 		}
 	}
 	return nil
+}
+
+// codexConfigKey is the key argv[i] sets when it is Codex's -c or --config,
+// with its key=value separate (-c k=v), joined (--config=k=v, -c=k=v) or
+// attached (-ck=v); "" when it is not one. A key may be quoted.
+func codexConfigKey(argv []string, i int) string {
+	arg, kv := argv[i], ""
+	switch {
+	case arg == "-c" || arg == "--config":
+		if i+1 < len(argv) {
+			kv = argv[i+1]
+		}
+	case strings.HasPrefix(arg, "--config="):
+		kv = strings.TrimPrefix(arg, "--config=")
+	case strings.HasPrefix(arg, "-c"):
+		kv = strings.TrimPrefix(arg[2:], "=")
+	default:
+		return ""
+	}
+	key, _, _ := strings.Cut(kv, "=")
+	return strings.Trim(strings.TrimSpace(key), `"'`)
 }
 
 // checkGroupAgents runs D12 and the launch-flag check on every group's own

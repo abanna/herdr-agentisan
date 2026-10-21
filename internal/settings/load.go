@@ -284,6 +284,9 @@ func parseFlags(sets []string) ([]*source, error) {
 		if err := s.load(tree); err != nil {
 			return nil, err
 		}
+		if err := s.checkNoRoutingOverrides(); err != nil {
+			return nil, err
+		}
 		out = append(out, s)
 	}
 	return out, nil

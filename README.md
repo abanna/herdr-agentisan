@@ -250,6 +250,19 @@ the daemon does, and a team added to the configuration since gets them
 after a `daemon-restart`. A worker whose row no pane is bound to, such as one
 lost after a herdr live handoff, is listed under `unbound` (ADR-001 A35).
 Just after the daemon starts, the command waits for its first poll.
+
+### Model routing
+
+The user's routing rules, built in byte for byte
+(`internal/routing/rules/jev-routing-v1.json`), choose the model and
+reasoning effort each worker starts with, by its type's role (ADR-001 A50).
+`[routing]` in the shared `herdr-agentisan.toml` holds what they leave to
+the deployment: `enabled` (off by default, and while it is on no
+`agent.model` key may be set), each binding's real `model_id`, efforts and
+`enabled`, and `[routing.overrides]`, the user's standing choice for a role
+and the only way to a premium binding. `worker spawn` asks routing from
+NERD-5289 part 1b on; until then the keys resolve and nothing reads them.
+
 ## The dashboard
 
 `herdr-agentisan dashboard` draws a team from the daemon (ADR-001 D5,

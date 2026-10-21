@@ -158,6 +158,13 @@ exempts whatever is later added under that name.
   references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check,
   and each group's one-line description (A36), never from a repo file.
   Sample in `docs/config/herdr-agentisan.example.toml`.
+- `internal/routing/` — the model and effort each spawned worker starts
+  with (ADR-001 A50, NERD-5289). It reads the user's routing rules,
+  embedded byte for byte from `rules/jev-routing-v1.json` and decoded
+  strictly, and the deployment facts from `[routing]` (`internal/settings`).
+  `Policy.Resolve` maps a worker type's role and provider, the boss's task
+  packet and overrides onto a binding. It returns a `Decision` that is also
+  the audit record. No caller yet: `worker spawn` wires it in part 1b.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
   embedded from `migrations/` and tracked by `user_version`. The daemon holds

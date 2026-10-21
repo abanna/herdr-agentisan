@@ -125,7 +125,19 @@ func TestLoadRefusesWorkforceKeys(t *testing.T) {
 		"a launch flag in a later group": {body: earlierGroups + "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"claude\", \"--model=opus-secret\"] }\n", wantErr: settings.ErrInvalid, wantAt: "groups.qa.agent.command", wantNot: "opus-secret"},
 		// The check knows no flag's arity, so it refuses a launch flag's name
 		// even where it is another flag's value.
-		"a launch flag's name as a value":      {body: "[agent]\ncommand = [\"claude\", \"--append-system-prompt\", \"--model\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command"},
+		"a launch flag's name as a value": {body: "[agent]\ncommand = [\"claude\", \"--append-system-prompt\", \"--model\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command"},
+		// Routing's effort and Codex's model settings are the workforce's
+		// too (A50), in every form clap takes them.
+		"a top-level command with --effort":    {body: "[agent]\ncommand = [\"claude\", \"--effort\", \"high\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command"},
+		"--effort with its value joined":       {body: "[agent]\ncommand = [\"claude\", \"--effort=xhigh-secret\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command", wantNot: "xhigh-secret"},
+		"codex's -c model":                     {body: "[agent]\ncommand = [\"codex\", \"-c\", \"model=o3-secret\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command", wantNot: "o3-secret"},
+		"codex's -c model_reasoning_effort":    {body: "[agent]\ncommand = [\"codex\", \"-c\", 'model_reasoning_effort=\"high\"']\n", wantErr: settings.ErrInvalid, wantAt: "agent.command"},
+		"codex's --config model":               {body: "[agent]\ncommand = [\"codex\", \"--config\", \"model=o3\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command"},
+		"codex's --config= joined":             {body: "[agent]\ncommand = [\"codex\", \"--config=model=o3\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command"},
+		"codex's -c= joined":                   {body: "[agent]\ncommand = [\"codex\", \"-c=model_reasoning_effort=low\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command"},
+		"codex's -c attached":                  {body: "[agent]\ncommand = [\"codex\", \"-cmodel=o3\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command"},
+		"codex's -c with a quoted, spaced key": {body: "[agent]\ncommand = [\"codex\", \"-c\", ' \"model\" = o3']\n", wantErr: settings.ErrInvalid, wantAt: "agent.command"},
+		"codex by path in a group, with -c":    {body: "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"/opt/bin/codex\", \"--no-daemon\", \"-c\", \"model=o3\"] }\n", wantErr: settings.ErrInvalid, wantAt: "groups.qa.agent.command"},
 		"a group agent key it does not know":   {body: "[groups.qa]\nworkers = 0\nslots = 1\nagent = { kind = \"codex\" }\n", wantErr: settings.ErrUnknownKey},
 		"an empty shell prompt":                {body: "[spawn]\nshell_prompt = \"\"\n", wantErr: settings.ErrInvalid, wantAt: "spawn.shell_prompt"},
 		"a shell prompt that does not compile": {body: "[spawn]\nshell_prompt = \"(\"\n", wantErr: settings.ErrInvalid, wantAt: "spawn.shell_prompt"},
@@ -161,12 +173,17 @@ func TestLoadRefusesWorkforceKeys(t *testing.T) {
 func TestLoadAcceptsTheWorkforceEdges(t *testing.T) {
 	t.Parallel()
 	for name, body := range map[string]string{
-		"no wait at all":               "[spawn]\nshell_ready_after_s = 0\n",
-		"slots at the bound":           "[groups.qa]\nworkers = 64\nslots = 64\n",
-		"a minute's wait":              "[spawn]\nshell_ready_after_s = 60\n",
-		"no keys":                      "[spawn]\nshell_ready_keys = []\n",
-		"a non-ASCII prompt":           "[spawn]\nshell_prompt = '➜\\s+\\S+'\n",
-		"a look-alike of a flag":       "[agent]\ncommand = [\"claude\", \"--models\", \"--model-x\", \"-x\", \"-é\", \"-\"]\n",
+		"no wait at all":              "[spawn]\nshell_ready_after_s = 0\n",
+		"slots at the bound":          "[groups.qa]\nworkers = 64\nslots = 64\n",
+		"a minute's wait":             "[spawn]\nshell_ready_after_s = 60\n",
+		"no keys":                     "[spawn]\nshell_ready_keys = []\n",
+		"a non-ASCII prompt":          "[spawn]\nshell_prompt = '➜\\s+\\S+'\n",
+		"a look-alike of a flag":      "[agent]\ncommand = [\"claude\", \"--models\", \"--model-x\", \"-x\", \"-é\", \"-\"]\n",
+		"a look-alike of --effort":    "[agent]\ncommand = [\"claude\", \"--efforts\", \"--effort-x\"]\n",
+		"another of codex's settings": "[agent]\ncommand = [\"codex\", \"-c\", \"model_provider=oss\", \"--config=profiles.x.model=y\", \"-cmodel_verbosity=low\"]\n",
+		"codex's -c with no value":    "[agent]\ncommand = [\"codex\", \"-c\"]\n",
+		// claude's -c is --continue, which takes no value.
+		"claude's own -c":              "[agent]\ncommand = [\"claude\", \"-c\", \"model=x\"]\n",
 		"codex as a group's own agent": "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"/opt/bin/codex\"] }\n",
 		// argv[0] is the program, which D12 checks by its base name.
 		"a program path that starts like a flag": "[agent]\ncommand = [\"-m/claude\"]\n",

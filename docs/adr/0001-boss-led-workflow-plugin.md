@@ -1007,3 +1007,53 @@ Budget: an agent pane a team places carries 8 keys, and a push sets 4.
   - It exits before it answers, and no other daemon of this server holds the lock: `ErrDaemonExited`, naming `daemon.log`, and a non-zero exit, so herdr's plugin log records the startup hook or the `daemon-restart` action as failed. Before, this waited out the 3 s and printed the same "not answering health yet" as a daemon still starting.
 - **Knowing it exited.** `daemon start` waits on the process it spawns, rather than releasing it, only to learn when it exits. The daemon still leads its own session and outlives the command, reparented.
 - **The lock is read, not probed.** While it waits, `daemon start` reads the lock record without taking the lock. A probe takes a free lock for an instant. A daemon trying the lock in that instant could read the record of one that has let go but not yet exited, take it for a live holder, and exit as already running.
+
+### A50. Worker model routing: the rules and the deployment
+
+*Adds to:* D9, D11 and A23. Recorded with NERD-5289 part 1a, from the user's routing rules v1 (2026-10-10) and the user's answers of 2026-10-21. Part 1b wires `worker spawn` to it, and part 2 adds Jev's complexity answer for coders. This part adds the domain package and its configuration, with no caller yet.
+
+- **The rules are the spec.** The user's rules ship in the binary byte for byte (`internal/routing/rules/jev-routing-v1.json`), decoded strictly: an unknown key fails, so a rule from a later version is never silently ignored.
+  - The plugin reads the bindings (a model id and the efforts it takes), and each role's allowed bindings, default (one, or one per provider), default effort and selection (`fixed`, `explicit` or `jev_complexity`).
+  - It checks the rules against themselves: every default is allowed, runs under its provider and takes the role's effort.
+  - A binding's provider is its name's prefix (`claude_`, `codex_`). A `*_premium` binding is never a default.
+  - The role instructions in the rules (scope, the cleanup and output requirements, the pre-check skills, the findings requirements) stay in agentisan-skills (D9). The plugin reads past them.
+- **The roles.** A worker type maps to a role:
+  - coder: coder;
+  - precheck: pre_check;
+  - qa: pre_check (qa has no role of its own and verifies a handoff as pre_check does; the user's decision of 2026-10-20);
+  - review: code_review;
+  - research: researcher;
+  - librarian: clerk;
+  - debugger: alex_debugger;
+  - boss: boss.
+  - Any other type has no role, and is refused with `ErrUnknownRole`.
+- **The provider is the type's agent command**, claude or codex (A23): the top-level command, `codex --no-daemon` for review, or a group's own command. A decision never changes it.
+  - A packet preferring the other provider is refused, and so is an override naming one of its bindings.
+  - A role with no default under the provider is blocked: the boss under codex, and code_review under claude.
+  - Putting a type on the other provider is a configuration change: its group's `agent.command`.
+- **`[routing]`, the deployment.** The user's shared file and `--set` only, like `[telemetry]`. It is an unknown key in a project table and in a repo file, which whoever commits to the repo writes.
+  - `enabled` (default false). While it is false, spawn launches as before and records the decision as what routing would have chosen (`applied: false`).
+  - `[routing.bindings.<binding>]`: `model_id` (`""` marks it unresolved, never "the latest"), the `efforts` its client takes, and `enabled`.
+  - `[routing.overrides] <role> = "<binding>"`: the user's standing choice, set in the shared file only, never `--set`, and the only way to a premium binding.
+  - Binding and role names are the rules' own, so a misspelt one is an unknown key. An effort is one a client takes: minimal, low, medium, high, xhigh or max.
+  - While `enabled` is true, `config resolve` refuses every `agent.model` key, in any layer: routing sets the model.
+- **The decision**, in order:
+  1. The role and the provider are checked, then the boss's task packet, the rules' `task_packet`. Its `user_model_override` must be null: the user's override is theirs to set. Part 1b bounds the packet's size where it decodes it, with the spawn request.
+  2. The binding is the user's override, else the boss's `--model` (a binding's name or its model id, never an alias), else the role's default for the provider.
+     - The boss never picks a premium binding.
+     - A `--model` other than the user's override is refused.
+  3. The effort is the boss's `--effort`, else the role's default effort, else the binding's first.
+  4. The hard filters with data apply: a model id, the binding enabled, and the effort supported.
+     - An override that fails is refused (`ErrOverrideRefused`), never swapped for another binding.
+     - A default that fails is `ErrBlocked`.
+     - Part 2 adds the fallback from Jev's choice to the default.
+- **The rules' filters with no data yet** (tool compatibility, context headroom, availability and spending limits) are listed in every decision as `unchecked`, until the user's activation defines them.
+- **Jev's place.** A `jev_complexity` role (coder) takes its default with a reason, each logged apart, and no Jev call:
+  - `task_not_found` (no packet, or not found);
+  - `lookup_unavailable`;
+  - `insufficient_assignment` (a blank assignment);
+  - `jev_disabled` until part 2.
+- **The audit record.** A decision carries every field the rules' `audit_fields` list, null or empty where it has nothing, plus `selection`, `applied` and `unchecked`.
+  - The assignment is there only as `assignment_digest`: the sha256 of the assignment, the requirements and the acceptance criteria.
+  - `policy_version` is the rules' schema version and a digest of the rules and the deployment, so a changed model id shows.
+- **What a command may carry.** A23's launch flags gain `--effort`. A codex command is also refused a `-c`/`--config` that sets `model` or `model_reasoning_effort`, in any form clap takes. Before, `-c model=…` slipped past the `--model` check. Part 1b will pass Claude its effort as `--effort`, and Codex its effort as `-c model_reasoning_effort="…"`.
