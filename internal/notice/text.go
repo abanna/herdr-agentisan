@@ -44,8 +44,10 @@ func details(p team.Pane) string {
 	return b.String()
 }
 
+// turnText leaves the status out: pane.list is read before agent.list, so
+// the status can be the poll's before the turn ended.
 func turnText(w team.Worker) string {
-	return fmt.Sprintf("%s finished a turn (%s)%s", who(w), w.Pane.Status, details(w.Pane))
+	return who(w) + " finished a turn" + details(w.Pane)
 }
 
 func blockedText(w team.Worker) string {

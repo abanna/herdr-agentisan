@@ -212,7 +212,7 @@ the daemon is down are not reported. The boss's own panes and plain shells are
 never reported. Each line carries the worker's reported ctx, item and stage:
 
 ```
-ha-coder-2 finished a turn (done) · ctx 44% · NERD-5322 · verify
+ha-coder-2 finished a turn · ctx 44% · NERD-5322 · verify
 ```
 
 The daemon only informs; it never acts on a notice. Each team's notices are

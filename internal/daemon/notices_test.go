@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/abanna/herdr-agentisan/internal/logging"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 )
 
@@ -79,11 +79,14 @@ func noticesConfig(t *testing.T, body string) string {
 	return dir
 }
 
-// noticeRun runs a daemon on th with config dir cfg, its log in logs.
+// noticeRun runs a daemon on th with config dir cfg, its log in logs,
+// written as `daemon run` writes daemon.log: JSON at info, scrubbed.
 func noticeRun(t *testing.T, th *teamHerdr, cfg string, logs *lockedLog) {
 	t.Helper()
 	o := teamOpts(t, shortDir(t), th, cfg)
-	o.Logger = zerolog.New(logs)
+	logger, err := logging.New(logs, "info", "json")
+	require.NoError(t, err)
+	o.Logger = logger
 	run(t, o)
 }
 
@@ -115,13 +118,9 @@ func TestNoticesReachTheLog(t *testing.T) {
 	require.Equal(t, []noticeMsg{{Project: "", Notices: []string{"agentisan: the daemon started; turns that ended while it was down are not reported"}}}, noticesIn(&logs),
 		"the first poll is the baseline: no blocked pane or ready agent is told")
 
-	// The status first, seen by a whole poll: one poll's pane.list and
-	// agent.list are two calls, and a turn seen between them would read
-	// "(working)", as it can in herdr.
 	th.setPane("wN:p1", "agent_status", "done")
-	polled(t, th.srv, 2)
 	th.setAgents(turned("wJ:p1", "boss", 9), turned("wN:p1", "pee01", 7), turned("wY:p1", "", 3))
-	waitLine(t, &logs, "pee01 finished a turn (done) · ctx 40%")
+	waitLine(t, &logs, "pee01 finished a turn · ctx 40%")
 
 	th.setPane("wN:p1", "agent_status", "blocked")
 	waitLine(t, &logs, "pee01 is blocked · ctx 40%")
@@ -133,7 +132,7 @@ func TestNoticesReachTheLog(t *testing.T) {
 	polled(t, th.srv, 3)
 	assert.Equal(t, []string{
 		"agentisan: the daemon started; turns that ended while it was down are not reported",
-		"pee01 finished a turn (done) · ctx 40%",
+		"pee01 finished a turn · ctx 40%",
 		"pee01 is blocked · ctx 40%",
 		"pane wY:p1 left the team",
 	}, noticeLines(&logs), "each once; the boss's own turn is not told")
