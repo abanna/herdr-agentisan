@@ -70,36 +70,43 @@ func TestWorkerQueryInputs(t *testing.T) {
 	}
 }
 
-// TestCheckQuery: an ad-hoc query reads the trail's stream and nothing else.
+// TestCheckQuery: an ad-hoc query reads the trail's stream and nothing else,
+// and each refusal says which rule it broke.
 func TestCheckQuery(t *testing.T) {
 	t.Parallel()
-	for q, ok := range map[string]bool{
-		"FROM logs-agentisan.otel-* | LIMIT 5":               true,
-		"  from logs-agentisan.otel-*\n| STATS n = COUNT(*)": true,
-		"FROM logs-agentisan.otel-*":                         true,
-		"FROM logs-* | LIMIT 5":                              false,
-		"FROM logs-agentisan.otel-*,.security | LIMIT 1":     false,
-		"FROM logs-agentisan.otel-* , logs-* | LIMIT 1":      false,
-		"FROM logs-agentisan.otel-*\t,.security":             false,
-		"FROM logs-agentisan.otel-* METADATA _index":         false,
-		"FROM logs-agentisan.otel-*|LIMIT 1":                 true,
-		"FROM logs-agentisan.otel-default | LIMIT 1":         false,
-		"ROW a = 1": false,
-		"SHOW INFO": false,
-		"":          false,
+	const (
+		ok     = ""
+		from   = "a trail query starts FROM logs-agentisan.otel-*"
+		second = "LOOKUP and ENRICH appear nowhere"
+	)
+	for q, wantIn := range map[string]string{
+		"FROM logs-agentisan.otel-* | LIMIT 5":               ok,
+		"  from logs-agentisan.otel-*\n| STATS n = COUNT(*)": ok,
+		"FROM logs-agentisan.otel-*":                         ok,
+		"FROM logs-* | LIMIT 5":                              from,
+		"FROM logs-agentisan.otel-*,.security | LIMIT 1":     from,
+		"FROM logs-agentisan.otel-* , logs-* | LIMIT 1":      from,
+		"FROM logs-agentisan.otel-*\t,.security":             from,
+		"FROM logs-agentisan.otel-* METADATA _index":         from,
+		"FROM logs-agentisan.otel-*|LIMIT 1":                 ok,
+		"FROM logs-agentisan.otel-default | LIMIT 1":         from,
+		"ROW a = 1": from,
+		"SHOW INFO": from,
+		"":          from,
 
 		// LOOKUP JOIN and ENRICH read a second index, a comment or not.
-		"FROM logs-agentisan.otel-* | LOOKUP JOIN other ON x":         false,
-		"FROM logs-agentisan.otel-*\n|lookup join other on x":         false,
-		"FROM logs-agentisan.otel-* | ENRICH policy ON x":             false,
-		"FROM logs-agentisan.otel-* | /* c */ LOOKUP JOIN other ON x": false,
-		"FROM logs-agentisan.otel-* |// c\nENRICH p ON x":             false,
+		"FROM logs-agentisan.otel-* | LOOKUP JOIN other ON x":         second,
+		"FROM logs-agentisan.otel-*\n|lookup join other on x":         second,
+		"FROM logs-agentisan.otel-* | ENRICH policy ON x":             second,
+		"FROM logs-agentisan.otel-* | /* c */ LOOKUP JOIN other ON x": second,
+		"FROM logs-agentisan.otel-* |// c\nENRICH p ON x":             second,
 	} {
 		err := trail.CheckQuery(q)
-		if ok {
+		if wantIn == ok {
 			require.NoError(t, err, q)
 		} else {
 			require.ErrorIs(t, err, trail.ErrInvalid, q)
+			assert.Contains(t, err.Error(), wantIn, q)
 		}
 	}
 }

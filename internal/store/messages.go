@@ -185,7 +185,9 @@ func binding(ctx context.Context, tx *sql.Tx, a Address) (string, sql.NullInt64,
 
 // claimNext is one statement, so it is atomic: the oldest queued message to
 // a recipient with none dispatching, and, for a worker, only while the
-// binding it was sent to is live and no handoff holds its inbox.
+// binding it was sent to is live, neither lost (no pane is proven to type
+// into, A35) nor starting (no agent is ready yet), and no handoff holds its
+// inbox.
 const claimNext = `UPDATE messages SET state = 'dispatching', attempts = attempts + 1, updated_at = max(?3, created_at)
 WHERE seq = (
 	SELECT m.seq FROM messages AS m
@@ -194,6 +196,7 @@ WHERE seq = (
 		AND (?1 <> 'worker' OR EXISTS (
 			SELECT 1 FROM workers AS w
 			WHERE w.logical_id = ?2 AND w.retired_at IS NULL AND w.generation = m.generation
+				AND w.status NOT IN ('lost', 'starting')
 				AND NOT EXISTS (SELECT 1 FROM handoffs AS h WHERE h.logical_id = ?2 AND h.state = 'pending')))
 	ORDER BY m.seq LIMIT 1)
 RETURNING ` + messageColumns
@@ -202,9 +205,8 @@ RETURNING ` + messageColumns
 // to dispatching and counts the attempt. It reports false when there is
 // none to take now: the recipient has a message in flight already (one at a
 // time, in the order queued), or, for a worker, the binding the message was
-// sent to has ended (ReturnToBoss takes those) or a pending handoff holds
-// the inbox (I3). A worker still starting is not held here: the dispatcher
-// waits for it once the workforce statuses (NERD-5254) are on main.
+// sent to has ended (ReturnToBoss takes those), is lost or still starting,
+// or a pending handoff holds the inbox (I3).
 func (s *Store) Claim(ctx context.Context, to Address, at time.Time) (Message, bool, error) {
 	if err := checkAddress(to, true); err != nil {
 		return Message{}, false, err
@@ -373,12 +375,13 @@ func fail(ctx context.Context, tx *sql.Tx, id, reason string, at time.Time, ns i
 	return nil
 }
 
-// ReturnToBoss gives boss the messages still queued for worker whose binding
-// has ended: its row is retired, or the id was reused at a later generation
-// (D11: undelivered messages return to the boss). They keep their ids and
-// order, and record the worker in ReturnedFrom. Messages sent to a live
-// binding, and any in flight, stay.
-func (s *Store) ReturnToBoss(ctx context.Context, worker string, boss Address, at time.Time) (int64, error) {
+// ReturnToBoss gives boss the messages still queued for worker in project
+// whose binding has ended: its row is retired, or the id was reused at a
+// later generation (D11: undelivered messages return to the boss). They keep
+// their ids and order, and record the worker in ReturnedFrom. Messages sent
+// to a live binding, any in flight, and those of another project, which go
+// to that project's boss, stay.
+func (s *Store) ReturnToBoss(ctx context.Context, worker, project string, boss Address, at time.Time) (int64, error) {
 	if boss.Kind != KindBoss {
 		return 0, fmt.Errorf("%w: messages return to a boss, not a %s", ErrInvalid, boss.Kind)
 	}
@@ -391,9 +394,9 @@ func (s *Store) ReturnToBoss(ctx context.Context, worker string, boss Address, a
 	}
 	res, err := s.db.ExecContext(ctx, `UPDATE messages
 SET recipient_kind = 'boss', recipient = ?2, generation = NULL, returned_from = ?1, updated_at = max(?3, created_at)
-WHERE recipient_kind = 'worker' AND recipient = ?1 AND state = 'queued'
+WHERE recipient_kind = 'worker' AND recipient = ?1 AND project = ?4 AND state = 'queued'
 	AND NOT EXISTS (SELECT 1 FROM workers AS w WHERE w.logical_id = ?1 AND w.retired_at IS NULL AND w.generation = messages.generation)`,
-		worker, boss.ID, ns)
+		worker, boss.ID, ns, project)
 	if err != nil {
 		return 0, fmt.Errorf("%w: return %s's messages: %w", ErrStore, worker, err)
 	}
@@ -402,6 +405,63 @@ WHERE recipient_kind = 'worker' AND recipient = ?1 AND state = 'queued'
 		return 0, fmt.Errorf("%w: return %s's messages: %w", ErrStore, worker, err)
 	}
 	return n, nil
+}
+
+// QueuedRecipients lists every address with a message still queued, once
+// each, the one whose oldest queued message is oldest first: the order a
+// dispatcher serves them in.
+func (s *Store) QueuedRecipients(ctx context.Context) ([]Address, error) {
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT recipient_kind, recipient FROM messages WHERE state = 'queued' GROUP BY recipient_kind, recipient ORDER BY min(seq)")
+	if err != nil {
+		return nil, fmt.Errorf("%w: queued recipients: %w", ErrStore, err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only; rows.Err reports what matters
+	var out []Address
+	for rows.Next() {
+		var a Address
+		if err := rows.Scan(&a.Kind, &a.ID); err != nil {
+			return nil, fmt.Errorf("%w: queued recipients: %w", ErrStore, err)
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: queued recipients: %w", ErrStore, err)
+	}
+	return out, nil
+}
+
+// EndedQueue is a worker with messages queued to a binding that has ended,
+// and the project they belong to: whose boss ReturnToBoss gives them to.
+type EndedQueue struct {
+	Worker  string
+	Project string
+}
+
+// EndedQueues lists the workers whose queued messages ReturnToBoss would
+// take: sent to a binding that is retired, or that a later generation
+// replaced. A lost binding has not ended, so its queue stays held.
+func (s *Store) EndedQueues(ctx context.Context) ([]EndedQueue, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT m.recipient, m.project FROM messages AS m
+WHERE m.recipient_kind = 'worker' AND m.state = 'queued'
+	AND NOT EXISTS (SELECT 1 FROM workers AS w WHERE w.logical_id = m.recipient AND w.retired_at IS NULL AND w.generation = m.generation)
+ORDER BY m.recipient, m.project`)
+	if err != nil {
+		return nil, fmt.Errorf("%w: ended queues: %w", ErrStore, err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only; rows.Err reports what matters
+	var out []EndedQueue
+	for rows.Next() {
+		var q EndedQueue
+		if err := rows.Scan(&q.Worker, &q.Project); err != nil {
+			return nil, fmt.Errorf("%w: ended queues: %w", ErrStore, err)
+		}
+		out = append(out, q)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: ended queues: %w", ErrStore, err)
+	}
+	return out, nil
 }
 
 // selectMessage spells messageColumns out: TestSendQueuesForTheBinding

@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
@@ -97,10 +98,32 @@ func WithGitHubTicks(g GitHubOptions, ticks <-chan time.Time) GitHubOptions {
 	return g
 }
 
+// WithStoreClose returns o with closeStore standing in for closing the state
+// database when Run exits.
+func WithStoreClose(o Options, closeStore func(*store.Store) error) Options {
+	o.closeStore = closeStore
+	return o
+}
+
 // WithProcLocks returns t with procLocks standing in for /proc/locks when
 // the team poll counts the test slots.
 func WithProcLocks(t TeamOptions, procLocks string) TeamOptions {
 	t.procLocks = procLocks
+	return t
+}
+
+// SlotsOfOnePoll counts the test slots as one team poll does, for locks,
+// with procLocks and proc standing in for /proc/locks and /proc: it reads
+// the lock list once, and gives each project's slots from that reading.
+func SlotsOfOnePoll(procLocks, proc string, locks settings.TestLocks) func(project string) *snapshot.Slots {
+	c := &slotCounter{locks: locks, procLocks: procLocks, proc: proc, failingFor: map[string]string{}}
+	return Options{Logger: zerolog.Nop()}.countSlots(c)
+}
+
+// WithProc returns t with proc standing in for /proc when the team poll
+// tells a hold from its holder.
+func WithProc(t TeamOptions, proc string) TeamOptions {
+	t.proc = proc
 	return t
 }
 
@@ -166,4 +189,35 @@ var CallWith = callWith
 // herdr server ident names.
 func WorkforceOf(o Options, ident Identity) *workforce.Service {
 	return o.newWorkforce(nil, ident, &team.IdleClock{})
+}
+
+// ViewSync is the agent view's state between the goroutines that feed it and
+// syncView (A28 addendum, A49), for tests of its bookkeeping.
+type ViewSync struct{ v *viewSync }
+
+// NewViewSync is a fresh view state: no focus, no model, nothing sent.
+func NewViewSync() ViewSync { return ViewSync{v: newViewSync()} }
+
+// Focus is a focus event the collector reads.
+func (s ViewSync) Focus(workspace string) { s.v.focus(workspace) }
+
+// Resynced is the collector reading focus afresh.
+func (s ViewSync) Resynced(workspace string) { s.v.resynced(workspace) }
+
+// Seen is what a poll reads before it lists the panes.
+func (s ViewSync) Seen() uint64 { return s.v.focusSeen() }
+
+// Polled is a poll's model and the workspace its list had focused, read
+// after seen.
+func (s ViewSync) Polled(m team.Model, workspace string, seen uint64) { s.v.polled(m, workspace, seen) }
+
+// Forget is a call that failed.
+func (s ViewSync) Forget() { s.v.forget() }
+
+// Next is syncView's decision: whether a view is due, whether it is a
+// clear, and the function that records it sent, as a call that succeeds
+// does.
+func (s ViewSync) Next() (clear bool, sent func(), ok bool) {
+	want, forgets, ok := s.v.next()
+	return want.clear, func() { s.v.sentAt(want, forgets) }, ok
 }

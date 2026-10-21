@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -149,6 +150,50 @@ func TestClaudeHookSnippetRunsReportTurn(t *testing.T) {
 	blocks := regexp.MustCompile("(?s)```json\n(.*?)```").FindAllStringSubmatch(string(readme), -1)
 	require.Len(t, blocks, 1, "README shows the Claude hooks")
 	assert.Equal(t, string(sample), blocks[0][1], "README and the sample show the same hooks")
+}
+
+// TestCodexTurnHookSnippetRunsReportTurn keeps the documented Codex turn
+// hooks runnable and apart from A43's: Stop and UserPromptSubmit each run the
+// real `report turn`, asynchronously, under a timeout, in a group of its own,
+// so `codex hooks` never finds one beside `report codex`; and README links
+// the sample.
+func TestCodexTurnHookSnippetRunsReportTurn(t *testing.T) {
+	t.Parallel()
+	sample, err := os.ReadFile(filepath.Join("..", "..", "docs", "config", "codex-turn-hooks.example.toml"))
+	require.NoError(t, err)
+
+	type handler struct {
+		Type    string `toml:"type"`
+		Command string `toml:"command"`
+		Timeout int    `toml:"timeout"`
+		Async   bool   `toml:"async"`
+	}
+	type group struct {
+		Matcher *string   `toml:"matcher"`
+		Hooks   []handler `toml:"hooks"`
+	}
+	var cfg struct {
+		Hooks map[string][]group `toml:"hooks"`
+	}
+	dec := toml.NewDecoder(bytes.NewReader(sample))
+	dec.DisallowUnknownFields()
+	require.NoError(t, dec.Decode(&cfg))
+
+	require.Len(t, cfg.Hooks, 2, "Stop and UserPromptSubmit, and no ctx hook")
+	for _, event := range []string{"Stop", "UserPromptSubmit"} {
+		groups := cfg.Hooks[event]
+		require.Len(t, groups, 1, event)
+		assert.Nil(t, groups[0].Matcher, event)
+		require.Len(t, groups[0].Hooks, 1, "%s: a group of its own, never beside report codex", event)
+		h := groups[0].Hooks[0]
+		assert.Equal(t, handler{Type: "command", Command: "herdr-agentisan report turn", Timeout: h.Timeout, Async: true}, h,
+			"%s: async, so a Stop hook's stray stdout never fails it", event)
+		assert.Positive(t, h.Timeout, event)
+	}
+
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	require.NoError(t, err)
+	assert.Contains(t, string(readme), "(docs/config/codex-turn-hooks.example.toml)")
 }
 
 // TestReportTurnTakesCodexsPayload: Codex's Stop, with its null final

@@ -175,7 +175,7 @@ type Model struct {
 	btopErr       error
 	// noTeam is set while the source says there is no team here
 	// (ErrNoTeamHere): no board is drawn then, not the last one.
-	noTeam bool
+	noTeam error
 	// sourceNote is the source's own footer note, such as herdr not
 	// answering where the dashboard runs.
 	sourceNote string
@@ -255,7 +255,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if errors.Is(msg.err, ErrNoTeamHere) {
 				// Not this place's team: draw none, never the last one,
 				// and no view of one of its groups.
-				m.noTeam = true
+				m.noTeam = msg.err
 				m.group = ""
 				m.show(nil)
 				m.settle()
@@ -263,7 +263,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.tick()
 		}
 		s := msg.snap
-		m.sourceErr, m.noTeam = nil, false
+		m.sourceErr, m.noTeam = nil, nil
 		m.show(&s)
 		m.refollow()
 		m.settle()

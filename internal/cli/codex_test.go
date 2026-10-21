@@ -116,9 +116,8 @@ func TestReportCodexDoesNothing(t *testing.T) {
 }
 
 // TestCodexHookSnippetRunsReportCodex keeps the documented Codex hooks
-// (sample and README) runnable: all three ctx events run the real `report
-// codex` command, and both turn edges the real `report turn` (A42), each
-// asynchronously, under a timeout.
+// (sample and README) runnable: all three events run the real `report codex`
+// command, asynchronously, under a timeout.
 func TestCodexHookSnippetRunsReportCodex(t *testing.T) {
 	t.Parallel()
 	sample, err := os.ReadFile(filepath.Join("..", "..", "docs", "config", "codex-hooks.example.toml"))
@@ -136,10 +135,9 @@ func TestCodexHookSnippetRunsReportCodex(t *testing.T) {
 	}
 	var cfg struct {
 		Hooks struct {
-			PostToolUse      []group `toml:"PostToolUse"`
-			Stop             []group `toml:"Stop"`
-			PostCompact      []group `toml:"PostCompact"`
-			UserPromptSubmit []group `toml:"UserPromptSubmit"`
+			PostToolUse []group `toml:"PostToolUse"`
+			Stop        []group `toml:"Stop"`
+			PostCompact []group `toml:"PostCompact"`
 		} `toml:"hooks"`
 	}
 	dec := toml.NewDecoder(bytes.NewReader(sample))
@@ -149,30 +147,19 @@ func TestCodexHookSnippetRunsReportCodex(t *testing.T) {
 	require.Len(t, cfg.Hooks.PostToolUse, 1)
 	require.NotNil(t, cfg.Hooks.PostToolUse[0].Matcher)
 	assert.Equal(t, "*", *cfg.Hooks.PostToolUse[0].Matcher, "every tool, not just the shell")
-	const ctx, turn = "herdr-agentisan report codex", "herdr-agentisan report turn"
-	for event, tc := range map[string]struct {
-		groups   []group
-		commands []string
-	}{
-		"PostToolUse": {cfg.Hooks.PostToolUse, []string{ctx}}, "Stop": {cfg.Hooks.Stop, []string{ctx, turn}},
-		"PostCompact": {cfg.Hooks.PostCompact, []string{ctx}}, "UserPromptSubmit": {cfg.Hooks.UserPromptSubmit, []string{turn}},
-	} {
-		require.Len(t, tc.groups, 1, event)
-		g := tc.groups[0].Hooks
-		require.Len(t, g, len(tc.commands), event)
-		for i, h := range g {
-			assert.Equal(t, "command", h.Type, event)
-			assert.Equal(t, tc.commands[i], h.Command, event)
-			assert.True(t, h.Async, "%s: a Stop hook that is not async fails on any stray stdout", event)
-			assert.Positive(t, h.Timeout, event)
-		}
+	for event, groups := range map[string][]group{"PostToolUse": cfg.Hooks.PostToolUse, "Stop": cfg.Hooks.Stop, "PostCompact": cfg.Hooks.PostCompact} {
+		require.Len(t, groups, 1, event)
+		g := groups[0].Hooks
+		require.Len(t, g, 1, event)
+		assert.Equal(t, "command", g[0].Type, event)
+		assert.Equal(t, "herdr-agentisan report codex", g[0].Command, event)
+		assert.True(t, g[0].Async, "%s: a Stop hook that is not async fails on any stray stdout", event)
+		assert.Positive(t, g[0].Timeout, event)
 	}
 
-	for _, name := range []string{"codex", "turn"} {
-		sub, _, err := cli.Root().Find([]string{"report", name})
-		require.NoError(t, err)
-		assert.Equal(t, name, sub.Name())
-	}
+	sub, _, err := cli.Root().Find([]string{"report", "codex"})
+	require.NoError(t, err)
+	assert.Equal(t, "codex", sub.Name())
 
 	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
 	require.NoError(t, err)

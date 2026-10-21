@@ -26,6 +26,18 @@ task plugin:unlink
 `herdr plugin link` never builds, which is why `task plugin:link` does. The
 binary also runs by hand: `task run:cli -- version --json`.
 
+herdr's startup hook runs `daemon start`, and the `daemon-restart` action
+`daemon restart`. Each waits for the daemon to answer health, for up to 13 s,
+and then says one of three things (ADR-001 A48):
+
+- `daemon running (pid N)`;
+- `daemon starting (pid N) but not answering health yet`, exit 0, since it
+  may still come up;
+- an error, exit non-zero, when the daemon exited before it answered.
+
+`herdr plugin log list --plugin nerdsrun.agentisan` shows which, and the
+`daemon.log` the message names says why.
+
 Requires Go 1.26.10+ and [Task](https://taskfile.dev). Linters and scanners are
 pinned in `go.mod` under the `tool` directive — nothing to install globally.
 
@@ -48,11 +60,22 @@ statusline has no context percentage yet, it reports nothing. Set
 ## Report `$ctx` from Codex
 
 Each Codex agent pushes the same `ctx` token through three Codex hooks, with
-the number Codex itself shows as "Context N% used". Add them to
-`~/.codex/config.toml`, or to a trusted project's `.codex/config.toml`
-([sample](docs/config/codex-hooks.example.toml)), and trust them once when
-Codex asks. The `report turn` hooks among them push `$item` and `$stage`
-([below](#report-item-and-stage-from-every-turn)):
+the number Codex itself shows as "Context N% used". Install them once:
+
+```bash
+herdr-agentisan codex hooks
+```
+
+It adds them to Codex's hooks file, `~/.codex/hooks.json`
+(`$CODEX_HOME/hooks.json`), after any hooks already there, and writes nothing
+else. Then trust them once: start `codex --no-daemon` and choose "Trust all
+and continue", or trust them in `/hooks`. Codex runs a hook only once you
+trust it, and asks again when one changes. Codex also trusts each folder by
+its exact path, so it asks once in every repo a Codex worker runs in.
+`herdr-agentisan codex hooks --check` says where each hook is, and exits 1
+unless all three are installed. To keep them in `config.toml` instead, paste
+them at its end ([sample](docs/config/codex-hooks.example.toml)); the command
+then refuses to add a second copy:
 
 ```toml
 [[hooks.PostToolUse]]
@@ -72,25 +95,11 @@ command = "herdr-agentisan report codex"
 timeout = 10
 async = true
 
-[[hooks.Stop.hooks]]
-type = "command"
-command = "herdr-agentisan report turn"
-timeout = 10
-async = true
-
 [[hooks.PostCompact]]
 
 [[hooks.PostCompact.hooks]]
 type = "command"
 command = "herdr-agentisan report codex"
-timeout = 10
-async = true
-
-[[hooks.UserPromptSubmit]]
-
-[[hooks.UserPromptSubmit.hooks]]
-type = "command"
-command = "herdr-agentisan report turn"
 timeout = 10
 async = true
 ```
@@ -99,7 +108,8 @@ Start Codex with `codex --no-daemon`. By default Codex runs its sessions in a
 shared background server whose hooks carry the environment of whichever pane
 started it, so the report cannot tell which pane it belongs to and reports
 nothing. Like `report statusline`, it prints nothing and always exits 0.
-`HERDR_AGENTISAN_LOG_LEVEL=debug` logs why nothing was reported.
+`HERDR_AGENTISAN_LOG_LEVEL=debug` logs why nothing was reported. Codex runs
+its hooks outside its sandbox, so `ctx` works whatever the sandbox.
 
 Codex's context changes only in a turn or a compaction, and those are when
 its hooks run, so the token lasts 24 h, set again by every report: an idle
@@ -131,6 +141,16 @@ the pane's own Codex started as `codex --no-daemon --sandbox danger-full-access`
 Under the shared app-server daemon, with Codex's default sandbox (even for an
 approved escalation), or on an OS other than Linux and macOS, it reports
 nothing (ADR-001 A25, A26).
+
+Codex workers run under your own Codex sandbox setting, so by default their
+`report stage` commands report nothing: they show `ctx`, and an item or a
+stage only from the [turn hooks](#report-item-and-stage-from-every-turn),
+which run outside the sandbox. To have a group's Codex workers report each
+step too, add `--sandbox danger-full-access` to the agent command they
+launch with.
+That runs their commands with no sandbox and no reviewer, since Codex's
+automatic review sees only escalations, which that mode never makes: a weaker
+guard than Claude's auto mode (ADR-001 A43).
 
 ## Report `$item` and `$stage` from every turn
 
@@ -190,9 +210,13 @@ For Claude, add the hooks to `.claude/settings.json` or
 }
 ```
 
-For Codex they are in the [Codex sample](docs/config/codex-hooks.example.toml)
-above, and need `codex --no-daemon` as `report codex` does: a hook the shared
-app-server ran reports nothing. Codex runs hooks outside its sandbox, so they
+For Codex, paste the
+[Codex turn hooks](docs/config/codex-turn-hooks.example.toml) at the end of
+`~/.codex/config.toml`, or of a trusted project's `.codex/config.toml`, and
+trust them once. `herdr-agentisan codex hooks` installs only the `ctx` hooks
+above. Each turn hook is a group of its own, so that command never finds one
+beside `report codex`. They need `codex --no-daemon`, as `report codex`
+does: a hook the shared app-server ran reports nothing. Codex runs hooks outside its sandbox, so they
 work under the default one, unlike `report stage` from a tool command. Both
 print nothing and always exit 0; `HERDR_AGENTISAN_LOG_LEVEL=debug` logs why
 nothing was reported. ADR-001 A42 has the details.
@@ -279,14 +303,17 @@ the last write wins; after, the daemon's next push, within 3 s, replaces the
 value v12 left on each group space. The daemon never writes `◆ herdr`, so
 v12's last value there clears itself when its 30 s TTL runs out.
 
-## The trail, read back
+## The debugger
 
-`herdr-agentisan events worker <id>` answers "what happened to worker X in
-the last hour" from the workflow events in Elasticsearch, and `events query
-'<ES|QL>'` runs any read of them. They are the debugger agent's tools
-(ADR-001 item 12). They take Elasticsearch's URL and read key from the env
-file `[debugger] env_file` names, at each query, so the key never enters an
-agent's environment. See [`docs/debugger.md`](docs/debugger.md).
+A read-only Claude agent that answers "what happened to worker X in the last
+hour" from the workflow events (ADR-001 item 12, A32). Its role ships here,
+in `roles/debugger.md`. `herdr-agentisan events worker <id>` and `events
+query '<ES|QL>'` read the events in Elasticsearch. They take its URL and read
+key from the env file `[debugger] env_file` names, at each query, so the key
+never enters an agent's environment. `herdr-agentisan debugger args` prints
+the claude command that starts it read-only, its reads fenced to the repo
+and the daemon's directory; `worker spawn --group debugger`
+will launch it. See [`docs/debugger.md`](docs/debugger.md).
 
 ## Teams: one workspace, one tab per worker
 
@@ -318,6 +345,14 @@ the daemon does, and a team added to the configuration since gets them
 after a `daemon-restart`. A worker whose row no pane is bound to, such as one
 lost after a herdr live handoff, is listed under `unbound` (ADR-001 A35).
 Just after the daemon starts, the command waits for its first poll.
+
+Each command resolves the project's profile with its repo's committed
+`.herdr-agentisan.toml`. So that file sets only `color`, `github`, a
+group's `workers` and `slots`, models and `rotation.thresholds` (ADR-001
+A46). Agent commands, `[spawn]`, `verify`, `[integrations]` and every other
+key belong in `herdr-agentisan.toml` or `--set`. A repo file that sets one
+is refused, and names the key. A model, from any layer, is a letter or
+digit, then letters, digits and `. _ - : / @ [ ]`, such as `opus[1m]`.
 ## The dashboard
 
 `herdr-agentisan dashboard` draws a team from the daemon (ADR-001 D5,
@@ -413,9 +448,12 @@ action after changing them.
 The header shows `slots used/total` for the lock files `[tests] locks`
 names in the shared `herdr-agentisan.toml` (ADR-001 A31): a slot is in use
 while some process holds a lock on its file, as `/proc/locks` lists them,
-counted every poll. Give absolute paths on tmpfs or ext4; agentisan's gate
-keeps one per slot in `$XDG_RUNTIME_DIR/agentisan/gate.<n>.lock`. Without
-`[tests]`, or off Linux, no slots are shown. The boss's `up 2h14m` counts
+counted every poll. A project's own `[projects.<p>.tests] locks` replaces
+the shared list for its team (A40). Give absolute paths on tmpfs or ext4;
+agentisan's gate keeps one per slot in
+`$XDG_RUNTIME_DIR/agentisan/gate.<n>.lock`. A slot a boss holds with
+`flock <lock> sleep …` shows as held, not used: `slots 1/2 (1 held)`.
+Without a list, or off Linux, no slots are shown. The boss's `up 2h14m` counts
 from when this daemon first saw the boss's pane, so a handoff or a daemon
 restart starts it again.
 

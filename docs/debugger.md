@@ -1,12 +1,20 @@
-# The debugger's trail
+# The debugger
 
 The debugger is a Claude agent that answers questions about the team's
-workflow from evidence (ADR-001 item 12). Its first tools ship here:
-`herdr-agentisan events` reads the workflow event trail
-([`telemetry.md`](telemetry.md)) back out of Elasticsearch. The debugger's
-role and its read-only launch follow, and `worker spawn --group debugger`
-will start it (item 4). The commands work for anyone with the env file below:
-a person, the boss, or the debugger.
+workflow from evidence (ADR-001 item 12, A32). It ships with the plugin:
+
+- its role is [`roles/debugger.md`](../roles/debugger.md);
+- `herdr-agentisan events` reads the workflow event trail
+  ([`telemetry.md`](telemetry.md)) back out of Elasticsearch;
+- `internal/debugger` builds its read-only launch, and `worker spawn --group
+  debugger` will start it (item 4).
+
+It reads the trail, the daemon's log, the project's repo and Linear. Its
+tools write nothing, and its reads are fenced to the repo and the daemon's
+directory. What still reaches past that, the Linear tools' free-text
+arguments, the repo's hooks, mods and managed policy, is listed under
+"Launching it". The `events` commands work for anyone with the env file
+below: a person, the boss, or the debugger.
 
 ## `herdr-agentisan events`
 
@@ -55,3 +63,112 @@ env_file = "~/.config/nerdsrun/local.env"
 From a shell outside herdr, export the config dir first:
 `HERDR_PLUGIN_CONFIG_DIR=<herdr's plugin config dir> herdr-agentisan events
 worker <id>`.
+
+## Launching it
+
+`worker spawn --group debugger` launches it in the project's repo (part 2,
+after item 4). Until then, `herdr-agentisan debugger args` prints the same
+launch for a start by hand:
+
+```
+herdr-agentisan debugger args --repo ~/src/project --server-dir <the daemon's srv-… dir> [--config-dir <dir>] [--json]
+```
+
+That prints one shell line, `cd <repo> && HERDR_PLUGIN_CONFIG_DIR=… claude …`,
+which you can run from anywhere: it starts claude in the repo, because the
+directory claude starts in is one its read fence admits. `--json` prints the
+same as `dir`, `env` and `argv`. The parts of the launch:
+
+- **The role,** appended from the plugin checkout with
+  `--append-system-prompt-file <root>/roles/debugger.md`. `--root` defaults to
+  `$HERDR_PLUGIN_ROOT`, then to the checkout the binary was built in.
+- **The session's facts,** in a second prompt: the plugin binary's path,
+  the repo, and `daemon.log` when `--server-dir` names the daemon's directory
+  (`$HERDR_PLUGIN_STATE_DIR/srv-<id>`).
+- **`--permission-mode dontAsk`,** which denies, with no prompt, every call
+  that would ask. Claude Code's built-in read-only commands, such as `ls`,
+  `cat`, `head`, `tail`, `grep`, `find` and read-only `git`, need no rule and
+  run inside the read fence below. The allow rules are:
+  - reading the repo and the daemon's directory;
+  - running `<bin> events`;
+  - Linear's read tools (an issue, issues, an issue's comments).
+
+  The `events` rule matches no command behind an environment assignment,
+  such as `HERDR_PLUGIN_CONFIG_DIR=… <bin> events …`, or behind `env`: an
+  allow rule matches past an assignment only of the variables Claude Code
+  counts as safe, so the debugger cannot point `events` at another env file.
+- **Denied outright:** reading the repo's `.env*` files and the env file
+  (by its name, and its target when it is a link), Edit, Write, NotebookEdit,
+  WebFetch and WebSearch. A redirect such as `> file` is checked as an Edit,
+  so it is denied too. The launch refuses a repo or daemon directory that
+  holds the env file, such as your home directory, and needs `env_file` set.
+- **Denied by name, Claude Code's own tools that act without asking:**
+  `Agent`, `Workflow`, `Monitor`, `TaskStop`, `EnterPlanMode`, the `Cron` tools,
+  `ScheduleWakeup`, `RemoteTrigger`, `SendMessage`, `ListAgents`,
+  `PushNotification`, `SendUserFile`, `SendFeedback`, the `Artifact` tools,
+  `DesignSync`, `EnterWorktree`, `ExitWorktree`, and the MCP resource tools
+  `ListMcpResourcesTool`, `ReadMcpResourceTool` and `ReadMcpResourceDirTool`.
+  Most need no permission, so `dontAsk` never stops them: a live check found
+  `CronList` running before they were denied. A deny rule naming a tool
+  removes it from the session. A tool a later Claude Code adds runs until it
+  is listed here, unless it asks.
+- **The project's MCP servers, rejected by name:** the launch reads the
+  `.mcp.json` in the repo and in each directory above it, as Claude Code
+  does, and names every server in them in `--settings`'
+  `disabledMcpjsonServers`. So none loads, and the session starts without
+  asking you to approve them. A `.mcp.json` it cannot read or parse refuses
+  the launch, and a server added after the launch was printed would ask.
+  It does not pass `--strict-mcp-config`: that keeps claude.ai's
+  connectors out too, and the debugger reads Linear through one. Your own
+  MCP servers stay out as well, since Claude Code loads them only with your
+  user and local settings. Your other claude.ai connectors still load, and
+  a plugin's servers may; their tools are offered, and `dontAsk` refuses
+  each one without an allow rule.
+- **The read fence:** `{"permissions":{"blockReadsOutsideWorkingDirectories":true}}`
+  in `--settings`, and `--add-dir <the daemon's directory>`. Without it, Claude Code's built-in
+  read-only commands, such as `cat` and `grep`, would read any file you can,
+  with no allow rule. With it, the file tools refuse a read outside the
+  working directories (the repo and the daemon's directory), except the
+  files Claude Code itself needs under `~/.claude/`, such as its skills and
+  `CLAUDE.md`, and a file-reading command outside them asks, which `dontAsk`
+  denies. It needs Claude Code 2.1.257 or later, and a live check on 2.1.306
+  saw a `cat` outside it refused. On Linux and macOS there is no Grep or
+  Glob tool: Claude Code leaves both out of its default set, so the
+  debugger searches with `grep` and `find` in the shell, as read-only
+  commands inside the fence. Inside the fence, a command that reads without
+  naming a file, such as `grep -r` run from a directory, is not checked
+  against the deny rules: `grep -r` in the repo reads its `.env*` files. So
+  the env file must stay outside both directories, which the launch
+  enforces.
+- **`--setting-sources project`:** of the settings files, only the repo's
+  `.claude/settings.json` loads, as it stands in the working tree, whatever
+  git tracks, so the "don't ask again" rules that pile up in
+  `.claude/settings.local.json` and your own `~/.claude/settings.json` never
+  widen it. Your statusline and hooks do not run in it either, so its pane
+  shows no `ctx`.
+- **The environment:** `HERDR_PLUGIN_CONFIG_DIR`, so `events` finds the env
+  file. There is no URL and no key in it.
+
+It is still Claude in the project's repo, so D12 holds and the repo's
+Agentisan bundle loads, but not its MCP servers. With no allow rule its skills cannot run, which is
+intended.
+
+What still reaches past the allow list and the fence:
+
+- **The Linear tools' free-text arguments.** These are `get_issue`'s id,
+  `list_issues`' query and `list_comments`' issue id. Anything the debugger
+  has read (the trail, the repo, `daemon.log`) can leave the machine in one,
+  so a prompt injection in any of those can send to Linear what the fence
+  admits. The role tells it to pass only ids and your own words.
+- **The repo's hooks.** Its `.claude/settings.json` hooks run in every
+  debugger session. In this repo git tracks `{}`, while the working tree
+  holds the Agentisan bundle's hooks; their SessionStart hook rewrites
+  `.claude/hooks/.handoff-dirty` and `.handoff-attempts` at each start.
+- **Mods.** A mod you installed can always approve a call that only
+  `dontAsk` would deny. Without managed settings, and without a Team or
+  Enterprise login as the session's credential, it can also approve a call
+  a deny rule refuses or the fence would ask for: it can lift every rule
+  here, the env file's deny included. The launch does not choose which mods
+  load.
+- **Managed policy and that file's allow rules.** An allow rule in either
+  widens the debugger too, so check the file, not only what git tracks.
