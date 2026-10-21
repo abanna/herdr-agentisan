@@ -215,10 +215,10 @@ func TestEventsRefuseBeforeReadingTheEnvFile(t *testing.T) {
 	t.Parallel()
 	ctx := envCtx(t, map[string]string{}) // no config dir: reading it would be the error
 	_, err := runIn(ctx, "events", "query", "FROM logs-* | LIMIT 1")
-	require.Error(t, err)
+	require.ErrorIs(t, err, trail.ErrInvalid, "the query's refusal, not the missing config dir's")
 	assert.Contains(t, err.Error(), "starts FROM")
 	_, err = runIn(ctx, "events", "worker", "w1:p1", "--since", "30s")
-	require.Error(t, err)
+	require.ErrorIs(t, err, trail.ErrInvalid, "the window's refusal, not the missing config dir's")
 	assert.Contains(t, err.Error(), "--since")
 }
 
