@@ -87,6 +87,9 @@ func (e *APIError) Is(target error) bool {
 	if target == ErrEventsLost {
 		return e.Code == codeEventsLost
 	}
+	if s, ok := workforceCodes[e.Code]; ok {
+		return target == s
+	}
 	return false
 }
 
@@ -380,6 +383,9 @@ func (c Client) ListPanes(ctx context.Context) ([]PaneInfo, error) {
 type Process struct {
 	PID  uint32 `json:"pid"`
 	Name string `json:"name"`
+	// Argv is the process's arguments as herdr read them; nil when it could
+	// not. They can hold a system prompt: never log them.
+	Argv []string `json:"argv"`
 }
 
 // ProcessInfo is the result of pane.process_info, limited to the processes

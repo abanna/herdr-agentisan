@@ -1,0 +1,31 @@
+# Codex hooks that report the item and stage each Codex turn states, as the
+# `item` and `stage` tokens (`report turn`, ADR-001 A42). Paste them at the end
+# of ~/.codex/config.toml, or of a trusted project's .codex/config.toml, and
+# trust them once when Codex asks.
+#
+# - `herdr-agentisan codex hooks` installs only the three `ctx` hooks of
+#   codex-hooks.example.toml (A43). Each hook here is a group of its own, so
+#   that command never finds one beside `report codex`.
+# - Start Codex with `codex --no-daemon`. A hook run by the shared app-server
+#   daemon carries the daemon's environment, not the pane's, so it reports
+#   nothing.
+# - `report turn` reports only what a turn states: an `item: <id>` line in the
+#   prompt or in the final message's closing paragraph, and a final
+#   `BOSS: <status>` or `STATUS: <status>` line. Tell your agents to write
+#   them (README, "Report `$item` and `$stage` from every turn").
+
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "herdr-agentisan report turn"
+timeout = 10
+async = true
+
+[[hooks.UserPromptSubmit]]
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "herdr-agentisan report turn"
+timeout = 10
+async = true

@@ -21,6 +21,7 @@ const (
 	kindInts
 	kindArgvs
 	kindSecret
+	kindBool
 )
 
 // node describes one key path of the profile. Tables and name maps are the
@@ -144,6 +145,8 @@ func (s *source) normalize(n *node, raw any, path string) (any, error) {
 		return listOf(s, raw, path, "a list of strings", asString)
 	case kindInts:
 		return listOf(s, raw, path, "a list of integers", asInt)
+	case kindBool:
+		return scalarOf(s, raw, path, "a boolean", asBool)
 	default: // kindArgvs
 		return listOf(s, raw, path, "a list of argv lists", asStrings)
 	}
@@ -279,6 +282,11 @@ func asInt(v any) (int, bool) {
 		return 0, false
 	}
 	return int(i), true
+}
+
+func asBool(v any) (bool, bool) {
+	b, ok := v.(bool)
+	return b, ok
 }
 
 func asStrings(v any) ([]string, bool) {

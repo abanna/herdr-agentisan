@@ -142,12 +142,84 @@ Under the shared app-server daemon, with Codex's default sandbox (even for an
 approved escalation), or on an OS other than Linux and macOS, it reports
 nothing (ADR-001 A25, A26).
 
-Codex workers run under your own Codex sandbox setting, so by default they
-show `ctx` but no item or stage. To have a group's Codex workers report them,
-add `--sandbox danger-full-access` to the agent command they launch with.
+Codex workers run under your own Codex sandbox setting, so by default their
+`report stage` commands report nothing: they show `ctx`, and an item or a
+stage only from the [turn hooks](#report-item-and-stage-from-every-turn),
+which run outside the sandbox. To have a group's Codex workers report each
+step too, add `--sandbox danger-full-access` to the agent command they
+launch with.
 That runs their commands with no sandbox and no reviewer, since Codex's
 automatic review sees only escalations, which that mode never makes: a weaker
 guard than Claude's auto mode (ADR-001 A43).
+
+## Report `$item` and `$stage` from every turn
+
+Any agent, a boss, QA or research pane included, pushes its own `item` and
+`stage` at the edges of its turns, with no command typed by hand.
+`report turn` runs as an async `UserPromptSubmit` and `Stop` hook, reads
+what the turn's text states, and sets the tokens `report stage` sets:
+
+- **The stage** is the final message's closing `BOSS: <status>` or
+  `STATUS: <status>` line, less its prefix: `BOSS: blocked: 1Password agent`
+  sets `blocked: 1Password agent`. `BOSS:` is the line a worker ends each
+  turn with; `STATUS:` is for a pane with no boss above it.
+- **The item** is an `item: <id>` line: the first one in a prompt, as a
+  dispatch carries it, or the last one in the final message's closing
+  paragraph, beside the status line. A new item stated with no stage clears
+  the old stage.
+
+Markdown bold and code ticks around a line are fine; a value over 80
+characters is cut to 79 and `…`. A turn that states neither reports nothing,
+so a pipeline step's stage stays; so do a subagent's turns, and a Claude turn
+you interrupt, which runs no `Stop` hook. Agents write these lines only when
+told to, so say it in their instructions (`CLAUDE.md`, `AGENTS.md`), for
+example: "End every turn with a last line `BOSS: <what you are doing>`."
+
+For Claude, add the hooks to `.claude/settings.json` or
+`~/.claude/settings.json`
+([sample](docs/config/claude-hooks.example.json)):
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "herdr-agentisan report turn",
+            "timeout": 10,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "herdr-agentisan report turn",
+            "timeout": 10,
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+For Codex, paste the
+[Codex turn hooks](docs/config/codex-turn-hooks.example.toml) at the end of
+`~/.codex/config.toml`, or of a trusted project's `.codex/config.toml`, and
+trust them once. `herdr-agentisan codex hooks` installs only the `ctx` hooks
+above. Each turn hook is a group of its own, so that command never finds one
+beside `report codex`. They need `codex --no-daemon`, as `report codex`
+does: a hook the shared app-server ran reports nothing. Codex runs hooks outside its sandbox, so they
+work under the default one, unlike `report stage` from a tool command. Both
+print nothing and always exit 0; `HERDR_AGENTISAN_LOG_LEVEL=debug` logs why
+nothing was reported. ADR-001 A42 has the details.
 
 ## Search on prefix+/ and in the dashboard
 
@@ -282,6 +354,20 @@ key belong in `herdr-agentisan.toml` or `--set`. A repo file that sets one
 is refused, and names the key. A model, from any layer, is a letter or
 digit, then letters, digits and `. _ - : / @ [ ]`, such as `opus[1m]`.
 
+### Model routing
+
+The user's routing rules, built in byte for byte
+(`internal/routing/rules/jev-routing-v1.json`), choose the model and
+reasoning effort each worker starts with, by its type's role (ADR-001 A50).
+`[routing]` in the shared `herdr-agentisan.toml` holds what they leave to
+the deployment: `enabled` (off by default, and while it is on no
+`agent.model` key may be set), each binding's real `model_id`, efforts and
+`enabled`, and `[routing.overrides]`, the user's standing choice for a role
+and the only way to a premium binding. `config resolve` shows each key with
+its layer, then `routing policy:`, the version a decision records.
+`worker spawn` asks routing from NERD-5289 part 1b on; until then the keys
+resolve and nothing reads them.
+
 ## Messaging
 
 `herdr-agentisan send <to> <body|->` queues a message in the daemon, which
@@ -354,6 +440,16 @@ A description is one line of at most 80 printable characters, and a repo's
 whenever the file changes, so an edit needs no `daemon-restart`; a file that
 does not resolve keeps the last ones, and `daemon.log` says why.
 
+### The model column
+
+Each row shows the model its agent was started with: Claude's `--model`, or
+Codex's `-m` or `--model`, read from the pane's processes through herdr
+(ADR-001 A39). The daemon asks herdr again only when a pane's agent
+restarted or changed, and a pane where it finds no agent process once a
+minute. It is the launch model: a `/model` switch shows once the agent
+restarts, and an agent started without the flag, such as a Codex that takes
+its model from `config.toml`, shows none.
+
 ### A group's view
 
 Press 1-9, or click a group's title, to open that group's view (ADR-001
@@ -393,8 +489,27 @@ Without a list, or off Linux, no slots are shown. The boss's `up 2h14m` counts
 from when this daemon first saw the boss's pane, so a handoff or a daemon
 restart starts it again.
 
-With both in the header, herdr-status.sh, herdr's `tab_bar_right`, can be
-retired.
+## The team's line in herdr's tab bar
+
+`herdr-agentisan status line` prints herdr-status.sh's line for a team,
+`PRs #878⏳ #886✓ · slots 2/2 · issues 14`, from the daemon's snapshot, so it
+never calls gh (ADR-001 A41). A held slot reads as in the dashboard's header,
+`slots 1/2 (1 held)` (A40). Run as herdr's `tab_bar_right` command, it
+follows the focused workspace: the line is that workspace's team's, and
+outside every team the entry hides. `--project <name>` shows one team
+everywhere. What the daemon does not report is left out, and the line fits
+the 80 characters herdr shows, the PRs giving way to a count first. A daemon
+that is down, starting or slower than 1 s is one short line, such as
+`agentisan: daemon down`, never a blank entry.
+
+Put the `[ui]` keys of
+[`docs/config/herdr-tab-bar.example.toml`](docs/config/herdr-tab-bar.example.toml)
+in herdr's config, in place of herdr-status.sh's entry, and reload herdr's
+config. herdr gives a tab-bar command no `HERDR_PLUGIN_STATE_DIR`, so the
+command names the plugin's state directory with `--state-dir`, which the
+shell works out from `XDG_STATE_HOME` or `HOME`, as herdr does. Retire
+herdr-status.sh by hand after a live check; for the agentisan-skills team,
+only once each project counts its own test slots.
 
 ## Gates
 

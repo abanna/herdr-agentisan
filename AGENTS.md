@@ -110,8 +110,11 @@ exempts whatever is later added under that name.
   (A22, hooks sampled in `docs/config/codex-hooks.example.toml`), with a
   24 h TTL (A27), and
   `report stage` pushes `item` and `stage` on each agentisan step
-  transition. They read `HERDR_PANE_ID`, a pane-shell variable, which is why
-  it is not in `plugin.Env`.
+  transition, and `report turn` pushes them from the `item:` and
+  `BOSS:`/`STATUS:` lines of a Claude or Codex turn (A42, hooks sampled in
+  `docs/config/claude-hooks.example.json` and
+  `docs/config/codex-turn-hooks.example.toml`). They read `HERDR_PANE_ID`, a
+  pane-shell variable, which is why it is not in `plugin.Env`.
 - `internal/codexhooks/` — installing those Codex hooks (ADR-001 A43):
   `codex hooks` writes them into `$CODEX_HOME/hooks.json`, after every entry
   already there, which it keeps as written, and never edits `config.toml` or
@@ -128,8 +131,9 @@ exempts whatever is later added under that name.
   own. Every poll it also reconciles `state.db`'s `workers` rows with
   herdr's panes (`bind.go`, A35), rebuilds the team model, pushes `$team`
   and every agent pane's ctx display (`team.go`, A28) and caches every team's
-  snapshot, with the workspaces each holds, which the `snapshot` op serves
-  by project or workspace, so the op never calls herdr (A18, A24,
+  snapshot, each row with its agent's launch model from the pane's processes
+  (`models.go`, A39), with the workspaces each holds, which the `snapshot` op
+  serves by project or workspace, so the op never calls herdr (A18, A24,
   `snapshot.go`, with `SnapshotSource`, the dashboard's client), each group
   with its description, re-read when the shared file changes
   (`descriptions.go`, A36), and sends each status change since the last
@@ -174,6 +178,13 @@ exempts whatever is later added under that name.
   group counts, models and rotation (A46, `repoFileKeys`, refused by default),
   and a model from any layer is checked as safe to pass to an agent
   (`CheckModel`). Sample in `docs/config/herdr-agentisan.example.toml`.
+- `internal/routing/` — the model and effort each spawned worker starts
+  with (ADR-001 A50, NERD-5289). It reads the user's routing rules,
+  embedded byte for byte from `rules/jev-routing-v1.json` and decoded
+  strictly, and the deployment facts from `[routing]` (`internal/settings`).
+  `Policy.Resolve` maps a worker type's role and provider, the boss's task
+  packet and overrides onto a binding. It returns a `Decision` that is also
+  the audit record. No caller yet: `worker spawn` wires it in part 1b.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
   embedded from `migrations/` and tracked by `user_version`. The daemon holds
@@ -219,8 +230,11 @@ exempts whatever is later added under that name.
   pane's workspace to a team (A24). `/` narrows the agents to a search query in
   place (`search.go`, ADR-001 A20), and 1-9 or a click on a group's title
   opens the group's view, a box per agent from the snapshot alone
-  (`groupview.go`, A37). Goldens in `testdata/`
-  (`go test ./internal/dashboard/ -update`, then read every one).
+  (`groupview.go`, A37). Also the team's one line for herdr's tab
+  bar (`tabbar.go`, A41), which `status line` prints, with its
+  `tab_bar_right` entry `docs/config/herdr-tab-bar.example.toml`, for herdr's
+  own config (`TestTabBarSnippet` in `internal/cli` runs it). Goldens in
+  `testdata/` (`go test ./internal/dashboard/ -update`, then read every one).
 - `internal/devctl/` — the `devctl` cobra tree: the coverage floor, the
   docs-parity check and the large-file ceiling, none of which the Go toolchain
   provides.

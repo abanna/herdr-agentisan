@@ -505,16 +505,11 @@ func projectLine(s *snapshot.Snapshot, width int) line {
 		tail = append(tail, line{{"issues " + strconv.Itoa(*p.Issues), plainStyle}})
 	}
 	if sl := p.Slots; sl != nil {
-		// A held slot is neither in use nor free (A40): it leaves the
-		// count, and the line says how many are held.
-		st, text := plainStyle, fmt.Sprintf("slots %d/%d", sl.Used, sl.Total-sl.Held)
+		st := plainStyle
 		if sl.Total > 0 && sl.Used >= sl.Total-sl.Held {
 			st = noteStyle // no slot free
 		}
-		if sl.Held > 0 {
-			text += fmt.Sprintf(" (%d held)", sl.Held)
-		}
-		tail = append(tail, line{{text, st}})
+		tail = append(tail, line{{slotsText(*sl), st}})
 	}
 	var out line
 	for _, d := range []prDetail{prFull, prCompact, prCount} {
@@ -1250,4 +1245,15 @@ func (l line) trimRight() line {
 		out = out[:len(out)-1]
 	}
 	return out
+}
+
+// slotsText is a project's test slots as the header and herdr's tab bar
+// both show them (A40, A41). A held slot is neither in use nor free: it
+// leaves the count, and the text says how many are held.
+func slotsText(sl snapshot.Slots) string {
+	text := fmt.Sprintf("slots %d/%d", sl.Used, sl.Total-sl.Held)
+	if sl.Held > 0 {
+		text += fmt.Sprintf(" (%d held)", sl.Held)
+	}
+	return text
 }
