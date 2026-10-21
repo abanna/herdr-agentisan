@@ -201,6 +201,11 @@ exempts whatever is later added under that name.
 - `internal/devctl/` — the `devctl` cobra tree: the coverage floor, the
   docs-parity check and the large-file ceiling, none of which the Go toolchain
   provides.
+- `internal/preflight/` — the D12 spawn precondition (ADR-001 I8, A10, A34):
+  in a repo with a `go.mod`, `tdaddy` must run from the daemon's PATH and the
+  Taskfile must have `tdaddy:index` and `tdaddy:impact`; each failure is a
+  sentinel whose message says how to fix it. Tests inject PATH, files and the
+  runner.
 - `internal/config/` — environment-backed config. No secret has a default.
   Also carries build provenance (`Version`, `Commit`, injected at link time):
   it is configuration resolved from the environment the binary was BUILT in,
@@ -255,7 +260,11 @@ roughly constant (BadgerDB open dominates), so the ratio is what decides. Use
 it here for the occasional "what does this actually touch?" question --
 especially the cross-package answer -- and run `task check` for everything else.
 
-**It is advisory, never the gate.** `task check` is the gate.
+**Its answer is advisory, never the gate.** `task check` is the gate,
+whatever tdaddy says a change affects. Having tdaddy set up is not optional,
+though: ADR-001 D12 and I8 require it for every worker in a Go repo, and
+`internal/preflight` checks it (`tdaddy --version` runs from the daemon's
+PATH, and the Taskfile has `tdaddy:index` and `tdaddy:impact`).
 
 Three traps, all encoded as comments in `Taskfile.yml`:
 

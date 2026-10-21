@@ -47,14 +47,14 @@ var profileSchema = &node{kind: kindTable, fields: map[string]*node{
 	"repo":   leafOf(kindString),
 	"color":  leafOf(kindString),
 	"github": leafOf(kindString),
-	"agent": {kind: kindTable, fields: map[string]*node{
-		"command": leafOf(kindStrings),
-		"model":   leafOf(kindString),
-	}},
+	"agent":  agentSchema(),
 	"groups": {kind: kindNames, elem: &node{kind: kindTable, fields: map[string]*node{
 		"workers": leafOf(kindInt),
 		"slots":   leafOf(kindInt),
+		// agent is the group's own agent (A23, Profile.AgentFor).
+		agentKey: agentSchema(),
 	}}},
+	"spawn":  spawnSchema,
 	"verify": leafOf(kindArgvs),
 	"integrations": {kind: kindNames, secrets: true, elem: &node{kind: kindTable, fields: map[string]*node{
 		"token": leafOf(kindSecret),
