@@ -204,6 +204,7 @@ func projectServers(dir string) ([]string, error) {
 		}
 		var data []byte
 		if err == nil {
+			// #nosec G304 -- the MCP config Claude Code itself reads, in the launch's repo or a directory above it.
 			data, err = os.ReadFile(path)
 		}
 		if err != nil {
