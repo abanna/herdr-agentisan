@@ -93,10 +93,12 @@ func (c Client) Subscribe(ctx context.Context, types ...string) (*Subscription, 
 // handshake sends the subscribe request on conn and reads herdr's
 // acknowledgement, bounded by ctx. It returns the reader that holds whatever
 // herdr wrote after the acknowledgement.
+//
+// Only ctx ends the exchange, and only once it is done. A conn deadline at
+// ctx's deadline would be a second timer for the same instant: when it fired
+// first, the read would fail while ctx.Err() was still nil, and a late ack
+// would read as herdr unavailable rather than as the timeout it is.
 func (c Client) handshake(ctx context.Context, conn net.Conn, types []string) (*bufio.Reader, string, error) {
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
-	}
 	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Unix(1, 0)) })
 
 	subs := make([]subscriptionParam, 0, len(types))
@@ -140,7 +142,6 @@ func (c Client) handshake(ctx context.Context, conn net.Conn, types []string) (*
 	if out.Type != "subscription_started" {
 		return nil, "", fmt.Errorf("%w: %s: result type %q, want \"subscription_started\"", ErrProtocol, methodSubscribe, out.Type)
 	}
-	_ = conn.SetDeadline(time.Time{})
 	return r, id, nil
 }
 

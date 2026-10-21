@@ -112,6 +112,11 @@ exempts whatever is later added under that name.
   `report stage` pushes `item` and `stage` on each agentisan step
   transition. They read `HERDR_PANE_ID`, a pane-shell variable, which is why
   it is not in `plugin.Env`.
+- `internal/codexhooks/` — installing those Codex hooks (ADR-001 A43):
+  `codex hooks` writes them into `$CODEX_HOME/hooks.json`, after every entry
+  already there, which it keeps as written, and never edits `config.toml` or
+  trusts a hook; `--check` only reports. Tests use temp Codex homes, never
+  the real `~/.codex`.
 - `internal/daemon/` — the daemon's lifecycle (ADR-001 D3, A3, A4): one daemon
   per herdr server, enforced by a flock'd `daemon.lock` that records the
   server's socket inode; the protocol pin; `daemon.log` capped at 10 MB; the
@@ -130,7 +135,7 @@ exempts whatever is later added under that name.
   (`descriptions.go`, A36), and sends each status change since the last
   poll as a workflow event (`events.go`). It keeps herdr's agent view on the
   focused team, which focus events and the poll feed it, and clears it
-  outside every team and on a clean stop (`view.go`, the A28 addendum).
+  outside every team and on a clean stop (`view.go`, the A28 addendum, A49).
   `daemon start` spawns a detached `daemon run` and waits for its health or
   its exit (A48); herdr's `[[startup]]` hook runs it, and the
   `daemon-restart` action covers linking. Tests run daemons in process
@@ -238,9 +243,10 @@ exempts whatever is later added under that name.
 - `docs/architecture.md` — why the pieces are shaped this way, and the
   deliberate limits.
 - `docs/adr/` — accepted architecture decisions. `0001-boss-led-workflow-plugin.md`
-  (ADR-001, read its Amendments section too) is the design source of truth
-  for the daemon, token contract, storage and build order; a change that
-  contradicts it needs a superseding ADR, not a quiet edit.
+  (ADR-001; its amendments are in `docs/adr/0001/`, one file each: read them
+  all) is the design source of truth for the daemon, token contract, storage
+  and build order; a change that contradicts it needs a superseding ADR, not a
+  quiet edit.
 
 Tests live beside the code they cover, in `package <name>_test`, so they
 exercise the exported surface an agent would actually call.
