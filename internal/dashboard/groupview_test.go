@@ -700,21 +700,29 @@ func TestGroupViewClampsItsInputs(t *testing.T) {
 }
 
 // TestGroupViewStageFillsTwoLines: a stage that fills its two lines
-// exactly is drawn whole; one character more ends the second in "…".
+// exactly is drawn whole; one character more ends the second in "…". A
+// line the wrap broke after a hyphen, not at a space, goes on with no
+// space added.
 func TestGroupViewStageFillsTwoLines(t *testing.T) {
 	t.Parallel()
 
 	const inner = 76 // an 80-cell box's text
 	a, b := strings.Repeat("a", inner), strings.Repeat("b", inner)
+	// The wrap breaks the second line after "well-" (66 cells), since
+	// "knownknownknown" does not fit in the 10 left.
+	hyphen := b[:60] + " well-knownknownknown"
 	tests := map[string]struct {
 		stage    string
 		one, two string
 	}{
-		"exactly two lines":      {stage: a + " " + b, one: a, two: b},
-		"one character more":     {stage: a + " " + b + "c", one: a, two: b[1:] + "…"},
-		"one word more":          {stage: a + " " + b + " c", one: a, two: b[1:] + "…"},
-		"exactly one line":       {stage: a, one: a},
-		"one word past one line": {stage: a + " b", one: a, two: "b"},
+		"exactly two lines":           {stage: a + " " + b, one: a, two: b},
+		"one character more":          {stage: a + " " + b + "c", one: a, two: b[1:] + "…"},
+		"one word more":               {stage: a + " " + b + " c", one: a, two: b[1:] + "…"},
+		"exactly one line":            {stage: a, one: a},
+		"one word past one line":      {stage: a + " b", one: a, two: "b"},
+		"a hyphen break on line two":  {stage: a + " " + hyphen, one: a, two: hyphen[:75] + "…"},
+		"a hyphen break on line one":  {stage: b[:70] + " well-knownknownknown", one: b[:70] + " well-", two: "knownknownknown"},
+		"a word wider than two lines": {stage: a + b + "c", one: a, two: b[1:] + "…"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -729,4 +737,150 @@ func TestGroupViewStageFillsTwoLines(t *testing.T) {
 			assert.Equal(t, tc.two, body(4))
 		})
 	}
+}
+
+// TestGroupViewStageIsItsStart: whatever the text and the box's width, the
+// stage's two lines are its start, cut only at its spaces, after a hyphen or
+// inside a word too long for a line: the first is where the stage begins,
+// and the second goes on from where the first stops, with no space added.
+// The stage drawn in one wide line is the text both are read against.
+func TestGroupViewStageIsItsStart(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]string{
+		"hyphens":               "x well-known-hyphenated-word here, then a re-check of go-review's cycle-2 run",
+		"invalid UTF-8":         "go\xffreview and then some more words to wrap",
+		"a truncated multibyte": "review \xe2\x82 and then some more words to wrap",
+		"a NUL":                 "go\x00review and then some more words to wrap",
+		"a byte-order mark":     "\ufeffreview and then some more words to wrap",
+		"an escape sequence":    "go\x1b[2Jreview\x1b]0;title\x07 and then some more words",
+		"CRLF and a lone CR":    "line one\r\nline two\rthree and more",
+		"wide characters":       strings.Repeat("レビュー中です", 12),
+		"wide after one":        "x" + strings.Repeat("漢字", 40),
+		"combining marks":       strings.Repeat("cafe\u0301 ", 30),
+		"one long word":         strings.Repeat("x", 300),
+	}
+	for name, text := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := &snapshot.Snapshot{V: 1, At: at, Team: "t", Groups: []snapshot.Group{{Name: "g", Agents: []snapshot.Agent{
+				{Name: "a", PaneID: "w1:p1", Status: snapshot.StatusWorking, Stage: text},
+			}}}}
+			// stage is the box's stage lines at width w.
+			stage := func(w int) (string, string) {
+				ls := lines(dashboard.Render(dashboard.Frame{Snapshot: s, Now: at, Group: "g"}, w, 24, plain))
+				_, y := locate(t, strings.Join(ls, "\n"), "◐ a · ") // the title, cut in a narrow box
+				body := func(i int) string { return strings.TrimSpace(strings.Trim(ls[y+i], "│")) }
+				return body(3), body(4)
+			}
+			whole, none := stage(400)
+			require.Empty(t, none, "the stage fits one line of a 400-cell box")
+			for w := 14; w <= 100; w++ {
+				one, two := stage(w)
+				label := fmt.Sprintf("%d columns: %q, %q", w, one, two)
+				require.NotEmpty(t, one, label)
+				require.True(t, strings.HasPrefix(whole, one), "the first line is where the stage begins: %s", label)
+				rest := strings.TrimLeft(strings.TrimPrefix(whole, one), " ")
+				if cut, ok := strings.CutSuffix(two, "…"); ok {
+					require.True(t, strings.HasPrefix(rest, cut), "the second goes on from the first: %s", label)
+					require.Greater(t, len(rest), len(cut), "a cut line leaves some of the stage: %s", label)
+				} else {
+					require.Equal(t, rest, two, "the second is the rest: %s", label)
+				}
+			}
+		})
+	}
+}
+
+// TestDigitsAtTheEdges: the digit just past the last group does nothing,
+// and a digit with the help open opens the group and closes the help, which
+// would hide it.
+func TestDigitsAtTheEdges(t *testing.T) {
+	t.Parallel()
+
+	snap := fixture(t, "full")
+	require.Len(t, snap.Groups, 6)
+	src := &script{steps: []func() (snapshot.Snapshot, error){serve(snap)}}
+	m := started(t, config(src, nil), 80, 24)
+	m, _ = update(t, m, digit('7'))
+	assert.Empty(t, m.Frame().Group, "full has six groups: 7 does nothing")
+
+	m, _ = update(t, m, keyHelp)
+	require.True(t, m.Frame().Help)
+	m, _ = update(t, m, digit('6'))
+	assert.Equal(t, snap.Groups[5].Name, m.Frame().Group, "6 opens the last group")
+	assert.False(t, m.Frame().Help, "the help would hide the view")
+}
+
+// TestOpeningAGroupScrollsFromTheTop: a digit opens its group's view at the
+// first box, scrolled only as far as the selected box needs, even from that
+// group's own view scrolled further down.
+func TestOpeningAGroupScrollsFromTheTop(t *testing.T) {
+	t.Parallel()
+
+	src := &script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "group"))}}
+	m := started(t, config(src, nil), 80, 24)
+	m, _ = update(t, m, digit('1'))
+	for range 5 {
+		m, _ = update(t, m, keyDown)
+	}
+	for range 4 {
+		m, _ = update(t, m, keyUp)
+	}
+	require.Equal(t, "pee02", selected(t, m))
+	require.NotContains(t, ansi.Strip(m.View().Content), "pee01 · working", "scrolled down: the first box is above")
+
+	m, _ = update(t, m, digit('1'))
+	frame := ansi.Strip(m.View().Content)
+	assert.Contains(t, frame, "pee01 · working", "the view opens at the first box")
+	assert.Contains(t, frame, "pee02 · ready", "with the selected box in view")
+}
+
+// TestGroupViewBorderColours: a blocked agent's box is drawn in the error
+// colour and the selected box in the accent, where any other box is dim
+// (ADR-001 A37); the text is the same either way.
+func TestGroupViewBorderColours(t *testing.T) {
+	t.Parallel()
+
+	snap := fixture(t, "group")
+	// bottom is the bottom border of name's box, drawn in colour: a box is
+	// eight lines, so it is seven under the title.
+	bottom := func(sel dashboard.Selection, name string) string {
+		t.Helper()
+		ls := lines(dashboard.Render(dashboard.Frame{Snapshot: snap, Now: at, Group: "coders", Selection: sel}, 80, 80, fullColour))
+		for i, l := range ls {
+			if strings.Contains(ansi.Strip(l), name+" · ") {
+				require.Less(t, i+7, len(ls))
+				return ls[i+7]
+			}
+		}
+		t.Fatalf("no box for %s", name)
+		return ""
+	}
+	dim := bottom(dashboard.Selection{}, "pee04") // idle, not selected
+	blocked := bottom(dashboard.Selection{}, "pee05")
+	selected := bottom(dashboard.Selection{Agent: 3}, "pee04")
+	require.Equal(t, ansi.Strip(dim), ansi.Strip(blocked))
+	require.Equal(t, ansi.Strip(dim), ansi.Strip(selected))
+	assert.NotEqual(t, dim, blocked, "a blocked agent's box is red")
+	assert.NotEqual(t, dim, selected, "the selected box is in the accent")
+	assert.NotEqual(t, blocked, selected)
+}
+
+// TestGroupViewGaugeColours: a box's ctx takes its D7 band's colour, as an
+// overview row's does: 22% and 78% are drawn in different ones.
+func TestGroupViewGaugeColours(t *testing.T) {
+	t.Parallel()
+
+	frame := dashboard.Render(dashboard.Frame{Snapshot: fixture(t, "group"), Now: at, Group: "coders"}, 80, 80, fullColour)
+	// style is the escape sequence that starts the segment pct is drawn in.
+	style := func(pct string) string {
+		t.Helper()
+		i := strings.Index(frame, pct)
+		require.GreaterOrEqual(t, i, 0, pct)
+		j := strings.LastIndex(frame[:i], "\x1b[")
+		require.GreaterOrEqual(t, j, 0, pct)
+		return frame[j:i]
+	}
+	assert.NotEqual(t, style("22%"), style("78%"))
 }

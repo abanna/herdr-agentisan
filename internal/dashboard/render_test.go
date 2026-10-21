@@ -32,6 +32,10 @@ var plain = dashboard.Options{Profile: colorprofile.NoTTY}
 // selected line can be found.
 var attrs = dashboard.Options{Profile: colorprofile.ASCII}
 
+// fullColour keeps every colour and attribute, for tests that compare
+// styles.
+var fullColour = dashboard.Options{Profile: colorprofile.TrueColor}
+
 // fixtures are every snapshot in testdata.
 var fixtures = []string{"full", "empty", "blocked", "crowd", "wide", "group"}
 
@@ -1016,6 +1020,121 @@ func TestHelpOverlay(t *testing.T) {
 			for _, s := range []string{"← →", "b back"} {
 				assert.NotContains(t, out, s, "keys that do nothing are not advertised")
 			}
+		})
+	}
+}
+
+// cell is one terminal cell of a drawn line: the cluster that starts in it,
+// "" for the second cell of a wide one, then any zero-width cluster drawn
+// after the cell, and the SGR in force there.
+type cell struct{ text, sgr string }
+
+// sgrAt matches an SGR sequence at the start of a string.
+var sgrAt = regexp.MustCompile(`^\x1b\[([0-9;:]*)m`)
+
+// cellsOf is l's cells, padded with blank ones to w: a frame drops its
+// lines' trailing spaces, which are blank cells all the same.
+func cellsOf(l string, w int) []cell {
+	var out []cell
+	cur, pending := "", ""
+	for l != "" {
+		if m := sgrAt.FindStringSubmatch(l); m != nil {
+			cur = m[0]
+			if m[1] == "" || m[1] == "0" {
+				cur = ""
+			}
+			l = l[len(m[0]):]
+			continue
+		}
+		c, cw := ansi.FirstGraphemeCluster(l, ansi.GraphemeWidth)
+		l = l[len(c):]
+		if cw == 0 {
+			if len(out) == 0 {
+				pending += c
+			} else {
+				out[len(out)-1].text += c
+			}
+			continue
+		}
+		out = append(out, cell{pending + c, cur})
+		pending = ""
+		for range cw - 1 {
+			out = append(out, cell{"", cur})
+		}
+	}
+	for len(out) < w {
+		out = append(out, cell{" ", ""})
+	}
+	return out
+}
+
+// TestHelpOverWideCharacters: the help box covers its own cells and no
+// others. A wide character the box cuts at either edge leaves a space in its
+// cell outside the box, in its own style, so the rest of the line, a
+// selected row's reverse video included, stays as it was, in the overview
+// and in a group's view. A zero-width character goes with the cell before
+// it, so one the box covers is not drawn beside it.
+func TestHelpOverWideCharacters(t *testing.T) {
+	t.Parallel()
+
+	var agents []snapshot.Agent
+	for i, name := range []string{"漢字漢字漢字漢字", "a漢字漢字漢字漢字", "ab漢字漢字漢字漢字"} {
+		agents = append(agents, snapshot.Agent{
+			Name: name, PaneID: fmt.Sprintf("w1:p%d", i), Status: snapshot.StatusWorking,
+			Item: strings.Repeat("項目\u200b", 20), Stage: strings.Repeat("レ\u200bビュー中です", 10),
+		})
+	}
+	snap := &snapshot.Snapshot{V: 1, At: at, Team: "t", Groups: []snapshot.Group{{Name: "g", Agents: agents}}}
+	for view, h := range map[string]int{"": 8, "g": 24} {
+		t.Run("view "+view, func(t *testing.T) {
+			t.Parallel()
+			edges := map[string]int{}
+			for w := 50; w < 66; w++ {
+				for a := range agents {
+					f := dashboard.Frame{Snapshot: snap, Now: at, Selection: dashboard.Selection{Agent: a}, Group: view}
+					base := lines(dashboard.Render(f, w, h, fullColour))
+					f.Help = true
+					help := lines(dashboard.Render(f, w, h, fullColour))
+					top := slices.IndexFunc(help, func(l string) bool { return strings.Contains(ansi.Strip(l), "╭ help") })
+					require.GreaterOrEqual(t, top, 0)
+					// The box is [x0, x1): its title is "╭ help ─…─╮", and a
+					// group's view draws boxes of its own around it.
+					first := cellsOf(help[top], w)
+					x0 := strings.Index(ansi.Strip(help[top]), "╭ help")
+					require.GreaterOrEqual(t, x0, 0)
+					x0 = ansi.StringWidth(ansi.Strip(help[top])[:x0])
+					x1 := x0 + slices.IndexFunc(first[x0:], func(c cell) bool { return c.text == "╮" }) + 1
+					require.Positive(t, x0)
+					require.Greater(t, x1, x0)
+					require.LessOrEqual(t, x1, w)
+					for y := top; y < h; y++ {
+						got, want := cellsOf(help[y], w), cellsOf(base[y], w)
+						if y > top && got[x0].text != "│" && got[x0].text != "╰" {
+							break // under the box
+						}
+						// A wide character's second cell is blank, but for the
+						// zero-width ones drawn after it.
+						if ansi.StringWidth(want[x0].text) == 0 {
+							want[x0-1].text = " "
+							edges["left"]++
+						}
+						if x1 < w && ansi.StringWidth(want[x1].text) == 0 {
+							want[x1].text = " " + want[x1].text
+							edges["right"]++
+						}
+						if strings.Contains(want[x1-1].text, "\u200b") {
+							edges["zero-width"]++
+						}
+						label := fmt.Sprintf("%dx%d, agent %d, line %d", w, h, a, y)
+						require.Equal(t, want[:x0], got[:x0], "left of the box: %s", label)
+						require.Equal(t, want[x1:], got[x1:], "right of the box: %s", label)
+						require.Contains(t, []string{"╮", "│", "╯"}, got[x1-1].text, "the box's right edge is its own: %s", label)
+					}
+				}
+			}
+			assert.Positive(t, edges["left"], "the sweep cuts a wide character at the box's left edge")
+			assert.Positive(t, edges["right"], "the sweep cuts a wide character at the box's right edge")
+			assert.Positive(t, edges["zero-width"], "the sweep covers a zero-width character with the box's right edge")
 		})
 	}
 }
