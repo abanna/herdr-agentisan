@@ -43,6 +43,11 @@ var (
 	// ErrUnavailable means the daemon socket could not be reached or closed
 	// without answering.
 	ErrUnavailable = errors.New("daemon is unavailable")
+	// ErrNotSent means an exchange ended before any of its request was
+	// written: its dial failed. The daemon certainly did not run the op, so
+	// it is ErrUnavailable too. An exchange that fails after writing never
+	// says this: the daemon may have run the op, and may never answer (A52).
+	ErrNotSent = errors.New("nothing was sent to the daemon")
 	// ErrProtocol means the daemon answered with something the protocol does
 	// not allow.
 	ErrProtocol = errors.New("daemon protocol violation")
@@ -339,14 +344,15 @@ func callArgs(ctx context.Context, socket, op string, args any) (json.RawMessage
 }
 
 // callWith sends one request with args and returns the data of an ok
-// answer, within timeout.
+// answer, within timeout. A failed dial is ErrNotSent; a failure after it
+// is ErrUnavailable alone, since some of the request may have been written.
 func callWith(ctx context.Context, socket, op string, args json.RawMessage, timeout time.Duration) (json.RawMessage, error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", socket)
 	if err != nil {
-		return nil, exchangeFailed(ctx, op, err)
+		return nil, fmt.Errorf("%w: %w", ErrNotSent, exchangeFailed(ctx, op, err))
 	}
 	defer conn.Close() //nolint:errcheck // one-shot connection
 	if deadline, ok := ctx.Deadline(); ok {

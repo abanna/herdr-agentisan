@@ -539,7 +539,7 @@ func TestWorkforceCodes(t *testing.T) {
 	}
 }
 
-// TestOpBudgets: team status, retire and send get 10 s, spawn 110 s, team up
+// TestOpBudgets: team status, retire and send get 10 s, spawn 100 s, team up
 // a spawn's, whatever that is, and retire --after-handoff 1,500 s, both in
 // the client's wait and in the budget the daemon's op map enforces; any other
 // op none of its own.
@@ -551,7 +551,7 @@ func TestOpBudgets(t *testing.T) {
 		want time.Duration
 	}{
 		{daemon.OpTeamStatus, ``, 10 * time.Second},
-		{daemon.OpWorkerSpawn, `{"group":"coder","count":1}`, 110 * time.Second},
+		{daemon.OpWorkerSpawn, `{"group":"coder","count":1}`, 100 * time.Second},
 		{daemon.OpTeamUp, ``, daemon.OpBudget(daemon.OpWorkerSpawn, nil)},
 		{daemon.OpWorkerRetire, `{"target":"x"}`, 10 * time.Second},
 		{daemon.OpWorkerRetire, `{"target":"x","after_handoff":true}`, 1500 * time.Second},
@@ -567,4 +567,24 @@ func TestOpBudgets(t *testing.T) {
 	for _, op := range daemon.WorkforceOpNames() {
 		assert.Positive(t, daemon.ServedBudget(op, nil), "%s has a budget in the table, not a nil one", op)
 	}
+}
+
+// TestAWorkforceCommandFitsTheWrapper: the longest a workforce command
+// waits, the not_ready window, its op's budget and an exchange (A52), is at
+// most 115 s, 5 s inside the skill wrapper's 120, for every op the daemon
+// serves, so an op added to the table is held to it too. A retire after a
+// handoff has the wrapper's 1,800 s instead, and the same 5 s to spare.
+func TestAWorkforceCommandFitsTheWrapper(t *testing.T) {
+	t.Parallel()
+	longest := func(op, args string) time.Duration {
+		return daemon.NotReadyWindow + daemon.OpBudget(op, json.RawMessage(args)) + daemon.IOTimeout
+	}
+	assert.Equal(t, 10*time.Second, daemon.NotReadyWindow)
+	assert.Equal(t, 5*time.Second, daemon.IOTimeout)
+	for _, op := range daemon.WorkforceOpNames() {
+		assert.LessOrEqual(t, longest(op, ""), 115*time.Second, "%s's window, budget and exchange", op)
+	}
+	assert.Equal(t, 115*time.Second, longest(daemon.OpWorkerSpawn, `{"group":"coder","count":1}`), "a spawn takes all of it")
+	assert.Equal(t, 115*time.Second, longest(daemon.OpTeamUp, ""), "team up, with a spawn's budget, takes all of it too")
+	assert.LessOrEqual(t, longest(daemon.OpWorkerRetire, `{"target":"x","after_handoff":true}`), 1795*time.Second, "a retire after a handoff")
 }

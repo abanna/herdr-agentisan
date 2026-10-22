@@ -132,7 +132,8 @@ exempts whatever is later added under that name.
   the plugin socket (D6) that answers `health`, `back` (A16: walk the
   focus history, un-zoom the pane left, then focus the target), `snapshot`
   and the workforce ops (A23, `workforce.go`), each with a budget of its
-  own. Every poll it also reconciles `state.db`'s `workers` rows with
+  own, which their client gives every ask, a not_ready one asked again for
+  10 s (A52). Every poll it also reconciles `state.db`'s `workers` rows with
   herdr's panes (`bind.go`, A35), rebuilds the team model, pushes `$team`
   and every agent pane's ctx display (`team.go`, A28) and caches every team's
   snapshot, each row with its agent's launch model from the pane's processes

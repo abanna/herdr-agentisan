@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/store"
@@ -62,6 +63,28 @@ func TestSendOverTheSocket(t *testing.T) {
 	for _, r := range rec.Records() {
 		assert.NotContains(t, r.Body().AsString(), "secret")
 	}
+	// .queued's time is the message's own queued time: the commit comes
+	// before the event, and a pass may deliver the message in between, so
+	// a trail sorted by time still puts .queued first (QA #75, N9).
+	at := func(name string) time.Time {
+		t.Helper()
+		var ts time.Time
+		require.Eventually(t, func() bool {
+			for _, r := range rec.Records() {
+				r.WalkAttributes(func(kv attribute.KeyValue) bool {
+					if r.EventName() == name && kv.Key == "agentisan.message.id" && kv.Value.AsString() == res.ID {
+						ts = r.Timestamp()
+					}
+					return true
+				})
+			}
+			return !ts.IsZero()
+		}, ready, 10*time.Millisecond, "the %s record", name)
+		return ts
+	}
+	queuedAt, deliveredAt := at(telemetry.EventMessageQueued), at(telemetry.EventMessageDelivered)
+	assert.True(t, queuedAt.Equal(stateOf(t, st, res.ID).CreatedAt), "stamped %v, queued %v", queuedAt, stateOf(t, st, res.ID).CreatedAt)
+	assert.True(t, queuedAt.Before(deliveredAt), "queued %v, delivered %v", queuedAt, deliveredAt)
 
 	res = send(t, workforce.SendRequest{To: "ha-coder-1", Body: "next", CallerPane: "w14:p1"})
 	assert.Equal(t, workforce.Party{Kind: store.KindBoss, ID: "ha-boss"}, res.From, "the boss's pane sends as the boss")
