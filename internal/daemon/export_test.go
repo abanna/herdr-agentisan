@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/store"
@@ -43,6 +44,19 @@ func BackOver(ctx context.Context, h HerdrClient, st *store.Store) (BackResult, 
 // client.
 func StillServedOver(ctx context.Context, socket string, ident Identity, protocol uint32) error {
 	o := Options{HerdrSocket: socket, Logger: zerolog.Nop()}.withDefaults().forServer(ident)
+	return o.stillServed(ctx, ident, protocol)
+}
+
+// StillServedLogging is StillServedOver logging to log, where a ping that
+// failed and still leaves the server up is a debug line. dialed, when set,
+// runs once the ping is connected and before it is sent.
+func StillServedLogging(ctx context.Context, socket string, ident Identity, protocol uint32, log zerolog.Logger, dialed func()) error {
+	o := Options{HerdrSocket: socket, Logger: log}.withDefaults().forServer(ident)
+	if c, ok := o.Herdr.(herdr.Client); ok && dialed != nil {
+		check := c.Dialed
+		c.Dialed = func() error { dialed(); return check() }
+		o.Herdr = c
+	}
 	return o.stillServed(ctx, ident, protocol)
 }
 
@@ -136,6 +150,11 @@ func DefaultStartTime() func(pid int) (uint64, error) {
 	return Options{}.withDefaults().Hooks.StartTime
 }
 
+// DefaultStartedAt is the StartedAt hook a daemon has when none is injected.
+func DefaultStartedAt() func(start uint64) (time.Time, error) {
+	return Options{}.withDefaults().Hooks.StartedAt
+}
+
 // ServedBudget is the budget the daemon's own op map gives op with args,
 // which the server enforces; OpBudget is the client's copy.
 func ServedBudget(op string, args json.RawMessage) time.Duration {
@@ -199,6 +218,16 @@ func WorkforceOf(o Options, ident Identity) *workforce.Service {
 	return o.newWorkforce(nil, ident, &team.IdleClock{})
 }
 
+// LogNotice writes m as the log sink does (A44).
+func LogNotice(log zerolog.Logger, m notice.Message) error {
+	return logSink{log}.Send(context.Background(), m)
+}
+
+// FlushNotices flushes b into s as the poll does.
+func FlushNotices(o Options, b *notice.Batcher, s notice.Sink) {
+	o.flushNotices(context.Background(), &notices{batch: b, sink: s})
+}
+
 // LaunchModels is the team poll's launch models (A39), driven one poll at a
 // time.
 type LaunchModels struct{ m *launchModels }
@@ -210,6 +239,12 @@ func NewLaunchModels() LaunchModels { return LaunchModels{m: newLaunchModels()} 
 // process_info reply held from earlier in the poll.
 func (l LaunchModels) Refresh(ctx context.Context, c herdr.Client, panes []herdr.PaneInfo, startTime func(int) (uint64, error), now time.Time, log zerolog.Logger) (map[string]string, error) {
 	return l.m.refresh(ctx, c, paneProcesses{}, panes, startTime, now, log)
+}
+
+// Started is when each pane's agent process started, on the wall clock
+// through wall, as the last Refresh left the entries (A47).
+func (l LaunchModels) Started(wall func(uint64) (time.Time, error)) map[string]time.Time {
+	return l.m.started(wall)
 }
 
 // PaneProcesses are one poll's process_info replies.

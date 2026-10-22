@@ -447,6 +447,14 @@ type AgentInfo struct {
 	// by an alias.
 	PaneID string `json:"pane_id"`
 	Name   string `json:"name"`
+	// TerminalID is the terminal the agent runs in, which a reissued pane
+	// id does not carry over (src/api/schema/agents.rs).
+	TerminalID string `json:"terminal_id"`
+	// CompletionSeq is herdr's state-change count at the agent's last
+	// working or blocked to idle change, the end of a turn; nil once it has
+	// changed state since, or before its first turn ends
+	// (src/app/actions.rs:22-29). It is a number to compare, never to order.
+	CompletionSeq *uint64 `json:"completion_seq"`
 }
 
 // FocusAgent focuses the agent herdr knows as target (its name or pane id),

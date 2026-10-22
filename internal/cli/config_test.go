@@ -97,6 +97,8 @@ func TestConfigResolveText(t *testing.T) {
 color = "#123456"  # project
 integrations.github.token = { env = "GITHUB_TOKEN" }  # shared
 integrations.linear.token = { op = "`+linearRef+`" }  # project
+notices.gap = 30  # default
+notices.repeat = 300  # default
 repo = "`+repo+`"  # project
 rotation.thresholds = [55, 65, 75]  # default
 short = "app"  # project
@@ -112,6 +114,8 @@ func TestConfigResolveWithoutAProjectListsThem(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, `agent.command = ["claude"]  # default
 integrations.github.token = { env = "GITHUB_TOKEN" }  # shared
+notices.gap = 30  # default
+notices.repeat = 300  # default
 rotation.thresholds = [55, 65, 75]  # default
 routing policy: `+defaultPolicy(t)+`
 projects: alpha, app
@@ -120,6 +124,8 @@ projects: alpha, app
 	out, err = runCtx(configCtx(t, nil, nil), "config", "resolve", "--config-dir", t.TempDir())
 	require.NoError(t, err, "no shared file: the defaults alone")
 	assert.Equal(t, `agent.command = ["claude"]  # default
+notices.gap = 30  # default
+notices.repeat = 300  # default
 rotation.thresholds = [55, 65, 75]  # default
 routing policy: `+defaultPolicy(t)+`
 projects: (none)
@@ -178,6 +184,8 @@ func TestConfigResolveJSON(t *testing.T) {
 					"color":                     settings.LayerProject,
 					"integrations.github.token": settings.LayerShared,
 					"integrations.linear.token": settings.LayerProject,
+					"notices.gap":               settings.LayerDefault,
+					"notices.repeat":            settings.LayerDefault,
 					"repo":                      settings.LayerProject,
 					"rotation.thresholds":       settings.LayerDefault,
 					"short":                     settings.LayerProject,
@@ -466,7 +474,7 @@ func TestConfigResolveRendersAnyValue(t *testing.T) {
 			out, err := runCtx(configCtx(t, nil, nil), args...)
 			require.NoError(t, err)
 			assert.Contains(t, out, tc.wantText+"\n")
-			assert.Len(t, strings.Split(strings.TrimSuffix(out, "\n"), "\n"), 9, "one line per leaf, then the routing policy: %q", out)
+			assert.Len(t, strings.Split(strings.TrimSuffix(out, "\n"), "\n"), 11, "one line per leaf, then the routing policy: %q", out)
 
 			out, err = runCtx(configCtx(t, nil, nil), append(args, "--json")...)
 			require.NoError(t, err)

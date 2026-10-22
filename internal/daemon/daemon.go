@@ -101,6 +101,11 @@ type Hooks struct {
 	// Preflight is the check a spawn's repo must pass before any pane opens
 	// (A34); nil means preflight.HostCheck.
 	Preflight preflight.Check
+	// StartedAt puts a start StartTime returned on the wall clock, by
+	// default through report.SystemStartedAt (/proc/stat's boot time on
+	// Linux; darwin's start already is one). With none, the boss shows no
+	// runtime (A47).
+	StartedAt func(start uint64) (time.Time, error)
 }
 
 // Spawned is the daemon process a Spawn hook started.
@@ -171,6 +176,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.Hooks.StartTime == nil {
 		o.Hooks.StartTime = startTimeFrom(report.SystemStat())
+	}
+	if o.Hooks.StartedAt == nil {
+		o.Hooks.StartedAt = report.SystemStartedAt()
 	}
 	if o.closeStore == nil {
 		o.closeStore = (*store.Store).Close

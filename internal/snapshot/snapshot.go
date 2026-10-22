@@ -132,10 +132,9 @@ type Boss struct {
 	// draw it (ADR-001 A38); it stays so that every v1 document holding it
 	// still decodes.
 	Watchers *int `json:"watchers,omitempty"`
-	// StartedAt is when the daemon first saw the boss's pane run an agent in
-	// the boss's place (ADR-001 A31), not the session's own start, which
-	// herdr does not report; its runtime counts from it. Nil means not
-	// reported.
+	// StartedAt is when the boss's agent process started (ADR-001 A47); its
+	// runtime counts from it. Nil means not reported, as when the start
+	// cannot be read.
 	StartedAt *time.Time `json:"started_at,omitempty"`
 }
 

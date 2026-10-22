@@ -37,3 +37,9 @@ func sysctlProcArgs2(pid int) ([]byte, error) {
 	}
 	return raw, nil
 }
+
+// systemStartedAt puts kinfo_proc's starts, already microseconds since the
+// epoch, on the wall clock.
+func systemStartedAt() StartedAtFunc {
+	return KinfoStartedAt
+}

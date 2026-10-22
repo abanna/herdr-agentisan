@@ -95,11 +95,20 @@ func blank(sql string) bool {
 // BusyTimeout) is ErrOpen. migrateNext checks the version again under the
 // write lock, for an opener that migrates meanwhile.
 func checkVersion(ctx context.Context, db *sql.DB, known int) error {
-	var current int
-	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&current); err != nil {
-		return fmt.Errorf("%w: read user_version: %w", ErrOpen, err)
+	current, err := userVersion(ctx, db)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrOpen, err)
 	}
 	return versionError(current, known)
+}
+
+// userVersion reads db's schema version with a plain read.
+func userVersion(ctx context.Context, db *sql.DB) (int, error) {
+	var v int
+	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v); err != nil {
+		return 0, fmt.Errorf("read user_version: %w", err)
+	}
+	return v, nil
 }
 
 // versionError says why a database at schema version current cannot be
@@ -135,11 +144,33 @@ func failed(what string, err error) error {
 // transactions are BEGIN IMMEDIATE, so the read happens under the write lock,
 // and an opener racing this one on the same file sees every migration the
 // other committed and does not run it again.
+//
+// A plain read of the version, outside any transaction, decides only whether
+// a step whose busy wait ran out runs again (see Open): it does when the
+// version rose during that wait past every version seen so far, which another
+// opener's migration does. Each retry raises that mark, so there is at most
+// one retry per version, and a version past len(set) is a newer build's,
+// refused at once.
 func migrate(ctx context.Context, db *sql.DB, set []migration) (int, error) {
+	seen := -1
 	for {
+		if v, err := userVersion(ctx, db); err == nil {
+			seen = max(seen, v)
+		}
 		applied, err := migrateNext(ctx, db, set)
 		if err != nil {
-			return 0, err
+			if !busy(err) {
+				return 0, err
+			}
+			now, verr := userVersion(ctx, db)
+			switch {
+			case verr != nil || now <= seen:
+				return 0, err
+			case now > len(set):
+				return 0, versionError(now, len(set))
+			}
+			seen = now
+			continue
 		}
 		if !applied {
 			return len(set), nil

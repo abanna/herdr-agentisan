@@ -93,6 +93,8 @@ type teamPoll struct {
 	slots *slotCounter
 	// bind keeps the workers rows bound to their panes (A35).
 	bind *binder
+	// notices tells each team's boss what the poll sees (A44).
+	notices *notices
 }
 
 // startTeam starts the team poll when o.Team is set, and beside it the
@@ -159,6 +161,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 		cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, idle: idle, cache: cache, header: header,
 		models: newLaunchModels(), descriptions: newGroupDescriptions(o.Team.ConfigDir),
 		slots: o.newSlotCounter(), bind: &binder{ready: ready},
+		notices: o.newNotices(),
 	}
 	onServer := o.onServer(ident)
 	c := herdr.Client{SocketPath: o.HerdrSocket, Dialed: onServer}
@@ -195,6 +198,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 			last = built
 			views.polled(*built, focused, seen)
 		}
+		o.flushNotices(ctx, tp.notices)
 		in.polled(built)
 		select {
 		case <-ctx.Done():
@@ -219,7 +223,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 // pushes nothing more, once a call finds the socket no longer names the
 // daemon's server.
 // Each row carries its pane's launch model, which herdr is asked for only
-// when the pane changed (A39).
+// when the pane changed (A39), and the boss its agent process's start (A47).
 // The model it returns is nil when a pane, workspace or tab list failed and
 // no model was built; agent names change neither which panes it holds nor
 // their statuses, so a failed agent list still gives the status events their
@@ -269,14 +273,17 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	m := team.Build(l, tp.cfg.resolver(), rows)
 	now := o.Now()
 	// A pane's rest is pane.list's status, so a failed agent list does not
-	// stop the idle clock.
+	// stop the idle clock, nor the notices of a status change.
 	tp.idle.Observe(m, now)
+	tp.notices.observe(m, agents, agentsErr == nil, now)
 	if agentsErr == nil {
 		tp.stages.Observe(m, now)
 		models, err := tp.models.refresh(ctx, c, pp, agentPanes(m, panes), o.Hooks.StartTime, now, o.Logger)
 		if err != nil {
 			return nil, "", err
 		}
+		// The boss's runtime is its agent process's (A47).
+		started := tp.models.started(o.Hooks.StartedAt)
 		// The held locks are read once for every team, so a list that
 		// changes mid-poll cannot give two teams two counts; each team
 		// counts its own project's lock files (A40).
@@ -285,6 +292,7 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 			tp.header.fill(project, s, now)
 			setSlots(s, slots(project))
 			team.FillModels(s, models)
+			team.FillBossStart(s, started)
 			team.Describe(s, tp.descriptions.of(project))
 		}
 		if err := tp.cache.store(m, tp.cfg.spaces.Project, now, tp.stages, tp.idle, fill); err != nil {
