@@ -99,7 +99,7 @@ type opFlags struct {
 }
 
 func (f *opFlags) add(c *cobra.Command, project bool) {
-	c.Flags().StringVar(&f.stateDir, "state-dir", "", "plugin state directory (default: HERDR_PLUGIN_STATE_DIR)")
+	c.Flags().StringVar(&f.stateDir, "state-dir", "", "plugin state directory (default: HERDR_PLUGIN_STATE_DIR, else herdr's state directory for this plugin)")
 	if project {
 		c.Flags().StringVar(&f.project, "project", "", "the team's project (default: the team whose workspace this pane is in, else the only tabs team)")
 	}
@@ -121,14 +121,12 @@ func (f *opFlags) runOp(cmd *cobra.Command, args []string, op string, req func()
 		return badRequest(cmd, fmt.Errorf("%s takes no arguments, got %s", cmd.CommandPath(), strings.Join(args, " ")))
 	}
 	ctx := cmd.Context()
-	env, err := plugin.EnvFrom(lookupEnvFrom(ctx))
+	lookup := lookupEnvFrom(ctx)
+	env, err := plugin.EnvFrom(lookup)
 	if err != nil {
 		return refuseWith(cmd, codeDaemonUnavailable, fmt.Sprintf("read plugin environment: %v", err))
 	}
-	dir := f.stateDir
-	if dir == "" {
-		dir = env.StateDir
-	}
+	dir, derived := plugin.StateDir(f.stateDir, lookup)
 	paths, err := daemon.PathsFor(dir, env.SocketPath)
 	if err != nil {
 		return refuseWith(cmd, codeDaemonUnavailable, noHerdr(err).Error())
@@ -145,7 +143,11 @@ func (f *opFlags) runOp(cmd *cobra.Command, args []string, op string, req func()
 	case errors.As(err, &refused):
 		return refuseWith(cmd, refused.Code, refused.Message)
 	case errors.Is(err, daemon.ErrUnavailable):
-		return refuseWith(cmd, codeDaemonUnavailable, "no daemon answered at "+paths.Socket+"; run the daemon-restart action: "+err.Error())
+		msg := "no daemon answered at " + paths.Socket
+		if derived {
+			msg += " (herdr's state directory for this plugin, from XDG_STATE_HOME or HOME; pass --state-dir if herdr runs with another)"
+		}
+		return refuseWith(cmd, codeDaemonUnavailable, msg+"; run the daemon-restart action: "+err.Error())
 	}
 	return refuseWith(cmd, "failed", err.Error())
 }

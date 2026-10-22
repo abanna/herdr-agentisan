@@ -38,6 +38,14 @@ and then says one of three things (ADR-001 A48):
 `herdr plugin log list --plugin nerdsrun.agentisan` shows which, and the
 `daemon.log` the message names says why.
 
+herdr gives a shell in one of its panes no `HERDR_PLUGIN_STATE_DIR`. From
+there the commands that ask a running daemon (`send`, `team status`,
+`worker retire`, `back`, `dashboard`, `status line`, `daemon health` and
+`daemon stop`) find it under herdr's own state directory for the plugin,
+from `XDG_STATE_HOME` or `HOME` as herdr works it out (ADR-001 A51).
+`daemon start`, `run` and `restart` never guess: run them from herdr, or
+pass `--state-dir`.
+
 Requires Go 1.26.10+ and [Task](https://taskfile.dev). Linters and scanners are
 pinned in `go.mod` under the `tool` directive — nothing to install globally.
 
