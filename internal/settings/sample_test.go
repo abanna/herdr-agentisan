@@ -95,7 +95,7 @@ func TestSampleConfigResolves(t *testing.T) {
 			// The workforce keys (A23): a group's own model, review on
 			// codex, and a shell prompt to wait for, with no keys typed.
 			assert.Equal(t, "sonnet", p.AgentFor("precheck").Model)
-			assert.Equal(t, []string{"codex", "--no-daemon"}, p.AgentFor("review").Command)
+			assert.Equal(t, []string{"codex", "--no-daemon", "--sandbox", "read-only"}, p.AgentFor("review").Command)
 			assert.Equal(t, settings.Spawn{ShellPrompt: `❯\s*$`, ShellReadyAfter: settings.DefaultShellReadyAfter}, p.Spawn)
 			// The rotation thresholds (A33): the project's, and one role's.
 			assert.Equal(t, []int{55, 65, 75}, p.Rotation.Thresholds)

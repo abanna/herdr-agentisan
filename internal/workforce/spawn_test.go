@@ -145,7 +145,7 @@ func TestPlanPassesAnEffort(t *testing.T) {
 	kind, args, err = workforce.Plan(p, settings.ReviewType, "gpt-5.1-codex", "high")
 	require.NoError(t, err)
 	assert.Equal(t, "codex", kind)
-	assert.Equal(t, []string{"--no-daemon", "--model", "gpt-5.1-codex", "-c", `model_reasoning_effort="high"`}, args)
+	assert.Equal(t, []string{"--no-daemon", "--sandbox", "read-only", "--model", "gpt-5.1-codex", "-c", `model_reasoning_effort="high"`}, args)
 
 	for _, effort := range []string{"High", "-high", "high;rm", "aaaaaaaaaaaaaaaaa"} {
 		_, _, err := workforce.Plan(p, "coder", "", effort)
@@ -182,7 +182,7 @@ func TestSpawnIDs(t *testing.T) {
 	assert.Equal(t, "ha-review-1", res.Workers[0].ID)
 	assert.Equal(t, "codex", res.Workers[0].Agent, "review launches codex")
 	starts := f.h.params("agent.start")
-	assert.Equal(t, []any{"--no-daemon"}, starts[len(starts)-1]["args"], "codex off the daemon (A22), with no --name and no model")
+	assert.Equal(t, []any{"--no-daemon", "--sandbox", "read-only"}, starts[len(starts)-1]["args"], "codex off the daemon (A22), read-only (A55), with no --name and no model")
 
 	cfg := strings.Replace(teamConfig, "workers = 2\nslots = 3", "workers = 2\nslots = 9", 1)
 	g := newFixture(t, cfg)

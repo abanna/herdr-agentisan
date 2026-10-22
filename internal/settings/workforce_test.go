@@ -28,8 +28,8 @@ func TestAgentFor(t *testing.T) {
 		"a group model only":                         {groups: map[string]settings.Group{"qa": {Agent: settings.Agent{Model: "sonnet"}}}, typ: "qa", want: settings.Agent{Command: top.Command, Model: "sonnet"}},
 		"a group command drops the top-level model":  {groups: map[string]settings.Group{"research": {Agent: settings.Agent{Command: []string{"codex"}}}}, typ: "research", want: settings.Agent{Command: []string{"codex"}}},
 		"a group command and model":                  {groups: map[string]settings.Group{"research": {Agent: settings.Agent{Command: []string{"codex"}, Model: "gpt-5"}}}, typ: "research", want: settings.Agent{Command: []string{"codex"}, Model: "gpt-5"}},
-		"review is codex by default, off the daemon": {typ: "review", want: settings.Agent{Command: []string{"codex", "--no-daemon"}}},
-		"review keeps its group's model":             {groups: map[string]settings.Group{"review": {Agent: settings.Agent{Model: "gpt-5"}}}, typ: "review", want: settings.Agent{Command: []string{"codex", "--no-daemon"}, Model: "gpt-5"}},
+		"review is codex by default, off the daemon": {typ: "review", want: settings.Agent{Command: []string{"codex", "--no-daemon", "--sandbox", "read-only"}}},
+		"review keeps its group's model":             {groups: map[string]settings.Group{"review": {Agent: settings.Agent{Model: "gpt-5"}}}, typ: "review", want: settings.Agent{Command: []string{"codex", "--no-daemon", "--sandbox", "read-only"}, Model: "gpt-5"}},
 		"review set back to claude":                  {groups: map[string]settings.Group{"review": {Agent: settings.Agent{Command: []string{"claude"}}}}, typ: "review", want: settings.Agent{Command: []string{"claude"}}},
 		"the match on review is exact":               {typ: "Review", want: top},
 	}
@@ -85,7 +85,7 @@ agent = { command = ["codex", "--search"] }
 	p := got.Profile
 	assert.Equal(t, []settings.Team{{Project: "app", Short: "app", Layout: settings.LayoutTabs}}, got.Teams)
 	assert.Equal(t, settings.Spawn{ShellPrompt: `❯\s*$`, ShellReadyKeys: []string{"enter"}, ShellReadyAfter: 20 * time.Second}, p.Spawn, "--set over the project's wait")
-	assert.Equal(t, settings.Agent{Command: []string{"codex", "--no-daemon"}, Model: "gpt-5"}, p.AgentFor("review"))
+	assert.Equal(t, settings.Agent{Command: []string{"codex", "--no-daemon", "--sandbox", "read-only"}, Model: "gpt-5"}, p.AgentFor("review"))
 	assert.Equal(t, settings.Agent{Command: []string{"codex", "--search"}, Model: "o3"}, p.AgentFor("research"), "--set adds a model to the project's command")
 	assert.Equal(t, settings.Agent{Command: []string{"claude"}, Model: "sonnet"}, p.AgentFor("qa"), "the repo file sets a group's agent too")
 	assert.Equal(t, settings.Agent{Command: []string{"claude"}}, p.AgentFor("coder"))
