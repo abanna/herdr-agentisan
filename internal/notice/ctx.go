@@ -2,6 +2,7 @@ package notice
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/team"
@@ -155,11 +156,11 @@ func ctxText(c Crossing, alerted bool) string {
 // workDetails is " · NERD-5261 · verify": the item and stage the pane
 // reported, each only when it has one.
 func workDetails(p team.Pane) string {
-	var s string
+	var b strings.Builder
 	for _, f := range []string{p.Item, p.Stage} {
 		if f = field(f); f != "" {
-			s += " · " + f
+			b.WriteString(" · " + f)
 		}
 	}
-	return s
+	return b.String()
 }
