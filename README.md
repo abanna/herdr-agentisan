@@ -503,7 +503,9 @@ then `routing policy:`, the version a decision records; with `--project` it
 also refuses an override a worker type with that role cannot run, such as a
 claude binding for a type on codex.
 
-`worker spawn` asks routing once per spawn. While it is on, the decision is
+`worker spawn` asks routing once per spawn, and `team up` once per group it
+fills, before it opens anything: while routing is on, a group it refuses
+stops the whole `team up`. While it is on, the decision is
 the launch: `--model` must then name a binding the role allows, by its name
 or model id, and `--effort` one it takes. While it is off, spawn launches as
 before and only records what routing would have chosen. `--task-file

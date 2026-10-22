@@ -50,9 +50,11 @@ type Spawned struct {
 	FallbackReason routing.Reason `json:"fallback_reason,omitempty"`
 }
 
-// Routed is one spawn's routing decision, applied or not, and the workers
-// it was made for: one decision for every worker of the spawn.
+// Routed is one routing decision, applied or not, and the workers it was
+// made for: every worker of a spawn, or of one group team up fills.
 type Routed struct {
+	// Op is the command that asked: "worker spawn" or "team up".
+	Op             string
 	Project, Group string
 	IDs            []string
 	// Decision is nil when routing, off, would have refused the spawn:
@@ -124,26 +126,15 @@ func (s *Service) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 			return nil, err
 		}
 		c := choice{model: cmp.Or(req.Model, st.profile.AgentFor(req.Group).Model), effort: req.Effort}
-		if d != nil && d.Applied {
-			c = choice{model: d.ModelID, effort: d.Effort, provider: d.Provider}
-		}
-		ps, err := plan(st.profile, req.Group, c, ids)
-		for i := range ps {
-			ps[i].routing = rowOf(d)
-		}
-		return ps, err
+		return planRouted(st.profile, req.Group, c, d, ids)
 	})
 	if err != nil {
 		return SpawnResult{}, err
 	}
-	if s.Routed != nil && len(pending) > 0 {
-		s.Routed(ctx, Routed{Project: st.team.Project, Group: req.Group, IDs: idsOf(pending), Decision: d, Refused: refused})
-	}
+	s.tellRouted(ctx, Routed{Op: "worker spawn", Project: st.team.Project, Group: req.Group, Decision: d, Refused: refused}, pending)
 	workers, err := s.bringUp(ctx, st.profile.Spawn, pending)
-	if d != nil && d.Applied {
-		for i := range workers {
-			workers[i].Binding, workers[i].Model, workers[i].Effort, workers[i].FallbackReason = d.SelectedBinding, d.ModelID, d.Effort, d.FallbackReason
-		}
+	for i := range workers {
+		routedResult(&workers[i], d)
 	}
 	return SpawnResult{Project: st.team.Project, Workers: workers, Warnings: s.codexWarnings(pending)}, err
 }
@@ -196,21 +187,47 @@ func rowOf(d *routing.Decision) *store.Routing {
 	return r
 }
 
+// planRouted plans ids of typ with base's launch, or with the one d chose
+// when routing applied it, and gives each planned row d's record (A50).
+// Spawn and team up plan through it, so both launch what routing chose.
+func planRouted(p *settings.Profile, typ string, base choice, d *routing.Decision, ids []string) ([]planned, error) {
+	if d != nil && d.Applied {
+		base = choice{model: d.ModelID, effort: d.Effort, provider: d.Provider}
+	}
+	ps, err := plan(p, typ, base, ids)
+	for i := range ps {
+		ps[i].routing = rowOf(d)
+	}
+	return ps, err
+}
+
+// tellRouted hands s.Routed r with the ids of the workers in ws that are of
+// r's group; with none, it tells nothing.
+func (s *Service) tellRouted(ctx context.Context, r Routed, ws []opened) {
+	for _, w := range ws {
+		if w.group == r.Group {
+			r.IDs = append(r.IDs, w.id)
+		}
+	}
+	if s.Routed != nil && len(r.IDs) > 0 {
+		s.Routed(ctx, r)
+	}
+}
+
+// routedResult names in w the binding, model, effort and fallback reason d
+// launched it with, when routing applied d.
+func routedResult(w *Spawned, d *routing.Decision) {
+	if d != nil && d.Applied {
+		w.Binding, w.Model, w.Effort, w.FallbackReason = d.SelectedBinding, d.ModelID, d.Effort, d.FallbackReason
+	}
+}
+
 // kindOf is the agent an agent command runs: its executable's name.
 func kindOf(a settings.Agent) string {
 	if len(a.Command) == 0 {
 		return ""
 	}
 	return filepath.Base(a.Command[0])
-}
-
-// idsOf is the logical ids of ws.
-func idsOf(ws []opened) []string {
-	out := make([]string, len(ws))
-	for i, w := range ws {
-		out[i] = w.id
-	}
-	return out
 }
 
 // codexWarnings warns when a Codex worker was planned and Codex's ctx hooks

@@ -521,9 +521,10 @@ func TestTheWorkforceGetsThePreflightHook(t *testing.T) {
 	assert.Nil(t, daemon.WorkforceOf(daemon.Options{Team: &daemon.TeamOptions{}}, daemon.Identity{}).Preflight)
 }
 
-// TestTheWorkforceRecordsItsRouting: the daemon's service hands each spawn's
-// routing decision to the workflow events, one per worker, and to daemon.log
-// whole; a refusal while routing is off goes to daemon.log alone (A50).
+// TestTheWorkforceRecordsItsRouting: the daemon's service hands each routing
+// decision, a spawn's or a team up group's, to the workflow events, one per
+// worker, and to daemon.log whole, named for its op; a refusal while routing
+// is off goes to daemon.log alone (A50).
 func TestTheWorkforceRecordsItsRouting(t *testing.T) {
 	t.Parallel()
 	events, rec := telemetrytest.NewEvents()
@@ -533,7 +534,7 @@ func TestTheWorkforceRecordsItsRouting(t *testing.T) {
 	require.NotNil(t, svc.Routed)
 	d := routing.Decision{Role: "coder", Provider: "claude", SelectedBinding: "claude_mid", ModelID: "claude-sonnet-5-5", Effort: "high", Applied: true}
 
-	svc.Routed(t.Context(), workforce.Routed{Project: "ha", Group: "coder", IDs: []string{"ha-coder-1", "ha-coder-2"}, Decision: &d})
+	svc.Routed(t.Context(), workforce.Routed{Op: "worker spawn", Project: "ha", Group: "coder", IDs: []string{"ha-coder-1", "ha-coder-2"}, Decision: &d})
 	got := rec.Events()
 	require.Len(t, got, 2)
 	for i, id := range []string{"ha-coder-1", "ha-coder-2"} {
@@ -550,9 +551,15 @@ func TestTheWorkforceRecordsItsRouting(t *testing.T) {
 	assert.Equal(t, true, routed["applied"])
 
 	logs.Reset()
-	svc.Routed(t.Context(), workforce.Routed{Project: "ha", Group: "ops", IDs: []string{"ha-ops-1"}, Refused: routing.ErrUnknownRole})
-	assert.Len(t, rec.Events(), 2, "no event without a decision")
-	assert.Contains(t, logs.String(), "it would refuse this spawn")
+	svc.Routed(t.Context(), workforce.Routed{Op: "team up", Project: "ha", Group: "qa", IDs: []string{"ha-qa-1"}, Decision: &d})
+	require.Len(t, rec.Events(), 3)
+	require.NoError(t, json.Unmarshal([]byte(logs.String()), &line))
+	assert.Equal(t, "team up routed", line["message"])
+
+	logs.Reset()
+	svc.Routed(t.Context(), workforce.Routed{Op: "worker spawn", Project: "ha", Group: "ops", IDs: []string{"ha-ops-1"}, Refused: routing.ErrUnknownRole})
+	assert.Len(t, rec.Events(), 3, "no event without a decision")
+	assert.Contains(t, logs.String(), "worker spawn: routing is off; when on, it would refuse this")
 	assert.Contains(t, logs.String(), routing.ErrUnknownRole.Error())
 }
 

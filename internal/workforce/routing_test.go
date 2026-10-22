@@ -121,6 +121,7 @@ func TestSpawnLaunchesWhatRoutingChose(t *testing.T) {
 			d := routed[0].Decision
 			require.NotNil(t, d)
 			assert.Nil(t, routed[0].Refused)
+			assert.Equal(t, "worker spawn", routed[0].Op)
 			assert.Equal(t, "herdr-agentisan", routed[0].Project)
 			assert.Equal(t, tc.group, routed[0].Group)
 			assert.True(t, d.Applied)
@@ -358,4 +359,149 @@ func TestSpawnRefusesAnAgentChangedAfterRouting(t *testing.T) {
 	assert.Contains(t, err.Error(), "changed from claude to codex")
 	assert.Empty(t, f.h.params("tab.create"))
 	assert.Empty(t, rec.all())
+}
+
+// upRouting is a group's launch as routing chooses it in these tests.
+type upRouting struct {
+	kind, role, binding, model string
+	reason                     routing.Reason
+}
+
+// upArgs is the launch's args as agent.start gets them, for worker id.
+func (u upRouting) upArgs(id string) []any {
+	if u.kind == "codex" {
+		return []any{"--no-daemon", "--sandbox", "read-only", "--model", u.model, "-c", `model_reasoning_effort="high"`}
+	}
+	return []any{"--model", u.model, "--effort", "high", "--name", id}
+}
+
+// TestUpLaunchesWhatRoutingChose: with routing on, team up decides each
+// group it fills as a spawn of that group would: each worker launches with
+// its group's binding, its row records it and the result names it, and each
+// group's decision is told once, with that group's workers alone (A50).
+func TestUpLaunchesWhatRoutingChose(t *testing.T) {
+	t.Parallel()
+	f, rec := routedFixture(t, strings.Replace(routingOn, "groups.review]\nworkers = 0", "groups.review]\nworkers = 1", 1))
+	want := map[string]upRouting{
+		"coder":  {"claude", "coder", "claude_mid", "claude-sonnet-5-5", routing.ReasonTaskNotFound},
+		"qa":     {"claude", "pre_check", "claude_mid", "claude-sonnet-5-5", ""},
+		"review": {"codex", "code_review", "codex_strong", "gpt-6.1-sol", ""},
+	}
+
+	res, err := f.svc.Up(t.Context(), workforce.UpRequest{})
+	require.NoError(t, err)
+	groups := map[string][]string{}
+	for _, w := range res.Workers {
+		u := want[w.Group]
+		groups[w.Group] = append(groups[w.Group], w.ID)
+		assert.Equal(t, workforce.Spawned{ID: w.ID, Group: w.Group, PaneID: w.PaneID, Agent: u.kind, Binding: u.binding, Model: u.model, Effort: "high", FallbackReason: u.reason}, w)
+	}
+	assert.Equal(t, map[string][]string{"coder": {"ha-coder-1", "ha-coder-2"}, "qa": {"ha-qa-1"}, "review": {"ha-review-1"}}, groups)
+	starts := f.h.params("agent.start")
+	require.Len(t, starts, 4)
+	for _, s := range starts {
+		id := s["name"].(string)
+		u := want[f.row(t, id).Group]
+		assert.Equal(t, u.kind, s["kind"])
+		assert.Equal(t, u.upArgs(id), s["args"])
+	}
+	routed := rec.all()
+	require.Len(t, routed, 3, "one decision per group filled")
+	for i, g := range []string{"coder", "qa", "review"} {
+		r, u := routed[i], want[g]
+		assert.Equal(t, "team up", r.Op)
+		assert.Equal(t, "herdr-agentisan", r.Project)
+		assert.Equal(t, g, r.Group)
+		assert.Equal(t, groups[g], r.IDs, "the group's own workers")
+		assert.Nil(t, r.Refused)
+		require.NotNil(t, r.Decision)
+		assert.True(t, r.Decision.Applied)
+		for _, id := range groups[g] {
+			assert.Equal(t, &store.Routing{Role: u.role, Provider: u.kind, Binding: u.binding, ModelID: u.model, Effort: "high", PolicyVersion: r.Decision.PolicyVersion}, routingOf(t, f, id))
+		}
+	}
+}
+
+// TestUpWhileRoutingIsOff: with routing off, team up launches as before and
+// no row records a decision; each group's decision, what routing would have
+// chosen, is told with its workers, and a group routing would refuse still
+// fills, its refusal told (A50).
+func TestUpWhileRoutingIsOff(t *testing.T) {
+	t.Parallel()
+	f, rec := routedFixture(t, strings.Replace(teamConfig+opsGroup, "groups.ops]\nworkers = 0", "groups.ops]\nworkers = 1", 1))
+
+	res, err := f.svc.Up(t.Context(), workforce.UpRequest{})
+	require.NoError(t, err)
+	require.Len(t, res.Workers, 4)
+	for _, w := range res.Workers {
+		assert.Equal(t, workforce.Spawned{ID: w.ID, Group: w.Group, PaneID: w.PaneID, Agent: "claude"}, w)
+		assert.Nil(t, routingOf(t, f, w.ID))
+	}
+	for _, s := range f.h.params("agent.start") {
+		assert.Equal(t, []any{"--name", s["name"]}, s["args"])
+	}
+	told := map[string]workforce.Routed{}
+	for _, r := range rec.all() {
+		assert.Equal(t, "team up", r.Op)
+		told[r.Group] = r
+	}
+	require.Len(t, told, 3)
+	for _, g := range []string{"coder", "qa"} {
+		require.NotNil(t, told[g].Decision, g)
+		assert.False(t, told[g].Decision.Applied)
+		assert.Equal(t, "claude_mid", told[g].Decision.SelectedBinding)
+	}
+	assert.Equal(t, []string{"ha-coder-1", "ha-coder-2"}, told["coder"].IDs)
+	assert.Nil(t, told["ops"].Decision)
+	require.ErrorIs(t, told["ops"].Refused, routing.ErrUnknownRole)
+	assert.Equal(t, []string{"ha-ops-1"}, told["ops"].IDs)
+}
+
+// TestUpRefusedWholeByRouting: with routing on, a group routing refuses
+// refuses the whole up before anything opens, the groups it decided before
+// included: no tab, no dashboard and nothing told (A50).
+func TestUpRefusedWholeByRouting(t *testing.T) {
+	t.Parallel()
+	review := strings.Replace(routingOn, "groups.review]\nworkers = 0", "groups.review]\nworkers = 1", 1)
+	for name, tc := range map[string]struct {
+		config string
+		want   error
+	}{
+		"a group no role has":               {config: strings.Replace(routingOn, "groups.ops]\nworkers = 0", "groups.ops]\nworkers = 1", 1), want: routing.ErrUnknownRole},
+		"the last group's default disabled": {config: review + "\n[routing.bindings.codex_strong]\nenabled = false\n", want: routing.ErrBlocked},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f, rec := routedFixture(t, tc.config)
+			f.svc.Dashboard = dashboard
+
+			_, err := f.svc.Up(t.Context(), workforce.UpRequest{})
+			require.ErrorIs(t, err, tc.want)
+			assert.Empty(t, f.h.params("tab.create"))
+			assert.Empty(t, f.h.params("plugin.pane.open"))
+			assert.Empty(t, rec.all())
+		})
+	}
+}
+
+// TestUpRoutesOnTheConfigurationItLocked: team up asks routing on the
+// configuration the lock read, not the preflight's: routing turned on
+// during the preflight decides the launch.
+func TestUpRoutesOnTheConfigurationItLocked(t *testing.T) {
+	t.Parallel()
+	f, rec := routedFixture(t, teamConfig)
+	f.svc.Preflight = func(context.Context, string) error {
+		return os.WriteFile(filepath.Join(f.config, settings.FileName), []byte(strings.ReplaceAll(routingOn, "REPO", f.repo)), 0o600)
+	}
+
+	res, err := f.svc.Up(t.Context(), workforce.UpRequest{})
+	require.NoError(t, err)
+	require.Len(t, res.Workers, 3)
+	for _, s := range f.h.params("agent.start") {
+		assert.Equal(t, []any{"--model", "claude-sonnet-5-5", "--effort", "high", "--name", s["name"]}, s["args"])
+	}
+	for _, r := range rec.all() {
+		require.NotNil(t, r.Decision)
+		assert.True(t, r.Decision.Applied, r.Group)
+	}
 }

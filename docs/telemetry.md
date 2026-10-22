@@ -224,11 +224,11 @@ FROM logs-agentisan.otel-*
 
 ### `agentisan.worker.routed`
 
-The model and effort `worker spawn` launched a worker with (ADR-001 A50):
-one event per worker, all of a spawn's sharing one decision. While
-`[routing] enabled` is false it is the decision routing would have made, with
-`agentisan.routing.applied` false; a spawn routing would refuse then emits
-nothing, and `daemon.log` says why. The record's time is the decision's. The
+The model and effort `worker spawn` or `team up` launched a worker with
+(ADR-001 A50): one event per worker, all of a spawn's, or of a group team up
+fills, sharing one decision. While `[routing] enabled` is false it is the
+decision routing would have made, with `agentisan.routing.applied` false; one
+routing would refuse then emits nothing, and `daemon.log` says why. The record's time is the decision's. The
 body reads `<worker id> <binding> <effort>`.
 
 Every audit field is present, `""` where the decision has none.

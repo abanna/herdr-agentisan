@@ -233,16 +233,17 @@ func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleCl
 	}
 }
 
-// routed records a spawn's routing decision (A50): one workflow event per
-// worker and a daemon.log line with the whole decision, which holds no
-// assignment text. A refusal while routing is off is logged only.
+// routed records a routing decision of a spawn or of one group team up
+// fills (A50): one workflow event per worker and a daemon.log line, named for
+// the op, with the whole decision, which holds no assignment text. A refusal
+// while routing is off is logged only.
 func (o Options) routed(ctx context.Context, r workforce.Routed) {
 	log := o.Logger.Info().Str("project", r.Project).Str("group", r.Group).Strs("workers", r.IDs)
 	if r.Decision == nil {
-		log.AnErr("refused", r.Refused).Msg("worker spawn: routing is off; when on, it would refuse this spawn")
+		log.AnErr("refused", r.Refused).Msg(r.Op + ": routing is off; when on, it would refuse this")
 		return
 	}
-	log.Interface("routing", r.Decision).Msg("worker spawn routed")
+	log.Interface("routing", r.Decision).Msg(r.Op + " routed")
 	for _, id := range r.IDs {
 		o.Team.Events.WorkerRouted(ctx, id, r.Project, r.Group, *r.Decision)
 	}

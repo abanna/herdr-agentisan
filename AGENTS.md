@@ -217,7 +217,8 @@ exempts whatever is later added under that name.
   `Policy.Resolve` maps a worker type's role and provider, the boss's task
   packet (`DecodeTask`, bounded) and overrides onto a binding. It returns a
   `Decision` that is also the audit record. `worker spawn` asks it once per
-  spawn, records it on each worker's row and sends it as an
+  spawn, and `team up` once per group it fills, before anything opens; each
+  records it on each worker's row and sends it as an
   `agentisan.worker.routed` event.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
