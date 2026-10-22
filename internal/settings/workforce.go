@@ -21,10 +21,11 @@ const ReviewType = "review"
 
 // reviewCommand is the review type's built-in agent command: codex outside
 // the shared app-server daemon, which A22 requires for its ctx (`report
-// codex` reports nothing under the daemon). It is a rule of the per-type
-// lookup, not a default layer: a default groups.review would be a group
-// without workers.
-var reviewCommand = []string{"codex", "--no-daemon"}
+// codex` reports nothing under the daemon), in Codex's read-only sandbox,
+// which roles/review.md's reviewer works under (A55). It is a rule of the
+// per-type lookup, not a default layer: a default groups.review would be a
+// group without workers.
+var reviewCommand = []string{"codex", "--no-daemon", "--sandbox", "read-only"}
 
 // DefaultShellReadyAfter is how long spawn waits for a new tab's shell before
 // it sends shell_ready_keys, when the profile does not say.
@@ -65,7 +66,10 @@ type Spawn struct {
 	// instant prompt) ends it at once.
 	// herdr matches it with Rust's regex syntax. The check here compiles it
 	// with Go's regexp, a first check only: a construct Rust lacks (a
-	// literal {, \Q…\E, a nested [) passes here and fails the spawn.
+	// literal {, \Q…\E, a nested [) passes here and fails the spawn, and one
+	// Go lacks ((?x), a{1001}) is refused here though Rust takes it. A
+	// pattern both compile can still match differently: Rust's \d, \w, \s
+	// and \b are Unicode's, Go's ASCII's (A53).
 	ShellPrompt string
 	// ShellReadyKeys are sent once to a new tab whose shell is still not
 	// ready after ShellReadyAfter and has a program at its foreground: they
@@ -143,6 +147,13 @@ func (m merged) checkModels() error {
 
 // launchFlags are the agent flags the workforce sets itself: a command that
 // carries one would be launched with two. --effort is routing's (A50).
+//
+// A command can still name a model another way, a codex -p profile or a
+// claude --settings file, and is not refused for it (A53): by each CLI's own
+// precedence the --model the workforce passes outranks both, and with no
+// model set the command's own configuration decides, which only the user's
+// layers set (A46). An abbreviation such as --mod is no --model: claude
+// matches long flags whole, and codex refuses it as an unexpected argument.
 var launchFlags = []string{"--model", "-m", "--name", "-n", "--effort"}
 
 // codexConfigKeys are the Codex settings routing sets (A50): a codex command

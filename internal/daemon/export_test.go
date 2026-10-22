@@ -35,7 +35,8 @@ var Held = held
 // HeldKeepingACopy is Held, with a copy of the probe's open file kept past
 // the probe, as a child forked while the probe had the lock keeps one until
 // it execs. The copy is a dup, which shares the open file as a fork's does;
-// letGo closes it. A probe that finds the lock held makes no copy.
+// letGo closes it. A probe that finds the lock held makes no copy. It is
+// Held's own probe: only the kept it passes differs from Held's.
 func HeldKeepingACopy(path string) (isHeld bool, letGo func() error, err error) {
 	fd, dupErr := -1, error(nil)
 	isHeld, err = heldKeeping(path, func(f *os.File) {
@@ -57,6 +58,12 @@ func HeldKeepingACopy(path string) (isHeld bool, letGo func() error, err error) 
 // st under ctx.
 func HealthOver(ctx context.Context, st *store.Store, base HealthInfo) HealthInfo {
 	return Options{Logger: zerolog.Nop()}.health(ctx, st, base)()
+}
+
+// ClaimOver is the dispatcher's claim of to's next message on st, under
+// ctx, as serve makes it.
+func ClaimOver(ctx context.Context, st *store.Store, to store.Address) (store.Message, bool, error) {
+	return (&dispatcher{st: st, now: time.Now}).claim(ctx, to)
 }
 
 // BackCode is the refusal code the back op answers err with.
@@ -209,6 +216,9 @@ func WorkforceOpNames() []string {
 	return slices.Sorted(maps.Keys(workforceOps(&workforce.Service{}, new(atomic.Bool), nil)))
 }
 
+// IOTimeout is the exchange, which a client waits past an op's budget.
+const IOTimeout = ioTimeout
+
 // GroupDescriptions is the team poll's reader of the group descriptions
 // (A36), driven one poll at a time.
 type GroupDescriptions struct{ d *groupDescriptions }
@@ -359,3 +369,7 @@ func (s GitHubSource) Collected(ctx context.Context, gh github.Runner, h setting
 
 // Take is what the source has handed the poll since the last Take.
 func (s GitHubSource) Take() []notice.Notice { return s.g.n.github.take() }
+
+// BetweenReads runs f, from now on, in each collection between its read of
+// what is held and its read of state.db, where an acknowledgement may land.
+func (s GitHubSource) BetweenReads(f func()) { s.g.betweenReads = f }

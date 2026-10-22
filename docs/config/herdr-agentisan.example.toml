@@ -19,7 +19,8 @@
 #      rotation.thresholds (ADR-001 A46). Everything else, what runs or
 #      is typed in your terminals, where a secret goes, a group's
 #      description and any key added later, comes only from this file
-#      and --set.
+#      and --set. An empty table sets nothing, but one that adds an
+#      entry, such as [integrations.x], is refused there too (A53).
 #   5. --set key.path=value on the command line, e.g.
 #      --set groups.coder.workers=4  --set 'rotation.thresholds=[50,60,70]'
 #
@@ -50,6 +51,12 @@ schema_version = 1
 command = ["claude"]
 model = "opus"
 
+# The context percentages at which the daemon tells a team's boss a pane is
+# due to rotate (ADR-001 D7, A33): soft, hard and the ceiling, which also
+# alerts you with a toast. Three whole numbers from 1 to 100, ascending, each
+# crossed at its percentage or above. These are the project's, and the
+# boss's; a group can set its own (see librarian below). Read once when the
+# daemon starts, from this file, the project's table and the repo file.
 [rotation]
 thresholds = [55, 65, 75]
 
@@ -71,7 +78,9 @@ repeat = 300
 # Each group is a worker type: coder, precheck, qa, review (Codex), research,
 # librarian or debugger. workers is how many `team up` starts, slots is the
 # cap the boss can scale to (64 >= slots >= workers >= 0). boss is not a
-# type: the boss has its own tab.
+# type: the boss has its own tab. A group's name is at most 20 characters,
+# so its workers' ids, <short>-<group>-<n>, fit herdr's 32-character agent
+# names (A53).
 #
 # description is the group's one-line purpose, drawn under its title on the
 # dashboard (ADR-001 A36): at most 80 printable characters. It goes with the
@@ -82,12 +91,17 @@ repeat = 300
 #
 # A group's own agent (ADR-001 A23), which `worker spawn` launches: with a
 # command of its own, a type runs that command and that model only, never the
-# [agent] model above. Without one, review runs codex --no-daemon (A22), and
-# every other type [agent]'s command, with the group's model or [agent]'s.
+# [agent] model above. Without one, review runs codex --no-daemon --sandbox
+# read-only (A22, A55), and every other type [agent]'s command, with the
+# group's model or [agent]'s.
 # Spawn adds --no-daemon to any codex command that lacks it (A22). The command
 # runs claude or codex (D12) and carries no --model, -m, --name, -n or
 # --effort, nor a codex -c setting model or model_reasoning_effort: the
-# workforce sets them.
+# workforce sets them. A codex -p profile or a claude --settings file can
+# still name a model: the --model the workforce passes outranks both, by each
+# CLI's own precedence, and with no model set the command's configuration
+# decides (A53). An abbreviation such as --mod is no --model to either:
+# claude matches long flags whole, and codex refuses it.
 [groups.precheck]
 workers = 1
 slots = 1
@@ -97,6 +111,8 @@ agent = { model = "sonnet" }
 [groups.librarian]
 workers = 1
 slots = 1
+# A librarian reads a lot, so it is rotated sooner.
+rotation = { thresholds = [45, 55, 65] }
 
 [groups.debugger]
 workers = 0
@@ -120,7 +136,11 @@ token = { env = "GITHUB_TOKEN" }
 #                        herdr matches it with Rust's regex syntax; resolve
 #                        compiles it with Go's, a first check only, so a
 #                        construct Rust lacks (a literal {, \Q…\E, a nested
-#                        [) passes here and fails the spawn.
+#                        [) passes here and fails the spawn, and one Go
+#                        lacks ((?x), a{1001}) is refused here though Rust
+#                        takes it (A53). Where both compile a pattern they
+#                        can still differ: Rust's \d, \w, \s and \b
+#                        match Unicode, Go's ASCII only.
 #   shell_ready_keys     keys sent once when the shell is still not ready
 #                        after shell_ready_after_s and a program (a password
 #                        prompt, say) has the terminal. Default none.
@@ -228,6 +248,8 @@ description = "runs the pre-PR test gates and owns the test-slot queue"
 [projects.agentisan.groups.coders]
 description = "write fixes + new code · run their own review loop"
 
+# review is the Codex reviewer (ADR-001 A55): read-only, it takes
+# roles/review.md and one PR's inputs from the boss for each review.
 [projects.agentisan.groups.review]
 workers = 1
 slots = 1

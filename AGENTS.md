@@ -132,7 +132,8 @@ exempts whatever is later added under that name.
   the plugin socket (D6) that answers `health`, `back` (A16: walk the
   focus history, un-zoom the pane left, then focus the target), `snapshot`
   and the workforce ops (A23, `workforce.go`), each with a budget of its
-  own. Every poll it also reconciles `state.db`'s `workers` rows with
+  own, which their client gives every ask, a not_ready one asked again for
+  10 s (A52). Every poll it also reconciles `state.db`'s `workers` rows with
   herdr's panes (`bind.go`, A35), rebuilds the team model, pushes `$team`
   and every agent pane's ctx display (`team.go`, A28) and caches every team's
   snapshot, each row with its agent's launch model from the pane's processes
@@ -144,7 +145,9 @@ exempts whatever is later added under that name.
   with its description, re-read when the shared file changes
   (`descriptions.go`, A36), and sends each status change since the last
   poll as a workflow event (`events.go`), and tells each team's boss what
-  the poll sees, through `internal/notice` (`notices.go`, A44). It keeps
+  the poll sees, through `internal/notice` (`notices.go`, A44), with the
+  context levels each agent pane crosses and, at the ceiling, a toast for
+  the user (A33). It keeps
   herdr's agent view on the focused team, which focus events and the poll
   feed it, and clears it outside every team and on a clean stop (`view.go`,
   the A28 addendum, A49).
@@ -174,29 +177,38 @@ exempts whatever is later added under that name.
 - `internal/notice/` — boss notices (ADR-001 A44): the team poll's source
   (`Watch`: a turn's end from `agent.list`'s `completion_seq`, blocked,
   unknown for two polls, gone (a pane closed or moved, or its agent exited),
-  and the daemon's start), GitHub's events (`github.go`, A45: merged, CI
-  failed or passed, a conflict, a 👍, each with its seen-set key), the
-  per-boss pacing (`Batcher`: coalesced, at most one message per gap,
-  repeats dropped, 8 KiB a message) and the `Sink` that delivers it. The
-  daemon's sink writes daemon.log until the inbox delivers (NERD-5256).
-  Pure: tests build models by hand.
+  and the daemon's start), the context levels' source (`CtxWatch`: each
+  agent pane's ctx crossing its rotation thresholds, the boss's included,
+  remembered by terminal and re-armed 5 under, A33), GitHub's events
+  (`github.go`, A45: merged, CI failed or passed, a conflict, a 👍, each
+  with its seen-set key), the per-boss pacing (`Batcher`: coalesced, at most
+  one message per gap, repeats dropped, 8 KiB a message) and the `Sink` that
+  delivers it. The daemon's sink writes daemon.log until the inbox delivers
+  (NERD-5256). Pure: tests build models by hand.
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
-  `team status`, `worker spawn` and `worker retire` so far, and `send`'s
+  `team status`, `team up`, `worker spawn` and `worker retire`, and `send`'s
   sender and recipient (A30): each group's counts and members on a tabs team
   or the ◆ spaces, with idle times from the daemon's clock and the rows no
   pane is bound to (A35); opening a tab per worker and waiting for its agent,
-  after `internal/preflight`'s check; and closing the pane a worker's row is
-  bound to, after its handoff when asked, with the row retired. The daemon
-  runs them; `internal/cli` only asks it.
+  after `internal/preflight`'s check, each group up to its count for
+  `team up`, which also opens the team's dashboard above the boss
+  (`dashboard.go`); and closing the pane a worker's row is bound to, after
+  its handoff when asked, with the row retired. The daemon runs them, with
+  the plugin's dashboard pane and the Codex hooks check `internal/cli` gives
+  it; `internal/cli` only asks it.
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
   references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check,
   each group's one-line description (A36), never from a repo file, and each
   project's test-slot lock files, which the daemon reads once at start
-  (`tests.go`, A40). A repo file is committed, so it sets only colour, github,
-  group counts, models and rotation (A46, `repoFileKeys`, refused by default),
-  and a model from any layer is checked as safe to pass to an agent
+  (`tests.go`, A40), and every project's rotation thresholds, a group's
+  own included, which the daemon reads once at start, the repo file
+  included (`rotation.go`, A33). A repo file is committed, so it sets only
+  colour, github, group counts, models and rotation (A46, `repoFileKeys`,
+  refused by default, an empty table adding an entry included, A53), and
+  the merged model, whichever layer sets it, is checked as safe to pass to
+  an agent
   (`CheckModel`). Sample in `docs/config/herdr-agentisan.example.toml`.
 - `internal/routing/` — the model and effort each spawned worker starts
   with (ADR-001 A50, NERD-5289). It reads the user's routing rules,
@@ -296,6 +308,13 @@ exempts whatever is later added under that name.
   reads fenced to the repo it starts in and the daemon's directory.
   `herdr-agentisan events` and `debugger args` are its commands;
   `TestRoleMatchesTheLaunch` keeps the role, the CLI and the launch in step.
+- `roles/review.md` — the Codex review worker's role (ADR-001 A55):
+  agentisan-skills' `## Review guidelines`, vendored byte for byte, with the
+  reviewer's read-only rules, its report's fields and its final line. The
+  boss sends it whole with `send` before each review; no Go reads it.
+  `internal/settings/reviewrole_test.go` pins the section's hash and commit,
+  the guards and the read-only default, and
+  `internal/routing/reviewrole_test.go` routing's `findings_require`.
 - `.devcontainer/` — the reproducible dev environment: Go 1.26.10 plus the
   two tools `go tool` does not resolve (Task, uv).
 - `docs/architecture.md` — why the pieces are shaped this way, and the

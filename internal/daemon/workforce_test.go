@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -102,6 +104,8 @@ func TestWorkforceOpsOverTheSocket(t *testing.T) {
 		"spawn takes no --set":        {op: daemon.OpWorkerSpawn, args: map[string]any{"group": "coder", "count": 1, "set": []string{"routing.bindings.claude_mid.model_id=claude-fable-5-1"}}, code: "bad_request"},
 		"spawn args not UTF-8":        {op: daemon.OpWorkerSpawn, args: json.RawMessage("{\"group\":\"coder\",\"count\":1,\"task\":{\"task_lookup_status\":\"found\",\"worker_assignment\":\"\xff\"}}"), code: "bad_request"},
 		"spawn args with a surrogate": {op: daemon.OpWorkerSpawn, args: json.RawMessage("{\"group\":\"coder\",\"count\":1,\"task\":{\"task_lookup_status\":\"found\",\"worker_assignment\":\"\xed\xa0\x80\"}}"), code: "bad_request"},
+		"team up, an unknown project": {op: daemon.OpTeamUp, args: map[string]any{"project": "nope"}, code: "unknown_project"},
+		"team up, an unknown arg":     {op: daemon.OpTeamUp, args: map[string]any{"group": "coder"}, code: "bad_request"},
 		"retire with no name":         {op: daemon.OpWorkerRetire, args: map[string]any{}, code: "bad_request"},
 		"retire the boss":             {op: daemon.OpWorkerRetire, args: map[string]any{"target": "w14:p1"}, code: "not_a_worker"},
 		"retire nobody":               {op: daemon.OpWorkerRetire, args: map[string]any{"target": "ha-coder-9"}, code: "unknown_worker"},
@@ -257,20 +261,25 @@ func TestDaemonStopEndsAHandoffWait(t *testing.T) {
 			stateDir := shortDir(t)
 			r := run(t, teamOpts(t, stateDir, th, workforceConfig(t)))
 			healthy(t, stateDir, th.fakeHerdr)
+			poll := freezePoll(t, th)
 
 			done := make(chan error, 1)
 			go func() {
 				_, err := daemon.Workforce(context.Background(), socketPath(t, stateDir, th.path), daemon.OpWorkerRetire, workforce.RetireRequest{Target: "ha-coder-1", AfterHandoff: true})
 				done <- err
 			}()
-			// The op reads the config, herdr and state.db first; a second is
-			// ample for that, and the handoff wait itself has 1,500 s.
-			time.Sleep(time.Second)
+			// The op reads herdr's layout, agent.list last, then state.db's
+			// workers rows, and then lists the panes: its handoff wait's
+			// first look. A stop before that list fails a read (herdr_failed,
+			// store_failed) rather than ending the wait, which has 1,500 s.
+			require.Eventually(t, func() bool { return poll.askedAfter("agent.list", "pane.list") }, ready, 5*time.Millisecond,
+				"the retire never reached its handoff wait")
 			select {
 			case err := <-done:
 				t.Fatalf("the retire ended before the stop: %v", err)
 			default:
 			}
+			poll.release() // a crash waits for every handler, a held push's too
 			tc.stop(r, th)
 			select {
 			case err := <-r.done:
@@ -283,18 +292,80 @@ func TestDaemonStopEndsAHandoffWait(t *testing.T) {
 			case <-time.After(ready):
 				t.Fatal("the daemon's stop waited for the handoff")
 			}
+			// Either stop answers handoff_timeout, and the answer always
+			// lands: the wait polls an unreachable herdr again until the op's
+			// context ends, and the server's close waits for every handler,
+			// which writes its answer before it closes. An early stop answers
+			// a read's herdr_failed or store_failed instead.
 			select {
 			case err := <-done:
-				if re, ok := errors.AsType[*daemon.RequestError](err); ok {
-					assert.Equal(t, "handoff_timeout", re.Code)
-				} else {
-					require.ErrorIs(t, err, daemon.ErrUnavailable)
-				}
+				re, ok := errors.AsType[*daemon.RequestError](err)
+				require.True(t, ok, "the client got no answer: %v", err)
+				assert.Equal(t, "handoff_timeout", re.Code)
 			case <-time.After(ready):
 				t.Fatal("the client never heard back")
 			}
 		})
 	}
+}
+
+// frozenPoll holds th's team poll at its pushes, which only the poll makes,
+// so every herdr call made meanwhile is another caller's.
+type frozenPoll struct {
+	frozen chan struct{}
+	// release lets the held pushes answer; the poll goes on.
+	release func()
+	mu      sync.Mutex
+	asked   []string // the methods herdr was asked while the poll was held
+}
+
+// freezePoll holds th's team poll at its next push until release, and
+// returns once it is held. A push follows the poll's reconcile, which opens
+// the workforce ops, so they are open by then. Each held push holds the poll
+// until its call's timeout, and a poll pushes to every team and agent pane,
+// so it stays held for many seconds even unreleased. When the hook lands on
+// a poll's last push, the poll goes on after one CallTimeout (5 s), and its
+// own pane.list and agent.list are recorded from then: a test whose other
+// caller takes longer than that to ask can read the poll's calls as its own.
+func freezePoll(t *testing.T, th *teamHerdr) *frozenPoll {
+	t.Helper()
+	held := make(chan struct{})
+	f := &frozenPoll{frozen: make(chan struct{}), release: sync.OnceFunc(func() { close(held) })}
+	freeze := sync.OnceFunc(func() { close(f.frozen) })
+	th.mu.Lock()
+	th.onCall = func(method string) {
+		if method == "workspace.report_metadata" || method == "pane.report_metadata" {
+			freeze()
+			<-held
+			return
+		}
+		select {
+		case <-f.frozen:
+			f.mu.Lock()
+			f.asked = append(f.asked, method)
+			f.mu.Unlock()
+		default:
+		}
+	}
+	th.mu.Unlock()
+	// After the fake herdr's own cleanup, so it runs first: herdrtest's Close
+	// waits for every handler, a held push's too.
+	t.Cleanup(f.release)
+	select {
+	case <-f.frozen:
+	case <-time.After(ready):
+		t.Fatal("the team poll never pushed")
+	}
+	return f
+}
+
+// askedAfter reports whether herdr was asked then after first while the
+// poll was held.
+func (f *frozenPoll) askedAfter(first, then string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := slices.Index(f.asked, first)
+	return i >= 0 && slices.Contains(f.asked[i+1:], then)
 }
 
 // TestAClientWaitsOutItsOpsBudget: a client waits an op's own budget, past
@@ -429,17 +500,24 @@ func TestAnOpEndsWithTheDaemon(t *testing.T) {
 }
 
 // TestTheWorkforceGetsThePreflightHook: Hooks.Preflight is the check the
-// daemon's spawns run (A34); with none, the service runs its default.
+// daemon's spawns run (A34); with none, the service runs its default. The
+// team's dashboard pane and Codex hooks check are the TeamOptions' own.
 func TestTheWorkforceGetsThePreflightHook(t *testing.T) {
 	t.Parallel()
 	var checked string
-	o := daemon.Options{Team: &daemon.TeamOptions{}, Hooks: daemon.Hooks{Preflight: func(_ context.Context, repo string) error {
+	dash := workforce.DashboardPane{PluginID: "p", Entrypoint: "dashboard", Title: "Dashboard"}
+	o := daemon.Options{Team: &daemon.TeamOptions{Dashboard: dash, CodexHooks: func() (bool, error) { return true, nil }}, Hooks: daemon.Hooks{Preflight: func(_ context.Context, repo string) error {
 		checked = repo
 		return nil
 	}}}
 	svc := daemon.WorkforceOf(o, daemon.Identity{})
 	require.NoError(t, svc.Preflight(t.Context(), "/repo"))
 	assert.Equal(t, "/repo", checked)
+	assert.Equal(t, dash, svc.Dashboard)
+	require.NotNil(t, svc.CodexHooks)
+	installed, err := svc.CodexHooks()
+	require.NoError(t, err)
+	assert.True(t, installed)
 	assert.Nil(t, daemon.WorkforceOf(daemon.Options{Team: &daemon.TeamOptions{}}, daemon.Identity{}).Preflight)
 }
 
@@ -513,9 +591,10 @@ func TestWorkforceCodes(t *testing.T) {
 	}
 }
 
-// TestOpBudgets: team status, retire and send get 10 s, spawn 110 s, and retire
-// --after-handoff 1,500 s, both in the client's wait and in the budget the
-// daemon's op map enforces; any other op none of its own.
+// TestOpBudgets: team status, retire and send get 10 s, spawn 100 s, team up
+// a spawn's, whatever that is, and retire --after-handoff 1,500 s, both in
+// the client's wait and in the budget the daemon's op map enforces; any other
+// op none of its own.
 func TestOpBudgets(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -524,7 +603,8 @@ func TestOpBudgets(t *testing.T) {
 		want time.Duration
 	}{
 		{daemon.OpTeamStatus, ``, 10 * time.Second},
-		{daemon.OpWorkerSpawn, `{"group":"coder","count":1}`, 110 * time.Second},
+		{daemon.OpWorkerSpawn, `{"group":"coder","count":1}`, 100 * time.Second},
+		{daemon.OpTeamUp, ``, daemon.OpBudget(daemon.OpWorkerSpawn, nil)},
 		{daemon.OpWorkerRetire, `{"target":"x"}`, 10 * time.Second},
 		{daemon.OpWorkerRetire, `{"target":"x","after_handoff":true}`, 1500 * time.Second},
 		{daemon.OpWorkerRetire, `not json`, 10 * time.Second},
@@ -535,8 +615,28 @@ func TestOpBudgets(t *testing.T) {
 		assert.Equal(t, tc.want, daemon.ServedBudget(tc.op, args), "the budget the daemon enforces: %s %s", tc.op, tc.args)
 	}
 	assert.Zero(t, daemon.OpBudget("health", nil))
-	assert.Equal(t, []string{daemon.OpSend, daemon.OpTeamStatus, daemon.OpWorkerRetire, daemon.OpWorkerSpawn}, daemon.WorkforceOpNames())
+	assert.Equal(t, []string{daemon.OpSend, daemon.OpTeamStatus, daemon.OpTeamUp, daemon.OpWorkerRetire, daemon.OpWorkerSpawn}, daemon.WorkforceOpNames())
 	for _, op := range daemon.WorkforceOpNames() {
 		assert.Positive(t, daemon.ServedBudget(op, nil), "%s has a budget in the table, not a nil one", op)
 	}
+}
+
+// TestAWorkforceCommandFitsTheWrapper: the longest a workforce command
+// waits, the not_ready window, its op's budget and an exchange (A52), is at
+// most 115 s, 5 s inside the skill wrapper's 120, for every op the daemon
+// serves, so an op added to the table is held to it too. A retire after a
+// handoff has the wrapper's 1,800 s instead, and the same 5 s to spare.
+func TestAWorkforceCommandFitsTheWrapper(t *testing.T) {
+	t.Parallel()
+	longest := func(op, args string) time.Duration {
+		return daemon.NotReadyWindow + daemon.OpBudget(op, json.RawMessage(args)) + daemon.IOTimeout
+	}
+	assert.Equal(t, 10*time.Second, daemon.NotReadyWindow)
+	assert.Equal(t, 5*time.Second, daemon.IOTimeout)
+	for _, op := range daemon.WorkforceOpNames() {
+		assert.LessOrEqual(t, longest(op, ""), 115*time.Second, "%s's window, budget and exchange", op)
+	}
+	assert.Equal(t, 115*time.Second, longest(daemon.OpWorkerSpawn, `{"group":"coder","count":1}`), "a spawn takes all of it")
+	assert.Equal(t, 115*time.Second, longest(daemon.OpTeamUp, ""), "team up, with a spawn's budget, takes all of it too")
+	assert.LessOrEqual(t, longest(daemon.OpWorkerRetire, `{"target":"x","after_handoff":true}`), 1795*time.Second, "a retire after a handoff")
 }

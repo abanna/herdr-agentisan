@@ -6,3 +6,6 @@ var RenderStart = renderStart
 
 // ReadTask is readTask, for the paths --task-file may name.
 var ReadTask = readTask
+
+// DaemonOptions is daemonOptions, for the options a daemon is given.
+var DaemonOptions = daemonOptions

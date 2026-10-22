@@ -1,6 +1,6 @@
 // Package workforce is the boss's team commands (ADR-001 D11, A23), run by
-// the daemon on a project's team (A19): team status, worker retire and
-// worker spawn here; team up follows. On a tabs team each worker is one tab in
+// the daemon on a project's team (A19): team status, team up, worker spawn
+// and worker retire. On a tabs team each worker is one tab in
 // the team's workspace, labelled with its logical id, <short>-<type>-<n>,
 // which is also its herdr agent name; the workers table binds that id to
 // its pane (I1).
@@ -113,6 +113,9 @@ type Service struct {
 	// applied or not (A50); nil records nothing. The daemon sends it as a
 	// workflow event and logs it.
 	Routed func(context.Context, Routed)
+	// Dashboard is the plugin pane team up opens as a team's dashboard; zero
+	// opens none (A18, A23).
+	Dashboard DashboardPane
 	// ReadyPoll, BusyWindow and HandoffPoll override the defaults above.
 	ReadyPoll, BusyWindow, HandoffPoll time.Duration
 
@@ -330,6 +333,8 @@ type state struct {
 	workspace string
 	model     team.Project
 	rows      []store.Worker
+	// foreign are the ids of every other project's rows, retired or not.
+	foreign []string
 }
 
 // resolver is the team's resolver.
@@ -375,7 +380,11 @@ func (s *Service) stateOf(ctx context.Context, t settings.Team, p *settings.Prof
 	if err != nil {
 		return state{}, fmt.Errorf("read workers: %w", err)
 	}
-	st := state{team: t, profile: p, layout: l, rows: rows}
+	foreign, err := s.Store.OtherProjectsIDs(ctx, t.Project)
+	if err != nil {
+		return state{}, fmt.Errorf("read workers: %w", err)
+	}
+	st := state{team: t, profile: p, layout: l, rows: rows, foreign: foreign}
 	st.workspace, _ = st.resolver().Workspace(l.Workspaces)
 	m := team.Build(l.Layout, st.resolver(), rows)
 	if i := slices.IndexFunc(m.Projects, func(pr team.Project) bool { return pr.Name == t.Project }); i >= 0 {

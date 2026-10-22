@@ -97,6 +97,10 @@ same as `dir`, `env` and `argv`. The parts of the launch:
   such as `HERDR_PLUGIN_CONFIG_DIR=… <bin> events …`, or behind `env`: an
   allow rule matches past an assignment only of the variables Claude Code
   counts as safe, so the debugger cannot point `events` at another env file.
+  Whether the rule also approves a command substitution inside its
+  argument, such as `<bin> events query "$(…)"`, is neither documented
+  nor checked live: Claude Code's reference says only that deny and ask
+  rules see the nested command.
 - **Denied outright:** reading the repo's `.env*` files and the env file
   (by its name, and its target when it is a link), Edit, Write, NotebookEdit,
   WebFetch and WebSearch. A redirect such as `> file` is checked as an Edit,
@@ -148,6 +152,11 @@ same as `dir`, `env` and `argv`. The parts of the launch:
   shows no `ctx`.
 - **The environment:** `HERDR_PLUGIN_CONFIG_DIR`, so `events` finds the env
   file. There is no URL and no key in it.
+  The rest of your shell's environment is kept, so a secret exported in
+  the shell you launch from is in the debugger's process: launch from one
+  that exports none. Only the allow list and `dontAsk` keep the debugger
+  from reading it; a live check saw an `echo` of an exported variable
+  refused, which the docs do not promise.
 
 It is still Claude in the project's repo, so D12 holds and the repo's
 Agentisan bundle loads, but not its MCP servers. With no allow rule its skills cannot run, which is

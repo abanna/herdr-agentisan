@@ -355,6 +355,38 @@ func TestInstallRefusesWhatARenameWouldBreak(t *testing.T) {
 	})
 }
 
+// TestInstalledIn: Codex runs every hook only once all three are installed
+// and config.toml leaves hooks on; a home that cannot be found, or a hooks
+// file that cannot be read, is an error.
+func TestInstalledIn(t *testing.T) {
+	t.Parallel()
+	lookup := func(home string) func(string) (string, bool) {
+		return func(k string) (string, bool) { return home, k == "CODEX_HOME" }
+	}
+	home := t.TempDir()
+	installed, err := codexhooks.InstalledIn(lookup(home))
+	require.NoError(t, err)
+	assert.False(t, installed, "none yet")
+
+	_, err = codexhooks.Install(home)
+	require.NoError(t, err)
+	installed, err = codexhooks.InstalledIn(lookup(home))
+	require.NoError(t, err)
+	assert.True(t, installed)
+
+	write(t, filepath.Join(home, "config.toml"), "[features]\nhooks = false\n", 0o600)
+	installed, err = codexhooks.InstalledIn(lookup(home))
+	require.NoError(t, err)
+	assert.False(t, installed, "Codex runs no hook with hooks off")
+
+	_, err = codexhooks.InstalledIn(func(string) (string, bool) { return "", false })
+	require.ErrorIs(t, err, codexhooks.ErrNoHome)
+	bad := t.TempDir()
+	write(t, filepath.Join(bad, codexhooks.FileName), "{not json", 0o600)
+	_, err = codexhooks.InstalledIn(lookup(bad))
+	require.Error(t, err)
+}
+
 // TestHooksOff reports features.hooks = false, under which Codex runs no
 // hook at all, ours included.
 func TestHooksOff(t *testing.T) {

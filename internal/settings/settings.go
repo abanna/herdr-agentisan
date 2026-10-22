@@ -127,6 +127,9 @@ type Group struct {
 	// as configured or starts a worker of it. Both counts set to 0 are
 	// still a worker type, one that starts none.
 	DescribesOnly bool
+	// Rotation is the group's own thresholds (A33); nil Thresholds when no
+	// layer sets them, and the project's apply.
+	Rotation Rotation
 }
 
 // MaxDescriptionChars caps a group's description, in Unicode characters

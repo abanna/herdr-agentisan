@@ -197,7 +197,9 @@ project's boss once the binding it was sent to ended. A message failed by
 the daemon starting after a crash gives `.failed` then. The daemon's own
 notices give no `.queued`. The body reads `<message id> queued for
 <recipient>` (or `delivered to`, `failed to`, `returned to`) and never
-carries the message's body.
+carries the message's body. A `.queued` record's time is the message's
+own queued time, so a trail sorted by `@timestamp` puts it first, even
+when the dispatcher delivers the message before `send` emits its event.
 
 | Attribute | Type | Value |
 | --- | --- | --- |
@@ -208,7 +210,7 @@ carries the message's body.
 | `agentisan.message.to.id` | string | The recipient; the boss for `.returned` |
 | `agentisan.message.returned_from` | string | The worker a message returned to the boss was sent to; `""` otherwise |
 | `agentisan.message.attempts` | int | The dispatches the message was claimed for; 0 for `.queued` |
-| `agentisan.message.reason` | string | Why it failed, for `.failed`; `""` otherwise |
+| `agentisan.message.reason` | string | Why it failed, for `.failed`, as `state.db` keeps it: control characters as spaces, at most 512 bytes; `""` otherwise |
 
 A message's trail, in ES|QL:
 
@@ -256,8 +258,33 @@ Every audit field is present, `""` where the decision has none.
 | `agentisan.routing.applied` | bool | Whether the worker was launched with it |
 | `agentisan.routing.unchecked` | string array | The rules' filters with no data yet |
 
+### `agentisan.worker.ctx_level`
+
+A pane's context crossed one of its rotation thresholds (ADR-001 A33): soft,
+hard or the ceiling, a level being crossed at its threshold or above. The
+daemon queued the line for its project's boss, unless `notices.skip` drops that
+level; the event is recorded either way. A rise past several levels at once is one
+event, at the highest. A level is crossed again only after the context fell
+to its threshold less 5, or under; a restarted daemon starts with none
+crossed. The body reads `<worker id> at <n>% crossed <level> (<threshold>%)`.
+
+| Attribute | Type | Value |
+| --- | --- | --- |
+| `agentisan.worker.id` | string | As for `status_changed`: the logical worker id, or the pane id while no row binds it |
+| `agentisan.worker.bound` | bool | Whether a `workers` row binds the pane |
+| `agentisan.project` | string | The pane's project; `""` is the unnamed project |
+| `agentisan.group` | string | The group; `""` for the boss |
+| `agentisan.role` | string | `boss` or `worker` |
+| `agentisan.agent` | string | The agent herdr detected, such as `claude` or `codex` |
+| `herdr.pane.id` | string | The pane, such as `wN:p1` |
+| `agentisan.ctx.level` | string | `soft`, `hard` or `ceiling` |
+| `agentisan.ctx.percent` | int | The context used, 0 to 100 |
+| `agentisan.ctx.threshold` | int | The level's threshold |
+| `agentisan.ctx.alerted` | bool | Whether the daemon asked herdr to alert the user with a toast, which it does only at the ceiling |
+| `agentisan.ctx.shown` | bool | Whether herdr showed that toast; false when it was not asked for |
+
 ## Coming
 
 The same helper carries these when their items land: stage changes (fast
-follow on item 3), context threshold crossings (item 5b), and handoff steps
-and rotations (items 5b and 6). Each adds a section here first.
+follow on item 3), and handoff steps and rotations (items 5b and 6). Each
+adds a section here first.

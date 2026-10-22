@@ -7,6 +7,7 @@
 package preflight
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -88,8 +89,8 @@ func Host() System {
 }
 
 // Check is a spawn precondition for the repo at repo, the absolute path of a
-// project's repo. `worker spawn` and `team up` (NERD-5254 parts 4 and 5) are
-// to run one before they open a pane.
+// project's repo. `worker spawn` and `team up` (NERD-5254 parts 4 and 5) run
+// one before they open a pane.
 type Check func(ctx context.Context, repo string) error
 
 var _ Check = HostCheck
@@ -209,20 +210,11 @@ func (r Runner) Run(ctx context.Context, dir, bin string, args ...string) error 
 	if r.Env != nil {
 		cmd.Env = slices.Clip(r.Env)
 	}
-	out := &capped{max: maxOutput}
+	out := newCapture()
 	cmd.Stdout, cmd.Stderr = out, out
 	cmd.WaitDelay = waitDelay
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		if err != nil {
-			return fmt.Errorf("kill %s's process group: %w", bin, err)
-		}
-		return nil
-	}
+	cmd.Cancel = func() error { return killGroup(syscall.Kill, cmd.Process.Pid, bin) }
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start %s: %w", bin, err)
 	}
@@ -241,23 +233,54 @@ func (r Runner) Run(ctx context.Context, dir, bin string, args ...string) error 
 	return nil
 }
 
-// capped keeps the first max bytes written to it and drops the rest. The
-// write itself never fails, so tdaddy is never left blocked on a pipe
-// nobody reads.
+// killGroup sends SIGKILL, through kill (syscall.Kill), to the process group
+// that pid leads, and is what Run's Cancel does. A group already gone is
+// os.ErrProcessDone, which exec takes as done. Any other failure goes back
+// to exec, which kills the leader alone once WaitDelay passes, and Run still
+// reports the cancel or the timeout. kill passes over a member the daemon
+// may not signal, so an EPERM means it could signal none of them, the leader
+// included: exec's kill fails too, and Run waits for the leader to exit.
+func killGroup(kill func(pid int, sig syscall.Signal) error, pid int, what string) error {
+	err := kill(-pid, syscall.SIGKILL)
+	if errors.Is(err, syscall.ESRCH) {
+		return os.ErrProcessDone
+	}
+	if err != nil {
+		return fmt.Errorf("kill %s's process group: %w", what, err)
+	}
+	return nil
+}
+
+// capped keeps the first max bytes written to it after any leading blanks,
+// and drops the rest. The blanks before the first byte kept are never
+// counted, so a reason after any number of them is kept. The write itself
+// never fails, so tdaddy is never left blocked on a pipe nobody reads.
 type capped struct {
 	mu  sync.Mutex
 	buf []byte
 	max int
 }
 
+// newCapture is what a run gives tdaddy's stdout and stderr: the first
+// maxOutput bytes are kept.
+func newCapture() *capped { return &capped{max: maxOutput} }
+
 func (c *capped) Write(p []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	kept := p
+	if len(c.buf) == 0 {
+		kept = bytes.TrimLeft(kept, blanks)
+	}
 	if room := c.max - len(c.buf); room > 0 {
-		c.buf = append(c.buf, p[:min(room, len(p))]...)
+		c.buf = append(c.buf, kept[:min(room, len(kept))]...)
 	}
 	return len(p), nil
 }
+
+// blanks are the bytes a capture skips before the first one it keeps: ASCII
+// whitespace, which firstLine's TrimSpace would drop anyway.
+const blanks = " \t\n\r\v\f"
 
 func (c *capped) String() string {
 	c.mu.Lock()

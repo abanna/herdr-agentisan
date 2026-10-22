@@ -168,6 +168,17 @@ func TestLoadLayerPrecedence(t *testing.T) {
 				"rotation.thresholds": {[]int{50, 60, 70}, settings.LayerFlag},
 			},
 		},
+		"a group's thresholds come from every layer, the highest whole": {
+			shared:  "[groups.coders]\nworkers = 1\nslots = 1\nrotation = { thresholds = [10, 20, 30] }\n[groups.qa]\nworkers = 1\nslots = 1\nrotation = { thresholds = [11, 21, 31] }\n",
+			project: "[projects.app.groups.coders.rotation]\nthresholds = [40, 50, 60]\n",
+			repo:    "[groups.qa.rotation]\nthresholds = [41, 51, 61]\n[groups.coders.rotation]\nthresholds = [42, 52, 62]\n",
+			set:     []string{"groups.coders.rotation.thresholds=[43,53,63]"},
+			want: map[string]want{
+				"groups.coders.rotation.thresholds": {[]int{43, 53, 63}, settings.LayerFlag},
+				"groups.qa.rotation.thresholds":     {[]int{41, 51, 61}, settings.LayerRepo},
+				"rotation.thresholds":               {[]int{55, 65, 75}, settings.LayerDefault},
+			},
+		},
 		"a secret ref replaces whole, its keys never merge": {
 			shared: "[integrations.github]\ntoken = { env = \"SHARED_TOKEN\" }\nurl = \"https://github.com\"\n",
 			project: "[projects.app.integrations.github]\n" +
@@ -626,9 +637,40 @@ func TestLoadErrors(t *testing.T) {
 			shared:  app + "[projects.app.rotation]\nthresholds = [50, 60, \"70\"]\n",
 			wantErr: settings.ErrInvalid, wantIn: []string{"rotation.thresholds"},
 		},
+		"a group's two thresholds": {
+			shared:  app + "[projects.app.groups.coders]\nworkers = 1\nslots = 1\nrotation = { thresholds = [50, 60] }\n",
+			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.rotation.thresholds", settings.LayerProject},
+		},
+		"a group's thresholds not ascending, from the shared groups": {
+			shared:  app + "[groups.coders]\nworkers = 1\nslots = 1\nrotation = { thresholds = [60, 50, 70] }\n",
+			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.rotation.thresholds", settings.LayerShared},
+		},
+		"a group's threshold above 100, from --set": {
+			shared: app + "[projects.app.groups.coders]\nworkers = 1\nslots = 1\n", set: []string{"groups.coders.rotation.thresholds=[50,60,101]"},
+			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.rotation.thresholds", "--set"},
+		},
+		"a group's thresholds from the repo file, below 1": {
+			shared: app + "[projects.app.groups.coders]\nworkers = 1\nslots = 1\n", repoFile: "schema_version = 1\n[groups.coders.rotation]\nthresholds = [0, 50, 70]\n",
+			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.rotation.thresholds", settings.RepoFileName},
+		},
+		"a group's negative threshold": {
+			shared:  app + "[projects.app.groups.coders]\nworkers = 1\nslots = 1\nrotation = { thresholds = [-5, 50, 70] }\n",
+			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.rotation.thresholds", "outside 1..100"},
+		},
+		"a group's threshold past every int": {
+			shared:  app + "[projects.app.groups.coders]\nworkers = 1\nslots = 1\nrotation = { thresholds = [50, 60, 9223372036854775807] }\n",
+			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.rotation.thresholds"},
+		},
+		"a group's thresholds of the wrong type": {
+			shared:  app + "[projects.app.groups.coders]\nworkers = 1\nslots = 1\nrotation = { thresholds = 50 }\n",
+			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.rotation.thresholds"},
+		},
+		// A count that is set, but wrong, is refused at its own key with
+		// its own reason, never as a missing one (NERD-5369, Draft 25).
 		"slots below workers": {
 			shared:  app + "[projects.app.groups.coders]\nworkers = 3\nslots = 2\n",
-			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.slots", settings.LayerProject},
+			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.slots", settings.LayerProject, "slots 2 is below workers 3"},
+			wantNotIn: []string{"every group needs"},
 		},
 		"slots one past the bound": {
 			shared:  app + "[projects.app.groups.coders]\nworkers = 1\nslots = 65\n",
@@ -640,7 +682,18 @@ func TestLoadErrors(t *testing.T) {
 		},
 		"negative workers": {
 			shared:  app + "[projects.app.groups.coders]\nworkers = -1\nslots = 2\n",
-			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.workers"},
+			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.workers", "workers -1 is below 0"},
+			wantNotIn: []string{"every group needs"},
+		},
+		"workers of the wrong type, from the repo file": {
+			shared: app, repoFile: "schema_version = 1\n[groups.qa]\nworkers = \"two\"\nslots = 2\n",
+			wantErr: settings.ErrInvalid, wantIn: []string{"groups.qa.workers (repo, ", settings.RepoFileName, "want an integer"},
+			wantNotIn: []string{"every group needs"},
+		},
+		"slots of the wrong type, from the repo file": {
+			shared: app, repoFile: "schema_version = 1\n[groups.qa]\nworkers = 1\nslots = 1.5\n",
+			wantErr: settings.ErrInvalid, wantIn: []string{"groups.qa.slots (repo, ", settings.RepoFileName, "want an integer"},
+			wantNotIn: []string{"every group needs"},
 		},
 		"slots not set in any layer": {
 			shared:  app + "[projects.app.groups.coders]\nworkers = 1\n",
@@ -759,6 +812,9 @@ func TestLoadErrors(t *testing.T) {
 			require.ErrorIs(t, err, tc.wantErr)
 			for _, s := range tc.wantIn {
 				assert.Contains(t, err.Error(), s)
+			}
+			for _, s := range tc.wantNotIn {
+				assert.NotContains(t, err.Error(), s)
 			}
 			assert.NotContains(t, err.Error(), plainSecret, "an error must never echo a secret")
 		})

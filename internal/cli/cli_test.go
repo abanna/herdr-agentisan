@@ -671,7 +671,7 @@ func TestManifestDeclaresTheBtopPopup(t *testing.T) {
 // TestManifestDeclaresTheDashboardSplit: herdr opens the dashboard as a split
 // pane (ADR-001 D5) running `dashboard`, which reads the daemon herdr's pane
 // environment names. Its entrypoint is the one the key snippet asks herdr to
-// open.
+// open, and its title the one team up finds it by.
 func TestManifestDeclaresTheDashboardSplit(t *testing.T) {
 	t.Parallel()
 	m, err := plugin.LoadManifest(filepath.Join("..", "..", plugin.ManifestFile))
@@ -686,6 +686,7 @@ func TestManifestDeclaresTheDashboardSplit(t *testing.T) {
 	require.NotNil(t, pane, "the manifest declares no %q pane", plugin.DashboardPane)
 	assert.Equal(t, "split", pane.Placement)
 	assert.Equal(t, []string{m.BuildOutput(), "dashboard"}, pane.Command, "no --fixture: it reads the daemon")
+	assert.Equal(t, plugin.DashboardTitle, pane.Title, "the label herdr gives the pane, by which team up finds one prefix+d opened")
 }
 
 // TestManifestStartsTheDaemon: herdr's startup hook starts the daemon, and

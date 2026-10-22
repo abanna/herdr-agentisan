@@ -99,7 +99,7 @@ func TestSpawnLaunchesWhatRoutingChose(t *testing.T) {
 		"review, on Codex": {
 			group: "review", count: 1, kind: "codex", role: "code_review", binding: "codex_strong", model: "gpt-6.1-sol",
 			args: func(string) []any {
-				return []any{"--no-daemon", "--model", "gpt-6.1-sol", "-c", `model_reasoning_effort="high"`}
+				return []any{"--no-daemon", "--sandbox", "read-only", "--model", "gpt-6.1-sol", "-c", `model_reasoning_effort="high"`}
 			},
 		},
 	}
