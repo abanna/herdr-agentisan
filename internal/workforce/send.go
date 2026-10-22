@@ -88,7 +88,7 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendResult, error)
 	if err != nil {
 		return SendResult{}, fmt.Errorf("read workers: %w", err)
 	}
-	from, home, err := sender(req, teamsIn(teams, l, rows), l, rows)
+	from, home, err := sender(req, teamsIn(teams, l, rows, s.Dashboard.Title), l, rows)
 	if err != nil {
 		return SendResult{}, err
 	}
@@ -122,12 +122,13 @@ type placed struct {
 	pr team.Project
 }
 
-// teamsIn places every team in l.
-func teamsIn(teams []settings.Team, l layout, rows []store.Worker) []placed {
+// teamsIn places every team in l, title being the dashboard pane's label
+// when prefix+d opened it (resolverOf).
+func teamsIn(teams []settings.Team, l layout, rows []store.Worker, title string) []placed {
 	out := make([]placed, 0, len(teams))
 	for _, t := range teams {
 		p := placed{Team: t}
-		m := team.Build(l.Layout, resolverOf(t), rows)
+		m := team.Build(l.Layout, resolverOf(t, title), rows)
 		if i := slices.IndexFunc(m.Projects, func(pr team.Project) bool { return pr.Name == t.Project }); i >= 0 {
 			p.pr = m.Projects[i]
 		}
@@ -205,10 +206,14 @@ func BossOf(t settings.Team) string {
 	return tabsOf(t).BossTab()
 }
 
-// resolverOf is the resolver that finds t in herdr's layout.
-func resolverOf(t settings.Team) team.Resolver {
+// resolverOf is the resolver that finds t in herdr's layout. A tabs team's
+// leaves out its dashboard pane, whose label is team.DashboardLabel or, when
+// prefix+d opened it, title (team.Tabs.Dashboard).
+func resolverOf(t settings.Team, title string) team.Resolver {
 	if t.Layout == settings.LayoutSpaces {
 		return team.Spaces{Project: t.Project, Color: t.Color}
 	}
-	return tabsOf(t)
+	r := tabsOf(t)
+	r.DashboardTitle = title
+	return r
 }

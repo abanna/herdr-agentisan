@@ -18,6 +18,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
+	"github.com/abanna/herdr-agentisan/internal/team"
 	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
@@ -181,10 +182,10 @@ func TestUpOpensTheDashboardAboveTheBoss(t *testing.T) {
 	assert.Equal(t, workforce.DashboardOutcome{Dashboard: &workforce.Dashboard{PaneID: dash, Opened: true}}, res.DashboardOutcome)
 	assert.Equal(t, []string{dash, f.boss}, f.h.tabPanes(f.boss), "above the boss")
 	f.h.mu.Lock()
-	assert.Equal(t, workforce.DashboardLabel("ha"), f.h.pane(dash).label)
+	assert.Equal(t, team.DashboardLabel("ha"), f.h.pane(dash).label)
 	assert.Equal(t, away, f.h.focused, "focus given back")
 	f.h.mu.Unlock()
-	assert.Equal(t, "ha-dashboard", workforce.DashboardLabel("ha"))
+	assert.Equal(t, "ha-dashboard", team.DashboardLabel("ha"))
 }
 
 // TestUpFocusesTheBossThenGivesFocusBack: herdr's swap focuses the

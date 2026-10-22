@@ -500,3 +500,82 @@ func TestWorkerName(t *testing.T) {
 	assert.Equal(t, "c\n1", notice.WorkerName(team.Worker{ID: "w1:p1", Pane: team.Pane{ID: "w1:p1", Name: "c\n1"}}))
 	assert.Equal(t, "w1:p1", notice.WorkerName(team.Worker{ID: "w1:p1", Pane: team.Pane{ID: "w1:p1"}}))
 }
+
+// TestWatchFreshUnknown is the cutover's F3: an agent pane never seen in a
+// known status is told unknown only at the 20th poll in a row that judged
+// it to run an agent, counted from the first, and once; a spawned agent
+// herdr has not yet classified is no news. One that shows a known status
+// first keeps the two-poll rule, and one that stops running an agent and
+// comes back starts again.
+func TestWatchFreshUnknown(t *testing.T) {
+	t.Parallel()
+	fresh := func(status team.Status) team.Model { return teamOf(nil, agentPane("w1:p3", "c3", status)) }
+	// polls observes m n times and returns every notice's kind, by poll.
+	polls := func(w *notice.Watch, m team.Model, n int) map[int][]string {
+		out := map[int][]string{}
+		for i := 1; i <= n; i++ {
+			if got := kinds(w.Observe(m, nil, false)); len(got) > 0 {
+				out[i] = got
+			}
+		}
+		return out
+	}
+
+	t.Run("a spawned agent, unknown from the start", func(t *testing.T) {
+		t.Parallel()
+		w := notice.NewWatch()
+		w.Observe(teamOf(nil), nil, false)
+		got := polls(w, fresh(team.StatusUnknown), 25)
+		assert.Equal(t, map[int][]string{20: {"w1:p3 unknown"}}, got, "polls 1 to 19 silent, the 20th told, and once")
+	})
+	t.Run("unknown at the daemon's first poll", func(t *testing.T) {
+		t.Parallel()
+		w := notice.NewWatch()
+		got := polls(w, fresh(team.StatusUnknown), 21)
+		assert.Equal(t, map[int][]string{1: {"ha started"}, 20: {"w1:p3 unknown"}}, got, "the baseline is its first poll")
+	})
+	t.Run("classified within the grace", func(t *testing.T) {
+		t.Parallel()
+		w := notice.NewWatch()
+		w.Observe(teamOf(nil), nil, false)
+		assert.Empty(t, polls(w, fresh(team.StatusUnknown), 19))
+		assert.Empty(t, polls(w, fresh(team.StatusIdle), 1), "known at its 20th poll: never told")
+		assert.Empty(t, polls(w, fresh(team.StatusIdle), 5))
+	})
+	t.Run("known, then unknown: the two-poll rule", func(t *testing.T) {
+		t.Parallel()
+		w := notice.NewWatch()
+		w.Observe(teamOf(nil), nil, false)
+		polls(w, fresh(team.StatusUnknown), 3)
+		polls(w, fresh(team.StatusWorking), 1)
+		got := polls(w, fresh(team.StatusUnknown), 22)
+		assert.Equal(t, map[int][]string{2: {"w1:p3 unknown"}}, got, "told at its second unknown poll, not after twenty")
+	})
+	t.Run("gone and back counts again", func(t *testing.T) {
+		t.Parallel()
+		w := notice.NewWatch()
+		w.Observe(teamOf(nil), nil, false)
+		assert.Empty(t, polls(w, fresh(team.StatusUnknown), 10))
+		assert.Equal(t, []string{"w1:p3 gone"}, kinds(w.Observe(teamOf(nil), nil, false)))
+		got := polls(w, fresh(team.StatusUnknown), 20)
+		assert.Equal(t, map[int][]string{20: {"w1:p3 unknown"}}, got, "its count starts again from 1")
+	})
+	t.Run("known, gone and back is fresh again", func(t *testing.T) {
+		t.Parallel()
+		w := notice.NewWatch()
+		w.Observe(teamOf(nil), nil, false)
+		polls(w, fresh(team.StatusIdle), 2)
+		assert.Equal(t, []string{"w1:p3 gone"}, kinds(w.Observe(teamOf(nil), nil, false)))
+		got := polls(w, fresh(team.StatusUnknown), 20)
+		assert.Equal(t, map[int][]string{20: {"w1:p3 unknown"}}, got, "a new agent there is not the known one")
+	})
+	t.Run("a shell's polls do not count", func(t *testing.T) {
+		t.Parallel()
+		w := notice.NewWatch()
+		w.Observe(teamOf(nil), nil, false)
+		shell := teamOf(nil, team.Worker{ID: "w1:p3", Pane: team.Pane{ID: "w1:p3", Status: team.StatusUnknown}})
+		assert.Empty(t, polls(w, shell, 30))
+		got := polls(w, fresh(team.StatusUnknown), 20)
+		assert.Equal(t, map[int][]string{20: {"w1:p3 unknown"}}, got, "counted from the poll that first judged it to run an agent")
+	})
+}

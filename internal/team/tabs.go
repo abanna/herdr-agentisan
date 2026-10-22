@@ -27,17 +27,34 @@ var ordinalPattern = regexp.MustCompile(`^[1-9][0-9]*$`)
 // worker, labelled <short>-<type>-<n>, and the boss's tab, <short>-boss. A
 // worker's group is its type, and every group's target is the team's
 // workspace, so its `$team` counts the whole team but the boss. Any other
-// tab is outside the model.
+// tab is outside the model, and so is the team's dashboard pane, wherever
+// it is (Dashboard).
 type Tabs struct {
 	Project string
 	// Short is the project's short code, which starts its tab labels and
 	// its agents' names. A team without one is not resolved.
 	Short string
 	Color string
+	// DashboardTitle is the label herdr gives the plugin's dashboard pane
+	// when prefix+d opens it, the manifest's title (internal/plugin's
+	// DashboardTitle, which this package cannot import); "" matches no pane.
+	DashboardTitle string
 }
 
 // BossTab is the label of the boss's tab.
 func (t Tabs) BossTab() string { return t.Short + "-" + BossGroup }
+
+// DashboardLabel is the label team up gives a team's dashboard pane. A
+// worker's tab label ends in -<n>, so it is never one.
+func DashboardLabel(short string) string { return short + "-dashboard" }
+
+// Dashboard reports whether p is a dashboard pane of the team: labelled
+// DashboardLabel, as team up names the one it opens, or with
+// DashboardTitle, as one prefix+d opened. It is not a member: neither the
+// boss's, though team up splits it in the boss's tab, nor a group's.
+func (t Tabs) Dashboard(p herdr.PaneInfo) bool {
+	return p.Label == DashboardLabel(t.Short) || t.DashboardTitle != "" && p.Label == t.DashboardTitle
+}
 
 // Type returns the worker type a tab label names, as <short>-<type>-<n>,
 // and whether it names one. The type is everything between the short code
@@ -73,8 +90,9 @@ func (t Tabs) Workspace(workspaces []herdr.WorkspaceInfo) (id string, ignored []
 }
 
 // Resolve places the boss tab's panes with the boss and each worker tab's
-// panes in its type's group. Only tabs in the team's workspace count, and a
-// tab herdr lists twice is placed once. The team's site is its workspace,
+// panes in its type's group. Only tabs in the team's workspace count, a
+// dashboard pane is left out of every tab (Dashboard), and a tab herdr
+// lists twice is placed once. The team's site is its workspace,
 // which is also where its `$team` goes with no worker there yet.
 func (t Tabs) Resolve(l Layout) Resolution {
 	id, _ := t.Workspace(l.Workspaces)
@@ -84,7 +102,7 @@ func (t Tabs) Resolve(l Layout) Resolution {
 	target := Target{WorkspaceID: id}
 	byTab := map[string][]herdr.PaneInfo{}
 	for _, p := range l.Panes {
-		if p.WorkspaceID == id {
+		if p.WorkspaceID == id && !t.Dashboard(p) {
 			byTab[p.TabID] = append(byTab[p.TabID], p)
 		}
 	}

@@ -34,16 +34,13 @@ type DashboardOutcome struct {
 	DashboardError string     `json:"dashboard_error,omitempty"`
 }
 
-// DashboardLabel is the label team up gives a team's dashboard pane. A
-// worker's tab label ends in -<n>, so it is never one.
-func DashboardLabel(short string) string { return short + "-dashboard" }
-
 // dashboardBudget bounds the dashboard's herdr calls, which run before the
 // agents start.
 const dashboardBudget = 5 * time.Second
 
 // ensureDashboard finds project's dashboard, a pane in its workspace labelled
-// DashboardLabel or, as one prefix+d opened, with the entrypoint's title, or
+// team.DashboardLabel or, as one prefix+d opened, with the entrypoint's title
+// (team.Tabs.Dashboard, which also leaves it out of the team), or
 // opens one above the boss's pane, the first agent in its tab, as the
 // snapshot names the boss. herdr splits only right or down, so that is a
 // split down from the boss, then a swap with it. The label comes first: a
@@ -68,9 +65,10 @@ func (s *Service) ensureDashboard(ctx context.Context, project string) Dashboard
 	if st.workspace == "" {
 		return DashboardOutcome{DashboardError: "the team has no workspace labelled " + project}
 	}
-	label := DashboardLabel(st.team.Short)
+	label := team.DashboardLabel(st.team.Short)
+	dash := team.Tabs{Short: st.team.Short, DashboardTitle: d.Title}
 	if i := slices.IndexFunc(st.layout.Panes, func(p herdr.PaneInfo) bool {
-		return p.WorkspaceID == st.workspace && (p.Label == label || d.Title != "" && p.Label == d.Title)
+		return p.WorkspaceID == st.workspace && dash.Dashboard(p)
 	}); i >= 0 {
 		return DashboardOutcome{Dashboard: &Dashboard{PaneID: st.layout.Panes[i].PaneID}}
 	}
