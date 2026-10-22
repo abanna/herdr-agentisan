@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -393,7 +394,9 @@ func TestDaemonRunKnowsThePluginCheckout(t *testing.T) {
 		"herdr's":          {env: map[string]string{"HERDR_PLUGIN_ROOT": root}, want: root},
 		"the binary's own": {want: filepath.Dir(filepath.Dir(exe))},
 	} {
-		o, err := cli.DaemonOptions(cli.WithLookupEnv(t.Context(), e.lookup(tc.env)))
+		cmd := &cobra.Command{}
+		cmd.SetContext(cli.WithLookupEnv(t.Context(), e.lookup(tc.env)))
+		o, err := cli.DaemonOptions(cmd, "", false)
 		require.NoError(t, err, name)
 		assert.Equal(t, tc.want, o.Team.PluginRoot, name)
 		assert.Equal(t, exe, o.Team.Binary, name)

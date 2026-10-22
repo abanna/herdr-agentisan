@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -177,4 +178,25 @@ func TestPromptAgentNotSent(t *testing.T) {
 		_, err := herdr.Client{SocketPath: filepath.Join(t.TempDir(), "none.sock")}.PromptAgent(ctx, "w", "x")
 		require.ErrorIs(t, err, herdr.ErrNotSent)
 	})
+	t.Run("no socket path", func(t *testing.T) {
+		t.Parallel()
+		_, err := herdr.Client{}.PromptAgent(t.Context(), "w", "x")
+		require.ErrorIs(t, err, herdr.ErrNotSent, "nothing was dialled, so nothing was typed")
+		assert.ErrorIs(t, err, herdr.ErrNoSocket)
+	})
+	// After the request is written, every failure may have typed the text.
+	for name, reply := range map[string]herdrtest.Reply{
+		"an answer over the client's cap": {Raw: []byte(strings.Repeat("x", 1<<20+16))},
+		"closed with no answer":           {Silent: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply { return reply })
+
+			_, err := herdr.Client{SocketPath: srv.Path}.PromptAgent(t.Context(), "w", "x")
+			require.Error(t, err)
+			assert.NotErrorIs(t, err, herdr.ErrNotSent, "the request was written: it may have been typed")
+			assert.Len(t, srv.Requests(), 1, "the prompt reached herdr")
+		})
+	}
 }

@@ -144,6 +144,24 @@ func TestMessageEventsEmitTheSchema(t *testing.T) {
 	}
 }
 
+// TestAMessageEventTakesItsTime: a message event's record carries the time
+// it is given, At, and when it is given none, the time it is emitted.
+func TestAMessageEventTakesItsTime(t *testing.T) {
+	t.Parallel()
+	events, rec := telemetrytest.NewEvents()
+	at := time.Date(2026, 10, 22, 5, 0, 0, 123456789, time.UTC)
+	events.MessageQueued(t.Context(), telemetry.Message{ID: "01JA", To: "ha-boss", At: at})
+	before := time.Now()
+	events.MessageDelivered(t.Context(), telemetry.Message{ID: "01JA", To: "ha-boss"})
+	after := time.Now()
+
+	records := rec.Records()
+	require.Len(t, records, 2)
+	assert.True(t, records[0].Timestamp().Equal(at), "the time it was given: %v", records[0].Timestamp())
+	assert.False(t, records[1].Timestamp().Before(before), "no earlier than its emit")
+	assert.False(t, records[1].Timestamp().After(after), "no later than its emit")
+}
+
 // TestNilEventsEmitNothing: the daemon holds a nil *Events when no endpoint
 // is configured, and every emit is then a silent no-op, never a panic.
 func TestNilEventsEmitNothing(t *testing.T) {
@@ -151,7 +169,36 @@ func TestNilEventsEmitNothing(t *testing.T) {
 	var events *telemetry.Events
 	assert.NotPanics(t, func() {
 		events.StatusChanged(t.Context(), telemetry.StatusChange{WorkerID: "w", From: "idle", To: "working"})
+		events.CtxLevelCrossed(t.Context(), telemetry.CtxLevel{WorkerID: "w", Level: "soft"})
 	})
+}
+
+// TestCtxLevelEmitsTheSchema is A33's contract for the ctx level event, as
+// docs/telemetry.md lists it: its name, exactly its twelve attributes, the
+// body line and the severity, spelled out by hand.
+func TestCtxLevelEmitsTheSchema(t *testing.T) {
+	t.Parallel()
+	events, rec := telemetrytest.NewEvents()
+	events.CtxLevelCrossed(t.Context(), telemetry.CtxLevel{
+		WorkerID: "ha-coder-1", Bound: true, Project: "ha", Group: "cödërs \x00\r\n ◆", Role: telemetry.RoleWorker,
+		Agent: "claude", PaneID: "w1:p1", Level: "ceiling", Ctx: 78, Threshold: 75, Alerted: true, Shown: false,
+	})
+
+	got := rec.Events()
+	require.Len(t, got, 1)
+	assert.Equal(t, "agentisan.worker.ctx_level", got[0].Name)
+	assert.Equal(t, map[string]any{
+		"agentisan.worker.id": "ha-coder-1", "agentisan.worker.bound": true,
+		"agentisan.project": "ha", "agentisan.group": "cödërs \x00\r\n ◆", "agentisan.role": "worker",
+		"agentisan.agent": "claude", "herdr.pane.id": "w1:p1",
+		"agentisan.ctx.level": "ceiling", "agentisan.ctx.percent": int64(78), "agentisan.ctx.threshold": int64(75),
+		"agentisan.ctx.alerted": true, "agentisan.ctx.shown": false,
+	}, got[0].Attrs, "exactly the schema's attributes, no more")
+	records := rec.Records()
+	assert.Equal(t, log.SeverityInfo, records[0].Severity())
+	assert.Equal(t, "INFO", records[0].SeverityText())
+	assert.Equal(t, "ha-coder-1 at 78% crossed ceiling (75%)", records[0].Body().AsString())
+	assert.False(t, records[0].Timestamp().IsZero())
 }
 
 // TestSetupEventsWithoutAnEndpointIsANoop: with no endpoint (the default,

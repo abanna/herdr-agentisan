@@ -60,6 +60,12 @@ func HealthOver(ctx context.Context, st *store.Store, base HealthInfo) HealthInf
 	return Options{Logger: zerolog.Nop()}.health(ctx, st, base)()
 }
 
+// ClaimOver is the dispatcher's claim of to's next message on st, under
+// ctx, as serve makes it.
+func ClaimOver(ctx context.Context, st *store.Store, to store.Address) (store.Message, bool, error) {
+	return (&dispatcher{st: st, now: time.Now}).claim(ctx, to)
+}
+
 // BackCode is the refusal code the back op answers err with.
 var BackCode = backCode
 
@@ -210,6 +216,9 @@ func WorkforceOpNames() []string {
 	return slices.Sorted(maps.Keys(workforceOps(&workforce.Service{}, new(atomic.Bool), nil)))
 }
 
+// IOTimeout is the exchange, which a client waits past an op's budget.
+const IOTimeout = ioTimeout
+
 // GroupDescriptions is the team poll's reader of the group descriptions
 // (A36), driven one poll at a time.
 type GroupDescriptions struct{ d *groupDescriptions }
@@ -262,11 +271,6 @@ var CallWith = callWith
 func WorkforceOf(o Options, ident Identity) *workforce.Service {
 	paths, _ := PathsFor(o.StateDir, o.HerdrSocket)
 	return o.newWorkforce(nil, ident, &team.IdleClock{}, paths.Dir)
-}
-
-// LogNotice writes m as the log sink does (A44).
-func LogNotice(log zerolog.Logger, m notice.Message) error {
-	return logSink{log}.Send(context.Background(), m)
 }
 
 // FlushNotices flushes b into s as the poll does.
@@ -352,7 +356,7 @@ type GitHubSource struct{ g *githubNotices }
 
 // NewGitHubSource is o's source on st, with o's notices settings.
 func NewGitHubSource(o Options, st *store.Store) GitHubSource {
-	return GitHubSource{o.newGitHubNotices(st, o.newNotices())}
+	return GitHubSource{o.newGitHubNotices(st, o.newNotices(st, newInbox(), nil))}
 }
 
 // Collected diffs h's list, open, as the collector does after a list.
@@ -362,3 +366,7 @@ func (s GitHubSource) Collected(ctx context.Context, gh github.Runner, h setting
 
 // Take is what the source has handed the poll since the last Take.
 func (s GitHubSource) Take() []notice.Notice { return s.g.n.github.take() }
+
+// BetweenReads runs f, from now on, in each collection between its read of
+// what is held and its read of state.db, where an acknowledgement may land.
+func (s GitHubSource) BetweenReads(f func()) { s.g.betweenReads = f }

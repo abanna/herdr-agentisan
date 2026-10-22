@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/abanna/herdr-agentisan/internal/codexhooks"
 	"github.com/abanna/herdr-agentisan/internal/config"
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/debugger"
@@ -18,6 +19,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/logging"
 	"github.com/abanna/herdr-agentisan/internal/plugin"
 	"github.com/abanna/herdr-agentisan/internal/telemetry"
+	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
 // daemonHooksKey addresses the daemon process hooks stashed in the command
@@ -102,6 +104,8 @@ func daemonOptions(cmd *cobra.Command, stateDirFlag string, client bool) (daemon
 		Team: &daemon.TeamOptions{
 			ConfigDir: env.ConfigDir, GitHub: daemon.GitHubOptions{Gh: findGh(lookup)},
 			PluginRoot: debugger.Root(lookup, exe), Binary: exe,
+			Dashboard:  workforce.DashboardPane{PluginID: plugin.ID, Entrypoint: plugin.DashboardPane, Title: plugin.DashboardTitle},
+			CodexHooks: func() (bool, error) { return codexhooks.InstalledIn(lookup) },
 		},
 	}, nil
 }

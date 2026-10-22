@@ -55,6 +55,8 @@ var profileSchema = &node{kind: kindTable, fields: map[string]*node{
 		"description": leafOf(kindString),
 		// agent is the group's own agent (A23, Profile.AgentFor).
 		agentKey: agentSchema(),
+		// rotation is the group's own thresholds (A33, Thresholds.For).
+		rotationKey: rotationSchema(),
 	}}},
 	"spawn":  spawnSchema,
 	"verify": leafOf(kindArgvs),
@@ -62,10 +64,16 @@ var profileSchema = &node{kind: kindTable, fields: map[string]*node{
 		"token": leafOf(kindSecret),
 		"url":   leafOf(kindString),
 	}}},
-	"rotation": {kind: kindTable, fields: map[string]*node{
-		"thresholds": leafOf(kindInts),
-	}},
+	rotationKey: rotationSchema(),
 }}
+
+// rotationSchema is the context thresholds a project, or one of its groups,
+// sets (A33).
+func rotationSchema() *node {
+	return &node{kind: kindTable, fields: map[string]*node{
+		"thresholds": leafOf(kindInts),
+	}}
+}
 
 // projectSchema is a [projects.<name>] table: a profile body plus the keys
 // that find the project's team in herdr (ADR-001 A19), its boss's notices

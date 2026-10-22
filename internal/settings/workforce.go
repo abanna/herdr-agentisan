@@ -21,10 +21,11 @@ const ReviewType = "review"
 
 // reviewCommand is the review type's built-in agent command: codex outside
 // the shared app-server daemon, which A22 requires for its ctx (`report
-// codex` reports nothing under the daemon). It is a rule of the per-type
-// lookup, not a default layer: a default groups.review would be a group
-// without workers.
-var reviewCommand = []string{"codex", "--no-daemon"}
+// codex` reports nothing under the daemon), in Codex's read-only sandbox,
+// which roles/review.md's reviewer works under (A55). It is a rule of the
+// per-type lookup, not a default layer: a default groups.review would be a
+// group without workers.
+var reviewCommand = []string{"codex", "--no-daemon", "--sandbox", "read-only"}
 
 // DebuggerType is the worker type that runs the debugger that ships with the
 // plugin (ADR-001 A32): claude with the plugin's read-only launch, which

@@ -93,3 +93,45 @@ func ctxOf(p herdr.PaneInfo) string {
 	}
 	return p.Tokens[report.CtxKey]
 }
+
+// Level is how far a pane's context has gone past its rotation thresholds
+// (ADR-001 D7, A33): soft, let the worker finish its unit and rotate it;
+// hard, rotate it now; the ceiling, which also alerts the user.
+type Level int
+
+// The levels, lowest first.
+const (
+	LevelNone Level = iota
+	LevelSoft
+	LevelHard
+	LevelCeiling
+)
+
+// String is the level's name as notices and events give it.
+func (l Level) String() string {
+	switch l {
+	case LevelSoft:
+		return "soft"
+	case LevelHard:
+		return "hard"
+	case LevelCeiling:
+		return "ceiling"
+	default:
+		return "none"
+	}
+}
+
+// CtxLevel is the highest level ctx has crossed, a level being crossed at
+// its threshold or above (A33): thresholds are the soft, hard and ceiling
+// percentages, ascending, as settings checks them. Only the first three
+// count, and fewer are fewer levels. Unlike the ctx display's bands, which
+// start above CtxWarnAbove and CtxHotAbove (A28), 55% is the soft level.
+func CtxLevel(ctx int, thresholds []int) Level {
+	l := LevelNone
+	for i, t := range thresholds[:min(len(thresholds), int(LevelCeiling))] {
+		if ctx >= t {
+			l = Level(i + 1)
+		}
+	}
+	return l
+}

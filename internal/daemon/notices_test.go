@@ -194,9 +194,12 @@ func TestNoticesWithABrokenConfig(t *testing.T) {
 	assert.Contains(t, logs.String(), "every boss gets the default notices")
 }
 
-// TestNoticesQueueNothing is A44's hard rule for part 1: notices reach the
-// log, and state.db's messages table stays empty.
-func TestNoticesQueueNothing(t *testing.T) {
+// TestNoticesQueueOneNoticePerBoss replaces part 1's rule that nothing is
+// queued (A44): while the boss is away, every message the poll flushes for
+// it is appended to its one queued notice, from the daemon, which holds
+// them all, oldest first; daemon.log has each message as well, each naming
+// that notice.
+func TestNoticesQueueOneNoticePerBoss(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
 	th.setAgents(turned("wN:p1", "pee01", 1))
@@ -214,7 +217,31 @@ func TestNoticesQueueNothing(t *testing.T) {
 	th.setPane("wN:p1", "agent_status", "blocked")
 	waitLine(t, &logs, "pee01 is blocked")
 	polled(t, th.srv, 2)
-	assert.Equal(t, []string{"0"}, query(t, paths(t, dir, th.fakeHerdr).DB, "SELECT count(*) FROM messages"))
+	assert.Equal(t, []string{"boss boss daemon agentisan queued " + strings.Join([]string{
+		"[agentisan] notices:",
+		"agentisan: the daemon started; turns that ended while it was down are not reported",
+		"pee01 finished a turn · ctx 40%",
+		"pee01 is blocked · ctx 40%",
+	}, "\n")}, query(t, paths(t, dir, th.fakeHerdr).DB,
+		"SELECT recipient_kind || ' ' || recipient || ' ' || sender_kind || ' ' || sender || ' ' || state || ' ' || body FROM messages"),
+		"no agent named boss is in the ◆ boss space, so the one notice waits")
+
+	var inboxes []string
+	appended := []bool{}
+	for line := range strings.Lines(logs.String()) {
+		var e struct {
+			Msg      string `json:"message"`
+			Inbox    string `json:"inbox"`
+			Appended bool   `json:"appended"`
+		}
+		if json.Unmarshal([]byte(line), &e) == nil && e.Msg == "notice" {
+			inboxes, appended = append(inboxes, e.Inbox), append(appended, e.Appended)
+		}
+	}
+	require.Len(t, inboxes, 3)
+	assert.NotEmpty(t, inboxes[0])
+	assert.Equal(t, []string{inboxes[0], inboxes[0], inboxes[0]}, inboxes, "each message went into the one notice")
+	assert.Equal(t, []bool{false, true, true}, appended)
 }
 
 // haNotices is a config dir with the tabs team ha and body appended.
@@ -228,7 +255,8 @@ func haNotices(t *testing.T, body string) string {
 }
 
 // TestNoticeLineShape pins the line a boss greps daemon.log for (A44): its
-// exact keys, level info, the team's project, and the lines.
+// exact keys, level info, the team's project, the lines, the boss they are
+// for and the inbox message they went into.
 func TestNoticeLineShape(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
@@ -254,11 +282,14 @@ func TestNoticeLineShape(t *testing.T) {
 			}
 		}
 	})
-	assert.Equal(t, []string{"level", "message", "notices", "project", "time"}, keys, raw)
+	assert.Equal(t, []string{"appended", "boss", "inbox", "level", "message", "notices", "project", "time"}, keys, raw)
 	assert.Equal(t, "info", e["level"])
 	assert.Equal(t, "notice", e["message"])
 	assert.Equal(t, "ha", e["project"])
 	assert.Equal(t, []any{"pane w14:p2 is blocked · ctx 31%"}, e["notices"])
+	assert.Equal(t, "ha-boss", e["boss"])
+	assert.Len(t, e["inbox"], 26, "the inbox message's ULID")
+	assert.IsType(t, true, e["appended"])
 }
 
 // TestNoticeLineSaysWhatWasDropped: a message cut for size says how many
@@ -268,8 +299,11 @@ func TestNoticeLineSaysWhatWasDropped(t *testing.T) {
 	var logs lockedLog
 	logger, err := logging.New(&logs, "info", "json")
 	require.NoError(t, err)
-	require.NoError(t, daemon.LogNotice(logger, notice.Message{Project: "ha", Lines: []string{"a"}, Dropped: 3}))
-	require.NoError(t, daemon.LogNotice(logger, notice.Message{Project: "ha", Lines: []string{"b"}}))
+	o := daemon.Options{Logger: logger, Now: time.Now, Team: &daemon.TeamOptions{}}
+	st := scratchStore(t)
+	bosses := map[string]string{"ha": "ha-boss"}
+	require.NoError(t, daemon.InboxNotice(o, st, bosses, notice.Message{Project: "ha", Lines: []string{"a"}, Dropped: 3}))
+	require.NoError(t, daemon.InboxNotice(o, st, bosses, notice.Message{Project: "ha", Lines: []string{"b"}}))
 	ls := slices.Collect(strings.Lines(logs.String()))
 	require.Len(t, ls, 2)
 	assert.Contains(t, ls[0], `"dropped":3`)

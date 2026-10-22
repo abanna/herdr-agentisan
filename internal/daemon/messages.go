@@ -104,12 +104,14 @@ func (in *inbox) polled(m *team.Model) {
 }
 
 // queued is what send does with each message it queues (A30): it wakes the
-// dispatcher through in, and records the message's queued event. o runs
-// the team poll, since only then is there a send op.
+// dispatcher through in, and records the message's queued event, at the
+// time the message was queued: the commit comes first, so a pass may
+// deliver it before the event is emitted, and the trail sorts by time. o
+// runs the team poll, since only then is there a send op.
 func (o Options) queued(in *inbox) func(context.Context, workforce.SendResult) {
 	return func(ctx context.Context, r workforce.SendResult) {
 		in.Wake()
-		o.Team.Events.MessageQueued(ctx, telemetry.Message{ID: r.ID, FromKind: r.From.Kind, From: r.From.ID, ToKind: r.To.Kind, To: r.To.ID})
+		o.Team.Events.MessageQueued(ctx, telemetry.Message{ID: r.ID, FromKind: r.From.Kind, From: r.From.ID, ToKind: r.To.Kind, To: r.To.ID, At: r.Queued})
 	}
 }
 
@@ -279,10 +281,11 @@ func (d *dispatcher) terminals(ctx context.Context) (map[string]string, error) {
 // serve delivers to's messages, oldest first, while they land. A refusal or
 // a failure ends to's turn this pass, so neither a refused recipient nor a
 // stuck pane holds up the others. It reports false once the daemon is
-// stopping, which ends the pass.
+// stopping, which ends the pass; a stop is checked before each claim, never
+// inside one (claim).
 func (d *dispatcher) serve(ctx context.Context, to store.Address, target string) bool {
 	for ctx.Err() == nil {
-		m, ok, err := d.st.Claim(ctx, to, d.now())
+		m, ok, err := d.claim(ctx, to)
 		if err != nil {
 			d.warnUnlessStopping(ctx, err, "messages: claim "+to.ID+"'s next message")
 			return true
@@ -301,12 +304,30 @@ func (d *dispatcher) serve(ctx context.Context, to store.Address, target string)
 	return false
 }
 
+// claim claims to's next message, if it has one. Once serve has decided to
+// claim, a stop does not cut the claim short, as it cuts short neither
+// deliver's nor drop's write: a stop inside the statement could leave the
+// row dispatching while the claim reports an error, and the next start
+// would fail a message that was never typed (QA #72). It is bounded on its
+// own: settleTimeout ends its wait for the store's one connection, and
+// SQLite ends a busy statement at store.BusyTimeout whatever the deadline,
+// so a busy database holds up a stop for about 10 s at most (QA #84).
+func (d *dispatcher) claim(ctx context.Context, to store.Address) (store.Message, bool, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), settleTimeout)
+	defer cancel()
+	m, ok, err := d.st.Claim(ctx, to, d.now())
+	if err != nil {
+		return store.Message{}, false, fmt.Errorf("claim: %w", err)
+	}
+	return m, ok, nil
+}
+
 // deliver prompts target with m's text and records how it ended: delivered;
 // queued again after a refusal that typed nothing, for the next pass; or
 // failed, with a notice to its sender, after anything that may have typed it
-// (A2). Once m is claimed a stop cuts short neither the prompt nor the write
-// after it, each bounded on its own, so a stop never turns a deliverable
-// message into a failure; a cancelled context would also interrupt the
+// (A2). Once m is claimed (claim) a stop cuts short neither the prompt nor
+// the write after it, each bounded on its own, so a stop never turns a
+// deliverable message into a failure; a cancelled context would also interrupt the
 // write's statement (NERD-5355). It reports whether m landed.
 func (d *dispatcher) deliver(ctx context.Context, m store.Message, target string) bool {
 	ctx = context.WithoutCancel(ctx)
@@ -480,12 +501,12 @@ func cleanText(text string) string {
 	}, strings.ReplaceAll(text, "\r\n", "\n"))
 }
 
-// messageEvent is m as a message event carries it, with reason. Never its
-// body.
+// messageEvent is m as a message event carries it, with reason as the row
+// keeps it. Never its body.
 func messageEvent(m store.Message, reason string) telemetry.Message {
 	return telemetry.Message{
 		ID: m.ID, FromKind: m.From.Kind, From: m.From.ID, ToKind: m.To.Kind, To: m.To.ID,
-		ReturnedFrom: m.ReturnedFrom, Attempts: m.Attempts, Reason: reason,
+		ReturnedFrom: m.ReturnedFrom, Attempts: m.Attempts, Reason: store.CleanReason(reason),
 	}
 }
 

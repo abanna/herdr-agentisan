@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
 	"github.com/abanna/herdr-agentisan/internal/config"
@@ -73,7 +74,7 @@ func Root() *cobra.Command {
 		Version:       fmt.Sprintf("%s (%s)", config.Version, config.Commit),
 	}
 	root.AddCommand(newVersionCmd(), newActionCmd(), newReportCmd(), newDaemonCmd(), newConfigCmd(), newDashboardCmd(), newBackCmd(),
-		newTeamCmd(), newWorkerCmd(), newSendCmd(), newEventsCmd(), newCodexCmd(), newDebuggerCmd(), newStatusCmd())
+		newTeamCmd(), newWorkerCmd(), newSendCmd(), newNoticesCmd(), newEventsCmd(), newCodexCmd(), newDebuggerCmd(), newStatusCmd())
 	return root
 }
 
@@ -190,9 +191,10 @@ func newReportCmd() *cobra.Command {
 func newReportStatuslineCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "statusline",
-		Short: "Push ctx from Claude's statusline JSON on stdin",
+		Short: "Push ctx and the model from Claude's statusline JSON on stdin",
 		Long: "Reads Claude Code's statusline JSON on stdin and sets this pane's ctx\n" +
-			"token. Add one line to the statusline script:\n\n" +
+			"token, and the model token, its model.id, with model_at (ADR-001 A56).\n" +
+			"Add one line to the statusline script:\n\n" +
 			"  herdr-agentisan report statusline <<<\"$input\" >/dev/null 2>&1 &\n\n" +
 			"It prints nothing and always exits 0; why it reported nothing goes to\n" +
 			"the debug log (HERDR_AGENTISAN_LOG_LEVEL=debug).",
@@ -214,7 +216,7 @@ func newReportStatuslineCmd() *cobra.Command {
 				logger.Debug().Err(err).Str("pane", pane.PaneID).Ints("lineage", lineage.PIDs()).Msg("report statusline: nothing reported")
 				return nil
 			}
-			logger.Debug().Str("pane", pane.PaneID).Str("reported_to", res.PaneID).Int(report.CtxKey, res.Ctx).Msg("report statusline")
+			logReported(logger, pane, res, "report statusline")
 			return nil
 		},
 	}
@@ -223,10 +225,11 @@ func newReportStatuslineCmd() *cobra.Command {
 func newReportCodexCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "codex",
-		Short: "Push ctx from a Codex hook's payload on stdin",
+		Short: "Push ctx and the model from a Codex hook's payload on stdin",
 		Long: "Reads the JSON a Codex hook passes on stdin and sets this pane's ctx\n" +
 			"token to what Codex shows as \"Context N% used\", from the latest token\n" +
-			"count in the session's transcript, for 24 h. Run it as an async PostToolUse,\n" +
+			"count in the session's transcript, and the model token to the hook's\n" +
+			"model, with model_at (ADR-001 A56), for 24 h. Run it as an async PostToolUse,\n" +
 			"Stop and PostCompact hook (docs/config/codex-hooks.example.toml), and start\n" +
 			"Codex with --no-daemon: a hook run by the shared app-server daemon cannot\n" +
 			"tell which pane it belongs to, and reports nothing.\n\n" +
@@ -248,10 +251,23 @@ func newReportCodexCmd() *cobra.Command {
 				logger.Debug().Err(err).Str("pane", pane.PaneID).Ints("lineage", lineage.PIDs()).Msg("report codex: nothing reported")
 				return nil
 			}
-			logger.Debug().Str("pane", pane.PaneID).Str("reported_to", res.PaneID).Int(report.CtxKey, res.Ctx).Msg("report codex")
+			logReported(logger, pane, res, "report codex")
 			return nil
 		},
 	}
+}
+
+// logReported writes what a ctx report pushed, and where, to the debug log:
+// ctx when it pushed one, and the model when it pushed one (A56).
+func logReported(logger zerolog.Logger, pane report.Pane, res report.Result, msg string) {
+	ev := logger.Debug().Str("pane", pane.PaneID).Str("reported_to", res.PaneID)
+	if res.HasCtx {
+		ev = ev.Int(report.CtxKey, res.Ctx)
+	}
+	if res.Model != "" {
+		ev = ev.Str(report.ModelKey, res.Model)
+	}
+	ev.Msg(msg)
 }
 
 func newReportTurnCmd() *cobra.Command {

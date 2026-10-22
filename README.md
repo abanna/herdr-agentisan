@@ -40,7 +40,7 @@ and then says one of three things (ADR-001 A48):
 
 herdr gives a shell in one of its panes no `HERDR_PLUGIN_STATE_DIR`. From
 there the commands that ask a running daemon (`send`, `team status`,
-`worker retire`, `back`, `dashboard`, `status line`, `daemon health` and
+`team up`, `worker retire`, `back`, `dashboard`, `status line`, `daemon health` and
 `daemon stop`) find it under herdr's own state directory for the plugin,
 from `XDG_STATE_HOME` or `HOME` as herdr works it out (ADR-001 A51).
 `daemon start`, `run` and `restart` never guess: run them from herdr, or
@@ -52,7 +52,10 @@ pinned in `go.mod` under the `tool` directive — nothing to install globally.
 ## Report `$ctx` from Claude's statusline
 
 Each Claude agent pushes its own context use to its pane as the `ctx` token:
-a bare integer from 0 to 100, source `agentisan`, with a 180 s TTL. After
+a bare integer from 0 to 100, source `agentisan`, with a 180 s TTL. In the
+same report it pushes the model it runs, the statusline's `model.id`, as the
+`model` token, with `model_at` (ADR-001 A56), so the dashboard's model column
+follows a `/model` switch. After
 `task install` puts `herdr-agentisan` on your `PATH`, add one line to the
 statusline script (`~/.claude/statusline.sh`), after it has read stdin into
 `$input`:
@@ -62,13 +65,15 @@ herdr-agentisan report statusline <<<"$input" >/dev/null 2>&1 &
 ```
 
 It prints nothing and always exits 0. Outside a herdr pane, or when the
-statusline has no context percentage yet, it reports nothing. Set
+statusline has neither a context percentage nor a model yet, it reports
+nothing. Set
 `HERDR_AGENTISAN_LOG_LEVEL=debug` and drop the redirect to see why.
 
 ## Report `$ctx` from Codex
 
 Each Codex agent pushes the same `ctx` token through three Codex hooks, with
-the number Codex itself shows as "Context N% used". Install them once:
+the number Codex itself shows as "Context N% used", and the hook's `model` as
+the `model` token, as the statusline does. Install them once:
 
 ```bash
 herdr-agentisan codex hooks
@@ -150,7 +155,8 @@ Under the shared app-server daemon, with Codex's default sandbox (even for an
 approved escalation), or on an OS other than Linux and macOS, it reports
 nothing (ADR-001 A25, A26).
 
-Codex workers run under your own Codex sandbox setting, so by default their
+Codex workers run under your own Codex sandbox setting, the review type's
+built-in `--sandbox read-only` aside (ADR-001 A55), so by default their
 `report stage` commands report nothing: they show `ctx`, and an item or a
 stage only from the [turn hooks](#report-item-and-stage-from-every-turn),
 which run outside the sandbox. To have a group's Codex workers report each
@@ -335,7 +341,7 @@ v12's last value there clears itself when its 30 s TTL runs out.
 
 The daemon tells each team's boss what its team poll sees (ADR-001 A44):
 - a worker finished a turn: herdr's `completion_seq` for its terminal changed;
-- it turned blocked;
+- it turned blocked, and when it is no longer blocked;
 - it turned unknown and still is at the next poll;
 - it left the team: its pane closed or moved away, or its agent exited and
   left a shell.
@@ -367,8 +373,18 @@ worker and kind again within `repeat` seconds is dropped. `[notices]` in
 `herdr-agentisan.toml`, or `[projects.<p>.notices]`, sets these and `skip`,
 the kinds not told; see the sample. The daemon reads them when it starts.
 
-Until notices go through the inbox (NERD-5256), each message is one line in
-`daemon.log`. Follow it with:
+Each message reaches the boss through the inbox (`docs/messaging.md`):
+
+```
+[agentisan] notices:
+ha-coder-2 finished a turn · ctx 44% · NERD-5322 · verify
+ha-coder-3 is blocked · ctx 61%
+```
+
+A boss that is away gets one: while it is still queued, each message is
+added to it, and past 8 KiB the oldest lines go, counted in the first line,
+`[agentisan] notices (3 earlier dropped):`. Each message is also one line in
+`daemon.log`, which you can follow:
 
 ```bash
 tail -F "$STATE_DIR/daemon.log" | grep --line-buffered '"message":"notice"'
@@ -376,6 +392,45 @@ tail -F "$STATE_DIR/daemon.log" | grep --line-buffered '"message":"notice"'
 
 `$STATE_DIR` is the plugin's state directory, which herdr passes the daemon
 as `HERDR_PLUGIN_STATE_DIR`.
+
+The boss can mute a worker it does not need to hear from:
+
+```bash
+herdr-agentisan notices mute ha-coder-2 --for 30m   # an hour by default, at most 24h
+herdr-agentisan notices list
+herdr-agentisan notices unmute ha-coder-2
+```
+
+A mute drops every notice about the worker, named as its notices name it,
+except its context ceiling. The daemon holds mutes in memory, so a restart
+ends them. Each command prints one JSON object and exits 1 when refused,
+such as `unknown_worker` for a name no team's worker has.
+
+### Rotation notices
+
+The boss is also told when a pane's context crosses one of its rotation
+thresholds (ADR-001 D7, A33). A level counts as crossed at its threshold or
+above:
+
+```
+ha-coder-1 is at 66% context (hard: 65%) · NERD-5261 · verify: rotate it now
+```
+
+- **What is covered:** every agent pane in a team, the boss's included. The
+  boss is told about its own: `you are at 80% context (ceiling: 75%): hand
+  off now; the user has been alerted`.
+- **Once per level:** each level is told once. It is told again only after the
+  context has fallen to its threshold less 5, or below.
+- **Unknown context:** a `ctx` that is absent or expired is unknown, and tells
+  nothing.
+- **The ceiling:** at the ceiling the daemon also shows the user a toast,
+  once, and the boss's line says whether it was shown.
+
+The thresholds are `rotation.thresholds`, by default `[55, 65, 75]`, for the
+project and the boss. A role can set its own with
+`groups.<type>.rotation.thresholds`. The daemon reads both when it starts,
+from the shared file, the project's table and the repo file. `skip` can name
+`ctx_soft` and `ctx_hard`, but never `ctx_ceiling`.
 
 ## The debugger
 
@@ -390,6 +445,36 @@ and the daemon's directory; `worker spawn --group debugger` starts it as one
 of the team's workers, in a group of its own. See
 [`docs/debugger.md`](docs/debugger.md).
 
+## The Codex reviewer
+
+A `review` worker reviews one pull request at a time, read-only, by
+agentisan-skills' review guidelines, which `roles/review.md` vendors byte
+for byte (ADR-001 A55). The review type starts `codex --no-daemon --sandbox
+read-only` unless its group names a command. For each review, prepare a
+worktree at the PR's head, then send the role whole and the inputs alone,
+from the plugin's checkout. The daemon types `[msg <id> from <sender>]`
+before a message's first line, so the item goes on the second, where
+`report turn` reads it:
+
+```bash
+herdr-agentisan send ha-review-1 - < roles/review.md
+herdr-agentisan send ha-review-1 - <<'BODY'
+Review inputs:
+item: PR-104
+pr: 104
+head: <the head commit's full SHA>
+base: origin/main
+worktree: <the worktree's path>
+BODY
+```
+
+Send nothing else with a review: no scope, focus, evidence or severity hint,
+which the guidelines forbid in a reviewer's brief. The reviewer answers in
+its final message, which ends `BOSS: review #104 at <sha7>: no findings`,
+`BOSS: review #104 at <sha7>: <k> findings (P0 <a>, P1 <b>)` or
+`BOSS: blocked: review #104: <reason>`. It never edits a file or touches
+GitHub.
+
 ## Teams: one workspace, one tab per worker
 
 Every configured project but the `[spaces] project` is a team: one herdr
@@ -402,19 +487,20 @@ See ADR-001 A19.
 
 ## The workforce commands
 
-The boss reads its team, spawns workers and retires them with commands the
-daemon runs (ADR-001 D11, A23); the `herdr-workforce` skill drives them.
-`team up` follows in a later part of NERD-5254.
+The boss reads its team, fills it, spawns workers and retires them with
+commands the daemon runs (ADR-001 D11, A23); the `herdr-workforce` skill
+drives them.
 
 | Command | What it does |
 | --- | --- |
 | `team status [--project p]` | Every group's counts and open slots, and each worker's status, ctx, item, stage (and whether it is old) and idle time |
+| `team up [--project p]` | Fills each group up to its `workers` count, empty slots only, so a full team gets none; opens the team's dashboard above the boss when none is open |
 | `worker spawn --group g [--count n] [--model m]` | Adds workers, refused whole past the group's `slots` or when the repo fails the tdaddy preflight |
 | `worker retire <id> [--after-handoff]` | Closes a worker's pane, by logical id or pane id; with the flag, once its handoff is written |
 
 Each prints one JSON object and exits 1 when refused. Without `--project`
-status and spawn read the team whose workspace the command runs in, else the only
-tabs team.
+status, up and spawn read the team whose workspace the command runs in, else
+the only tabs team.
 A tabs team's worker is named by its logical id, `<short>-<type>-<n>`, its
 tab's label; a pane of the ◆ spaces by its pane id. Idle times start when
 the daemon does, and a team added to the configuration since gets them
@@ -424,9 +510,10 @@ Just after the daemon starts, the command waits for its first poll.
 
 Each command resolves the project's profile with its repo's committed
 `.herdr-agentisan.toml`. So that file sets only `color`, `github`, a
-group's `workers` and `slots`, models and `rotation.thresholds` (ADR-001
-A46). Agent commands, `[spawn]`, `verify`, `[integrations]` and every other
-key belong in `herdr-agentisan.toml` or `--set`. A repo file that sets one
+group's `workers` and `slots`, models and the rotation thresholds, the
+project's and a group's (ADR-001 A46, A33). Agent commands, `[spawn]`,
+`verify`, `[integrations]` and every other key belong in
+`herdr-agentisan.toml` or `--set`. A repo file that sets one
 is refused, and names the key. A model, from any layer, is a letter or
 digit, then letters, digits and `. _ - : / @ [ ]`, such as `opus[1m]`.
 
@@ -481,6 +568,9 @@ description = "Agentisan: open the team dashboard"
 prefix+d is not one of herdr's default keys. Each press opens a new split,
 where `dashboard-tab.sh` jumped to the one it had made, so close a dashboard
 with `q`. Add `--direction down` to split below the focused pane instead.
+`team up` opens one for you, above the boss, labelled `<short>-dashboard`,
+when the team's workspace has none, and leaves one prefix+d opened there as
+it is.
 See [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml).
 
 `herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json`
@@ -521,13 +611,20 @@ does not resolve keeps the last ones, and `daemon.log` says why.
 
 ### The model column
 
-Each row shows the model its agent was started with: Claude's `--model`, or
-Codex's `-m` or `--model`, read from the pane's processes through herdr
-(ADR-001 A39). The daemon asks herdr again only when a pane's agent
-restarted or changed, and a pane where it finds no agent process once a
-minute. It is the launch model: a `/model` switch shows once the agent
-restarts, and an agent started without the flag, such as a Codex that takes
-its model from `config.toml`, shows none.
+Each row shows the model its agent reports it runs (ADR-001 A56): Claude's
+statusline `model.id`, or the model a Codex hook names. A `/model` switch
+therefore shows at the agent's next report. For Claude that is within a
+minute when the statusline sets `refreshInterval: 60`, else at its next
+message. For Codex it is after the next tool use or turn end.
+
+Until an agent has reported, or when its report is older than the agent's
+process, as a model left by an earlier agent in the pane is, the row shows
+the model the agent was started with. That is Claude's `--model`, or Codex's
+`-m` or `--model`, read from the pane's processes through herdr (A39).
+
+The daemon asks herdr again only when a pane's agent restarted or changed,
+and once a minute for a pane where it finds no agent process. An agent
+started without the flag that has not reported yet shows none.
 
 ### A group's view
 

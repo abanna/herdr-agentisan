@@ -159,11 +159,25 @@ func TestReportPaneMetadataFailureClasses(t *testing.T) {
 }
 
 // TestCallFailureClasses walks every way a call can fail. Each must surface as
-// an error a caller can branch on with errors.Is, never as a zero result.
+// an error a caller can branch on with errors.Is, never as a zero result,
+// and none as ErrNotSent: each fails after the request is written. An answer
+// that is bad past its id echoes the request's, so it reaches its own
+// branch, not the id check (QA #84, S1).
 func TestCallFailureClasses(t *testing.T) {
 	t.Parallel()
 
 	wrongID := "someone-else"
+	// answer is a raw answer to the request's own id, so the client gets
+	// past the id check to the branch the rest of the answer reaches.
+	answer := func(rest string) herdrtest.Handler {
+		return func(r herdrtest.Request) herdrtest.Reply {
+			return herdrtest.Reply{Raw: []byte(`{"id":"` + r.ID + `"` + rest + `}`)}
+		}
+	}
+	pastTheID := func(t *testing.T, err error) {
+		t.Helper()
+		assert.NotContains(t, err.Error(), "does not match", "past the id check")
+	}
 	tests := map[string]struct {
 		handler herdrtest.Handler
 		want    error
@@ -190,8 +204,10 @@ func TestCallFailureClasses(t *testing.T) {
 			},
 			want: herdr.ErrProtocol,
 		},
-		"response is not JSON":     {handler: func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Raw: []byte("not json")} }, want: herdr.ErrProtocol},
-		"neither result nor error": {handler: func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Raw: []byte(`{"id":"x"}`)} }, want: herdr.ErrProtocol},
+		"response is not JSON":          {handler: func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Raw: []byte("not json")} }, want: herdr.ErrProtocol},
+		"neither result nor error":      {handler: answer(""), want: herdr.ErrProtocol, check: pastTheID},
+		"a null result":                 {handler: answer(`,"result":null`), want: herdr.ErrProtocol, check: pastTheID},
+		"a result that does not decode": {handler: answer(`,"result":5`), want: herdr.ErrProtocol, check: pastTheID},
 		"wrong result type": {
 			handler: func(herdrtest.Request) herdrtest.Reply {
 				return herdrtest.Reply{Result: map[string]any{"type": "notification_show", "shown": true, "reason": "shown"}}
@@ -213,6 +229,7 @@ func TestCallFailureClasses(t *testing.T) {
 			_, err := herdr.Client{SocketPath: srv.Path}.Ping(t.Context())
 			require.Error(t, err)
 			require.ErrorIs(t, err, tc.want)
+			assert.NotErrorIs(t, err, herdr.ErrNotSent, "it failed after the request was written, so it may have taken effect")
 			if tc.check != nil {
 				tc.check(t, err)
 			}
@@ -365,6 +382,7 @@ func TestResponseFramingClasses(t *testing.T) {
 				return
 			}
 			require.ErrorIs(t, err, tc.want)
+			assert.NotErrorIs(t, err, herdr.ErrNotSent, "it failed after the request was written, so it may have taken effect")
 		})
 	}
 }

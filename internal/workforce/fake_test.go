@@ -73,7 +73,17 @@ type fakeHerdr struct {
 	// alias maps a pane id herdr no longer lists, one frozen in a shell's
 	// HERDR_PANE_ID, to the pane pane.process_info resolves it to.
 	alias map[string]string
+	// focused is the pane with the user's focus; "" for none.
+	focused string
+	// tabFocus is each tab's own focused pane, which herdr keeps per tab and
+	// shows on the user's next visit: a swap that changes the layout and a
+	// pane.focus set it.
+	tabFocus map[string]string
 }
+
+// dashTitle is the dashboard entrypoint's manifest title, which herdr labels
+// the plugin pane it opens with.
+const dashTitle = "Agentisan dashboard"
 
 type fakeWS struct{ id, label string }
 
@@ -87,11 +97,12 @@ type fakePane struct {
 	pending, ready        bool
 	kind                  string
 	fg                    bool
+	label                 string
 }
 
 func newFake(t *testing.T) *fakeHerdr {
 	t.Helper()
-	f := &fakeHerdr{t: t, fail: map[string]string{}, failAfter: map[string]int{}, calls: map[string]int{}, keys: map[string][][]string{}, waits: map[string]int{}, alias: map[string]string{}}
+	f := &fakeHerdr{t: t, fail: map[string]string{}, failAfter: map[string]int{}, calls: map[string]int{}, keys: map[string][][]string{}, waits: map[string]int{}, alias: map[string]string{}, tabFocus: map[string]string{}}
 	f.srv = herdrtest.Start(t, f.handle)
 	return f
 }
@@ -215,7 +226,7 @@ func errReply(code string) herdrtest.Reply {
 func (f *fakeHerdr) paneInfo(p *fakePane) map[string]any {
 	out := map[string]any{
 		"pane_id": p.id, "terminal_id": p.terminal, "workspace_id": p.ws, "tab_id": p.tab,
-		"focused": false, "agent_status": p.status, "revision": 1, "tokens": p.tokens,
+		"focused": p.id == f.focused, "agent_status": p.status, "revision": 1, "tokens": p.tokens, "label": p.label,
 	}
 	if p.agent != "" {
 		out["agent"] = p.agent
@@ -360,6 +371,43 @@ func (f *fakeHerdr) answer(r herdrtest.Request) herdrtest.Reply {
 			f.workspaces = slices.DeleteFunc(f.workspaces, func(w *fakeWS) bool { return w.id == closed.ws })
 		}
 		return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
+	case "plugin.pane.open":
+		target := f.pane(str("target_pane_id"))
+		if target == nil || str("placement") != "split" {
+			return errReply("plugin_pane_open_failed")
+		}
+		pane := f.newPane(target.ws, target.tab)
+		pane.label = dashTitle
+		// A split down puts the new pane after its target in the layout.
+		f.panes = slices.Insert(f.panes[:len(f.panes)-1], slices.Index(f.panes, target)+1, pane)
+		return herdrtest.Reply{Result: map[string]any{"type": "plugin_pane_opened", "plugin_pane": map[string]any{"plugin_id": str("plugin_id"), "entrypoint": str("entrypoint"), "pane": f.paneInfo(pane)}}}
+	case "pane.swap":
+		src, dst := f.pane(str("source_pane_id")), f.pane(str("target_pane_id"))
+		swap := map[string]any{"changed": false, "source_pane_id": str("source_pane_id"), "focused_pane_id": f.focused, "layout": map[string]any{}}
+		switch {
+		case src == nil || dst == nil:
+			swap["reason"] = "not_found"
+		case src.tab != dst.tab:
+			swap["reason"] = "cross_tab"
+		default:
+			i, j := slices.Index(f.panes, src), slices.Index(f.panes, dst)
+			f.panes[i], f.panes[j] = dst, src
+			f.focused, swap["changed"], swap["focused_pane_id"] = src.id, true, src.id
+			f.tabFocus[src.tab] = src.id
+		}
+		return herdrtest.Reply{Result: map[string]any{"type": "pane_swap", "swap": swap}}
+	case "pane.rename", "pane.focus":
+		pane := f.pane(str("pane_id"))
+		if pane == nil {
+			return errReply("pane_not_found")
+		}
+		if r.Method == "pane.rename" {
+			pane.label = str("label")
+		} else {
+			f.focused = pane.id
+			f.tabFocus[pane.tab] = pane.id
+		}
+		return herdrtest.Reply{Result: map[string]any{"type": "pane_info", "pane": f.paneInfo(pane)}}
 	case "pane.get":
 		pane := f.pane(str("pane_id"))
 		if pane == nil {

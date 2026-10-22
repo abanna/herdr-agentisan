@@ -7,6 +7,7 @@
 package preflight
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -88,8 +89,8 @@ func Host() System {
 }
 
 // Check is a spawn precondition for the repo at repo, the absolute path of a
-// project's repo. `worker spawn` and `team up` (NERD-5254 parts 4 and 5) are
-// to run one before they open a pane.
+// project's repo. `worker spawn` and `team up` (NERD-5254 parts 4 and 5) run
+// one before they open a pane.
 type Check func(ctx context.Context, repo string) error
 
 var _ Check = HostCheck
@@ -250,9 +251,10 @@ func killGroup(kill func(pid int, sig syscall.Signal) error, pid int, what strin
 	return nil
 }
 
-// capped keeps the first max bytes written to it and drops the rest. The
-// write itself never fails, so tdaddy is never left blocked on a pipe
-// nobody reads.
+// capped keeps the first max bytes written to it after any leading blanks,
+// and drops the rest. The blanks before the first byte kept are never
+// counted, so a reason after any number of them is kept. The write itself
+// never fails, so tdaddy is never left blocked on a pipe nobody reads.
 type capped struct {
 	mu  sync.Mutex
 	buf []byte
@@ -266,11 +268,19 @@ func newCapture() *capped { return &capped{max: maxOutput} }
 func (c *capped) Write(p []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	kept := p
+	if len(c.buf) == 0 {
+		kept = bytes.TrimLeft(kept, blanks)
+	}
 	if room := c.max - len(c.buf); room > 0 {
-		c.buf = append(c.buf, p[:min(room, len(p))]...)
+		c.buf = append(c.buf, kept[:min(room, len(kept))]...)
 	}
 	return len(p), nil
 }
+
+// blanks are the bytes a capture skips before the first one it keeps: ASCII
+// whitespace, which firstLine's TrimSpace would drop anyway.
+const blanks = " \t\n\r\v\f"
 
 func (c *capped) String() string {
 	c.mu.Lock()

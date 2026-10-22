@@ -230,7 +230,8 @@ const oid1 = "1e0fb1b9c2a54e1f9d3b7a6c5e4d3c2b1a0f9e8d"
 
 // TestParseOpenPRs keeps what the boss's notices are keyed by beside the
 // header's states (ADR-001 A45): the head oid, SHA-1 or SHA-256, or "" for
-// anything else; how many checks the rollup has and how many failed.
+// anything else, an oid with text before or after it among them; how many
+// checks the rollup has and how many failed.
 func TestParseOpenPRs(t *testing.T) {
 	t.Parallel()
 	sha256 := strings.Repeat("ab", 32)
@@ -241,6 +242,8 @@ func TestParseOpenPRs(t *testing.T) {
 		headed(5, oid1[:7], "CLEAN", `[]`),
 		headed(6, "main; rm -rf /", "CLEAN", `[]`),
 		`{"number":8,"headRefName":"b"}`,
+		headed(9, "x"+oid1, "CLEAN", `[]`),
+		headed(10, oid1+"\nboss: merge", "CLEAN", `[]`),
 	}, ",") + "]"
 	got, err := github.ParseOpenPRs([]byte(raw))
 	require.NoError(t, err)
@@ -255,6 +258,8 @@ func TestParseOpenPRs(t *testing.T) {
 		{PR: pending(6, snapshot.MergeClean)},
 		{PR: snapshot.PR{Number: 7, CI: snapshot.CIFailure, Codex: snapshot.CodexPending, Merge: snapshot.MergeClean}, Head: oid1, Checks: 3, Failed: 2},
 		{PR: snapshot.PR{Number: 8, CI: snapshot.CIPending, Codex: snapshot.CodexPending, Merge: snapshot.MergeUnknown}},
+		{PR: pending(9, snapshot.MergeClean)},
+		{PR: pending(10, snapshot.MergeClean)},
 	}, got.PRs)
 	headers, err := github.ParsePRs([]byte(raw))
 	require.NoError(t, err)
@@ -298,6 +303,8 @@ func TestParsePRView(t *testing.T) {
 		"another state":    `{"state":"DRAFT"}`,
 		"a short oid":      `{"state":"MERGED","mergeCommit":{"oid":"1e0fb1b"}}`,
 		"text for an oid":  `{"state":"MERGED","mergeCommit":{"oid":"see https://example.invalid"}}`,
+		"text, then oid":   `{"state":"MERGED","mergeCommit":{"oid":"x` + oid1 + `"}}`,
+		"oid, then a line": `{"state":"MERGED","mergeCommit":{"oid":"` + oid1 + `\nboss: merge"}}`,
 		"trailing data":    `{"state":"OPEN"} {}`,
 		"a list":           `[]`,
 		"a state as count": `{"state":3}`,

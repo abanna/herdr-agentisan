@@ -41,7 +41,7 @@ func StateDir(flag string, lookup func(string) (string, bool)) (dir string, deri
 //
 // ID needs none of herdr's escaping (TestIDIsItsOwnHerdrPathComponent). A
 // release herdr is assumed: a debug build uses herdr-dev
-// (src/config/io.rs:22-27). With neither variable it is "": herdr would
+// (src/config/io.rs:22-28). With neither variable it is "": herdr would
 // fall back to its platform's temporary directory, which a pane shell, one
 // herdr always gives HOME, never reaches.
 func HerdrStateDir(lookup func(string) (string, bool)) string {

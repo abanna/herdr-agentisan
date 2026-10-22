@@ -32,6 +32,11 @@ const BtopPane = "btop"
 // `--entrypoint` DashboardPane opens it; the README's prefix+d snippet does.
 const DashboardPane = "dashboard"
 
+// DashboardTitle is the DashboardPane entry's manifest title, which herdr
+// labels each pane it opens for it with: team up finds a dashboard opened
+// with prefix+d by it (ADR-001 A23).
+const DashboardTitle = "Agentisan dashboard"
+
 // Manifest is the subset of herdr-plugin.toml this plugin declares. Decoding
 // is strict: a key this struct does not know is a typo until proven
 // otherwise, so adding a section (events, panes, ...) means adding it here.

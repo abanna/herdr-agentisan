@@ -308,14 +308,20 @@ func TestBindWorkerLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, live)
 
-	again := store.Worker{LogicalID: "ha-coder-2", Project: "assay", Group: "qa", PaneID: "w14:pA", TerminalID: "term_c"}
+	_, err = s.BindWorker(ctx, store.Worker{LogicalID: "ha-coder-2", Project: "assay", Group: "qa", PaneID: "w14:pA", TerminalID: "term_c"}, t0.Add(time.Hour))
+	require.ErrorIs(t, err, store.ErrWorkerLive, "another project's id is never taken over (QA #78 F4)")
+	unchanged, err := s.WorkerRow(ctx, "ha-coder-2")
+	require.NoError(t, err)
+	assert.Equal(t, row, unchanged)
+
+	again := store.Worker{LogicalID: "ha-coder-2", Project: "herdr-agentisan", Group: "qa", PaneID: "w14:pA", TerminalID: "term_c"}
 	gen, err = s.BindWorker(ctx, again, t0.Add(time.Hour))
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), gen)
 	row, err = s.WorkerRow(ctx, "ha-coder-2")
 	require.NoError(t, err)
 	again.Generation, again.Status = 1, store.StatusStarting
-	assert.Equal(t, store.Row{Worker: again, CreatedAt: t0}, row.InUTC(), "the new project and group, the row's first creation")
+	assert.Equal(t, store.Row{Worker: again, CreatedAt: t0}, row.InUTC(), "the new group, the row's first creation")
 	require.ErrorIs(t, s.SetWorkerStatus(ctx, w, store.StatusRetired, t0.Add(2*time.Hour)), store.ErrNoWorker,
 		"a write planned on generation 0 never ends generation 1")
 }
@@ -351,6 +357,32 @@ func TestBindWorkerReusesALostID(t *testing.T) {
 	row, err := s.WorkerRow(ctx, "w")
 	require.NoError(t, err)
 	assert.Equal(t, store.StatusRetired, row.Status)
+}
+
+// TestBindWorkerKeepsAnotherProjectsID: a lost row is never bound into
+// another project, and OtherProjectsIDs lists every other project's id,
+// retired or not, which a spawn must not take (QA #78 F4).
+func TestBindWorkerKeepsAnotherProjectsID(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	seedWorker(t, s, "w", "w14:p2", 3)
+	require.NoError(t, s.MarkWorkerLost(ctx, liveRow(t, s, "w")))
+	seedWorker(t, s, "v", "w14:p3", 0)
+	retire(t, s, "v")
+	lost := liveRow(t, s, "w")
+
+	_, err := s.BindWorker(ctx, store.Worker{LogicalID: "w", Project: "assay", Group: "coders", PaneID: "w14:p9", TerminalID: "term_new"}, t1)
+	require.ErrorIs(t, err, store.ErrWorkerLive)
+	assert.Contains(t, err.Error(), "w is live, or is another project's than assay")
+	assert.Equal(t, lost, liveRow(t, s, "w"), "nothing changed")
+
+	ids, err := s.OtherProjectsIDs(ctx, "assay")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"v", "w"}, ids, "the retired row's id too")
+	ids, err = s.OtherProjectsIDs(ctx, "agentisan")
+	require.NoError(t, err)
+	assert.Empty(t, ids)
 }
 
 // TestBindWorkerFailsAStaleHandoff: a handoff left pending on a row retired
