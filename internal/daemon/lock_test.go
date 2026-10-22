@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,8 +54,9 @@ func TestTheProbeLetsGoWhereverItsFileIsCopied(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, again, "the probe left the holder its lock")
 		require.NoError(t, holder.Close())
-		again, err = daemon.Held(path)
-		require.NoError(t, err)
-		assert.False(t, again, "its holder gone, it is free")
+		// A child another test forks just before the close holds a copy of
+		// the holder's descriptor, and its lock, until it execs.
+		assert.Eventually(t, func() bool { again, err := daemon.Held(path); return err == nil && !again },
+			ready, 10*time.Millisecond, "its holder gone, it is free")
 	})
 }

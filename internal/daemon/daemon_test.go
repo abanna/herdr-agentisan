@@ -874,6 +874,11 @@ func TestStartClasses(t *testing.T) {
 		require.NoError(t, r.wait(t, ready))
 		paths, err := daemon.PathsFor(dir, h.path)
 		require.NoError(t, err)
+		// A child another test forked while the daemon ran can hold a copy
+		// of the daemon's own descriptor until it execs (see restarted).
+		// Once nothing holds the lock, nothing can take it back.
+		require.Eventually(t, func() bool { isHeld, err := daemon.Held(paths.Lock); return err == nil && !isHeld },
+			ready, 10*time.Millisecond, "the stopped daemon's lock was never free")
 		isHeld, letGo, err := daemon.HeldKeepingACopy(paths.Lock)
 		require.NoError(t, err)
 		require.False(t, isHeld)
