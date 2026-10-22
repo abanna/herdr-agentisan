@@ -321,6 +321,39 @@ the last write wins; after, the daemon's next push, within 3 s, replaces the
 value v12 left on each group space. The daemon never writes `◆ herdr`, so
 v12's last value there clears itself when its 30 s TTL runs out.
 
+## Boss notices
+
+The daemon tells each team's boss what its team poll sees (ADR-001 A44):
+- a worker finished a turn: herdr's `completion_seq` for its terminal changed;
+- it turned blocked;
+- it turned unknown and still is at the next poll;
+- it left the team: its pane closed or moved away, or its agent exited and
+  left a shell.
+
+It also tells each boss, once, that the daemon started. Turns that end while
+the daemon is down are not reported. The boss's own panes and plain shells are
+never reported. Each line carries the worker's reported ctx, item and stage:
+
+```
+ha-coder-2 finished a turn · ctx 44% · NERD-5322 · verify
+```
+
+The daemon only informs; it never acts on a notice. Each team's notices are
+coalesced, and its boss gets at most one message every `gap` seconds. The same
+worker and kind again within `repeat` seconds is dropped. `[notices]` in
+`herdr-agentisan.toml`, or `[projects.<p>.notices]`, sets these and `skip`,
+the kinds not told; see the sample. The daemon reads them when it starts.
+
+Until notices go through the inbox (NERD-5256), each message is one line in
+`daemon.log`. Follow it with:
+
+```bash
+tail -F "$STATE_DIR/daemon.log" | grep --line-buffered '"message":"notice"'
+```
+
+`$STATE_DIR` is the plugin's state directory, which herdr passes the daemon
+as `HERDR_PLUGIN_STATE_DIR`.
+
 ## The debugger
 
 A read-only Claude agent that answers "what happened to worker X in the last

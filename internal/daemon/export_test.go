@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/store"
@@ -197,6 +198,16 @@ var CallWith = callWith
 // herdr server ident names.
 func WorkforceOf(o Options, ident Identity) *workforce.Service {
 	return o.newWorkforce(nil, ident, &team.IdleClock{})
+}
+
+// LogNotice writes m as the log sink does (A44).
+func LogNotice(log zerolog.Logger, m notice.Message) error {
+	return logSink{log}.Send(context.Background(), m)
+}
+
+// FlushNotices flushes b into s as the poll does.
+func FlushNotices(o Options, b *notice.Batcher, s notice.Sink) {
+	o.flushNotices(context.Background(), &notices{batch: b, sink: s})
 }
 
 // LaunchModels is the team poll's launch models (A39), driven one poll at a

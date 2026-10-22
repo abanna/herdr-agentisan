@@ -68,14 +68,15 @@ var profileSchema = &node{kind: kindTable, fields: map[string]*node{
 }}
 
 // projectSchema is a [projects.<name>] table: a profile body plus the keys
-// that find the project's team in herdr (ADR-001 A19), and the project's own
-// test slots (A40). Only the project's own table sets them: the daemon reads
-// them without the repo file, a short code shared by every project would
-// collide, and the lock files are the machine's.
+// that find the project's team in herdr (ADR-001 A19), its boss's notices
+// (A44), and the project's own test slots (A40). Only the project's own table
+// sets them: the daemon reads them without the repo file, a short code shared
+// by every project would collide, and the lock files are the machine's.
 var projectSchema = func() *node {
 	fields := maps.Clone(profileSchema.fields)
 	fields["short"] = leafOf(kindString)
 	fields["layout"] = leafOf(kindString)
+	fields["notices"] = noticesSchema
 	fields["tests"] = testsSchema
 	return &node{kind: kindTable, fields: fields}
 }()

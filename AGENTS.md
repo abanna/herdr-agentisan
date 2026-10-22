@@ -138,9 +138,11 @@ exempts whatever is later added under that name.
   `snapshot.go`, with `SnapshotSource`, the dashboard's client), each group
   with its description, re-read when the shared file changes
   (`descriptions.go`, A36), and sends each status change since the last
-  poll as a workflow event (`events.go`). It keeps herdr's agent view on the
-  focused team, which focus events and the poll feed it, and clears it
-  outside every team and on a clean stop (`view.go`, the A28 addendum, A49).
+  poll as a workflow event (`events.go`), and tells each team's boss what
+  the poll sees, through `internal/notice` (`notices.go`, A44). It keeps
+  herdr's agent view on the focused team, which focus events and the poll
+  feed it, and clears it outside every team and on a clean stop (`view.go`,
+  the A28 addendum, A49).
   It types each queued message into its recipient with `agent.prompt`, by
   the agent name the poll's last model shows where it belongs, or a pane
   sender's by the pane showing its terminal, returns an ended binding's
@@ -164,6 +166,13 @@ exempts whatever is later added under that name.
   idle clock (A23), whose working stretches tell an old stage from a
   current one (`stage.go`, A42: `StageOf`, and the sidebar's `stage_now` and
   `stage_old`).
+- `internal/notice/` — boss notices (ADR-001 A44): the team poll's source
+  (`Watch`: a turn's end from `agent.list`'s `completion_seq`, blocked,
+  unknown for two polls, gone (a pane closed or moved, or its agent exited),
+  and the daemon's start), the per-boss pacing (`Batcher`: coalesced, at
+  most one message per gap, repeats dropped, 8 KiB a message) and the `Sink`
+  that delivers it. The daemon's sink writes daemon.log until the inbox
+  delivers (NERD-5256). Pure: tests build models by hand.
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
   `team status` and `worker retire` so far, and `send`'s sender and
   recipient (A30): each group's counts and members

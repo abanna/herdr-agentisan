@@ -93,6 +93,8 @@ type teamPoll struct {
 	slots *slotCounter
 	// bind keeps the workers rows bound to their panes (A35).
 	bind *binder
+	// notices tells each team's boss what the poll sees (A44).
+	notices *notices
 }
 
 // startTeam starts the team poll when o.Team is set, and beside it the
@@ -159,6 +161,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 		cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, idle: idle, cache: cache, header: header,
 		models: newLaunchModels(), descriptions: newGroupDescriptions(o.Team.ConfigDir),
 		slots: o.newSlotCounter(), bind: &binder{ready: ready},
+		notices: o.newNotices(),
 	}
 	onServer := o.onServer(ident)
 	c := herdr.Client{SocketPath: o.HerdrSocket, Dialed: onServer}
@@ -195,6 +198,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 			last = built
 			views.polled(*built, focused, seen)
 		}
+		o.flushNotices(ctx, tp.notices)
 		in.polled(built)
 		select {
 		case <-ctx.Done():
@@ -269,8 +273,9 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	m := team.Build(l, tp.cfg.resolver(), rows)
 	now := o.Now()
 	// A pane's rest is pane.list's status, so a failed agent list does not
-	// stop the idle clock.
+	// stop the idle clock, nor the notices of a status change.
 	tp.idle.Observe(m, now)
+	tp.notices.observe(m, agents, agentsErr == nil, now)
 	if agentsErr == nil {
 		tp.stages.Observe(m, now)
 		models, err := tp.models.refresh(ctx, c, pp, agentPanes(m, panes), o.Hooks.StartTime, now, o.Logger)
