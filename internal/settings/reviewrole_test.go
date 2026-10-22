@@ -159,3 +159,33 @@ func TestReviewRoleFitsOneMessage(t *testing.T) {
 	item, _ := report.Stated(report.EventPromptSubmit, role)
 	assert.Empty(t, item, "the role sets no item")
 }
+
+// TestReviewDispatchSetsTheItem: README's inputs message, typed as the
+// daemon types a worker's message (`[msg <id> from <sender>] <body>`, its
+// textOf), sets the reviewer's item, which an item on the body's first line
+// would not, and gives the four inputs the role names.
+func TestReviewDispatchSetsTheItem(t *testing.T) {
+	t.Parallel()
+	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
+	require.NoError(t, err)
+	_, section, ok := strings.Cut(string(readme), "\n## The Codex reviewer\n")
+	require.True(t, ok)
+	section, _, _ = strings.Cut(section, "\n## ")
+	_, body, ok := strings.Cut(section, "herdr-agentisan send ha-review-1 - <<'BODY'\n")
+	require.True(t, ok, "README sends the inputs on stdin")
+	body, _, ok = strings.Cut(body, "\nBODY\n")
+	require.True(t, ok)
+
+	typed := "[msg 01M5JNK6368AKCMW7Q0D05BSGJ from ha-boss] " + body
+	item, _ := report.Stated(report.EventPromptSubmit, typed)
+	assert.Equal(t, "PR-104", item)
+	first, _, _ := strings.Cut(body, "\n")
+	item, _ = report.Stated(report.EventPromptSubmit, "[msg 01M5JNK6368AKCMW7Q0D05BSGJ from ha-boss] "+strings.TrimPrefix(body, first+"\n"))
+	assert.Empty(t, item, "an item on the first line is typed behind the header and never read")
+
+	role := readReviewRole(t)
+	for _, input := range []string{"pr", "head", "base", "worktree"} {
+		assert.Regexp(t, "(?m)^"+input+": ", body, "the dispatch gives %s", input)
+		assert.Contains(t, role, "`"+input+"`", "the role names %s", input)
+	}
+}

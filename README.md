@@ -150,7 +150,8 @@ Under the shared app-server daemon, with Codex's default sandbox (even for an
 approved escalation), or on an OS other than Linux and macOS, it reports
 nothing (ADR-001 A25, A26).
 
-Codex workers run under your own Codex sandbox setting, so by default their
+Codex workers run under your own Codex sandbox setting, the review type's
+built-in `--sandbox read-only` aside (ADR-001 A55), so by default their
 `report stage` commands report nothing: they show `ctx`, and an item or a
 stage only from the [turn hooks](#report-item-and-stage-from-every-turn),
 which run outside the sandbox. To have a group's Codex workers report each
@@ -422,11 +423,14 @@ agentisan-skills' review guidelines, which `roles/review.md` vendors byte
 for byte (ADR-001 A55). The review type starts `codex --no-daemon --sandbox
 read-only` unless its group names a command. For each review, prepare a
 worktree at the PR's head, then send the role whole and the inputs alone,
-from the plugin's checkout:
+from the plugin's checkout. The daemon types `[msg <id> from <sender>]`
+before a message's first line, so the item goes on the second, where
+`report turn` reads it:
 
 ```bash
 herdr-agentisan send ha-review-1 - < roles/review.md
 herdr-agentisan send ha-review-1 - <<'BODY'
+Review inputs:
 item: PR-104
 pr: 104
 head: <the head commit's full SHA>
