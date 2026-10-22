@@ -1,6 +1,7 @@
 package report_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -323,6 +325,30 @@ func TestTurnSurfacesHerdrErrors(t *testing.T) {
 	}
 }
 
+// TestTurnBoundsTheCallByCallTimeout: the hook's context carries no deadline,
+// so one herdr.CallTimeout bounds the whole report, as it does Statusline's
+// and Stage's. An item alone on a stale HERDR_PANE_ID makes every call Turn
+// can: resolving the pane (process_info, list, process_info), reading its
+// item (list), and the report, and a budget per call would let them add up.
+func TestTurnBoundsTheCallByCallTimeout(t *testing.T) {
+	t.Parallel()
+
+	rep := &deadlineReporter{}
+	lineage := report.ReadLineage(5000, newProcTable(oursProcs()).stat).WithCmdline(argv(claudeArgv))
+	start := time.Now()
+	got, err := report.Turn(context.Background(), rep,
+		report.Pane{SocketPath: "/x", PaneID: "w1:p1", Lineage: lineage}, strings.NewReader(claudeStop("item: NERD-1")))
+	require.NoError(t, err)
+	assert.Equal(t, report.TurnResult{Item: "NERD-1", PaneID: "w2:p1", Cleared: true}, got)
+
+	require.Len(t, rep.deadlines, 5, "process_info, list, process_info, list, report")
+	for i, d := range rep.deadlines {
+		require.False(t, d.IsZero(), "call %d must run under a deadline", i)
+		assert.Equal(t, rep.deadlines[0], d, "call %d must share the one report deadline", i)
+	}
+	assert.WithinDuration(t, start.Add(herdr.CallTimeout), rep.deadlines[0], time.Second)
+}
+
 // TestTurnLandsOnTheReportingPane: a turn report goes to the pane the hook's
 // own lineage runs in, never to the pane a stale or reissued HERDR_PANE_ID
 // now names (NERD-5268: never report for another pane), and nowhere when no
@@ -379,7 +405,8 @@ func TestTurnRefusesATerminal(t *testing.T) {
 }
 
 // TestTurnDrainsStdin: a payload bigger than a pipe buffer is read to its end
-// on a path that reports nothing, so the agent's write completes.
+// on a path that reports nothing, so the agent's write completes. Over the
+// size cap, what is left past the cap is itself more than a pipe buffer.
 func TestTurnDrainsStdin(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -387,7 +414,7 @@ func TestTurnDrainsStdin(t *testing.T) {
 		payload string
 	}{
 		"outside a pane":    {payload: claudeStop(strings.Repeat("x", 200<<10))},
-		"over the size cap": {pane: report.Pane{SocketPath: "/nowhere", PaneID: "w1:p1"}, payload: claudeStop(strings.Repeat("x", report.MaxTurnHookBytes))},
+		"over the size cap": {pane: report.Pane{SocketPath: "/nowhere", PaneID: "w1:p1"}, payload: claudeStop(strings.Repeat("x", report.MaxTurnHookBytes+256<<10))},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

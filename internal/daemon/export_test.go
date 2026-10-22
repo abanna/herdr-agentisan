@@ -12,12 +12,14 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/abanna/herdr-agentisan/internal/github"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
+	"github.com/abanna/herdr-agentisan/internal/testslots"
 	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
@@ -138,6 +140,14 @@ func WithGitHubTicks(g GitHubOptions, ticks <-chan time.Time) GitHubOptions {
 	return g
 }
 
+// WithGitHubRounds returns g sending on rounds at each round's end, once
+// every repo's calls and notices are done, so a test waits for the round
+// itself rather than for its gh calls.
+func WithGitHubRounds(g GitHubOptions, rounds chan<- struct{}) GitHubOptions {
+	g.rounds = rounds
+	return g
+}
+
 // WithStoreClose returns o with closeStore standing in for closing the state
 // database when Run exits.
 func WithStoreClose(o Options, closeStore func(*store.Store) error) Options {
@@ -156,8 +166,15 @@ func WithProcLocks(t TeamOptions, procLocks string) TeamOptions {
 // with procLocks and proc standing in for /proc/locks and /proc: it reads
 // the lock list once, and gives each project's slots from that reading.
 func SlotsOfOnePoll(procLocks, proc string, locks settings.TestLocks) func(project string) *snapshot.Slots {
-	c := &slotCounter{locks: locks, procLocks: procLocks, proc: proc, failingFor: map[string]string{}}
+	c := &slotCounter{locks: locks, procLocks: procLocks, proc: proc, read: testslots.Read, failingFor: map[string]string{}}
 	return Options{Logger: zerolog.Nop()}.countSlots(c)
+}
+
+// WithLockReads returns t with read standing in for the team poll's one
+// reading of the held locks, so a test sees each reading the poll makes.
+func WithLockReads(t TeamOptions, read func(procLocks, proc string) (*testslots.Reading, error)) TeamOptions {
+	t.readLocks = read
+	return t
 }
 
 // WithProc returns t with proc standing in for /proc when the team poll
@@ -329,3 +346,19 @@ func (s ViewSync) Next() (clear bool, sent func(), ok bool) {
 	want, forgets, ok := s.v.next()
 	return want.clear, func() { s.v.sentAt(want, forgets) }, ok
 }
+
+// GitHubSource is the GitHub collector's notice source (A45) on its own.
+type GitHubSource struct{ g *githubNotices }
+
+// NewGitHubSource is o's source on st, with o's notices settings.
+func NewGitHubSource(o Options, st *store.Store) GitHubSource {
+	return GitHubSource{o.newGitHubNotices(st, o.newNotices())}
+}
+
+// Collected diffs h's list, open, as the collector does after a list.
+func (s GitHubSource) Collected(ctx context.Context, gh github.Runner, h settings.Header, open github.Open) {
+	s.g.collected(ctx, gh, h, open)
+}
+
+// Take is what the source has handed the poll since the last Take.
+func (s GitHubSource) Take() []notice.Notice { return s.g.n.github.take() }

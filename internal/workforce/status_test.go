@@ -95,7 +95,7 @@ func TestStatusStage(t *testing.T) {
 		}
 		return team.Model{Projects: []team.Project{{Name: "herdr-agentisan", Groups: []team.Group{{Name: "coder", Workers: []team.Worker{pane(coder)}}}}}}
 	}
-	for i, st := range []team.Status{team.StatusIdle, team.StatusWorking, team.StatusIdle} {
+	for i, st := range []team.Status{team.StatusIdle, team.StatusWorking, team.StatusIdle, team.StatusIdle} {
 		f.svc.Idle.Observe(model(st), t0.Add(time.Duration(3*i)*time.Second))
 	}
 	f.svc.Now = func() time.Time { return t0.Add(90 * time.Second) }

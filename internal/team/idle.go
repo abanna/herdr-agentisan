@@ -24,9 +24,10 @@ type turn struct {
 	// stage it held then; rest is zero when the clock first saw it at work.
 	rest      time.Time
 	restStage string
-	// working is set from the poll that sees the pane working or blocked
-	// until the one that sees it at rest again.
-	working bool
+	// rests counts the polls in a row that saw the pane at rest; it is zero
+	// from the poll that sees the pane working or blocked until the one that
+	// sees it at rest again.
+	rests int
 	// from is when the latest stretch the clock saw begin began: the last
 	// poll that saw the pane at rest before it, since the stretch began
 	// somewhere between that poll and the next. stage is the stage the pane
@@ -35,15 +36,21 @@ type turn struct {
 	stage string
 }
 
+// settled is how many polls in a row must see a pane at rest before the
+// clock calls its stretch ended: the second, not the first, since a Stop
+// hook's report can land just after the poll that first sees the turn's end
+// (A42), and judging it at that poll would flash its stage old for a poll.
+const settled = 2
+
 // resting reports whether a pane is at rest.
 func resting(p Pane) bool { return p.Status == StatusIdle || p.Status == StatusDone }
 
 // Observe records m at now: a pane newly at rest starts resting at now; one
 // still at rest keeps its start; one working, blocked or unknown, or not in
-// m, is forgotten, so its next rest starts again. A pane at rest after it
-// worked has ended a stretch, and one working or blocked after a rest has
-// begun one; one unknown, or not in m, is forgotten there too, so the clock
-// times a stretch only when it saw both its ends.
+// m, is forgotten, so its next rest starts again. A pane at rest for a
+// second poll after it worked has ended a stretch, and one working or
+// blocked after a rest has begun one; one unknown, or not in m, is forgotten
+// there too, so the clock times a stretch only when it saw both its ends.
 func (c *IdleClock) Observe(m Model, now time.Time) {
 	if c == nil {
 		return
@@ -83,14 +90,14 @@ func (c *IdleClock) Observe(m Model, now time.Time) {
 func (t turn) next(p Pane, now time.Time) (turn, bool) {
 	switch {
 	case resting(p):
-		t.rest, t.restStage, t.working = now, p.Stage, false
+		t.rest, t.restStage, t.rests = now, p.Stage, t.rests+1
 	case p.Status == StatusWorking || p.Status == StatusBlocked:
 		// rest holds still while the pane works, so every poll of a stretch
 		// finds the same start.
 		if !t.rest.IsZero() {
 			t.from, t.stage = t.rest, t.restStage
 		}
-		t.working = true
+		t.rests = 0
 	default:
 		return turn{}, false
 	}
@@ -100,8 +107,8 @@ func (t turn) next(p Pane, now time.Time) (turn, bool) {
 // Stretch is when the pane's latest working stretch began, as far as this
 // clock has seen, and the stage the pane held as it began. ok is false
 // unless the clock saw that stretch begin, after a rest, and end: the pane
-// was at rest at the last poll. After a daemon restart a pane needs a rest,
-// a stretch and a rest again.
+// was at rest at the last settled polls, two in a row. After a daemon
+// restart a pane needs a rest, a stretch and two polls at rest again.
 func (c *IdleClock) Stretch(paneID string) (from time.Time, stage string, ok bool) {
 	if c == nil {
 		return time.Time{}, "", false
@@ -109,7 +116,7 @@ func (c *IdleClock) Stretch(paneID string) (from time.Time, stage string, ok boo
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	t, known := c.turns[paneID]
-	if !known || t.working || t.from.IsZero() {
+	if !known || t.rests < settled || t.from.IsZero() {
 		return time.Time{}, "", false
 	}
 	return t.from, t.stage, true
