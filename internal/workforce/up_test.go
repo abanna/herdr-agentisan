@@ -323,6 +323,8 @@ func TestUpOpensTheDashboardAboveTheBossAgent(t *testing.T) {
 
 // TestUpDashboardIsBestEffort: whatever the dashboard lacks is reported
 // beside a team up that still succeeds; a dashboard opened stays reported.
+// A call herdr refuses within the dashboard's 5 s is a herdr failure; one
+// those 5 s end is out of time.
 func TestUpDashboardIsBestEffort(t *testing.T) {
 	t.Parallel()
 	tests := map[string]struct {
@@ -334,8 +336,16 @@ func TestUpDashboardIsBestEffort(t *testing.T) {
 		"no boss agent": {setup: func(f *fixture) {
 			f.h.setPane(f.boss, func(p *fakePane) { p.agent, p.name = "", "" })
 		}, says: "no agent runs in the ha-boss tab"},
-		"the split refused": {setup: func(f *fixture) { f.h.fail["plugin.pane.open"] = "plugin_pane_open_failed" }, says: "open the dashboard"},
-		"the label refused": {setup: func(f *fixture) { f.h.fail["pane.rename"] = "server_error" }, opened: true, says: "label the dashboard ha-dashboard"},
+		"the split refused": {setup: func(f *fixture) { f.h.fail["plugin.pane.open"] = "plugin_pane_open_failed" }, says: "herdr call failed: open the dashboard"},
+		"the split held past the dashboard's 5 s": {setup: func(f *fixture) {
+			wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+				if r.Method == "plugin.pane.open" {
+					time.Sleep(6 * time.Second)
+				}
+				return next()
+			})
+		}, says: "open the dashboard: out of time: context deadline exceeded"},
+		"the label refused": {setup: func(f *fixture) { f.h.fail["pane.rename"] = "server_error" }, opened: true, says: "herdr call failed: label the dashboard ha-dashboard"},
 		"the swap declined": {setup: func(f *fixture) {
 			wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
 				if r.Method == "pane.swap" {
@@ -343,8 +353,8 @@ func TestUpDashboardIsBestEffort(t *testing.T) {
 				}
 				return next()
 			})
-		}, opened: true, says: "move the dashboard above the boss; it is below"},
-		"focus refused": {setup: func(f *fixture) { f.h.focused, f.h.fail["pane.focus"] = f.boss, "server_error" }, opened: true, says: "give focus back to " + "w10:p1"},
+		}, opened: true, says: "herdr call failed: move the dashboard above the boss; it is below"},
+		"focus refused": {setup: func(f *fixture) { f.h.focused, f.h.fail["pane.focus"] = f.boss, "server_error" }, opened: true, says: "herdr call failed: give focus back to " + "w10:p1"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -365,7 +375,8 @@ func TestUpDashboardIsBestEffort(t *testing.T) {
 // TestUpDashboardKeepsToItsBudget: herdr holds each of the dashboard's calls
 // 3 s. The dashboard gives up within its 5 s, says why, and the agents start
 // then: a team up never waits out every dashboard call one after another
-// (QA #96 P1).
+// (QA #96 P1). Every call those 5 s end is out of time, never a herdr
+// failure: the label's, and the swap and focus after it.
 func TestUpDashboardKeepsToItsBudget(t *testing.T) {
 	t.Parallel()
 	f := upFixture(t, teamConfig)
@@ -387,7 +398,8 @@ func TestUpDashboardKeepsToItsBudget(t *testing.T) {
 	assert.Len(t, res.Workers, 3)
 	require.NotNil(t, res.Dashboard)
 	assert.True(t, res.Dashboard.Opened)
-	assert.NotEmpty(t, res.DashboardError)
+	assert.Contains(t, res.DashboardError, "label the dashboard ha-dashboard: out of time: context deadline exceeded")
+	assert.NotContains(t, res.DashboardError, workforce.ErrHerdr.Error())
 	took := time.Duration(startAt.Load() - openAt.Load())
 	assert.Less(t, took, 6500*time.Millisecond, "within the dashboard's 5 s, not 4 x 3 s: %s", res.DashboardError)
 }
