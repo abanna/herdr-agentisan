@@ -61,8 +61,9 @@ type HandoffReadyResult struct {
 // lists with its terminal, and a row bound to no pane is ErrUnknownWorker;
 // then a tabs team's worker tab label, its agent pane; then a pane id, or the
 // pane herdr resolves a stale one to. With no target it is the caller's
-// confirmed pane, else the pane of the live row req.Worker names, else
-// ErrBadRequest. The pane must be an agent pane in a team's group: the
+// confirmed pane, unless herdr lists it with no terminal, else the pane of
+// the live row req.Worker names, else ErrBadRequest. The pane must be an
+// agent pane in a team's group, one herdr detects or names an agent in: the
 // boss's, a shell and a pane in no team's group are ErrNotAWorker. It writes
 // only once pane.get shows the pane still has the terminal it read, else
 // ErrPaneChanged, since retire --after-handoff trusts the mark. The token is
@@ -115,7 +116,7 @@ func (s *Service) HandoffReady(ctx context.Context, req HandoffReadyRequest) (Ha
 // handoffPane is the pane req means in l (see HandoffReady).
 func (s *Service) handoffPane(ctx context.Context, req HandoffReadyRequest, teams []settings.Team, l layout, rows []store.Worker) (herdr.PaneInfo, error) {
 	if req.Target == "" {
-		if p, ok := l.pane(req.CallerPane); ok {
+		if p, ok := l.pane(req.CallerPane); ok && p.TerminalID != "" {
 			return p, nil
 		}
 		if req.Worker == "" || !slices.ContainsFunc(rows, func(r store.Worker) bool { return r.LogicalID == req.Worker }) {
@@ -167,8 +168,8 @@ func member(pane herdr.PaneInfo, teams []placed) (HandoffReadyResult, error) {
 				continue
 			}
 			w := g.Workers[i]
-			if w.Pane.Agent == "" {
-				return HandoffReadyResult{}, fmt.Errorf("%w: %s is a shell: herdr detects no agent in it", ErrNotAWorker, pane.PaneID)
+			if !w.Pane.IsAgent() {
+				return HandoffReadyResult{}, fmt.Errorf("%w: %s is a shell: herdr detects and names no agent in it", ErrNotAWorker, pane.PaneID)
 			}
 			return HandoffReadyResult{ID: w.ID, Bound: w.Bound, Project: t.pr.Name, Group: g.Name, PaneID: pane.PaneID}, nil
 		}

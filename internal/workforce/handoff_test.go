@@ -105,8 +105,9 @@ func TestHandoffReadyReplacesAnotherWritersMark(t *testing.T) {
 }
 
 // TestHandoffReadyFindsTheCaller: with no target the mark goes on the
-// caller's confirmed pane; with none listed, on the pane of the live row
-// HERDR_AGENTISAN_WORKER names; with neither, it is a bad request.
+// caller's confirmed pane; with none listed, or one listed with no terminal,
+// on the pane of the live row HERDR_AGENTISAN_WORKER names; with neither, it
+// is a bad request.
 func TestHandoffReadyFindsTheCaller(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, teamConfig)
@@ -123,6 +124,11 @@ func TestHandoffReadyFindsTheCaller(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, w.PaneID, res.PaneID, "a caller pane herdr no longer lists falls back to the variable")
 	assert.True(t, res.Changed)
+	blank := f.h.addTab(f.ws, "ha-coder-3", "claude", "idle")
+	f.h.setPane(blank, func(p *fakePane) { p.terminal = "" })
+	res, err = f.svc.HandoffReady(t.Context(), workforce.HandoffReadyRequest{CallerPane: blank, Worker: w2.ID, Clear: true})
+	require.NoError(t, err)
+	assert.Equal(t, w2.PaneID, res.PaneID, "a caller pane listed with no terminal falls back to the variable, as send's sender does")
 
 	for name, req := range map[string]workforce.HandoffReadyRequest{
 		"nothing":                    {},
@@ -172,9 +178,9 @@ func TestHandoffReadyTrustsTheRowOverTheTab(t *testing.T) {
 
 // TestHandoffReadyMarksOnlyATeamsWorkers: the boss's tab, a shell, a pane in
 // no team's group and names nobody holds, the boss's tab label among them,
-// are refused and nothing is written;
-// a ◆ space's agent is the unnamed project's worker, and ◆ boss is the
-// boss's.
+// are refused and nothing is written; a ◆ space's agent is the unnamed
+// project's worker, ◆ boss is the boss's, and an agent herdr knows only by
+// name, as a held one, is a worker.
 func TestHandoffReadyMarksOnlyATeamsWorkers(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, teamConfig)
@@ -210,6 +216,12 @@ func TestHandoffReadyMarksOnlyATeamsWorkers(t *testing.T) {
 	res, err := f.svc.HandoffReady(t.Context(), workforce.HandoffReadyRequest{Target: spacesCoder})
 	require.NoError(t, err)
 	assert.Equal(t, workforce.HandoffReadyResult{ID: spacesCoder, Project: "", Group: "coders", PaneID: spacesCoder, Ready: true, Changed: true}, res)
+
+	held := f.h.addTab(f.ws, "ha-coder-5", "claude", "idle")
+	f.h.setPane(held, func(p *fakePane) { p.agent = "" })
+	res, err = f.svc.HandoffReady(t.Context(), workforce.HandoffReadyRequest{Target: "ha-coder-5"})
+	require.NoError(t, err, "an agent herdr knows only by name, as a held one, is no shell")
+	assert.Equal(t, held, res.PaneID)
 }
 
 // TestHandoffReadyRechecksThePaneBeforeWriting: a pane that shows another
