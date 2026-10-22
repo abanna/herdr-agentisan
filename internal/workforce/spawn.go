@@ -197,15 +197,18 @@ func settling(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), settleBudget)
 }
 
-// failAll closes each worker's pane and marks its row failed, all at once on
-// ctx, so no pane is left open and no row starting; it returns each one's
-// error, in ws's order.
+// failAll marks each worker's row failed and closes its pane, all at once on
+// ctx, so no row is left starting and no pane open; it returns each one's
+// error, in ws's order. The row comes first: the store answers in
+// milliseconds, while a slow herdr can hold the close past the whole budget,
+// and a row left starting would hold its slot until the boss retires it.
 func (s *Service) failAll(ctx context.Context, ws []opened) []error {
 	errs := make([]error, len(ws))
 	var wg sync.WaitGroup
 	for i, w := range ws {
 		wg.Go(func() {
-			errs[i] = errors.Join(s.closeQuietly(ctx, w.paneID, w.terminalID), ignoreGone(s.Store.SetWorkerStatus(ctx, w.row(), store.StatusFailed, s.now())))
+			failed := ignoreGone(s.Store.SetWorkerStatus(ctx, w.row(), store.StatusFailed, s.now()))
+			errs[i] = errors.Join(failed, s.closeQuietly(ctx, w.paneID, w.terminalID))
 		})
 	}
 	wg.Wait()

@@ -1318,3 +1318,29 @@ func TestSpawnCleansUpAtOnce(t *testing.T) {
 		assert.Nil(t, f.h.tabByLabel(id))
 	}
 }
+
+// TestSpawnFailsTheRowBeforeASlowClose: a herdr that holds the cleanup's
+// pane.get past the whole settle budget still leaves the row failed, never
+// starting, where it would hold its slot for good, and the op still answers
+// within the 5 s the daemon's exchange leaves it (QA #78 N1).
+func TestSpawnFailsTheRowBeforeASlowClose(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	release := make(chan struct{})
+	wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+		switch r.Method {
+		case "agent.start":
+			return errReply("invalid_agent_name")
+		case "pane.get":
+			<-release // herdr answering later than the whole budget
+		}
+		return next()
+	})
+	t.Cleanup(func() { close(release) })
+
+	began := time.Now()
+	_, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1})
+	require.ErrorIs(t, err, workforce.ErrSpawnFailed)
+	assert.Less(t, time.Since(began), 5*time.Second, "answered within the exchange")
+	assert.Equal(t, store.StatusFailed, f.row(t, "ha-coder-1").Status)
+}
