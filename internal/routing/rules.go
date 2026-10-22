@@ -28,10 +28,13 @@ const RulesSchemaVersion = 1
 // routingOwner is who the rules say routes: the plugin.
 const routingOwner = "herdr_plugin"
 
-// KnownEfforts are the reasoning efforts a binding may list: the union of
-// what Claude Code's --effort takes (low to max) and Codex's
-// model_reasoning_effort (minimal to xhigh).
-var KnownEfforts = []string{"minimal", "low", "medium", "high", "xhigh", "max"}
+// providerEfforts are the reasoning efforts each provider's client takes:
+// Claude Code's --effort, low to max, and Codex's model_reasoning_effort,
+// minimal to xhigh. A binding lists only its own provider's.
+var providerEfforts = map[string][]string{
+	Claude: {"low", "medium", "high", "xhigh", "max"},
+	Codex:  {"minimal", "low", "medium", "high", "xhigh"},
+}
 
 // namePattern is the alphabet of a binding's or a role's name. Names become
 // keys of the user's [routing] tables and appear in every decision.
@@ -210,21 +213,22 @@ func bindingOf(name string, raw bindingJSON) (Binding, error) {
 	if raw.ModelID != "" && !modelIDPattern.MatchString(raw.ModelID) {
 		return Binding{}, fmt.Errorf("%w: binding %s: model_id %q is not a model id", ErrInvalid, name, raw.ModelID)
 	}
-	if err := checkEfforts(raw.Efforts); err != nil {
+	if err := checkEfforts(provider, raw.Efforts); err != nil {
 		return Binding{}, fmt.Errorf("binding %s: %w", name, err)
 	}
 	return Binding{Name: name, ModelID: raw.ModelID, Provider: provider, Efforts: slices.Clone(raw.Efforts), Premium: strings.HasSuffix(name, "_premium"), Enabled: true}, nil
 }
 
-// checkEfforts checks a binding's efforts: at least one, each known, none
-// twice.
-func checkEfforts(efforts []string) error {
+// checkEfforts checks a binding's efforts: at least one, each one its
+// provider's client takes, none twice.
+func checkEfforts(provider string, efforts []string) error {
 	if len(efforts) == 0 {
 		return fmt.Errorf("%w: efforts is empty", ErrInvalid)
 	}
+	takes := providerEfforts[provider]
 	for i, e := range efforts {
-		if !slices.Contains(KnownEfforts, e) {
-			return fmt.Errorf("%w: effort %q is not one of %s", ErrInvalid, e, strings.Join(KnownEfforts, ", "))
+		if !slices.Contains(takes, e) {
+			return fmt.Errorf("%w: effort %q is not one %s takes: %s", ErrInvalid, e, provider, strings.Join(takes, ", "))
 		}
 		if slices.Contains(efforts[:i], e) {
 			return fmt.Errorf("%w: effort %s is listed twice", ErrInvalid, e)
@@ -286,6 +290,10 @@ func (r *Rules) roleOf(name string, raw roleJSON) (Role, error) {
 
 // BindingNames are the rules' bindings, sorted.
 func (r *Rules) BindingNames() []string { return slices.Sorted(maps.Keys(r.bindings)) }
+
+// Provider is the provider a binding of the rules runs under; "" for a name
+// the rules do not have.
+func (r *Rules) Provider(binding string) string { return r.bindings[binding].Provider }
 
 // RoleNames are the rules' roles, sorted.
 func (r *Rules) RoleNames() []string { return slices.Sorted(maps.Keys(r.roles)) }

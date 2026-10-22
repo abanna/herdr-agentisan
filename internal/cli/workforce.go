@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -14,6 +15,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/plugin"
 	"github.com/abanna/herdr-agentisan/internal/report"
+	"github.com/abanna/herdr-agentisan/internal/routing"
 	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
@@ -201,9 +203,9 @@ func newTeamUpCmd() *cobra.Command {
 
 func newWorkerSpawnCmd() *cobra.Command {
 	var (
-		f            opFlags
-		group, model string
-		count        int
+		f                              opFlags
+		group, model, effort, taskFile string
+		count                          int
 	)
 	c := &cobra.Command{
 		Use:   "spawn",
@@ -211,20 +213,44 @@ func newWorkerSpawnCmd() *cobra.Command {
 		Long: "Adds --count workers of the type --group, refused whole when they would\n" +
 			"pass the group's slots or the repo fails the preflight (tdaddy in a Go\n" +
 			"repo). Each gets the lowest free logical id, <short>-<type>-<n>, as its\n" +
-			"tab label and agent name.",
+			"tab label and agent name. With [routing] enabled, routing chooses\n" +
+			"their model and effort from the type's role and --task-file (A50).",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			task, err := readTask(cmd.InOrStdin(), taskFile)
+			if err != nil {
+				return badRequest(cmd, fmt.Errorf("--task-file: %w", err))
+			}
 			return f.runOp(cmd, args, daemon.OpWorkerSpawn, func() (any, error) {
 				sel, err := f.selector(cmd.Context())
-				return workforce.SpawnRequest{Selector: sel, Group: group, Count: count, Model: model}, err
+				return workforce.SpawnRequest{Selector: sel, Group: group, Count: count, Model: model, Effort: effort, Task: task}, err
 			})
 		},
 	}
 	f.add(c, true)
 	c.Flags().StringVar(&group, "group", "", "the worker type, a group of the project's configuration (required)")
 	c.Flags().IntVar(&count, "count", 1, "how many workers to add")
-	c.Flags().StringVar(&model, "model", "", "the model, instead of the group's")
+	c.Flags().StringVar(&model, "model", "", "the model, instead of the group's; with routing on, a binding the role allows, by name or model id")
+	c.Flags().StringVar(&effort, "effort", "", "the reasoning effort, such as high")
+	c.Flags().StringVar(&taskFile, "task-file", "", "the task packet routing reads, as JSON: a file, or - for stdin")
 	return c
+}
+
+// readTask reads --task-file's packet: none for "", stdin for "-".
+func readTask(stdin io.Reader, path string) (*routing.Task, error) {
+	switch path {
+	case "":
+		return nil, nil
+	case "-":
+		return routing.DecodeTask(stdin) //nolint:wrapcheck // routing's ErrInvalid says what is wrong
+	}
+	// #nosec G304 -- the path is the boss's own --task-file, read as data.
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err //nolint:wrapcheck // the path error names the file
+	}
+	defer f.Close()              //nolint:errcheck // read-only
+	return routing.DecodeTask(f) //nolint:wrapcheck // routing's ErrInvalid says what is wrong
 }
 
 func newWorkerRetireCmd() *cobra.Command {

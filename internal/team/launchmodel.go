@@ -4,10 +4,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 )
 
@@ -19,7 +18,7 @@ const (
 
 // MaxModelChars is the longest model a row carries, in code points: a herdr
 // token value's limit, which item and stage keep too.
-const MaxModelChars = 80
+const MaxModelChars = report.MaxValueChars
 
 // LaunchModel is the model the agent among procs, a pane's foreground job,
 // was started with (ADR-001 A39). The agent is the first process, in herdr's
@@ -70,7 +69,7 @@ func modelFlag(flags []string, codex bool) string {
 		f := flags[i]
 		switch {
 		case f == "--":
-			return validModel(model)
+			return report.ValidModel(model)
 		case f == "--model" || codex && f == "-m":
 			model = ""
 			if i+1 < len(flags) {
@@ -83,24 +82,45 @@ func modelFlag(flags []string, codex bool) string {
 			model = strings.TrimPrefix(strings.TrimPrefix(f, "-m"), "=")
 		}
 	}
-	return validModel(model)
+	return report.ValidModel(model)
 }
 
-// validModel is m when a row may carry it, else "".
-func validModel(m string) string {
-	if m == "" || strings.HasPrefix(m, "-") || !utf8.ValidString(m) || utf8.RuneCountInString(m) > MaxModelChars {
-		return ""
-	}
-	for _, r := range m {
-		if !unicode.IsPrint(r) || r == utf8.RuneError {
-			return ""
+// CurrentModels is the model each agent pane of m's teams, bosses and
+// workers, runs now, by pane id (ADR-001 A56): the model its agent reported,
+// when the report is not older than the agent's process, whose start started
+// holds by pane, or when started holds no start for the pane; else the launch
+// model launch holds for it (A39). A pane with neither is left out. A model
+// reported before its agent started is one an agent before it in the pane
+// left, as a Codex's can be for 24 h.
+func CurrentModels(m Model, launch map[string]string, started map[string]time.Time) map[string]string {
+	out := map[string]string{}
+	add := func(ws []Worker) {
+		for _, w := range ws {
+			if model := currentModel(w.Pane, launch[w.Pane.ID], started[w.Pane.ID]); model != "" {
+				out[w.Pane.ID] = model
+			}
 		}
 	}
-	return m
+	for _, pr := range m.Projects {
+		add(pr.Boss)
+		for _, g := range pr.Groups {
+			add(g.Workers)
+		}
+	}
+	return out
+}
+
+// currentModel is p's reported model when it is not older than start, the
+// agent's, or start is unknown (zero); else launch.
+func currentModel(p Pane, launch string, start time.Time) string {
+	if p.Model != "" && (start.IsZero() || !p.ModelAt.Before(start)) {
+		return p.Model
+	}
+	return launch
 }
 
 // FillModels sets every row of s, the boss's too, to the model byPane holds
-// for its pane: none when it holds none.
+// for its pane, CurrentModels' or LaunchModel's: none when it holds none.
 func FillModels(s *snapshot.Snapshot, byPane map[string]string) {
 	if s.Boss != nil {
 		s.Boss.Model = byPane[s.Boss.PaneID]

@@ -109,6 +109,10 @@ type Service struct {
 	// CodexHooks reports whether Codex's ctx hooks are installed; nil
 	// checks nothing. A Codex spawn without them warns (A22, A43).
 	CodexHooks func() (bool, error)
+	// Routed records each routing decision a spawn opens workers on,
+	// applied or not (A50); nil records nothing. The daemon sends it as a
+	// workflow event and logs it.
+	Routed func(context.Context, Routed)
 	// Dashboard is the plugin pane team up opens as a team's dashboard; zero
 	// opens none (A18, A23).
 	Dashboard DashboardPane

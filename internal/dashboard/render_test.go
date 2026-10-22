@@ -870,6 +870,10 @@ func TestShortModel(t *testing.T) {
 		"fable":             "fab",
 		"claude-fable-5-1":  "fab",
 		"Fable 5.1":         "fab",
+		// A model.id from Claude's statusline (A56), its context suffix
+		// and all.
+		"claude-opus-5-5[1m]":   "opus",
+		"claude-sonnet-5-5[1m]": "son",
 		// A Codex model by its name, wherever it says codex.
 		"gpt-5-codex":       "cdx",
 		"gpt-5.5-codex":     "cdx",

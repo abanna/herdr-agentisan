@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
 	"strings"
@@ -80,7 +82,7 @@ func TestWorkforceHelpMeetsTheWrapper(t *testing.T) {
 	tests := map[string][]string{
 		"team status":   {"--project", "--state-dir"},
 		"team up":       {"--project", "--state-dir"},
-		"worker spawn":  {"--group", "--count", "--model", "--project", "--state-dir"},
+		"worker spawn":  {"--group", "--count", "--model", "--effort", "--task-file", "--project", "--state-dir"},
 		"worker retire": {"--after-handoff", "--state-dir"},
 	}
 	e := newDaemonEnv(t)
@@ -137,6 +139,7 @@ func TestWorkforceCommandsAlwaysAnswerInJSON(t *testing.T) {
 		"retire takes no project":    {args: []string{"worker", "retire", "ha-coder-1", "--project", "ha"}, code: "bad_request"},
 		"an unknown worker verb":     {args: []string{"worker", "adopt"}, code: "bad_request"},
 		"spawn with no daemon":       {args: []string{"worker", "spawn", "--group", "coder"}, code: "daemon_unavailable"},
+		"a task file not there":      {args: []string{"worker", "spawn", "--group", "coder", "--task-file", "/nonexistent/packet.json"}, code: "bad_request"},
 		"retire with no daemon":      {args: []string{"worker", "retire", "ha-coder-1"}, code: "daemon_unavailable"},
 		"no daemon":                  {args: []string{"team", "status"}, code: "daemon_unavailable"},
 		"no state dir":               {args: []string{"team", "status"}, env: map[string]string{"HERDR_PLUGIN_STATE_DIR": ""}, code: "daemon_unavailable"},
@@ -155,6 +158,62 @@ func TestWorkforceCommandsAlwaysAnswerInJSON(t *testing.T) {
 			assert.NotEmpty(t, errBody["message"])
 		})
 	}
+}
+
+// TestWorkerSpawnSendsItsTaskPacket: --task-file's packet, from a file or
+// stdin, rides in the spawn request with --effort; one that is not a packet
+// is refused before the daemon is asked.
+func TestWorkerSpawnSendsItsTaskPacket(t *testing.T) {
+	t.Parallel()
+	const ok = `{"ok":true,"data":{"project":"ha"}}`
+	const packet = `{"task_id":"NERD-5289","task_lookup_status":"found","worker_assignment":"wire spawn"}`
+	const sentTask = `"task":{"task_id":"NERD-5289","task_lookup_status":"found","title":"","requirements":"","acceptance_criteria":null,"worker_assignment":"wire spawn","requested_role":"","provider_preference":"","required_tools":null,"previous_attempts":"","user_model_override":null}`
+	file := filepath.Join(t.TempDir(), "packet.json")
+	require.NoError(t, os.WriteFile(file, []byte(packet), 0o600))
+	for name, tc := range map[string]struct {
+		path, stdin string
+	}{
+		"a file": {path: file},
+		"stdin":  {path: "-", stdin: packet},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newDaemonEnvWith(t, paneHerdr("w14:p1", "w9:p9"))
+			sent := fakeDaemon(t, e, ok)
+
+			out, err := spawnIn(t, e.lookup(nil), tc.stdin, "worker", "spawn", "--project", "ha", "--group", "coder", "--effort", "high", "--task-file", tc.path)
+			require.NoError(t, err)
+			assert.JSONEq(t, ok, out)
+			require.Len(t, sent, 1)
+			assert.JSONEq(t, `{"v":1,"op":"worker.spawn","args":{"project":"ha","group":"coder","count":1,"effort":"high",`+sentTask+`}}`, <-sent)
+		})
+	}
+	t.Run("not a packet", func(t *testing.T) {
+		t.Parallel()
+		e := newDaemonEnvWith(t, paneHerdr("w14:p1", "w9:p9"))
+		sent := fakeDaemon(t, e, ok)
+
+		out, err := spawnIn(t, e.lookup(nil), `{"task_lookup_status":"found","priority":1}`, "worker", "spawn", "--project", "ha", "--group", "coder", "--task-file", "-")
+		require.Error(t, err)
+		v := oneJSONObject(t, out)
+		errBody, _ := v["error"].(map[string]any)
+		assert.Equal(t, "bad_request", errBody["code"])
+		assert.Contains(t, errBody["message"], "--task-file: ")
+		assert.Empty(t, sent, "the daemon is never asked")
+	})
+}
+
+// spawnIn is runOut with stdin, returning stdout.
+func spawnIn(t *testing.T, lookup func(string) (string, bool), stdin string, args ...string) (string, error) {
+	t.Helper()
+	root := cli.Root()
+	var out bytes.Buffer
+	root.SetIn(strings.NewReader(stdin))
+	root.SetOut(&out)
+	root.SetErr(io.Discard)
+	root.SetArgs(args)
+	err := root.ExecuteContext(cli.WithLookupEnv(cli.WithLineage(t.Context(), testLineage), lookup))
+	return out.String(), err
 }
 
 // TestWorkforceCommandsAskTheDaemon: each command sends its op with the

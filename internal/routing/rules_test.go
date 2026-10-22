@@ -61,6 +61,8 @@ func TestParseRulesRefuses(t *testing.T) {
 		"no efforts":                         {func(d map[string]any) { at(d, "bindings", "claude_mid")["efforts"] = []any{} }, "efforts is empty"},
 		"an effort no client takes":          {func(d map[string]any) { at(d, "bindings", "claude_mid")["efforts"] = []any{"turbo"} }, `effort "turbo"`},
 		"an effort twice":                    {func(d map[string]any) { at(d, "bindings", "claude_strong")["efforts"] = []any{"high", "high"} }, "listed twice"},
+		"an effort only codex takes":         {func(d map[string]any) { at(d, "bindings", "claude_mid")["efforts"] = []any{"high", "minimal"} }, `effort "minimal" is not one claude takes`},
+		"an effort only claude takes":        {func(d map[string]any) { at(d, "bindings", "codex_strong")["efforts"] = []any{"max"} }, `effort "max" is not one codex takes`},
 		"a role name out of the alphabet": {func(d map[string]any) {
 			at(d, "roles")["Coder"] = at(d, "roles", "coder")
 		}, "a name must match"},
@@ -146,6 +148,8 @@ func TestNewChecksTheDeployment(t *testing.T) {
 		"a model id with a NUL":             {d: routing.Deployment{Bindings: map[string]routing.Facts{"claude_mid": {ModelID: new("claude\x00")}}}, wantErr: routing.ErrInvalid},
 		"no efforts":                        {d: routing.Deployment{Bindings: map[string]routing.Facts{"claude_mid": {Efforts: []string{}}}}, wantErr: routing.ErrInvalid, wantIn: "efforts is empty"},
 		"an effort no client takes":         {d: routing.Deployment{Bindings: map[string]routing.Facts{"claude_mid": {Efforts: []string{"High"}}}}, wantErr: routing.ErrInvalid},
+		"an effort only codex takes":        {d: routing.Deployment{Bindings: map[string]routing.Facts{"claude_mid": {Efforts: []string{"minimal"}}}}, wantErr: routing.ErrInvalid, wantIn: "not one claude takes"},
+		"an effort only claude takes":       {d: routing.Deployment{Bindings: map[string]routing.Facts{"codex_strong": {Efforts: []string{"high", "max"}}}}, wantErr: routing.ErrInvalid, wantIn: "not one codex takes"},
 		"a role the rules do not have":      {d: routing.Deployment{Overrides: map[string]string{"qa": "claude_mid"}}, wantErr: routing.ErrUnknownRole, wantIn: "routing.overrides.qa"},
 		"a binding the role does not allow": {d: routing.Deployment{Overrides: map[string]string{"clerk": "claude_strong"}}, wantErr: routing.ErrOverrideRefused, wantIn: "routing.overrides.clerk"},
 		"a premium binding for the boss":    {d: routing.Deployment{Overrides: map[string]string{"boss": "claude_premium"}}, wantErr: routing.ErrOverrideRefused},
@@ -156,12 +160,16 @@ func TestNewChecksTheDeployment(t *testing.T) {
 		require.ErrorIs(t, err, tc.wantErr, name)
 		assert.Contains(t, err.Error(), tc.wantIn, name)
 	}
+	_, err := routing.New(routing.V1(), routing.Deployment{Bindings: map[string]routing.Facts{"claude_mid": {ModelID: new("--dangerously-skip")}}})
+	require.ErrorIs(t, err, routing.ErrInvalid)
+	assert.NotContains(t, err.Error(), "dangerously", "a model id is never echoed, as settings.CheckModel's model is not")
 	for name, d := range map[string]routing.Deployment{
 		"nothing":                           {},
 		"an unresolved id":                  {Bindings: map[string]routing.Facts{"codex_premium": {ModelID: new("")}}},
 		"a model id at 128 bytes":           {Bindings: map[string]routing.Facts{"claude_mid": {ModelID: new(strings.Repeat("a", 128))}}},
 		"a context suffix":                  {Bindings: map[string]routing.Facts{"claude_strong": {ModelID: new("claude-opus-5-5[1m]")}}},
-		"every effort a client takes":       {Bindings: map[string]routing.Facts{"codex_strong": {Efforts: routing.KnownEfforts}}},
+		"every effort codex takes":          {Bindings: map[string]routing.Facts{"codex_strong": {Efforts: []string{"minimal", "low", "medium", "high", "xhigh"}}}},
+		"every effort claude takes":         {Bindings: map[string]routing.Facts{"claude_mid": {Efforts: []string{"low", "medium", "high", "xhigh", "max"}}}},
 		"a premium choice for the debugger": {Overrides: map[string]string{"alex_debugger": "codex_premium"}},
 	} {
 		_, err := routing.New(routing.V1(), d)

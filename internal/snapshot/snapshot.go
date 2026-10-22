@@ -99,9 +99,11 @@ type Agent struct {
 	// workspace, so it is shown, never focused (ADR-001 A37).
 	TabID  string `json:"tab_id,omitempty"`
 	Status Status `json:"status"`
-	// Model is the model the agent was started with, e.g. "claude-opus-5-5":
-	// Claude's --model or Codex's -m, read from its pane's processes (ADR-001
-	// A39); empty, and left out, when it is not known.
+	// Model is the model the agent runs, e.g. "claude-opus-5-5": the one it
+	// last reported, Claude's statusline model.id or a Codex hook's model,
+	// while that report is the current agent's (ADR-001 A56), else the one it
+	// was started with, Claude's --model or Codex's -m, read from its pane's
+	// processes (A39); empty, and left out, when it is not known.
 	Model string `json:"model,omitempty"`
 	// Ctx is the context window used, 0..100. Nil means not reported.
 	Ctx   *int   `json:"ctx,omitempty"`
