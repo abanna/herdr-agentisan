@@ -302,6 +302,10 @@ func TestAClientWaitsOutItsOpsBudget(t *testing.T) {
 	stateDir := shortDir(t)
 	run(t, teamOpts(t, stateDir, th, workforceConfig(t)))
 	healthy(t, stateDir, th.fakeHerdr)
+	// The first reconcile opens the ops: a status before it is not_ready
+	// for as long as that poll takes, which this test is not about (QA #77,
+	// F-5).
+	polled(t, th.srv, 1)
 	var slow atomic.Bool
 	th.mu.Lock()
 	th.onCall = func(method string) {

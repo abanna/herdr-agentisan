@@ -309,7 +309,7 @@ func TestRunPushesTeamToEachGroupSpace(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
 	dir := shortDir(t)
-	run(t, teamOpts(t, dir, th, ""))
+	serving(t, teamOpts(t, dir, th, ""), th.fakeHerdr)
 
 	polled(t, th.srv, 2)
 	got := pushes(t, th.srv)
@@ -389,7 +389,7 @@ func TestRunPushesTheCtxDisplayToEveryAgentPane(t *testing.T) {
 	th.setToken("wN:p3", "ctx", "70")
 	th.setToken("wY:p1", "ctx", "58")
 	th.agents = []map[string]any{{"pane_id": "w12:p1", "name": "hooked"}}
-	run(t, teamOpts(t, shortDir(t), th, ""))
+	serving(t, teamOpts(t, shortDir(t), th, ""), th.fakeHerdr)
 
 	polled(t, th.srv, 2)
 	want := maps.Clone(wantCtx)
@@ -419,7 +419,7 @@ func TestRunPushesTheCtxDisplayToEveryAgentPane(t *testing.T) {
 func TestRunReportsEachAgentPaneOnceAPoll(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	run(t, teamOpts(t, shortDir(t), th, ""))
+	serving(t, teamOpts(t, shortDir(t), th, ""), th.fakeHerdr)
 	polled(t, th.srv, 3)
 
 	var polls []map[string]int // each poll starts with its workspace.list
@@ -453,7 +453,7 @@ func TestNoCtxDisplayWithoutAnAgent(t *testing.T) {
 	th.layout(ws, []map[string]any{
 		{"pane_id": "wN:p1", "workspace_id": "wN", "agent": nil, "agent_status": "unknown", "focused": false, "tokens": map[string]string{"ctx": "40"}},
 	}, nil)
-	run(t, teamOpts(t, shortDir(t), th, ""))
+	serving(t, teamOpts(t, shortDir(t), th, ""), th.fakeHerdr)
 
 	polled(t, th.srv, 2)
 	assert.NotEmpty(t, pushes(t, th.srv)["wN"], "the space still gets $team")
@@ -588,7 +588,7 @@ func TestTeamPushIgnoresAServerReplacedMidPoll(t *testing.T) {
 			}
 			o := teamOpts(t, dir, th, configDir(t, tc.config))
 			o.Poll = time.Hour // only the poll at start runs
-			r := run(t, o)
+			r := serving(t, o, th.fakeHerdr)
 
 			select {
 			case <-swap:
@@ -637,7 +637,7 @@ func TestCtxPushStopsWhenTheServerIsReplaced(t *testing.T) {
 	o := teamOpts(t, shortDir(t), th, "")
 	o.Poll = time.Hour // only the poll at start runs
 	o.Logger = zerolog.New(&logs)
-	r := run(t, o)
+	r := serving(t, o, th.fakeHerdr)
 
 	select {
 	case <-swap:
@@ -672,7 +672,7 @@ func TestTeamPushSurvivesAFailingPush(t *testing.T) {
 	var logs lockedLog
 	o := teamOpts(t, shortDir(t), th, "")
 	o.Logger = zerolog.New(&logs)
-	r := run(t, o)
+	r := serving(t, o, th.fakeHerdr)
 
 	polled(t, th.srv, 2)
 	got := pushes(t, th.srv)
@@ -695,7 +695,7 @@ func TestTeamPushSurvivesAFailingPush(t *testing.T) {
 func TestTeamPushFollowsARelabel(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	run(t, teamOpts(t, shortDir(t), th, ""))
+	serving(t, teamOpts(t, shortDir(t), th, ""), th.fakeHerdr)
 	polled(t, th.srv, 1)
 
 	th.relabel("wN", "coders")
@@ -754,7 +754,7 @@ func TestTeamPushReadsTheConfiguredProject(t *testing.T) {
 			var logs lockedLog
 			o := teamOpts(t, shortDir(t), th, dir)
 			o.Logger = zerolog.New(&logs)
-			run(t, o)
+			serving(t, o, th.fakeHerdr)
 
 			polled(t, th.srv, 1)
 			assert.Len(t, pushes(t, th.srv), 3, "the pushes do not depend on the project")
@@ -838,7 +838,7 @@ repo = "/z"
 short = "as"
 `))
 	o.Logger = zerolog.New(&logs)
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 
 	polled(t, th.srv, 3)
 	got := pushes(t, th.srv)
@@ -870,7 +870,7 @@ func TestTeamPollCostsAFailedTabList(t *testing.T) {
 	var logs lockedLog
 	o := teamOpts(t, shortDir(t), th, configDir(t, "[projects.ha]\nrepo = \"/x\"\nshort = \"ha\"\nlayout = \"tabs\"\n"))
 	o.Logger = zerolog.New(&logs)
-	r := run(t, o)
+	r := serving(t, o, th.fakeHerdr)
 
 	polled(t, th.srv, 2)
 	assert.Empty(t, pushes(t, th.srv))
@@ -884,7 +884,7 @@ func TestTeamPollCostsAFailedTabList(t *testing.T) {
 func TestTeamPollListsNoTabsWithoutATabsTeam(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	run(t, teamOpts(t, shortDir(t), th, ""))
+	serving(t, teamOpts(t, shortDir(t), th, ""), th.fakeHerdr)
 	polled(t, th.srv, 2)
 	for _, r := range th.srv.Requests() {
 		assert.NotEqual(t, "tab.list", r.Method, "no tabs team, no tab.list")

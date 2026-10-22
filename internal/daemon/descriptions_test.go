@@ -45,7 +45,7 @@ func describedDaemon(t *testing.T, file string, logs *lockedLog) (*teamHerdr, st
 	o := teamOpts(t, dir, th, cfg)
 	o.Now = func() time.Time { return t0 }
 	o.Logger = zerolog.New(logs)
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 	require.Eventually(t, func() bool {
 		_, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{Project: "beta"})
@@ -211,7 +211,7 @@ func TestGroupDescriptionsWithoutAConfigDir(t *testing.T) {
 	dir := shortDir(t)
 	o := teamOpts(t, dir, th, "")
 	o.Logger = zerolog.New(&logs)
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 	served(t, sock, anySnapshot)
 	data, code := snapshotOp(t, sock, "")

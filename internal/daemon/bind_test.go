@@ -165,7 +165,7 @@ func TestTheTeamPollFollowsAMove(t *testing.T) {
 	th.setShell("w14:p2", 4242, false)
 	o := teamOpts(t, dir, th, workforceConfig(t))
 	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 4242: 9}}).startTime
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 
 	eventually(t, dir, th, "ha-coder-1", workerRow{Pane: "w14:p2", Terminal: "term_w14:p2", Status: "active", ShellPID: 4242, ShellStart: 9})
 	th.setPane("w14:p2", "pane_id", "w14:p9")
@@ -221,7 +221,7 @@ VALUES ('ha-handing-off', 'w2:p1', 'w2:p9', 0, 'term_w2:p9', 1, 1)`)
 	starts := &procs{start: map[int]uint64{os.Getpid(): 77, 4242: 9, 5555: 2, 6060: 1, 7777: 1, 1111: 5, 3333: 5}}
 	o := teamOpts(t, dir, th, workforceConfig(t))
 	o.Hooks.StartTime = starts.startTime
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 
 	eventually(t, dir, th, "ha-coder-1", workerRow{Pane: "w14:p2", Terminal: "renewed_w14:p2", Status: "active", ShellPID: 4242, ShellStart: 9})
 	eventually(t, dir, th, "ha-coder-2", workerRow{Pane: "w14:p3", Terminal: "renewed_w14:p3", Status: "active", ShellPID: 3333, ShellStart: 5})
@@ -283,7 +283,7 @@ func TestARowBoundMidPollIsNotLost(t *testing.T) {
 		seedRow(t, dir, th, "ha-coder-2", "w14:p3", "term_w14:p3", 0, 0)
 	}
 	th.mu.Unlock()
-	run(t, teamOpts(t, dir, th, workforceConfig(t)))
+	serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
 
 	require.Eventually(t, bound.Load, ready, 10*time.Millisecond)
 	polled(t, th.srv, 2)
@@ -356,7 +356,9 @@ func TestWorkforceOpsWaitForTheFirstReconcile(t *testing.T) {
 // not_ready again until it answers, all within the one wait the command has,
 // which the caller's context can shorten: a deadline that ends an exchange,
 // or the wait between two asks, ends the asks at once with the last
-// refusal, and nothing is asked after that.
+// refusal, and nothing is asked after the deadline. A server that stalls
+// past the wait can let the next ask in before the deadline passes; the
+// subtest of the wait allows that one ask.
 func TestWorkforceRetriesNotReady(t *testing.T) {
 	t.Parallel()
 	// serve answers op not_ready n times, running then before each, and
@@ -430,7 +432,8 @@ func TestWorkforceRetriesNotReady(t *testing.T) {
 
 	// The caller's deadline passes in the wait after the first refusal:
 	// the server passes the cue once the client has read the refusal and
-	// closed its end, so the client holds it and is in its 100 ms wait.
+	// closed its end, so the client holds it and is in its 100 ms wait, or
+	// just before it.
 	// Workforce returns that refusal at once, never the context's error
 	// (QA #77, F-2). A cue off a timer raced the client's read, and a
 	// deadline that cuts the first ask short is no answer (#77's review).
@@ -643,7 +646,7 @@ func TestAShellReadMidHandoffIsNotRecorded(t *testing.T) {
 	done := handoffMidPoll(t, th, dir, "ha-coder-1")
 	o := teamOpts(t, dir, th, workforceConfig(t))
 	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 4242: 9, 5151: 3}}).startTime
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	require.Eventually(t, done.Load, ready, 10*time.Millisecond)
 	eventually(t, dir, th, "ha-coder-1", workerRow{Pane: "w14:p3", Terminal: "term_w14:p3", Status: "active", ShellPID: 5151, ShellStart: 3})
 }
@@ -663,7 +666,7 @@ func TestAReKeyPlannedBeforeAHandoffIsRefused(t *testing.T) {
 	done := handoffMidPoll(t, th, dir, "ha-coder-1")
 	o := teamOpts(t, dir, th, workforceConfig(t))
 	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 4242: 9, 5151: 3}}).startTime
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	require.Eventually(t, done.Load, ready, 10*time.Millisecond)
 	eventually(t, dir, th, "ha-coder-1", workerRow{Pane: "w14:p3", Terminal: "term_w14:p3", Status: "active", ShellPID: 5151, ShellStart: 3})
 }
@@ -691,7 +694,7 @@ func TestWorkforceOpsWaitWhileTheFirstReconcileRuns(t *testing.T) {
 	th.mu.Unlock()
 	o := teamOpts(t, dir, th, workforceConfig(t))
 	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 4242: 9}}).startTime
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	select {
 	case <-entered:
 	case <-time.After(ready):
@@ -720,7 +723,7 @@ func TestAReKeyReachesTheEventsAtOnce(t *testing.T) {
 	o := teamOpts(t, dir, th, workforceConfig(t))
 	o.Team.Events = events
 	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 4242: 9}}).startTime
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	polled(t, th.srv, 2)
 
 	// A live handoff renews every terminal; the worker turns working in the
@@ -765,7 +768,7 @@ func TestRepeatingWarningsAreLoggedOnce(t *testing.T) {
 		dir := shortDir(t)
 		o := teamOpts(t, dir, th, workforceConfig(t))
 		o.Logger = zerolog.New(&logs)
-		run(t, o)
+		serving(t, o, th.fakeHerdr)
 		polled(t, th.srv, 3)
 		assert.Equal(t, 1, strings.Count(logs.String(), noTerminal), "logged once over three polls")
 	})
@@ -784,7 +787,7 @@ VALUES ('ha-coder-1', 'w14:p2', 'w14:p9', 0, 'term_w14:p9', 1, 1)`)
 		o := teamOpts(t, dir, th, workforceConfig(t))
 		o.Logger = zerolog.New(&logs)
 		o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 4242: 9, 5151: 3}}).startTime
-		run(t, o)
+		serving(t, o, th.fakeHerdr)
 		polled(t, th.srv, 3)
 		assert.Equal(t, 1, strings.Count(logs.String(), anotherShell), "logged once over three polls")
 
@@ -822,7 +825,7 @@ VALUES ('ha-coder-1', 'w14:p2', 'w14:p9', 0, 'term_w14:p9', 1, 1)`)
 		o := teamOpts(t, dir, th, workforceConfig(t))
 		o.Logger = zerolog.New(&logs)
 		o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 4242: 9}}).startTime
-		run(t, o)
+		serving(t, o, th.fakeHerdr)
 		polled(t, th.srv, 3)
 		assert.Equal(t, 1, strings.Count(logs.String(), unread), "logged once over three polls")
 		assert.Equal(t, workerRow{Pane: "w14:p2", Terminal: "term_w14:p2", Status: "active"}, row(t, dir, th, "ha-coder-1"), "still bound, with no shell")
@@ -853,7 +856,7 @@ VALUES ('ha-coder-1', 'w14:p2', 'w14:p9', 0, 'term_w14:p9', 1, 1), ('ha-coder-2'
 			}
 			return out
 		}
-		run(t, o)
+		serving(t, o, th.fakeHerdr)
 		polled(t, th.srv, 3)
 		// Another shell is each worker's to know: one line for each.
 		got := lines(anotherShell)
@@ -899,7 +902,7 @@ func TestAShellReadCutShortByAStopIsNotLogged(t *testing.T) {
 	o := teamOpts(t, dir, th, workforceConfig(t))
 	o.Logger = zerolog.New(&logs)
 	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 4242: 9}}).startTime
-	r := run(t, o)
+	r := serving(t, o, th.fakeHerdr)
 	select {
 	case <-entered:
 	case <-time.After(ready):

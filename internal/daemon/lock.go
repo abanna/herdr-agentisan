@@ -90,8 +90,15 @@ func readInfo(path string) LockInfo {
 }
 
 // held reports whether a live process holds the lock at path. It takes the
-// lock for an instant when it is free.
-func held(path string) (bool, error) {
+// lock for an instant when it is free, and lets go of it before closing: a
+// flock belongs to the open file, and a child another goroutine forks
+// meanwhile holds that open file until it execs, so a close alone can leave
+// the lock held after held has reported it free.
+func held(path string) (bool, error) { return heldKeeping(path, nil) }
+
+// heldKeeping is held, calling kept, when set, with the probe's file once it
+// has the free lock, as a fork would copy it then.
+func heldKeeping(path string, kept func(*os.File)) (bool, error) {
 	f, err := openLock(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil // no daemon has ever run for this server
@@ -99,12 +106,24 @@ func held(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	defer f.Close() //nolint:errcheck // closing releases the probe's lock; nothing was written
+	defer f.Close() //nolint:errcheck // the lock is let go of below; nothing was written
 	switch err := tryLock(f); {
 	case errors.Is(err, errLocked):
 		return true, nil
 	case err != nil:
 		return false, err
 	}
-	return false, nil
+	if kept != nil {
+		kept(f)
+	}
+	return false, unlock(f)
+}
+
+// unlock lets go of the flock on f's open file, however many descriptors
+// share it.
+func unlock(f *os.File) error {
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_UN); err != nil {
+		return fmt.Errorf("unlock %s: %w", f.Name(), err)
+	}
+	return nil
 }

@@ -89,7 +89,7 @@ func TestTeamPollEmitsStatusTransitions(t *testing.T) {
 	events, rec := telemetrytest.NewEvents()
 	o := teamOpts(t, dir, th, "")
 	o.Team.Events = events
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 
 	polled(t, th.srv, 2)
 	assert.Empty(t, rec.Events(), "the first poll is a baseline: a restart is not every pane appearing")
@@ -135,7 +135,7 @@ func TestTeamPollKeepsItsBaselineAcrossAFailedList(t *testing.T) {
 	o := teamOpts(t, shortDir(t), th, "")
 	o.Team.Events = events
 	o.Logger = zerolog.New(&logs)
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	polled(t, th.srv, 1)
 
 	good := th.listedPanes()
@@ -173,7 +173,7 @@ func TestTeamPollEventsSurviveAFailedAgentList(t *testing.T) {
 	events, rec := telemetrytest.NewEvents()
 	o := teamOpts(t, shortDir(t), th, "")
 	o.Team.Events = events
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	polled(t, th.srv, 1)
 
 	th.mu.Lock()
@@ -254,7 +254,7 @@ func TestTeamPollIsNotHeldUpByAHungCollector(t *testing.T) {
 	dir := shortDir(t)
 	o := teamOpts(t, dir, th, "")
 	o.Team.Events = events
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 
 	require.Eventually(t, func() bool { return exports.Load() > 0 }, ready, 5*time.Millisecond,
