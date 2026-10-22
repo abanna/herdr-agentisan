@@ -284,13 +284,16 @@ func TestDaemonStopEndsAHandoffWait(t *testing.T) {
 			case <-time.After(ready):
 				t.Fatal("the daemon's stop waited for the handoff")
 			}
+			// Either stop answers handoff_timeout, and the answer always
+			// lands: the wait polls an unreachable herdr again until the op's
+			// context ends, and the server's close waits for every handler,
+			// which writes its answer before it closes. An early stop answers
+			// a read's herdr_failed or store_failed instead.
 			select {
 			case err := <-done:
-				if re, ok := errors.AsType[*daemon.RequestError](err); ok {
-					assert.Equal(t, "handoff_timeout", re.Code)
-				} else {
-					require.ErrorIs(t, err, daemon.ErrUnavailable)
-				}
+				re, ok := errors.AsType[*daemon.RequestError](err)
+				require.True(t, ok, "the client got no answer: %v", err)
+				assert.Equal(t, "handoff_timeout", re.Code)
 			case <-time.After(ready):
 				t.Fatal("the client never heard back")
 			}
@@ -312,7 +315,10 @@ type frozenPoll struct {
 // returns once it is held. A push follows the poll's reconcile, which opens
 // the workforce ops, so they are open by then. Each held push holds the poll
 // until its call's timeout, and a poll pushes to every team and agent pane,
-// so it stays held for many seconds even unreleased.
+// so it stays held for many seconds even unreleased. When the hook lands on
+// a poll's last push, the poll goes on after one CallTimeout (5 s), and its
+// own pane.list and agent.list are recorded from then: a test whose other
+// caller takes longer than that to ask can read the poll's calls as its own.
 func freezePoll(t *testing.T, th *teamHerdr) *frozenPoll {
 	t.Helper()
 	held := make(chan struct{})
