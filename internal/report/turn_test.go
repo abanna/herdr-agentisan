@@ -46,6 +46,9 @@ func TestStatedClasses(t *testing.T) {
 	t.Parallel()
 	const prompt, stop = report.EventPromptSubmit, report.EventStop
 	long := strings.Repeat("x", 78) + " " + strings.Repeat("y", 10)
+	// resend opens a resend notice as store.fail writes it (A30): the
+	// notice's own words come before the quoted body.
+	resend := "[agentisan] message 01J to ha-coder-1 may not have been delivered (timeout); resend if needed: "
 	tests := map[string]struct {
 		event, text, item, stage string
 	}{
@@ -73,6 +76,9 @@ func TestStatedClasses(t *testing.T) {
 		"a sender holding a bracket":        {event: prompt, text: "[msg 01J from a] b] item: NERD-1"},
 		"a sender holding a bare bracket":   {event: prompt, text: "[msg 01J from a]b] item: NERD-1", item: "NERD-1"},
 		"a final message keeps its header":  {event: stop, text: "[msg 01J from ha-boss] item: NERD-1"},
+		"a resend notice's quoted item":     {event: prompt, text: resend + "item: NERD-1\nbuild it"},
+		"a returned resend notice's item":   {event: prompt, text: "[agentisan] originally to ha-coder-1: " + resend + "item: NERD-1"},
+		"a resend notice's later item line": {event: prompt, text: resend + "build it\nitem: NERD-1", item: "NERD-1"},
 		"a non-ASCII sender":                {event: prompt, text: "[msg 01J from rédacteur-1] item: NERD-1", item: "NERD-1"},
 		"a Latin-1 byte in the sender":      {event: prompt, text: "[msg 01J from caf\xe9] item: NERD-1", item: "NERD-1"},
 		"a cut multibyte sender":            {event: prompt, text: "[msg 01J from x\xe5\xaf] item: NERD-1", item: "NERD-1"},
