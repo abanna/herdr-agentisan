@@ -90,7 +90,7 @@ func TestSnapshotCarriesTheGitHubHeader(t *testing.T) {
 	dir := shortDir(t)
 	o := ghOpts(t, dir, th, ghConfig(t), f, nil)
 	o.Now = func() time.Time { return t0 }
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 
 	got := served(t, socketPath(t, dir, th.path), hasHeader)
 	assert.Equal(t, &snapshot.Project{Color: "#7c3aed", PRs: recordedPRs(), Issues: new(14)}, got.Project)
@@ -109,13 +109,13 @@ func TestSnapshotHeaderWithoutAColour(t *testing.T) {
 		[]byte("schema_version = 1\n[projects.app]\nrepo = \"/x\"\ngithub = \"acme/app\"\n"), 0o600))
 	f := ghtest.New(t)
 	dir := shortDir(t)
-	run(t, ghOpts(t, dir, th, cfg, f, nil))
+	serving(t, ghOpts(t, dir, th, cfg, f, nil), th.fakeHerdr)
 
 	got := served(t, socketPath(t, dir, th.path), hasHeader)
 	assert.Equal(t, &snapshot.Project{PRs: []snapshot.PR{}, Issues: new(0)}, got.Project, "none open is reported as none, not left out")
 	assert.Equal(t, []string{
 		"pr", "list", "--repo=acme/app", "--state=open", "--limit=100",
-		"--json=number,headRefName,mergeStateStatus,reactionGroups,statusCheckRollup",
+		"--json=number,headRefName,headRefOid,mergeStateStatus,reactionGroups,statusCheckRollup",
 	}, f.Args(t, "pr"))
 }
 
@@ -129,7 +129,7 @@ func TestGitHubPolledOncePerInterval(t *testing.T) {
 	f := recordedGh(t)
 	ticks := make(chan time.Time)
 	dir := shortDir(t)
-	run(t, ghOpts(t, dir, th, ghConfig(t), f, ticks))
+	serving(t, ghOpts(t, dir, th, ghConfig(t), f, ticks), th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 
 	read := func() {
@@ -176,7 +176,7 @@ func TestGitHubKeepsTheLastGoodStateFiveIntervals(t *testing.T) {
 	const interval = 20 * time.Second
 	o.Team.GitHub.Interval = interval
 	o.Now, o.Logger = c.Now, zerolog.New(&logs)
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 	fresh := func(s snapshot.Snapshot) bool { return hasHeader(s) && !s.At.Before(c.Now()) }
 
@@ -216,7 +216,7 @@ func TestGitHubHangDoesNotDelayTheTeam(t *testing.T) {
 	f := ghtest.New(t)
 	f.Mode(t, ghtest.ModeHang)
 	dir := shortDir(t)
-	r := run(t, ghOpts(t, dir, th, ghConfig(t), f, nil))
+	r := serving(t, ghOpts(t, dir, th, ghConfig(t), f, nil), th.fakeHerdr)
 
 	var child int
 	require.Eventually(t, func() bool {
@@ -275,7 +275,7 @@ func TestGitHubNotCollected(t *testing.T) {
 				o.Team.GitHub.Gh = ""
 			}
 			o.Logger = zerolog.New(&logs)
-			run(t, o)
+			serving(t, o, th.fakeHerdr)
 
 			got := served(t, socketPath(t, dir, th.path), anySnapshot)
 			polled(t, th.srv, 3)
@@ -305,7 +305,7 @@ func TestEachTeamCarriesItsOwnHeader(t *testing.T) {
 	th.mu.Unlock()
 	f := recordedGh(t)
 	dir := shortDir(t)
-	run(t, ghOpts(t, dir, th, ghConfig(t), f, nil))
+	serving(t, ghOpts(t, dir, th, ghConfig(t), f, nil), th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 
 	var other snapshot.Snapshot
@@ -343,7 +343,7 @@ func TestEachTeamCarriesOnlyItsOwnHeader(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(cfg, settings.FileName), []byte(body), 0o600))
 	f := recordedGh(t)
 	dir := shortDir(t)
-	run(t, ghOpts(t, dir, th, cfg, f, nil))
+	serving(t, ghOpts(t, dir, th, cfg, f, nil), th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 
 	require.Eventually(t, func() bool {

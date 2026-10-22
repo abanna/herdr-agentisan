@@ -8,6 +8,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"testing"
 	"time"
@@ -37,8 +38,8 @@ import (
 // wait each get ready (NERD-5366). With its start forced to 7 s and its
 // collection to 4 s after it serves, it failed 3 of 3 subtests timing from
 // the start and passes 3 of 3 from serving. A new wait for what a daemon
-// does once it serves should wait for it to serve first; the package's
-// other such waits still time from the start, a follow-up (QA #77, F-5).
+// does once it serves should wait for it to serve first, as
+// TestDaemonRunPushesTeam's push does too (QA #77, F-5).
 // It assumes memory headroom: capped at 150 MiB, against the run's 217 MiB
 // peak uncapped (30k major page faults), 7 other tests here failed, while
 // this one's daemons reached their collection within 0.4 s of their start.
@@ -170,7 +171,7 @@ func TestDaemonLifecycleCommands(t *testing.T) {
 
 	out, err := runCtx(ctx, "daemon", "start")
 	require.NoError(t, err)
-	assert.Contains(t, out, "daemon running")
+	assert.Regexp(t, spawnedLine, out)
 
 	out, err = runCtx(ctx, "daemon", "start")
 	require.NoError(t, err)
@@ -182,12 +183,12 @@ func TestDaemonLifecycleCommands(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(out), &info))
 	assert.Equal(t, os.Getpid(), info.PID)
 	assert.EqualValues(t, 22, info.HerdrProtocol)
-	assert.Equal(t, 3, info.StoreVersion)
+	assert.Equal(t, 4, info.StoreVersion)
 
 	out, err = runCtx(ctx, "daemon", "restart")
 	require.NoError(t, err)
-	assert.Contains(t, out, "daemon stopped")
-	assert.Contains(t, out, "daemon running")
+	assert.Regexp(t, `(?m)^daemon stopped$`, out)
+	assert.Regexp(t, spawnedLine, out, "the restart's start spawned a daemon")
 
 	out, err = runCtx(ctx, "daemon", "stop")
 	require.NoError(t, err)
@@ -199,9 +200,17 @@ func TestDaemonLifecycleCommands(t *testing.T) {
 
 	out, err = runCtx(ctx, "daemon", "restart")
 	require.NoError(t, err, "restart starts a daemon that was not running")
-	assert.Contains(t, out, "daemon running")
+	assert.Regexp(t, `(?m)^no daemon running$`, out)
+	assert.Regexp(t, spawnedLine, out, "the restart's start spawned a daemon")
 	assert.Equal(t, 3, p.runs, "start, restart and restart each spawned once; the second start did not")
 }
+
+// spawnedLine is the line a start prints for a daemon it spawned that
+// answers health. A stop's "no daemon running" holds "daemon running", and a
+// start that found the lock held prints "daemon already running": neither
+// is this line, so a restart that spawned nothing fails at its own step
+// (QA debt Draft 8).
+var spawnedLine = regexp.MustCompile(`(?m)^daemon running \(pid \d+\)$`)
 
 // TestDaemonHealthText: the human form names the pid, the herdr protocol, the
 // socket and the state database's schema version and focus rows.
@@ -218,7 +227,7 @@ func TestDaemonHealthText(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "pid")
 	assert.Contains(t, out, "protocol 22")
-	assert.Contains(t, out, "state schema 3, 0 focus rows")
+	assert.Contains(t, out, "state schema 4, 0 focus rows")
 }
 
 // TestDaemonCommandsFailClearly: what each command reports when it cannot do
@@ -437,10 +446,15 @@ func TestDaemonRunPushesTeam(t *testing.T) {
 	defer cancel()
 
 	done := make(chan error, 1)
+	ended := make(chan struct{})
 	go func() {
 		_, err := runCtx(ctx, "daemon", "run")
 		done <- err
+		close(ended)
 	}()
+	// Its start first, then its first poll's push, each within ready
+	// (QA #77, F-5).
+	awaitDaemon(t, e, ended)
 	var push string
 	require.Eventually(t, func() bool {
 		for _, r := range srv.Requests() {

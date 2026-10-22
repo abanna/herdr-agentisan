@@ -38,6 +38,14 @@ and then says one of three things (ADR-001 A48):
 `herdr plugin log list --plugin nerdsrun.agentisan` shows which, and the
 `daemon.log` the message names says why.
 
+herdr gives a shell in one of its panes no `HERDR_PLUGIN_STATE_DIR`. From
+there the commands that ask a running daemon (`send`, `team status`,
+`worker retire`, `back`, `dashboard`, `status line`, `daemon health` and
+`daemon stop`) find it under herdr's own state directory for the plugin,
+from `XDG_STATE_HOME` or `HOME` as herdr works it out (ADR-001 A51).
+`daemon start`, `run` and `restart` never guess: run them from herdr, or
+pass `--state-dir`.
+
 Requires Go 1.26.10+ and [Task](https://taskfile.dev). Linters and scanners are
 pinned in `go.mod` under the `tool` directive — nothing to install globally.
 
@@ -330,6 +338,19 @@ The daemon tells each team's boss what its team poll sees (ADR-001 A44):
 - it left the team: its pane closed or moved away, or its agent exited and
   left a shell.
 
+From the GitHub collector (A45), it tells each project's boss when one of
+its repo's PRs merged, its CI failed or passed at a head, it has a merge
+conflict at a head, or it got its first 👍:
+
+```
+herdr-agentisan #50 merged as 1e0fb1b
+#50 CI failed at 1e0fb1b (2 of 7 checks)
+```
+
+Each is told once, across restarts, from `state.db`. A repo's first
+collection only records what is true then. GitHub's lines never carry a
+title, branch, body or comment.
+
 It also tells each boss, once, that the daemon started. Turns that end while
 the daemon is down are not reported. The boss's own panes and plain shells are
 never reported. Each line carries the worker's reported ctx, item and stage:
@@ -404,17 +425,18 @@ See ADR-001 A19.
 
 ## The workforce commands
 
-The boss reads its team and retires workers with commands the daemon runs
-(ADR-001 D11, A23); the `herdr-workforce` skill drives them. `worker spawn`
-and `team up` follow in later parts of NERD-5254.
+The boss reads its team, spawns workers and retires them with commands the
+daemon runs (ADR-001 D11, A23); the `herdr-workforce` skill drives them.
+`team up` follows in a later part of NERD-5254.
 
 | Command | What it does |
 | --- | --- |
 | `team status [--project p]` | Every group's counts and open slots, and each worker's status, ctx, item, stage (and whether it is old) and idle time |
+| `worker spawn --group g [--count n] [--model m]` | Adds workers, refused whole past the group's `slots` or when the repo fails the tdaddy preflight |
 | `worker retire <id> [--after-handoff]` | Closes a worker's pane, by logical id or pane id; with the flag, once its handoff is written |
 
 Each prints one JSON object and exits 1 when refused. Without `--project`
-status reads the team whose workspace the command runs in, else the only
+status and spawn read the team whose workspace the command runs in, else the only
 tabs team.
 A tabs team's worker is named by its logical id, `<short>-<type>-<n>`, its
 tab's label; a pane of the ◆ spaces by its pane id. Idle times start when

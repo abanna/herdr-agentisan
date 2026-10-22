@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/preflight"
 	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
@@ -43,8 +44,8 @@ const (
 	// DefaultStopWait is how long Stop waits for the daemon to let go.
 	DefaultStopWait = 10 * time.Second
 	// PruneInterval is how often, by Options.Now, the daemon prunes finished
-	// handoffs and messages past retention (A1). It also prunes once when it
-	// starts.
+	// handoffs and messages past retention (A1), and the GitHub notices' rows
+	// past theirs (A45). It also prunes once when it starts.
 	PruneInterval = 24 * time.Hour
 )
 
@@ -97,6 +98,9 @@ type Hooks struct {
 	// report.SystemStat (/proc on Linux, sysctl on darwin). With none, a
 	// holder is checked by pid alone.
 	StartTime func(pid int) (uint64, error)
+	// Preflight is the check a spawn's repo must pass before any pane opens
+	// (A34); nil means preflight.HostCheck.
+	Preflight preflight.Check
 	// StartedAt puts a start StartTime returned on the wall clock, by
 	// default through report.SystemStartedAt (/proc/stat's boot time on
 	// Linux; darwin's start already is one). With none, the boss shows no
@@ -364,21 +368,22 @@ func (o Options) health(ctx context.Context, st *store.Store, base HealthInfo) f
 	}
 }
 
-// prune deletes the finished handoffs and messages past retention (A1) and
-// returns when the next prune is due. A failure is logged and retried at the
+// prune deletes the finished handoffs and messages past retention (A1), and
+// the GitHub notices' rows past theirs (A45), and returns when the next
+// prune is due. A failure is logged and retried at the
 // next one.
 func (o Options) prune(ctx context.Context, st *store.Store) time.Time {
 	now := o.Now()
 	for _, p := range []struct {
 		what  string
 		prune func(context.Context, time.Time) (int64, error)
-	}{{"handoffs", st.PruneHandoffs}, {"messages", st.PruneMessages}} {
+	}{{"finished handoffs", st.PruneHandoffs}, {"finished messages", st.PruneMessages}, {"GitHub notice rows not observed for 30 days", st.PruneGitHub}} {
 		n, err := p.prune(ctx, now)
 		switch {
 		case err != nil:
-			o.Logger.Warn().Err(err).Msg("prune finished " + p.what)
+			o.Logger.Warn().Err(err).Msg("prune " + p.what)
 		case n > 0:
-			o.Logger.Info().Int64("deleted", n).Msg("pruned finished " + p.what)
+			o.Logger.Info().Int64("deleted", n).Msg("pruned " + p.what)
 		}
 	}
 	return now.Add(PruneInterval)

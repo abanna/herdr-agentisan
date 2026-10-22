@@ -1,0 +1,21 @@
+{
+  "v": 1,
+  "at": "2026-10-09T17:19:00Z",
+  "team": "agentisan",
+  "project": {
+    "color": "#bd93f9",
+    "prs": [
+      {"number": 886, "ci": "success", "codex": "approved", "merge": "clean"}
+    ],
+    "issues": 3,
+    "slots": {"used": 1, "total": 3, "held": 1}
+  },
+  "boss": {"name": "boss", "pane_id": "w1:p1", "status": "working", "model": "claude-opus-4-1", "ctx": 31, "item": "#886 merge", "stage": "holding a slot",
+           "stage_started_at": "2026-10-09T17:10:00Z", "started_at": "2026-10-09T15:05:00Z"},
+  "groups": [
+    {"name": "coders", "agents": [
+      {"name": "pee01", "pane_id": "w2:p1", "status": "working", "model": "opus", "ctx": 44, "item": "NERD-5323", "stage": "build_test", "stage_started_at": "2026-10-09T17:12:00Z"},
+      {"name": "pee02", "pane_id": "w2:p2", "status": "idle", "model": "opus", "ctx": 18, "item": "NERD-5349", "stage": "waiting: slot", "stage_started_at": "2026-10-09T17:14:00Z", "idle_since": "2026-10-09T17:14:00Z"}
+    ]}
+  ]
+}

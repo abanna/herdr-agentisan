@@ -23,8 +23,9 @@ func newDashboardCmd() *cobra.Command {
 			"focuses and zooms the agent through HERDR_SOCKET_PATH, a click on\n" +
 			"[ btop ] opens btop in a herdr popup, ? shows help and q quits.\n\n" +
 			"Snapshots come from the daemon of the herdr server in HERDR_SOCKET_PATH,\n" +
-			"under the plugin state directory (HERDR_PLUGIN_STATE_DIR, or --state-dir),\n" +
-			"where `daemon health` looks; herdr's dashboard pane sets both. With no\n" +
+			"under the plugin state directory (--state-dir, HERDR_PLUGIN_STATE_DIR, or\n" +
+			"else herdr's own for this plugin, from XDG_STATE_HOME or HOME), where\n" +
+			"`daemon health` looks; herdr's dashboard pane sets both. With no\n" +
 			"daemon running the footer says so and the dashboard keeps asking.\n" +
 			"The team shown is the one whose workspace the dashboard's own pane is in,\n" +
 			"found through herdr by this process's id every 10 seconds; outside every\n" +
@@ -42,11 +43,8 @@ func newDashboardCmd() *cobra.Command {
 			if fixture != "" {
 				cfg, err = dashboard.FixtureConfig(ctx, fixture, env.SocketPath)
 			} else {
-				dir := stateDir
-				if dir == "" {
-					dir = env.StateDir
-				}
 				lookup := lookupEnvFrom(ctx)
+				dir, _ := plugin.StateDir(stateDir, lookup)
 				paneID, _ := lookup("HERDR_PANE_ID")
 				workspaceID, _ := lookup("HERDR_WORKSPACE_ID")
 				cfg, err = dashboard.DaemonConfig(dir, env.SocketPath, dashboard.Where{
@@ -66,7 +64,7 @@ func newDashboardCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&fixture, "fixture", "", "read snapshots from this JSON file instead of the daemon")
-	c.Flags().StringVar(&stateDir, "state-dir", "", "plugin state directory the daemon runs under (default: HERDR_PLUGIN_STATE_DIR)")
+	c.Flags().StringVar(&stateDir, "state-dir", "", "plugin state directory the daemon runs under (default: HERDR_PLUGIN_STATE_DIR, else herdr's state directory for this plugin)")
 	c.Flags().StringVar(&project, "project", "", "show this project's team (default: the team of the workspace the dashboard runs in)")
 	c.MarkFlagsMutuallyExclusive("fixture", "project")
 	return c

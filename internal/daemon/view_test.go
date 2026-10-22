@@ -102,7 +102,7 @@ func assertClear(t *testing.T, c viewCall) {
 func TestRunSetsTheFocusedTeamsView(t *testing.T) {
 	t.Parallel()
 	th, cfg := viewTeams(t)
-	run(t, teamOpts(t, shortDir(t), th, cfg))
+	serving(t, teamOpts(t, shortDir(t), th, cfg), th.fakeHerdr)
 	s := th.nextStream(t)
 
 	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
@@ -142,7 +142,7 @@ func TestRunSendsAnIdenticalViewOnce(t *testing.T) {
 	th.mu.Lock()
 	th.workspaces = append(th.workspaces, herdr.WorkspaceInfo{WorkspaceID: "w3", Label: "scratch"})
 	th.mu.Unlock()
-	run(t, teamOpts(t, shortDir(t), th, cfg))
+	serving(t, teamOpts(t, shortDir(t), th, cfg), th.fakeHerdr)
 	s := th.nextStream(t)
 
 	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
@@ -171,7 +171,7 @@ func TestRunSendsAnIdenticalViewOnce(t *testing.T) {
 func TestRunSendsTheViewAgainAfterAResync(t *testing.T) {
 	t.Parallel()
 	th, cfg := viewTeams(t)
-	run(t, teamOpts(t, shortDir(t), th, cfg))
+	serving(t, teamOpts(t, shortDir(t), th, cfg), th.fakeHerdr)
 	s := th.nextStream(t)
 
 	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
@@ -190,7 +190,7 @@ func TestRunSendsTheViewAgainAfterAResync(t *testing.T) {
 func TestRunSendsTheViewAgainAfterAResyncThatCannotList(t *testing.T) {
 	t.Parallel()
 	th, cfg := viewTeams(t)
-	run(t, teamOpts(t, shortDir(t), th, cfg))
+	serving(t, teamOpts(t, shortDir(t), th, cfg), th.fakeHerdr)
 	s := th.nextStream(t)
 
 	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
@@ -213,7 +213,7 @@ func TestRunMovesTheViewOnAResyncWithoutWaitingForAPoll(t *testing.T) {
 	th, cfg := viewTeams(t)
 	o := teamOpts(t, shortDir(t), th, cfg)
 	o.Poll = time.Hour // one poll at start; then only focus moves the view
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	s := th.nextStream(t)
 
 	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
@@ -237,7 +237,7 @@ func TestRunSetsTheViewOfTheFocusAtStart(t *testing.T) {
 		}
 	}
 	th.mu.Unlock()
-	run(t, teamOpts(t, shortDir(t), th, cfg))
+	serving(t, teamOpts(t, shortDir(t), th, cfg), th.fakeHerdr)
 	th.nextStream(t)
 	assertSet(t, awaitViews(t, th.srv, 1)[0], viewSpaces)
 }
@@ -249,7 +249,7 @@ func TestRunSetsTheViewOfTheFocusAtStart(t *testing.T) {
 func TestRunFollowsAFocusOnlyThePollSees(t *testing.T) {
 	t.Parallel()
 	th, cfg := viewTeams(t)
-	run(t, teamOpts(t, shortDir(t), th, cfg))
+	serving(t, teamOpts(t, shortDir(t), th, cfg), th.fakeHerdr)
 	s := th.nextStream(t)
 
 	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
@@ -283,7 +283,7 @@ func TestRunTriesTheViewAgainAfterAFailure(t *testing.T) {
 	var logs lockedLog
 	o := teamOpts(t, shortDir(t), th, cfg)
 	o.Logger = zerolog.New(&logs)
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	s := th.nextStream(t)
 
 	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
@@ -325,7 +325,7 @@ func TestRunLogsARefusalAgainAfterASuccess(t *testing.T) {
 	var logs lockedLog
 	o := teamOpts(t, shortDir(t), th, cfg)
 	o.Logger = zerolog.New(&logs)
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	s := th.nextStream(t)
 
 	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
@@ -346,7 +346,7 @@ func TestRunLogsARefusalAgainAfterASuccess(t *testing.T) {
 func TestRunSendsTheViewAgainAfterAFailedCall(t *testing.T) {
 	t.Parallel()
 	th, cfg := viewTeams(t)
-	run(t, teamOpts(t, shortDir(t), th, cfg))
+	serving(t, teamOpts(t, shortDir(t), th, cfg), th.fakeHerdr)
 	s := th.nextStream(t)
 
 	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
@@ -369,7 +369,7 @@ func TestRunSendsTheViewAgainAfterAFailedCall(t *testing.T) {
 func TestCleanStopClearsTheView(t *testing.T) {
 	t.Parallel()
 	th, cfg := viewTeams(t)
-	r := run(t, teamOpts(t, shortDir(t), th, cfg))
+	r := serving(t, teamOpts(t, shortDir(t), th, cfg), th.fakeHerdr)
 	s := th.nextStream(t)
 	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
 	awaitViews(t, th.srv, 1)
@@ -411,7 +411,7 @@ func TestNoViewClearOnAServerThatIsGone(t *testing.T) {
 			var logs lockedLog
 			o := teamOpts(t, shortDir(t), th, cfg)
 			o.Logger = zerolog.New(&logs)
-			r := run(t, o)
+			r := serving(t, o, th.fakeHerdr)
 			original := th.srv
 			s := th.nextStream(t)
 			s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
@@ -447,7 +447,7 @@ func TestViewNeverReachesAReplacement(t *testing.T) {
 	o := teamOpts(t, shortDir(t), th, cfg)
 	o.Poll = time.Hour // one poll at start; then only focus moves the view
 	o.Logger = zerolog.New(&logs)
-	r := run(t, o)
+	r := serving(t, o, th.fakeHerdr)
 	s := th.nextStream(t)
 	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
 	awaitViews(t, th.srv, 1)

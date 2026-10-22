@@ -61,9 +61,11 @@ thresholds = [55, 65, 75]
 
 # What the daemon tells each team's boss from its team poll (ADR-001 A44): a
 # worker's turn ended, it turned blocked or unknown, it left the team, and,
-# once, that the daemon started. skip names the kinds not told: turn_ended,
-# blocked, unknown, gone, started, and the context levels ctx_soft and
-# ctx_hard; ctx_ceiling always goes. A boss gets at most one message every
+# once, that the daemon started; and from GitHub (A45): a PR merged, its CI
+# failed or passed, it has a merge conflict, it got its first 👍. skip names
+# the kinds not told: turn_ended, blocked, unknown, gone, started, the
+# context levels ctx_soft and ctx_hard, and merged, ci_failed, ci_passed,
+# dirty and approved; ctx_ceiling always goes. A boss gets at most one message every
 # gap seconds (0 to 3600) and the same worker and kind again within repeat
 # seconds (0 to 86400) is dropped. Read once when the daemon starts, from
 # this file only, never a repo file.
@@ -84,12 +86,13 @@ repeat = 300
 # below). The daemon reads descriptions again whenever this file changes, so
 # an edit needs no restart; a repo's .herdr-agentisan.toml cannot set one.
 #
-# A group's own agent (ADR-001 A23), which `worker spawn` launches (it lands
-# in a later part of NERD-5254; the key resolves now): with a command of its
-# own, a type runs that command and that model only, never the [agent] model
-# above. Without one, review runs codex --no-daemon (A22), and every other
-# type [agent]'s command, with the group's model or [agent]'s. The command
-# runs claude or codex (D12) and carries no --model, -m, --name or -n: the
+# A group's own agent (ADR-001 A23), which `worker spawn` launches: with a
+# command of its own, a type runs that command and that model only, never the
+# [agent] model above. Without one, review runs codex --no-daemon (A22), and
+# every other type [agent]'s command, with the group's model or [agent]'s.
+# Spawn adds --no-daemon to any codex command that lacks it (A22). The command
+# runs claude or codex (D12) and carries no --model, -m, --name, -n or
+# --effort, nor a codex -c setting model or model_reasoning_effort: the
 # workforce sets them.
 [groups.precheck]
 workers = 1
@@ -111,13 +114,17 @@ slots = 1
 token = { env = "GITHUB_TOKEN" }
 
 # How `worker spawn` waits for a new tab's shell before it starts the agent
-# there (ADR-001 A23; spawn lands in a later part of NERD-5254, the keys
-# resolve now). herdr only checks that the shell has the terminal, so a shell
+# there (ADR-001 A23). herdr only checks that the shell has the terminal, so a shell
 # asking a question at startup (oh-my-zsh's update prompt, say) would get the
 # agent's command line typed into it.
 #
 #   shell_prompt         a regular expression one line of your prompt
 #                        matches; spawn waits for it. Unset, spawn does not.
+#                        herdr trims each line's trailing white space, so
+#                        '\$ $' never matches (write '\$$'), and the first
+#                        line from the top that matches ends the wait: a
+#                        prompt drawn before a startup question (an instant
+#                        prompt) ends it at once.
 #                        herdr matches it with Rust's regex syntax; resolve
 #                        compiles it with Go's, a first check only, so a
 #                        construct Rust lacks (a literal {, \Q…\E, a nested
@@ -130,8 +137,8 @@ token = { env = "GITHUB_TOKEN" }
 #                        empty unless you know which prompt it will answer.
 #   shell_ready_after_s  default 3, at most 60.
 #
-# Once spawn lands, a worker's shell will have HERDR_AGENTISAN_WORKER set to
-# its logical id, so your shell profile can skip its questions there instead.
+# A worker's shell has HERDR_AGENTISAN_WORKER set to its logical id, so your
+# shell profile can skip its questions there instead.
 [spawn]
 shell_prompt = '❯\s*$'
 

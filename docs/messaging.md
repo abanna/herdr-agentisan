@@ -34,7 +34,7 @@ refusal exits 1:
 | `too_large` | The body is over 8 KiB |
 | `bad_request` | No body, an empty one, or one with a NUL. Quote a body with spaces, put one starting with `-` after `--`, or pass `-` |
 | `not_ready` | The daemon has just started; the command asks again for up to 10 s |
-| `daemon_unavailable` | No daemon answers. Fall back to `herdr agent prompt`, which is not durable |
+| `daemon_unavailable` | No daemon answers under `--state-dir`, `HERDR_PLUGIN_STATE_DIR`, or else herdr's state directory for the plugin, from `XDG_STATE_HOME` or `HOME` (A51). Fall back to `herdr agent prompt`, which is not durable |
 
 ## Who the sender is
 

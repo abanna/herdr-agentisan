@@ -29,9 +29,12 @@ const noticeMsg = "notice"
 type notices struct {
 	watch *notice.Watch
 	// ctx tells the context levels each pane crosses (A33).
-	ctx   *notice.CtxWatch
-	batch *notice.Batcher
-	sink  notice.Sink
+	ctx     *notice.CtxWatch
+	batch   *notice.Batcher
+	configs notice.Configs
+	sink    notice.Sink
+	// github carries the GitHub collector's notices to the poll (A45).
+	github noticeQueue
 }
 
 // newNotices reads every team's notices settings from the configuration,
@@ -48,7 +51,7 @@ func (o Options) newNotices() *notices {
 	for name, c := range ns.Projects {
 		cfgs.Projects[name] = noticeConfig(c)
 	}
-	return &notices{watch: notice.NewWatch(), ctx: o.newCtxWatch(), batch: notice.NewBatcher(cfgs), sink: logSink{o.Logger}}
+	return &notices{watch: notice.NewWatch(), ctx: o.newCtxWatch(), batch: notice.NewBatcher(cfgs), configs: cfgs, sink: logSink{o.Logger}}
 }
 
 // newCtxWatch reads every team's rotation thresholds from the configuration
@@ -123,6 +126,7 @@ func (o Options) alert(ctx context.Context, c herdr.Client, cr notice.Crossing) 
 // flush sends every boss whose gap has passed its waiting notices. A
 // message the sink refuses is logged and dropped, unacknowledged.
 func (o Options) flushNotices(ctx context.Context, n *notices) {
+	n.batch.Add(o.Now(), n.github.take())
 	for _, m := range n.batch.Flush(o.Now()) {
 		if err := n.sink.Send(ctx, m); err != nil {
 			o.Logger.Warn().Err(err).Str("project", m.Project).Msg("notice not delivered")
