@@ -109,9 +109,9 @@ func TestEndedQueues(t *testing.T) {
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []store.EndedQueue{{Worker: "retired", Project: "agentisan"}, {Worker: "reused", Project: "agentisan"}}, got)
 
-	n, err := s.ReturnToBoss(t.Context(), "retired", "agentisan", boss, t1)
+	returned, err := s.ReturnToBoss(t.Context(), "retired", "agentisan", boss, t1)
 	require.NoError(t, err)
-	assert.EqualValues(t, 1, n)
+	assert.Len(t, returned, 1)
 	got, err = s.EndedQueues(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, []store.EndedQueue{{Worker: "reused", Project: "agentisan"}}, got, "a returned queue is no longer listed")

@@ -111,7 +111,8 @@ exempts whatever is later added under that name.
   24 h TTL (A27), and
   `report stage` pushes `item` and `stage` on each agentisan step
   transition, and `report turn` pushes them from the `item:` and
-  `BOSS:`/`STATUS:` lines of a Claude or Codex turn (A42, hooks sampled in
+  `BOSS:`/`STATUS:` lines of a Claude or Codex turn, each stage with its
+  `stage_at` (A42, hooks sampled in
   `docs/config/claude-hooks.example.json` and
   `docs/config/codex-turn-hooks.example.toml`). They read `HERDR_PANE_ID`, a
   pane-shell variable, which is why it is not in `plugin.Env`.
@@ -141,12 +142,15 @@ exempts whatever is later added under that name.
   the poll sees, through `internal/notice` (`notices.go`, A44). It keeps
   herdr's agent view on the focused team, which focus events and the poll
   feed it, and clears it outside every team and on a clean stop (`view.go`,
-  the A28 addendum, A49). It types each queued message into its recipient
-  with `agent.prompt`, by the agent name the poll's last model shows where it
-  belongs, returns an ended binding's queue to its boss, and fails, never
-  retrying, whatever a timeout or a crash may have typed (`messages.go`, A2,
-  A30). `daemon start` spawns a detached `daemon run` and waits for its
-  health or its exit (A48); herdr's `[[startup]]` hook runs it, and the
+  the A28 addendum, A49).
+  It types each queued message into its recipient with `agent.prompt`, by
+  the agent name the poll's last model shows where it belongs, or a pane
+  sender's by the pane showing its terminal, returns an ended binding's
+  queue to its boss, and fails, never retrying, whatever a timeout or a
+  crash may have typed (`messages.go`, A2, A30). The `send` op queues them
+  (`docs/messaging.md`).
+  `daemon start` spawns a detached `daemon run` and waits for its health or
+  its exit (A48); herdr's `[[startup]]` hook runs it, and the
   `daemon-restart` action covers linking. Tests run daemons in process
   against herdrtest and a scratch state dir, never the real ones.
 - `internal/team/` — the team domain model (ADR-001 D5, A17): project → group
@@ -159,7 +163,9 @@ exempts whatever is later added under that name.
   sidebar rows that show them, `docs/config/herdr-sidebar.example.toml`, for
   herdr's own config (`TestSidebarSnippet`), and the model as a snapshot v1
   in the resolver's group order, with the in-memory stage clock (A18) and
-  idle clock (A23).
+  idle clock (A23), whose working stretches tell an old stage from a
+  current one (`stage.go`, A42: `StageOf`, and the sidebar's `stage_now` and
+  `stage_old`).
 - `internal/notice/` — boss notices (ADR-001 A44): the team poll's source
   (`Watch`: a turn's end from `agent.list`'s `completion_seq`, blocked,
   unknown for two polls, gone (a pane closed or moved, or its agent exited),
@@ -168,7 +174,8 @@ exempts whatever is later added under that name.
   that delivers it. The daemon's sink writes daemon.log until the inbox
   delivers (NERD-5256). Pure: tests build models by hand.
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
-  `team status` and `worker retire` so far: each group's counts and members
+  `team status` and `worker retire` so far, and `send`'s sender and
+  recipient (A30): each group's counts and members
   on a tabs team or the ◆ spaces, with idle times from the daemon's clock and
   the rows no pane is bound to (A35), and closing the pane a worker's row is
   bound to, after its handoff when asked, with the row retired. The daemon

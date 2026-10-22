@@ -111,8 +111,9 @@ func itemHerdr(item string) herdrtest.Handler {
 }
 
 // TestTurnPushesTheTokenContract: a turn's stated values go out under the
-// item and stage contract (A5), source agentisan and the 24 h TTL, from
-// either agent's payload. A turn that states both pushes both and asks herdr
+// item and stage contract (A5), a stage with its stage_at from the pane's
+// clock (A42), source agentisan and the 24 h TTL, from either agent's
+// payload. A turn that states both pushes both and asks herdr
 // nothing else; the pane has no lineage, so the report trusts HERDR_PANE_ID.
 func TestTurnPushesTheTokenContract(t *testing.T) {
 	t.Parallel()
@@ -124,19 +125,19 @@ func TestTurnPushesTheTokenContract(t *testing.T) {
 		"a Claude worker's Stop": {
 			payload: claudeStop("Rebased.\n\nBOSS: 1b updated c44380c, 554"),
 			want:    report.TurnResult{Stage: "1b updated c44380c, 554", PaneID: "w14:p1"},
-			tokens:  `{"stage":"1b updated c44380c, 554"}`,
+			tokens:  `{"stage":"1b updated c44380c, 554","stage_at":"1761066000"}`,
 		},
 		"a Codex boss's Stop": {
 			payload: codexStop(strconv.Quote("item: NERD-5334\nSTATUS: waiting on QA")),
 			want:    report.TurnResult{Item: "NERD-5334", Stage: "waiting on QA", PaneID: "w14:p1"},
-			tokens:  `{"item":"NERD-5334","stage":"waiting on QA"}`,
+			tokens:  `{"item":"NERD-5334","stage":"waiting on QA","stage_at":"1761066000"}`,
 		},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			srv := herdrtest.Start(t, itemHerdr(""))
-			pane := report.Pane{SocketPath: srv.Path, PaneID: "w14:p1"}
+			pane := report.Pane{SocketPath: srv.Path, PaneID: "w14:p1", Now: reportedAt}
 
 			got, err := report.Turn(t.Context(), herdr.Client{SocketPath: srv.Path}, pane, strings.NewReader(tc.payload))
 			require.NoError(t, err)
@@ -151,8 +152,9 @@ func TestTurnPushesTheTokenContract(t *testing.T) {
 
 // TestTurnANewItemClearsTheStage: an item stated with no stage is checked
 // against the pane's item. A new one clears the stage, which belonged to the
-// old item, by reporting it empty, which herdr takes as a clear; the same
-// one only renews its TTL, so the stage stays.
+// old item, and its stage_at, by reporting them empty, which herdr takes as
+// a clear; the same one only renews its TTL, so the stage stays, and it
+// never writes stage_at, which would make an old stage look reported now.
 func TestTurnANewItemClearsTheStage(t *testing.T) {
 	t.Parallel()
 	tests := map[string]struct {
@@ -160,15 +162,15 @@ func TestTurnANewItemClearsTheStage(t *testing.T) {
 		cleared                bool
 		tokens                 map[string]string
 	}{
-		"a dispatch of another item":      {carried: "NERD-5260", payload: claudePrompt("item: NERD-5334\nRead the Stage 3."), cleared: true, tokens: map[string]string{"item": "NERD-5334", "stage": ""}},
-		"a pane with no item yet":         {payload: claudePrompt("item: NERD-5334"), cleared: true, tokens: map[string]string{"item": "NERD-5334", "stage": ""}},
+		"a dispatch of another item":      {carried: "NERD-5260", payload: claudePrompt("item: NERD-5334\nRead the Stage 3."), cleared: true, tokens: map[string]string{"item": "NERD-5334", "stage": "", "stage_at": ""}},
+		"a pane with no item yet":         {payload: claudePrompt("item: NERD-5334"), cleared: true, tokens: map[string]string{"item": "NERD-5334", "stage": "", "stage_at": ""}},
 		"a dispatch of the same item":     {carried: "NERD-5334", payload: claudePrompt("item: NERD-5334\nFix QA's findings."), tokens: map[string]string{"item": "NERD-5334"}},
-		"a closing item line, no status":  {carried: "NERD-1", payload: claudeStop("Moving on.\nitem: NERD-2"), cleared: true, tokens: map[string]string{"item": "NERD-2", "stage": ""}},
+		"a closing item line, no status":  {carried: "NERD-1", payload: claudeStop("Moving on.\nitem: NERD-2"), cleared: true, tokens: map[string]string{"item": "NERD-2", "stage": "", "stage_at": ""}},
 		"the same item, closing, no line": {carried: "NERD-2", payload: claudeStop("item: NERD-2"), tokens: map[string]string{"item": "NERD-2"}},
 		// Compared byte for byte, as herdr stores a value: another spelling
 		// is another item.
-		"the item re-cased":        {carried: "NERD-5334", payload: claudePrompt("item: nerd-5334"), cleared: true, tokens: map[string]string{"item": "nerd-5334", "stage": ""}},
-		"the item in NFD, not NFC": {carried: "caf\u00e9", payload: claudePrompt("item: cafe\u0301"), cleared: true, tokens: map[string]string{"item": "cafe\u0301", "stage": ""}},
+		"the item re-cased":        {carried: "NERD-5334", payload: claudePrompt("item: nerd-5334"), cleared: true, tokens: map[string]string{"item": "nerd-5334", "stage": "", "stage_at": ""}},
+		"the item in NFD, not NFC": {carried: "caf\u00e9", payload: claudePrompt("item: cafe\u0301"), cleared: true, tokens: map[string]string{"item": "cafe\u0301", "stage": "", "stage_at": ""}},
 		// With no lineage HERDR_PANE_ID is trusted, and may be an alias that
 		// pane.list never shows: its item is unknown, so the stage stays.
 		"a pane pane.list does not show": {carried: "NERD-5334", pane: "w9:p1", payload: claudePrompt("item: NERD-5334"), tokens: map[string]string{"item": "NERD-5334"}},
@@ -177,7 +179,7 @@ func TestTurnANewItemClearsTheStage(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			srv := herdrtest.Start(t, itemHerdr(tc.carried))
-			pane := report.Pane{SocketPath: srv.Path, PaneID: "w14:p1"}
+			pane := report.Pane{SocketPath: srv.Path, PaneID: "w14:p1", Now: reportedAt}
 			if tc.pane != "" {
 				pane.PaneID = tc.pane
 			}

@@ -178,9 +178,12 @@ type TurnResult struct {
 // Turn pushes the item and stage a turn hook's payload on r states (Stated)
 // to the pane the reporting process runs in, with source agentisan and the
 // StageTTL, and returns what it pushed where. Only the keys stated are set,
-// but an item stated with no stage that is not the item the pane carries
-// also clears the stage, which belonged to the old item. A pane pane.list
-// does not show, as an alias trusted with no lineage, keeps its stage.
+// a stage with stage_at from pane's clock, but an item stated with no stage
+// that is not the item the pane carries also clears the stage and its
+// stage_at, since the stage belonged to the old item. An item alone never
+// sets stage_at: the boss's dispatch would otherwise renew every old stage at
+// the start of each turn. A pane pane.list does not show, as an alias
+// trusted with no lineage, keeps its stage.
 //
 // Outside a pane it returns ErrNotInPane, inside a subagent ErrSubagent, for
 // an event other than EventPromptSubmit and EventStop ErrMalformed, and for a
@@ -218,7 +221,7 @@ func Turn(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (TurnResult
 	res := TurnResult{Item: item, Stage: stage, PaneID: target}
 	tokens := map[string]string{}
 	if stage != "" {
-		tokens[StageKey] = stage
+		tokens[StageKey], tokens[StageAtKey] = stage, FormatStageAt(pane.now())
 	}
 	if item != "" {
 		tokens[ItemKey] = item
@@ -229,7 +232,7 @@ func Turn(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (TurnResult
 			}
 			if listed && current != item {
 				// herdr clears a token reported empty.
-				tokens[StageKey], res.Cleared = "", true
+				tokens[StageKey], tokens[StageAtKey], res.Cleared = "", "", true
 			}
 		}
 	}

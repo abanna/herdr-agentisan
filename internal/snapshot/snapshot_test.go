@@ -178,9 +178,17 @@ func TestDecodeAcceptsEveryContractValue(t *testing.T) {
 		"the first instant at rest":      agent(`"status":"idle","idle_since":"0000-01-01T00:00:00Z"`),
 		"the last instant at rest":       agent(`"status":"idle","idle_since":"9999-12-31T23:59:59.999999999Z"`),
 		"a rest with 30 fraction digits": agent(`"status":"idle","idle_since":"2026-10-09T17:12:30.123456789012345678901234567890Z"`),
-		"no model":                       `{"v":1,"team":"t","groups":[{"name":"g","agents":[{"name":"a","pane_id":"w1:p1","status":"idle"}]}]}`,
-		"an empty team name":             `{"v":1,"team":"","groups":[]}`,
-		"an empty agent list":            `{"v":1,"team":"t","groups":[{"name":"g","agents":[]}]}`,
+		// stage_at and stage_stale are optional (ADR-001 A42): absent, null
+		// and false all mean not reported, a current stage.
+		"a stage_at":                   agent(`"status":"idle","stage":"x","stage_at":"2026-10-09T17:12:30Z"`),
+		"a null stage_at":              agent(`"status":"idle","stage":"x","stage_at":null`),
+		"a stale stage":                agent(`"status":"idle","stage":"x","stage_at":"2026-10-09T17:12:30Z","stage_stale":true`),
+		"a stale stage of unknown age": agent(`"status":"unknown","stage":"x","stage_stale":true`),
+		"stage_stale false":            agent(`"status":"idle","stage":"x","stage_stale":false`),
+		"a boss's stale stage":         boss(`"stage":"x","stage_at":"2026-10-09T17:12:30+05:30","stage_stale":true`),
+		"no model":                     `{"v":1,"team":"t","groups":[{"name":"g","agents":[{"name":"a","pane_id":"w1:p1","status":"idle"}]}]}`,
+		"an empty team name":           `{"v":1,"team":"","groups":[]}`,
+		"an empty agent list":          `{"v":1,"team":"t","groups":[{"name":"g","agents":[]}]}`,
 	}
 	for name, in := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -257,6 +265,11 @@ func TestDecodeRefuses(t *testing.T) {
 		"tab_id in another case":       {in: agent(`"name":"a","status":"idle","tabId":"w2:t1"`), want: snapshot.ErrInvalid, contains: []string{`"tabId"`}},
 		"idle_since in another case":   {in: agent(`"name":"a","status":"idle","Idle_Since":"2026-10-09T17:12:30Z"`), want: snapshot.ErrInvalid, contains: []string{`"Idle_Since"`}},
 		"a duplicate idle_since":       {in: agent(`"name":"a","status":"idle","idle_since":null,"idle_since":null`), want: snapshot.ErrInvalid, contains: []string{`"idle_since"`, "twice"}},
+		"stage_stale is not a bool":    {in: agent(`"name":"a","status":"idle","stage_stale":"yes"`), want: snapshot.ErrInvalid},
+		"stage_stale is a number":      {in: agent(`"name":"a","status":"idle","stage_stale":1`), want: snapshot.ErrInvalid},
+		"stage_stale in another case":  {in: agent(`"name":"a","status":"idle","Stage_Stale":true`), want: snapshot.ErrInvalid, contains: []string{`"Stage_Stale"`}},
+		"stage_at in another case":     {in: agent(`"name":"a","status":"idle","stageAt":"2026-10-09T17:12:30Z"`), want: snapshot.ErrInvalid, contains: []string{`"stageAt"`}},
+		"a duplicate stage_at":         {in: agent(`"name":"a","status":"idle","stage_at":null,"stage_at":null`), want: snapshot.ErrInvalid, contains: []string{`"stage_at"`, "twice"}},
 		"v negative":                   {in: `{"v":-1}`, want: snapshot.ErrUnsupportedVersion},
 		"v past int64":                 {in: `{"v":99999999999999999999,"team":"t","groups":[]}`, want: snapshot.ErrInvalid},
 		"v not an integer":             {in: `{"v":1.0,"team":"t","groups":[]}`, want: snapshot.ErrInvalid},
@@ -399,6 +412,12 @@ func TestDecodeRefusesTimesThatAreNotRFC3339(t *testing.T) {
 	bossIdle := func(lit string) string {
 		return `{"v":1,"team":"t","boss":{"name":"boss","status":"idle","idle_since":` + lit + `}}`
 	}
+	stageAt := func(lit string) string {
+		return `{"v":1,"team":"t","groups":[{"name":"g","agents":[{"name":"a","status":"idle","stage":"x","stage_at":` + lit + `}]}]}`
+	}
+	bossStageAt := func(lit string) string {
+		return `{"v":1,"team":"t","boss":{"name":"boss","status":"idle","stage":"x","stage_at":` + lit + `}}`
+	}
 	tests := map[string]string{
 		"a date without a time":       `"2026-10-09"`,
 		"a time without a zone":       `"2026-10-09T17:19:00"`,
@@ -429,6 +448,7 @@ func TestDecodeRefusesTimesThatAreNotRFC3339(t *testing.T) {
 			t.Parallel()
 			for field, doc := range map[string]string{
 				"at": at(lit), "started_at": start(lit), "stage_started_at": stage(lit), "idle_since": idle(lit), "boss idle_since": bossIdle(lit),
+				"stage_at": stageAt(lit), "boss stage_at": bossStageAt(lit),
 			} {
 				_, err := snapshot.Decode(strings.NewReader(doc))
 				require.ErrorIs(t, err, snapshot.ErrInvalid, "%s %s", field, lit)
@@ -692,6 +712,33 @@ func TestTabAndIdleAreLeftOutUnlessSet(t *testing.T) {
 	}
 	raw, err := json.Marshal(doc)
 	require.NoError(t, err)
+	got, err := snapshot.Decode(bytes.NewReader(raw))
+	require.NoError(t, err)
+	assert.Equal(t, doc, got)
+}
+
+// TestStageAtAndStaleAreLeftOutUnlessSet: a writer leaves stage_at and
+// stage_stale out when not reported (ADR-001 A42), so a snapshot from before
+// the keys existed decodes to the same agent, a current stage; set, both
+// survive a round trip, the boss's included.
+func TestStageAtAndStaleAreLeftOutUnlessSet(t *testing.T) {
+	t.Parallel()
+
+	bare, err := json.Marshal(snapshot.Agent{Name: "pee01", PaneID: "w2:p1", Status: snapshot.StatusIdle, Stage: "build_test"})
+	require.NoError(t, err)
+	assert.NotContains(t, string(bare), "stage_at")
+	assert.NotContains(t, string(bare), "stage_stale")
+
+	at := time.Date(2026, 10, 9, 17, 12, 30, 0, time.UTC)
+	agent := snapshot.Agent{Name: "pee03", PaneID: "w2:p3", Status: snapshot.StatusIdle, Stage: "build_test", StageAt: &at, StageStale: true}
+	doc := snapshot.Snapshot{
+		V: snapshot.Version, At: at, Team: "t",
+		Boss:   &snapshot.Boss{Agent: snapshot.Agent{Name: "boss", PaneID: "w1:p1", Status: snapshot.StatusDone, Stage: "waiting", StageAt: &at, StageStale: true}},
+		Groups: []snapshot.Group{{Name: "g", Agents: []snapshot.Agent{agent, {Name: "pee04", PaneID: "w2:p4", Status: snapshot.StatusIdle, Stage: "x", StageAt: &at}}}},
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"stage_at":"2026-10-09T17:12:30Z","stage_stale":true`)
 	got, err := snapshot.Decode(bytes.NewReader(raw))
 	require.NoError(t, err)
 	assert.Equal(t, doc, got)

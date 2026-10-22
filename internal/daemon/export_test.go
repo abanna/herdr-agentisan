@@ -140,12 +140,12 @@ func DefaultStartTime() func(pid int) (uint64, error) {
 // ServedBudget is the budget the daemon's own op map gives op with args,
 // which the server enforces; OpBudget is the client's copy.
 func ServedBudget(op string, args json.RawMessage) time.Duration {
-	return workforceOps(&workforce.Service{}, new(atomic.Bool))[op].budget(args)
+	return workforceOps(&workforce.Service{}, new(atomic.Bool), nil)[op].budget(args)
 }
 
 // WorkforceOpNames is every op the daemon's workforce op map serves.
 func WorkforceOpNames() []string {
-	return slices.Sorted(maps.Keys(workforceOps(&workforce.Service{}, new(atomic.Bool))))
+	return slices.Sorted(maps.Keys(workforceOps(&workforce.Service{}, new(atomic.Bool), nil)))
 }
 
 // GroupDescriptions is the team poll's reader of the group descriptions

@@ -19,6 +19,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/report"
@@ -139,6 +140,9 @@ type Pane struct {
 	// their writers left them (ADR-001 token contract); "" when absent, and
 	// Ctx "" too when herdr detects no agent in the pane (A27).
 	Ctx, Item, Stage string
+	// StageAt is when the stage was last reported, from its stage_at token
+	// (A42); zero when absent or not a time report.ParseStageAt reads.
+	StageAt time.Time
 }
 
 // IsAgent reports whether an agent runs in the pane: herdr detected one, or
@@ -321,6 +325,9 @@ func worker(p herdr.PaneInfo, t Target, ids, names map[string]string) Worker {
 	}}
 	if id, ok := ids[p.TerminalID]; ok {
 		w.ID, w.Bound = id, true
+	}
+	if at, ok := report.ParseStageAt(p.Tokens[report.StageAtKey]); ok {
+		w.Pane.StageAt = at
 	}
 	return w
 }
