@@ -2,6 +2,8 @@ package workforce_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -338,4 +340,22 @@ func TestPlanRefusesAChangedAgent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "claude", kind)
 	assert.Equal(t, []string{"--model", "claude-sonnet-5-5", "--effort", "high", "--name", "ha-coder-1"}, args)
+}
+
+// TestSpawnRefusesAnAgentChangedAfterRouting: the type's agent changes after
+// routing decided, here during the preflight, before the lock re-reads the
+// configuration: the spawn is refused, never codex on a claude decision.
+func TestSpawnRefusesAnAgentChangedAfterRouting(t *testing.T) {
+	t.Parallel()
+	f, rec := routedFixture(t, routingOn)
+	changed := strings.Replace(routingOn, "[projects.herdr-agentisan.groups.coder]\n", "[projects.herdr-agentisan.groups.coder]\nagent = { command = [\"codex\"] }\n", 1)
+	require.NotEqual(t, routingOn, changed)
+	f.svc.Preflight = func(context.Context, string) error {
+		return os.WriteFile(filepath.Join(f.config, settings.FileName), []byte(strings.ReplaceAll(changed, "REPO", f.repo)), 0o600)
+	}
+	_, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1})
+	require.ErrorIs(t, err, workforce.ErrConfig)
+	assert.Contains(t, err.Error(), "changed from claude to codex")
+	assert.Empty(t, f.h.params("tab.create"))
+	assert.Empty(t, rec.all())
 }
