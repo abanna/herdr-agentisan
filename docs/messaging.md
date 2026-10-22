@@ -79,6 +79,9 @@ too.
   `[msg <ulid> from <sender>, originally to <worker>] <body>`.
 - The body is typed with CR and CRLF as LF, and with every other control
   character but LF and TAB left out.
+- The header doesn't hide an `item:` line that opens the body: `report
+  turn` reads it behind each of these headers, so a dispatch can send its
+  item first (A42).
 
 ## Pane senders
 

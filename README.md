@@ -172,10 +172,11 @@ what the turn's text states, and sets the tokens `report stage` sets:
   sets `blocked: 1Password agent`. `BOSS:` is the line a worker ends each
   turn with; `STATUS:` is for a pane with no boss above it.
 - **The item** is an `item: <id>` line: the first one in a prompt, as a
-  dispatch carries it, or the last one in the final message's closing
-  paragraph, beside the status line. A new item stated with no stage clears
-  the old stage. An item alone never sets `stage_at`, so it never makes an
-  old stage look reported again.
+  dispatch carries it (behind the header a `send` message is typed with,
+  too), or the last one in the final message's closing paragraph, beside
+  the status line. A new item stated with no stage clears the old stage. An
+  item alone never sets `stage_at`, so it never makes an old stage look
+  reported again.
 
 Markdown bold and code ticks around a line are fine; a value over 80
 characters is cut to 79 and `…`. A turn that states neither reports nothing,
