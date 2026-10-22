@@ -45,9 +45,9 @@ func TestNoticesForTheDaemon(t *testing.T) {
 			},
 		},
 		"every kind, and the bounds": {
-			file: "[projects.app]\nrepo = \"/x\"\nshort = \"a\"\n[projects.app.notices]\nskip = [\"turn_ended\", \"blocked\", \"unknown\", \"gone\", \"started\", \"ctx_soft\", \"ctx_hard\"]\ngap = 3600\nrepeat = 86400\n[projects.web]\nrepo = \"/y\"\nshort = \"w\"\nnotices = { gap = 0, repeat = 0 }\n",
+			file: "[projects.app]\nrepo = \"/x\"\nshort = \"a\"\n[projects.app.notices]\nskip = [\"turn_ended\", \"blocked\", \"unknown\", \"gone\", \"started\", \"ctx_soft\", \"ctx_hard\", \"merged\", \"ci_failed\", \"ci_passed\", \"dirty\", \"approved\"]\ngap = 3600\nrepeat = 86400\n[projects.web]\nrepo = \"/y\"\nshort = \"w\"\nnotices = { gap = 0, repeat = 0 }\n",
 			want: settings.NoticeSettings{Default: defaultNotices, Projects: map[string]settings.NoticeConfig{
-				"app": {Skip: []string{"turn_ended", "blocked", "unknown", "gone", "started", "ctx_soft", "ctx_hard"}, Gap: time.Hour, Repeat: 24 * time.Hour},
+				"app": {Skip: []string{"turn_ended", "blocked", "unknown", "gone", "started", "ctx_soft", "ctx_hard", "merged", "ci_failed", "ci_passed", "dirty", "approved"}, Gap: time.Hour, Repeat: 24 * time.Hour},
 				"web": {},
 			}},
 		},

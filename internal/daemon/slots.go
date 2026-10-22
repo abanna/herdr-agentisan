@@ -17,6 +17,9 @@ type slotCounter struct {
 	locks settings.TestLocks
 	// procLocks and proc stand for /proc/locks and /proc.
 	procLocks, proc string
+	// read makes the poll's one reading of them: testslots.Read, or a
+	// test's stand-in.
+	read func(procLocks, proc string) (*testslots.Reading, error)
 	// failing is the lock list's failure last logged; "" while it reads.
 	failing string
 	// failingFor is each project's failure last logged, while it lasts.
@@ -32,7 +35,10 @@ func (o Options) newSlotCounter() *slotCounter {
 		o.Logger.Warn().Err(err).Msg("test slots: herdr-agentisan.toml does not resolve; the header reports no slots until it is fixed and the daemon restarts")
 		return &slotCounter{}
 	}
-	c := &slotCounter{locks: locks, procLocks: o.Team.procLocks, proc: o.Team.proc, failingFor: map[string]string{}}
+	c := &slotCounter{locks: locks, procLocks: o.Team.procLocks, proc: o.Team.proc, read: o.Team.readLocks, failingFor: map[string]string{}}
+	if c.read == nil {
+		c.read = testslots.Read
+	}
 	if c.procLocks == "" {
 		c.procLocks = testslots.ProcLocks
 	}
@@ -70,7 +76,7 @@ func (o Options) countSlots(c *slotCounter) func(project string) *snapshot.Slots
 	if c == nil || !c.any() {
 		return none
 	}
-	r, err := testslots.Read(c.procLocks, c.proc)
+	r, err := c.read(c.procLocks, c.proc)
 	if err != nil {
 		if kind := failureKind(err); kind != c.failing {
 			c.failing = kind

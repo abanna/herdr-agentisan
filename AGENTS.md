@@ -174,10 +174,12 @@ exempts whatever is later added under that name.
 - `internal/notice/` — boss notices (ADR-001 A44): the team poll's source
   (`Watch`: a turn's end from `agent.list`'s `completion_seq`, blocked,
   unknown for two polls, gone (a pane closed or moved, or its agent exited),
-  and the daemon's start), the per-boss pacing (`Batcher`: coalesced, at
-  most one message per gap, repeats dropped, 8 KiB a message) and the `Sink`
-  that delivers it. The daemon's sink writes daemon.log until the inbox
-  delivers (NERD-5256). Pure: tests build models by hand.
+  and the daemon's start), GitHub's events (`github.go`, A45: merged, CI
+  failed or passed, a conflict, a 👍, each with its seen-set key), the
+  per-boss pacing (`Batcher`: coalesced, at most one message per gap,
+  repeats dropped, 8 KiB a message) and the `Sink` that delivers it. The
+  daemon's sink writes daemon.log until the inbox delivers (NERD-5256).
+  Pure: tests build models by hand.
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
   `team status`, `worker spawn` and `worker retire` so far, and `send`'s
   sender and recipient (A30): each group's counts and members on a tabs team
@@ -213,8 +215,10 @@ exempts whatever is later added under that name.
   holds a worker's inbox until it completes, which rebinds the worker in the
   same transaction. A `workers` row binds its pane by terminal, with the
   shell the team poll read (migration 0003, A35), and the poll's writes are
-  compare-and-sets on the row as it read it. Tests open a fresh database in
-  a temp dir; the store is never mocked.
+  compare-and-sets on the row as it read it. The GitHub notices' seen-set,
+  open PRs and seed marks (`github.go`, migration 0004, A45) make each
+  event told once across restarts. Tests open a fresh database in a temp
+  dir; the store is never mocked.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real
@@ -225,7 +229,10 @@ exempts whatever is later added under that name.
   the snapshot's PR states. `ghtest` is a checked-in stand-in gh: tests run
   it with an environment they build, never the real gh or GitHub. The
   daemon's collector (`internal/daemon/github.go`) runs it every 60 s beside
-  the team poll and caches each project's result for the snapshot.
+  the team poll and caches each project's result for the snapshot, then
+  diffs each list against state.db and hands the boss's GitHub notices to
+  the poll (`ghnotices.go`, A45), looking up a PR that left the list with
+  `gh pr view`.
 - `internal/testslots/` — the dashboard header's test slots (ADR-001 A31,
   A40): which of a project's lock files some process holds a lock on, read
   from the kernel's `/proc/locks` once every team poll without opening or

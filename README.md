@@ -338,6 +338,19 @@ The daemon tells each team's boss what its team poll sees (ADR-001 A44):
 - it left the team: its pane closed or moved away, or its agent exited and
   left a shell.
 
+From the GitHub collector (A45), it tells each project's boss when one of
+its repo's PRs merged, its CI failed or passed at a head, it has a merge
+conflict at a head, or it got its first 👍:
+
+```
+herdr-agentisan #50 merged as 1e0fb1b
+#50 CI failed at 1e0fb1b (2 of 7 checks)
+```
+
+Each is told once, across restarts, from `state.db`. A repo's first
+collection only records what is true then. GitHub's lines never carry a
+title, branch, body or comment.
+
 It also tells each boss, once, that the daemon started. Turns that end while
 the daemon is down are not reported. The boss's own panes and plain shells are
 never reported. Each line carries the worker's reported ctx, item and stage:
