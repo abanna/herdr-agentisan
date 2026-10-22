@@ -32,7 +32,7 @@ var noticesSchema = &node{kind: kindTable, fields: map[string]*node{
 
 // NoticeKinds are the daemon's notice kinds (notice.Kinds), which a test
 // there keeps in step. notices.skip can name each but noticeAlways.
-var NoticeKinds = []string{"turn_ended", "blocked", "unknown", "gone", "started", "ctx_soft", "ctx_hard", "ctx_ceiling"}
+var NoticeKinds = []string{"turn_ended", "blocked", "unknown", "gone", "started", "ctx_soft", "ctx_hard", "ctx_ceiling", "merged", "ci_failed", "ci_passed", "dirty", "approved"}
 
 // noticeAlways is the kind no team can skip: a worker's context reaching the
 // ceiling always reaches its boss (D7).

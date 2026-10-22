@@ -220,6 +220,96 @@ func seq(from, to int) []int {
 	return out
 }
 
+// headed is a PR with its head oid, merge state and rollup.
+func headed(number int, oid, merge, rollup string) string {
+	return fmt.Sprintf(`{"number":%d,"headRefName":"b","headRefOid":%q,"mergeStateStatus":%q,"reactionGroups":[],"statusCheckRollup":%s}`,
+		number, oid, merge, rollup)
+}
+
+const oid1 = "1e0fb1b9c2a54e1f9d3b7a6c5e4d3c2b1a0f9e8d"
+
+// TestParseOpenPRs keeps what the boss's notices are keyed by beside the
+// header's states (ADR-001 A45): the head oid, SHA-1 or SHA-256, or "" for
+// anything else; how many checks the rollup has and how many failed.
+func TestParseOpenPRs(t *testing.T) {
+	t.Parallel()
+	sha256 := strings.Repeat("ab", 32)
+	raw := "[" + strings.Join([]string{
+		headed(7, oid1, "CLEAN", rollup(checkRun("COMPLETED", "SUCCESS"), checkRun("COMPLETED", "FAILURE"), statusContext("ERROR"))),
+		headed(3, sha256, "DIRTY", `[]`),
+		headed(4, strings.ToUpper(oid1), "CLEAN", `null`),
+		headed(5, oid1[:7], "CLEAN", `[]`),
+		headed(6, "main; rm -rf /", "CLEAN", `[]`),
+		`{"number":8,"headRefName":"b"}`,
+	}, ",") + "]"
+	got, err := github.ParseOpenPRs([]byte(raw))
+	require.NoError(t, err)
+	assert.False(t, got.Full)
+	pending := func(n int, m snapshot.MergeState) snapshot.PR {
+		return snapshot.PR{Number: n, CI: snapshot.CIPending, Codex: snapshot.CodexPending, Merge: m}
+	}
+	assert.Equal(t, []github.OpenPR{
+		{PR: pending(3, snapshot.MergeDirty), Head: sha256},
+		{PR: pending(4, snapshot.MergeClean)},
+		{PR: pending(5, snapshot.MergeClean)},
+		{PR: pending(6, snapshot.MergeClean)},
+		{PR: snapshot.PR{Number: 7, CI: snapshot.CIFailure, Codex: snapshot.CodexPending, Merge: snapshot.MergeClean}, Head: oid1, Checks: 3, Failed: 2},
+		{PR: snapshot.PR{Number: 8, CI: snapshot.CIPending, Codex: snapshot.CodexPending, Merge: snapshot.MergeUnknown}},
+	}, got.PRs)
+	headers, err := github.ParsePRs([]byte(raw))
+	require.NoError(t, err)
+	assert.Equal(t, got.Headers(), headers, "the header reads the same PRs")
+}
+
+// TestParseOpenPRsFull: a list of PRLimit entries may be cut off, counted
+// before release-please's are skipped; one entry fewer is complete.
+func TestParseOpenPRsFull(t *testing.T) {
+	t.Parallel()
+	list := func(n int) string {
+		prs := []string{prJSON(1, "release-please--branches--main", "CLEAN", `[]`, `[]`)}
+		for i := 2; i <= n; i++ {
+			prs = append(prs, prJSON(i, "b", "CLEAN", `[]`, `[]`))
+		}
+		return "[" + strings.Join(prs, ",") + "]"
+	}
+	full, err := github.ParseOpenPRs([]byte(list(github.PRLimit)))
+	require.NoError(t, err)
+	assert.True(t, full.Full)
+	assert.Len(t, full.PRs, github.PRLimit-1, "release-please's still skipped")
+	short, err := github.ParseOpenPRs([]byte(list(github.PRLimit - 1)))
+	require.NoError(t, err)
+	assert.False(t, short.Full)
+}
+
+// TestParsePRView: a state other than the three, or a merge commit that is
+// not an oid, is ErrOutput; a merge commit on a PR not merged is ignored.
+func TestParsePRView(t *testing.T) {
+	t.Parallel()
+	got, err := github.ParsePRView([]byte(`{"state":"CLOSED","mergeCommit":{"oid":"` + oid1 + `"}}`))
+	require.NoError(t, err)
+	assert.Equal(t, github.PRState{State: github.StateClosed}, got)
+	got, err = github.ParsePRView([]byte(`{"state":"MERGED","mergeCommit":null}`))
+	require.NoError(t, err)
+	assert.Equal(t, github.PRState{State: github.StateMerged}, got, "merged with no commit named")
+	for name, raw := range map[string]string{
+		"empty":            ``,
+		"no state":         `{"mergeCommit":null}`,
+		"lower case":       `{"state":"merged"}`,
+		"another state":    `{"state":"DRAFT"}`,
+		"a short oid":      `{"state":"MERGED","mergeCommit":{"oid":"1e0fb1b"}}`,
+		"text for an oid":  `{"state":"MERGED","mergeCommit":{"oid":"see https://example.invalid"}}`,
+		"trailing data":    `{"state":"OPEN"} {}`,
+		"a list":           `[]`,
+		"a state as count": `{"state":3}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := github.ParsePRView([]byte(raw))
+			require.ErrorIs(t, err, github.ErrOutput)
+		})
+	}
+}
+
 // TestParsePRsBadOutput: output that is not a PR list is ErrOutput, never an
 // empty list that would read as "no PRs open".
 func TestParsePRsBadOutput(t *testing.T) {

@@ -13,12 +13,14 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
 
 // The modes the stand-in answers in. The zero mode answers `pr` with the PR
-// list and `api` with the issue count.
+// list, `view` with what View set for that PR (and fails without it) and
+// `api` with the issue count.
 const (
 	// ModeFail writes the stderr Fail set and exits 1.
 	ModeFail = "fail"
@@ -73,6 +75,19 @@ func (f *Fake) Mode(t testing.TB, mode string) {
 	f.write(t, "mode", mode)
 }
 
+// View sets what `gh pr view <n>` prints from now on.
+func (f *Fake) View(t testing.TB, n int, answer string) {
+	t.Helper()
+	f.write(t, "view."+strconv.Itoa(n), answer)
+}
+
+// CallMode sets how one call, "pr", "view" or "api", answers from now on,
+// over Mode; "" answers as Mode says.
+func (f *Fake) CallMode(t testing.TB, call, mode string) {
+	t.Helper()
+	f.write(t, "mode."+call, mode)
+}
+
 // Fail makes every call from now on write stderr and exit 1.
 func (f *Fake) Fail(t testing.TB, stderr string) {
 	t.Helper()
@@ -80,13 +95,15 @@ func (f *Fake) Fail(t testing.TB, stderr string) {
 	f.Mode(t, ModeFail)
 }
 
-// Calls are the verbs of every call so far, in order: "pr" or "api".
+// Calls are every call so far, in order: "pr" (pr list), "view" (pr view)
+// or "api".
 func (f *Fake) Calls(t testing.TB) []string {
 	t.Helper()
 	return f.lines(t, "calls")
 }
 
-// Args are the arguments of the last call with verb, the verb first.
+// Args are the arguments of the last call of its kind (Calls), the verb
+// first.
 func (f *Fake) Args(t testing.TB, verb string) []string {
 	t.Helper()
 	return f.lines(t, "args."+verb)

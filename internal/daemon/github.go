@@ -115,8 +115,8 @@ func (c *headerCache) fill(project string, s *snapshot.Snapshot, now time.Time) 
 // repo starts failing, or fails differently, and when it recovers, not
 // every interval; its last good state stays reported (fill). With no repo
 // to collect, no gh, or a configuration that does not resolve, it collects
-// nothing.
-func (o Options) collectGitHub(ctx context.Context, c *headerCache) {
+// nothing. After both calls, each successful PR list goes to notices (A45).
+func (o Options) collectGitHub(ctx context.Context, c *headerCache, notices *githubNotices) {
 	g := o.Team.GitHub
 	repos, err := settings.Headers(o.Team.ConfigDir)
 	if err != nil {
@@ -145,12 +145,13 @@ func (o Options) collectGitHub(ctx context.Context, c *headerCache) {
 	failing := map[string]string{}
 	for {
 		for _, h := range repos {
-			prs, err := gh.PRs(ctx, h.GitHub)
+			open, err := gh.OpenPRs(ctx, h.GitHub)
 			if ctx.Err() != nil {
 				return
 			}
-			if o.noteGitHub(failing, h, "prs", err) {
-				c.putPRs(h.Project, prs, o.Now())
+			listed := o.noteGitHub(failing, h, "prs", err)
+			if listed {
+				c.putPRs(h.Project, open.Headers(), o.Now())
 			}
 			n, err := gh.OpenIssues(ctx, h.GitHub)
 			if ctx.Err() != nil {
@@ -158,6 +159,9 @@ func (o Options) collectGitHub(ctx context.Context, c *headerCache) {
 			}
 			if o.noteGitHub(failing, h, "issues", err) {
 				c.putIssues(h.Project, n, o.Now())
+			}
+			if listed {
+				notices.collected(ctx, gh, h, open)
 			}
 		}
 		select {
