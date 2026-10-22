@@ -79,7 +79,11 @@ func Rotations(opts LoadOptions) (RotationSettings, error) {
 	if err != nil {
 		return RotationSettings{}, err
 	}
-	out.Default = thresholdsOf(merge(defaults(), shared))
+	def := merge(defaults(), shared)
+	if err := def.checkFields(); err != nil {
+		return RotationSettings{}, err
+	}
+	out.Default = thresholdsOf(def)
 	for name, p := range projects {
 		layers := []*source{defaults(), shared, p}
 		view := merge(layers...)

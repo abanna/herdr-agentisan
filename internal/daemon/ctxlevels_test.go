@@ -119,7 +119,7 @@ func TestCtxLevelsReachTheBoss(t *testing.T) {
 	for m := range before {
 		delete(after, m)
 	}
-	assert.Equal(t, map[string]bool{"notification.show": true}, after, "the ceilings add the toast to the poll's calls, and nothing else")
+	assert.Equal(t, map[string]bool{"notification.show": true}, after, "the ceilings add the toast, and no other method the poll did not call before")
 }
 
 // methodsOf is every method th has been asked so far.

@@ -222,9 +222,10 @@ FROM logs-agentisan.otel-*
 
 ### `agentisan.worker.ctx_level`
 
-A pane's context crossed one of its rotation thresholds (ADR-001 A33), and the
-daemon told its project's boss: soft, hard or the ceiling, a level being
-crossed at its threshold or above. A rise past several levels at once is one
+A pane's context crossed one of its rotation thresholds (ADR-001 A33): soft,
+hard or the ceiling, a level being crossed at its threshold or above. The
+daemon queued the line for its project's boss, unless `notices.skip` drops that
+level; the event is recorded either way. A rise past several levels at once is one
 event, at the highest. A level is crossed again only after the context fell
 to its threshold less 5, or under; a restarted daemon starts with none
 crossed. The body reads `<worker id> at <n>% crossed <level> (<threshold>%)`.
@@ -241,8 +242,8 @@ crossed. The body reads `<worker id> at <n>% crossed <level> (<threshold>%)`.
 | `agentisan.ctx.level` | string | `soft`, `hard` or `ceiling` |
 | `agentisan.ctx.percent` | int | The context used, 0 to 100 |
 | `agentisan.ctx.threshold` | int | The level's threshold |
-| `agentisan.ctx.alerted` | bool | Whether the user was alerted with a toast: only at the ceiling |
-| `agentisan.ctx.shown` | bool | Whether herdr showed that toast |
+| `agentisan.ctx.alerted` | bool | Whether the daemon asked herdr to alert the user with a toast, which it does only at the ceiling |
+| `agentisan.ctx.shown` | bool | Whether herdr showed that toast; false when it was not asked for |
 
 ## Coming
 
