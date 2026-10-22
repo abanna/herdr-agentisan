@@ -235,7 +235,13 @@ func TestCrossingNotice(t *testing.T) {
 		assert.Equal(t, "ha", n.Project, name)
 		assert.Equal(t, tc.c.Worker.Pane.ID, n.Subject, name)
 		assert.Equal(t, tc.text, n.Text, name)
+		if tc.c.Boss {
+			assert.Empty(t, n.Worker, "%s: the boss's own is about no worker, so no mute silences it", name)
+		} else {
+			assert.Equal(t, notice.WorkerName(tc.c.Worker), n.Worker, name)
+		}
 	}
+	assert.Equal(t, "c3", tests["hard, unbound"].c.Notice(false).Worker)
 }
 
 // TestCrossingAlert: the ceiling's toast names the pane as its notice does,

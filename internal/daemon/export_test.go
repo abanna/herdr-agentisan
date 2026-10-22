@@ -271,11 +271,6 @@ func WorkforceOf(o Options, ident Identity) *workforce.Service {
 	return o.newWorkforce(nil, ident, &team.IdleClock{})
 }
 
-// LogNotice writes m as the log sink does (A44).
-func LogNotice(log zerolog.Logger, m notice.Message) error {
-	return logSink{log}.Send(context.Background(), m)
-}
-
 // FlushNotices flushes b into s as the poll does.
 func FlushNotices(o Options, b *notice.Batcher, s notice.Sink) {
 	o.flushNotices(context.Background(), &notices{batch: b, sink: s})
@@ -359,7 +354,7 @@ type GitHubSource struct{ g *githubNotices }
 
 // NewGitHubSource is o's source on st, with o's notices settings.
 func NewGitHubSource(o Options, st *store.Store) GitHubSource {
-	return GitHubSource{o.newGitHubNotices(st, o.newNotices())}
+	return GitHubSource{o.newGitHubNotices(st, o.newNotices(st, newInbox(), nil))}
 }
 
 // Collected diffs h's list, open, as the collector does after a list.

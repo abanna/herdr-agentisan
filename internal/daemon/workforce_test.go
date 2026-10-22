@@ -35,7 +35,7 @@ func workforceConfig(t *testing.T) string {
 	marker := filepath.Join(repo, filepath.FromSlash(settings.BundleMarker))
 	require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0o750))
 	require.NoError(t, os.WriteFile(marker, []byte("1\n"), 0o600))
-	return configDir(t, fmt.Sprintf("[projects.ha]\nrepo = %q\nshort = \"ha\"\nlayout = \"tabs\"\n[projects.ha.groups.coder]\nworkers = 1\nslots = 2\n", repo))
+	return configDir(t, fmt.Sprintf("[projects.ha]\nrepo = %q\nshort = \"ha\"\nlayout = \"tabs\"\n[projects.ha.groups.coder]\nworkers = 1\nslots = 2\n", repo)+quietNotices)
 }
 
 // withTeam adds the ha team's workspace, with its boss's tab and one coder,
