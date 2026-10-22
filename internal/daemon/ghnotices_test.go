@@ -93,10 +93,11 @@ func newGHNotices(t *testing.T, notices string) *ghNotices {
 	return &ghNotices{th: newTeamHerdr(t), f: ghtest.New(t), ticks: make(chan time.Time), rounds: make(chan struct{}), dir: shortDir(t), cfg: cfg, logs: &lockedLog{}}
 }
 
-// start runs the next daemon and waits for its first collection: the PR
-// list, the count and lookups more calls. Each daemon is a new process,
-// started later than the last (restarted says why a daemon with its
-// predecessor's start may stop at once, NERD-5335).
+// start runs the next daemon, waits until it serves, then waits for its
+// first collection: the PR list, the count and lookups more calls. A slow
+// start is then never charged to the collection's wait (NERD-5354 F3). Each
+// daemon is a new process, started later than the last (restarted says why
+// a daemon with its predecessor's start may stop at once, NERD-5335).
 func (g *ghNotices) start(t *testing.T, lookups int) *running {
 	t.Helper()
 	o := ghOpts(t, g.dir, g.th, g.cfg, g.f, g.ticks)
@@ -106,7 +107,7 @@ func (g *ghNotices) start(t *testing.T, lookups int) *running {
 	o.Logger = logger
 	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77 + g.daemons}}).startTime
 	g.daemons++
-	g.r = run(t, o)
+	g.r = serving(t, o, g.th.fakeHerdr)
 	g.collected(t, lookups)
 	return g.r
 }
