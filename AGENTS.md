@@ -198,7 +198,9 @@ exempts whatever is later added under that name.
   (`dashboard.go`); and closing the pane a worker's row is bound to, after
   its handoff when asked, with the row retired. The daemon runs them, with
   the plugin's dashboard pane and the Codex hooks check `internal/cli` gives
-  it; `internal/cli` only asks it.
+  it; `internal/cli` only asks it, and asks herdr only to confirm its own
+  pane (`FindCallerPane`), when no `--project` names the team and for
+  `send`'s sender.
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret

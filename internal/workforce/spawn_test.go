@@ -1359,6 +1359,143 @@ func TestSpawnMarksTheWorkersUpActiveFirst(t *testing.T) {
 	assert.Equal(t, store.StatusFailed, f.row(t, "ha-coder-2").Status)
 }
 
+// TestSpawnClosesWhatItOpenedWhenCancelled: a spawn whose own context ends,
+// at a shutdown's cancel or its deadline, while it opens a worker still
+// closes the tab or workspace it just opened, on a settle context of its own:
+// on the op's, the close would fail at once and leave a pane no row binds,
+// whose label takes the id. Both of open's cleanups: the new workspace's tab
+// label refused, and the row's write on the ended context (NERD-5350).
+func TestSpawnClosesWhatItOpenedWhenCancelled(t *testing.T) {
+	t.Parallel()
+	const assay = "\n[projects.assay]\nrepo = \"REPO\"\nshort = \"as\"\n[projects.assay.groups.qa]\nworkers = 1\nslots = 2\n"
+	tests := map[string]struct {
+		req workforce.SpawnRequest
+		id  string
+		// opens is the call that opened the worker's pane.
+		opens string
+		// cut ends the op's context where the test wants it to fail.
+		cut func(f *fixture, cancel context.CancelFunc) *herdrtest.Server
+	}{
+		"the new workspace's tab label": {
+			req: workforce.SpawnRequest{Selector: workforce.Selector{Project: "assay"}, Group: "qa", Count: 1}, id: "as-qa-1", opens: "workspace.create",
+			cut: func(f *fixture, cancel context.CancelFunc) *herdrtest.Server {
+				return wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+					if r.Method == "tab.rename" {
+						cancel()
+						return errReply("server_error")
+					}
+					return next()
+				})
+			},
+		},
+		"the row, after the tab opened": {
+			req: workforce.SpawnRequest{Selector: workforce.Selector{Project: "herdr-agentisan"}, Group: "coder", Count: 1}, id: "ha-coder-1", opens: "tab.create",
+			cut: func(f *fixture, cancel context.CancelFunc) *herdrtest.Server {
+				var created atomic.Bool
+				srv := wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+					reply := next()
+					if r.Method == "tab.create" {
+						created.Store(true)
+					}
+					return reply
+				})
+				// The row's stamp is read right before its write, after the
+				// tab is open: the context ends there.
+				f.svc.Now = func() time.Time {
+					if created.Load() {
+						cancel()
+					}
+					return time.Now()
+				}
+				return srv
+			},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, teamConfig+assay)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			srv := tc.cut(f, cancel)
+
+			_, err := f.svc.Spawn(ctx, tc.req)
+			require.Error(t, err)
+			require.Equal(t, 1, countCalls(srv, tc.opens), "the worker's pane was opened, then its open failed: %v", err)
+			assert.Nil(t, f.h.tabByLabel(tc.id), "no tab of %s is left open", tc.id)
+			assert.False(t, f.h.hasWorkspace("assay"), "nor a workspace opened for it")
+			assert.Equal(t, []string{f.boss}, f.h.paneIDs(), "only the boss's pane is left")
+			_, err = f.st.WorkerRow(t.Context(), tc.id)
+			assert.ErrorIs(t, err, store.ErrNoWorker, "and no row binds anything")
+		})
+	}
+}
+
+// TestSpawnsEndOnTheirCancel: a shutdown cancels the daemon's in-flight ops
+// (ADR-001 A23, NERD-5350 item 2). A spawn held inside the workforce lock on a
+// herdr call, and one queued behind that lock, both end at the cancel: the
+// herdr call is cut off at once, the first one's cleanup runs on its own
+// settle budget, and the queued one fails its first call. So a daemon's stop
+// waits about the settle budget, never a spawn's budget.
+func TestSpawnsEndOnTheirCancel(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig+"\n[projects.assay]\nrepo = \"REPO\"\nshort = \"as\"\n[projects.assay.groups.qa]\nworkers = 1\nslots = 2\n")
+	held, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	srv := wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+		if r.Method == "tab.rename" {
+			once.Do(func() { close(held) })
+			<-release // held past the cancel: only the client's cut-off ends the call
+		}
+		return next()
+	})
+	// After wrapHerdr's own: cleanups run last first, so the held call is
+	// released before the server closes.
+	t.Cleanup(func() { close(release) })
+	checked := make(chan struct{}, 2)
+	f.svc.Preflight = func(context.Context, string) error {
+		checked <- struct{}{}
+		return nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	first, queued := make(chan error, 1), make(chan error, 1)
+	go func() {
+		_, err := f.svc.Spawn(ctx, workforce.SpawnRequest{Selector: workforce.Selector{Project: "assay"}, Group: "qa", Count: 1})
+		first <- err
+	}()
+	<-checked
+	<-held // the first spawn holds the lock, its tab.rename unanswered
+	go func() {
+		_, err := f.svc.Spawn(ctx, workforce.SpawnRequest{Selector: workforce.Selector{Project: "herdr-agentisan"}, Group: "coder", Count: 1})
+		queued <- err
+	}()
+	select {
+	case <-checked:
+	case err := <-queued:
+		t.Fatalf("the second spawn ended before its preflight: %v", err)
+	}
+	// Past its preflight, a spawn's next herdr read is inside the lock.
+	lists := countCalls(srv, "pane.list")
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, lists, countCalls(srv, "pane.list"), "the second spawn waits on the lock: it has read nothing since its preflight")
+
+	cancel()
+	cancelled := time.Now()
+	for name, ch := range map[string]chan error{"the spawn holding the lock": first, "the spawn queued on it": queued} {
+		select {
+		case err := <-ch:
+			require.Error(t, err, name)
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s outlived the cancel", name)
+		}
+	}
+	assert.Less(t, time.Since(cancelled), 3*time.Second, "within the settle budget, not a spawn's")
+	assert.False(t, f.h.hasWorkspace("assay"), "the first spawn's workspace is closed")
+	assert.Equal(t, []string{f.boss}, f.h.paneIDs(), "and the queued spawn opened nothing")
+}
+
 // TestSpawnFailsTheRowBeforeASlowClose: a herdr that holds the cleanup's
 // pane.get past the whole settle budget still leaves the row failed, never
 // starting, where it would hold its slot for good, and the op still answers

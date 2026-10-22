@@ -162,7 +162,7 @@ func (s *Service) open(ctx context.Context, st *state, p planned) (opened, error
 		}
 		st.workspace = c.WorkspaceID
 		if err := s.Herdr.RenameTab(ctx, c.TabID, p.id); err != nil {
-			return opened{}, errors.Join(herdrFailed("label "+p.id+"'s tab", err), s.closeQuietly(ctx, c.RootPane.PaneID, c.RootPane.TerminalID))
+			return opened{}, errors.Join(herdrFailed("label "+p.id+"'s tab", err), s.closeOpened(ctx, c))
 		}
 	} else {
 		c, err = s.Herdr.CreateTab(ctx, herdr.TabCreate{WorkspaceID: st.workspace, Cwd: st.profile.Repo, Label: p.id, Env: env})
@@ -172,9 +172,19 @@ func (s *Service) open(ctx context.Context, st *state, p planned) (opened, error
 	}
 	gen, err := s.Store.BindWorker(ctx, store.Worker{LogicalID: p.id, Project: st.team.Project, Group: p.group, PaneID: c.RootPane.PaneID, TerminalID: c.RootPane.TerminalID}, s.now())
 	if err != nil {
-		return opened{}, errors.Join(fmt.Errorf("record %s: %w", p.id, err), s.closeQuietly(ctx, c.RootPane.PaneID, c.RootPane.TerminalID))
+		return opened{}, errors.Join(fmt.Errorf("record %s: %w", p.id, err), s.closeOpened(ctx, c))
 	}
 	return opened{planned: p, paneID: c.RootPane.PaneID, terminalID: c.RootPane.TerminalID, generation: gen}, nil
+}
+
+// closeOpened closes the pane open just opened, when the rest of it failed,
+// on a settle context of its own: what failed may be the op's own context
+// ending, at a shutdown's cancel or the deadline, and a close on that context
+// would fail at once, leaving a pane no row binds whose label takes the id.
+func (s *Service) closeOpened(ctx context.Context, c herdr.Created) error {
+	settle, cancel := settling(ctx)
+	defer cancel()
+	return s.closeQuietly(settle, c.RootPane.PaneID, c.RootPane.TerminalID)
 }
 
 // abandon closes the panes of workers opened before a failure, and marks

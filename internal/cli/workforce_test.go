@@ -44,11 +44,37 @@ func runOut(t *testing.T, lookup func(string) (string, bool), args ...string) (s
 	return out.String(), errOut.String(), err
 }
 
-// TestWorkforceHelpMeetsTheWrapper: the herdr-workforce skill's wrapper
-// decides a command is available from its --help alone (workforce.py
-// unsupported): exit 0, a line that is or starts with `herdr-agentisan
-// <group> <verb>`, and each long flag the skill passes on a line of its own
-// starting with "-". The same rule, applied here to every command.
+// wrapperReads is how the herdr-workforce skill's wrapper reads a command's
+// --help (workforce.py unsupported): the command is available when the help
+// exits 0 with a line, on stdout or stderr, that is or starts with
+// `herdr-agentisan <group> <verb>`; a long flag the skill passes must then be
+// on a stdout line of its own starting with "-". listed is those flag lines.
+func wrapperReads(t *testing.T, e daemonEnv, cmd string) (available bool, listed string, out string) {
+	t.Helper()
+	out, errOut, err := runOut(t, e.lookup(nil), append(strings.Fields(cmd), "--help")...)
+	usage := "herdr-agentisan " + cmd
+	found := false
+	for line := range strings.SplitSeq(out+"\n"+errOut, "\n") {
+		if s := strings.TrimSpace(line); s == usage || strings.HasPrefix(s, usage+" ") {
+			found = true
+		}
+	}
+	var flagLines []string
+	for line := range strings.SplitSeq(out, "\n") {
+		if strings.HasPrefix(strings.TrimLeft(line, " \t"), "-") {
+			flagLines = append(flagLines, line)
+		}
+	}
+	return err == nil && found, strings.Join(flagLines, "\n"), out + errOut
+}
+
+// flagOn matches flag f on a flag line, as a word of its own.
+func flagOn(f string) *regexp.Regexp {
+	return regexp.MustCompile(`(^|[^\w-])` + regexp.QuoteMeta(f) + `($|[^\w-])`)
+}
+
+// TestWorkforceHelpMeetsTheWrapper: every built workforce command reads as
+// available to the skill's wrapper, with each long flag the skill passes.
 func TestWorkforceHelpMeetsTheWrapper(t *testing.T) {
 	t.Parallel()
 	tests := map[string][]string{
@@ -61,27 +87,29 @@ func TestWorkforceHelpMeetsTheWrapper(t *testing.T) {
 	for cmd, flags := range tests {
 		t.Run(cmd, func(t *testing.T) {
 			t.Parallel()
-			out, _, err := runOut(t, e.lookup(nil), append(strings.Fields(cmd), "--help")...)
-			require.NoError(t, err)
-
-			usage := "herdr-agentisan " + cmd
-			found := false
-			var flagLines []string
-			for line := range strings.SplitSeq(out, "\n") {
-				if s := strings.TrimSpace(line); s == usage || strings.HasPrefix(s, usage+" ") {
-					found = true
-				}
-				if strings.HasPrefix(strings.TrimLeft(line, " \t"), "-") {
-					flagLines = append(flagLines, line)
-				}
-			}
-			assert.True(t, found, "a %q usage line in:\n%s", usage, out)
-			listed := strings.Join(flagLines, "\n")
+			available, listed, out := wrapperReads(t, e, cmd)
+			require.True(t, available, "%q reads as available in:\n%s", cmd, out)
 			for _, f := range flags {
-				assert.Regexp(t, regexp.MustCompile(`(^|[^\w-])`+regexp.QuoteMeta(f)+`($|[^\w-])`), listed, "%s is on a flag line", f)
+				assert.Regexp(t, flagOn(f), listed, "%s is on a flag line", f)
 			}
 		})
 	}
+}
+
+// TestUnbuiltCommandsStayUnavailable: a command or flag the skill knows but
+// this build lacks reads as unavailable to the wrapper, so the skill reports
+// it and runs nothing: `boss handoff` (ADR-001 item 6, NERD-5262) and spawn's
+// `--replaces` (item 5b, NERD-5261). Flip each as its part ships (QA #39
+// item 3).
+func TestUnbuiltCommandsStayUnavailable(t *testing.T) {
+	t.Parallel()
+	e := newDaemonEnv(t)
+	available, _, out := wrapperReads(t, e, "boss handoff")
+	assert.False(t, available, "boss handoff reads as unavailable:\n%s", out)
+
+	available, listed, out := wrapperReads(t, e, "worker spawn")
+	require.True(t, available, out)
+	assert.NotRegexp(t, flagOn("--replaces"), listed, "spawn has no --replaces yet")
 }
 
 // TestWorkforceCommandsAlwaysAnswerInJSON: stdout is exactly one JSON object

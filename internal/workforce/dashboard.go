@@ -50,7 +50,9 @@ const dashboardBudget = 5 * time.Second
 // swap that fails still leaves a dashboard the next run finds. herdr's swap
 // focuses the dashboard in the boss's tab and switches to that tab, so the
 // boss is focused again, which the tab keeps for the user's next visit, and
-// then the pane that had focus, when it was not the boss. It holds the
+// then the pane that had focus, when it was not the boss. Only a swap herdr
+// declined, naming why, moved no focus; one that failed otherwise may have
+// swapped, its reply lost, so the boss is focused after it too. It holds the
 // workforce lock, so two runs open one.
 func (s *Service) ensureDashboard(ctx context.Context, project string) DashboardOutcome {
 	d := s.Dashboard
@@ -88,9 +90,11 @@ func (s *Service) ensureDashboard(ctx context.Context, project string) Dashboard
 		errs = append(errs, herdrFailed("label the dashboard "+label, err))
 	}
 	var back []string
-	if err := s.Herdr.SwapPanes(ctx, p.PaneID, boss); err != nil {
-		errs = append(errs, herdrFailed("move the dashboard above the boss; it is below", err))
-	} else {
+	swapErr := s.Herdr.SwapPanes(ctx, p.PaneID, boss)
+	if swapErr != nil {
+		errs = append(errs, herdrFailed("move the dashboard above the boss; it is below", swapErr))
+	}
+	if !errors.Is(swapErr, herdr.ErrSwapDeclined) {
 		back = append(back, boss)
 	}
 	if focused := focusedPane(st.layout.Panes); focused != "" && !slices.Contains(back, focused) {
