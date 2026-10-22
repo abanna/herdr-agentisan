@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -174,13 +175,8 @@ func TestWorkerRoutedEmitsTheSchema(t *testing.T) {
 		"agentisan.routing.unchecked": []string{"tool_compatibility", "context_headroom", "availability", "spending_limits"},
 	}
 	with := func(kv map[string]any) map[string]any {
-		out := map[string]any{}
-		for k, v := range base {
-			out[k] = v
-		}
-		for k, v := range kv {
-			out[k] = v
-		}
+		out := maps.Clone(base)
+		maps.Copy(out, kv)
 		return out
 	}
 	decision := routing.Decision{
