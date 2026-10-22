@@ -412,8 +412,10 @@ func TestRunnerFailures(t *testing.T) {
 	t.Parallel()
 	notExec := filepath.Join(t.TempDir(), "tdaddy")
 	require.NoError(t, os.WriteFile(notExec, []byte("#!/bin/sh\n"), 0o600))
+	reason := []string{"exit status 1: the real reason"}
 	tests := map[string]struct {
 		mode string
+		env  []string // added to the stand-in's environment
 		bin  func(standIn string) string
 		want error
 		says []string
@@ -431,6 +433,15 @@ func TestRunnerFailures(t *testing.T) {
 		"CRLF line ends":           {mode: "crlf", says: []string{"exit status 1: first line"}, not: []string{"\r", "second line"}},
 		"blank lines first":        {mode: "blankfirst", says: []string{"exit status 1: the reason after a blank line"}},
 		"the reason on stdout":     {mode: "stdout", says: []string{"exit status 1: tdaddy: the reason, on stdout"}},
+		// Leading blanks never count toward the 4 KiB kept, however many
+		// there are (NERD-5343, Draft 20): 4,096 and up lost the reason.
+		"100 blank bytes first":   {mode: "blanks", env: []string{"FAKE_TDADDY_BLANKS=100"}, says: reason},
+		"4,000 blank bytes first": {mode: "blanks", env: []string{"FAKE_TDADDY_BLANKS=4000"}, says: reason},
+		"4,096 blank bytes first": {mode: "blanks", env: []string{"FAKE_TDADDY_BLANKS=4096"}, says: reason},
+		"5,000 blank bytes first": {mode: "blanks", env: []string{"FAKE_TDADDY_BLANKS=5000"}, says: reason},
+		// Output that is not blank still counts: a reason past the 4 KiB
+		// kept is not seen.
+		"the reason past the cap": {mode: "pastcap", says: []string{"exit status 1: " + strings.Repeat("0", 200)}, not: []string{"the real reason"}},
 		// x then 150 two-byte é: the cut at 200 bytes falls inside an é.
 		"a cut inside a character": {mode: "longutf8", says: []string{"exit status 1: x" + strings.Repeat("é", 99)}, not: []string{strings.Repeat("é", 100)}},
 		"no such file": {
@@ -445,6 +456,7 @@ func TestRunnerFailures(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			bin, r, _ := standIn(t, tc.mode)
+			r.Env = append(r.Env, tc.env...)
 			if tc.bin != nil {
 				bin = tc.bin(bin)
 			}
