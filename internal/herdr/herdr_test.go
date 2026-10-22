@@ -204,7 +204,7 @@ func TestCallFailureClasses(t *testing.T) {
 			},
 			want: herdr.ErrProtocol,
 		},
-		"response is not JSON":     {handler: func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Raw: []byte("not json")} }, want: herdr.ErrProtocol},
+		"response is not JSON":          {handler: func(herdrtest.Request) herdrtest.Reply { return herdrtest.Reply{Raw: []byte("not json")} }, want: herdr.ErrProtocol},
 		"neither result nor error":      {handler: answer(""), want: herdr.ErrProtocol, check: pastTheID},
 		"a null result":                 {handler: answer(`,"result":null`), want: herdr.ErrProtocol, check: pastTheID},
 		"a result that does not decode": {handler: answer(`,"result":5`), want: herdr.ErrProtocol, check: pastTheID},
