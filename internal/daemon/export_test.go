@@ -242,6 +242,15 @@ func (l LaunchModels) Refresh(ctx context.Context, c herdr.Client, panes []herdr
 	return l.m.refresh(ctx, c, paneProcesses{}, panes, startTime, now, log)
 }
 
+// RefreshHeld is Refresh with the replies pp already holds from earlier in
+// the poll, as the reconcile leaves them.
+func (l LaunchModels) RefreshHeld(ctx context.Context, c herdr.Client, pp PaneProcesses, panes []herdr.PaneInfo, startTime func(int) (uint64, error), now time.Time, log zerolog.Logger) (map[string]string, error) {
+	return l.m.refresh(ctx, c, pp.pp, panes, startTime, now, log)
+}
+
+// SetClock measures the budget by clock instead of time.Now.
+func (l LaunchModels) SetClock(clock func() time.Time) { l.m.clock = clock }
+
 // Started is when each pane's agent process started, on the wall clock
 // through wall, as the last Refresh left the entries (A47).
 func (l LaunchModels) Started(wall func(uint64) (time.Time, error)) map[string]time.Time {

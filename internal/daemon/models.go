@@ -32,6 +32,8 @@ type launchModels struct {
 	// overran is set while the budget runs out before every pane is asked,
 	// so that is logged once.
 	overran bool
+	// clock is what the budget is measured by: time.Now, but for tests.
+	clock func() time.Time
 }
 
 // launchModel is what one ask found in one pane.
@@ -51,7 +53,7 @@ type launchModel struct {
 }
 
 func newLaunchModels() *launchModels {
-	return &launchModels{byPane: map[string]launchModel{}, failed: map[string]bool{}}
+	return &launchModels{byPane: map[string]launchModel{}, failed: map[string]bool{}, clock: time.Now}
 }
 
 // agentPanes are the panes of m's teams, workers and bosses, where herdr
@@ -81,7 +83,8 @@ func agentPanes(m team.Model, panes []herdr.PaneInfo) []herdr.PaneInfo {
 // each pane's model, for the panes that have one. A pane whose entry still
 // holds is not asked. Any other pane is asked with pane.process_info through
 // pp, the poll's replies, so a pane whose shell the reconcile read this poll
-// is not asked again; the asks are all within ModelBudget, and a pane the
+// is not asked again and gives its model from that reply, even once the
+// budget is spent; the asks are all within ModelBudget, and a pane the
 // budget leaves out has no model until a later poll. A miss is asked again
 // ModelRetry after it was asked.
 //
@@ -94,12 +97,12 @@ func agentPanes(m team.Model, panes []herdr.PaneInfo) []herdr.PaneInfo {
 // startTime reads a process's start time; nil, off Linux and darwin, keeps
 // an entry until its pane's terminal or agent changes.
 func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProcesses, panes []herdr.PaneInfo, startTime func(pid int) (uint64, error), now time.Time, log zerolog.Logger) (map[string]string, error) {
-	deadline := time.Now().Add(ModelBudget)
-	ask, cancel := context.WithDeadline(ctx, deadline)
+	deadline := lm.clock().Add(ModelBudget)
+	ask, cancel := context.WithTimeout(ctx, ModelBudget)
 	defer cancel()
 	// spent is checked by the clock too: a read cut off by the deadline can
 	// return before the context records that it has passed.
-	spent := func() bool { return ask.Err() != nil || !time.Now().Before(deadline) }
+	spent := func() bool { return ask.Err() != nil || !lm.clock().Before(deadline) }
 	out := map[string]string{}
 	listed := make(map[string]bool, len(panes))
 	left := false
@@ -112,7 +115,10 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 			continue
 		}
 		delete(lm.byPane, p.PaneID)
-		if spent() {
+		// A reply the poll already holds costs no call, so the budget does
+		// not leave it out, and its failure is not the budget's.
+		_, held := pp[p.PaneID]
+		if !held && spent() {
 			left = true
 			continue
 		}
@@ -121,7 +127,8 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 			return nil, err
 		}
 		if err != nil {
-			if spent() {
+			// A stopping poll logs nothing, a held reply's failure included.
+			if ctx.Err() != nil || !held && spent() {
 				left = true
 				continue
 			}
