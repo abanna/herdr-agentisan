@@ -505,15 +505,25 @@ func TestLaunchModelsHeldFailureAfterTheWallBudget(t *testing.T) {
 	ph.refuse("w1:p2", "server_error")
 	ph.set("w1:p3", agentProc(301, "claude", "--model", "haiku"))
 	pt := &procs{start: map[int]uint64{101: 1, 301: 1}}
+	// w1:p1's read, cut off by the budget's deadline, can return before the
+	// ask's context records its end; w1:p3's start time, read between w1:p1
+	// and w1:p2 and taking 300 ms, lets it record that, so w1:p2's refusal is
+	// judged once the ask has ended, as this test means.
+	startTime := func(pid int) (uint64, error) {
+		if pid == 301 {
+			time.Sleep(300 * time.Millisecond)
+		}
+		return pt.startTime(pid)
+	}
 	c := herdr.Client{SocketPath: ph.srv.Path}
 	pp := daemon.NewPaneProcesses()
 	for _, pane := range []string{"w1:p2", "w1:p3"} {
 		_, _ = pp.Ask(t.Context(), c, pane)
 	}
 	var logs lockedLog
-	panes := []herdr.PaneInfo{agentPane("w1:p1", "t1", "claude"), agentPane("w1:p2", "t2", "claude"), agentPane("w1:p3", "t3", "claude")}
+	panes := []herdr.PaneInfo{agentPane("w1:p1", "t1", "claude"), agentPane("w1:p3", "t3", "claude"), agentPane("w1:p2", "t2", "claude")}
 
-	got, err := daemon.NewLaunchModels().RefreshHeld(t.Context(), c, pp, panes, pt.startTime, t0, zerolog.New(&logs))
+	got, err := daemon.NewLaunchModels().RefreshHeld(t.Context(), c, pp, panes, startTime, t0, zerolog.New(&logs))
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"w1:p3": "haiku"}, got, "the held success gives its model past the wall budget")
 	assert.Equal(t, 1, strings.Count(logs.String(), "read a pane's processes"), "the held refusal is a failed ask")
