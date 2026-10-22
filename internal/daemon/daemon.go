@@ -97,6 +97,11 @@ type Hooks struct {
 	// report.SystemStat (/proc on Linux, sysctl on darwin). With none, a
 	// holder is checked by pid alone.
 	StartTime func(pid int) (uint64, error)
+	// StartedAt puts a start StartTime returned on the wall clock, by
+	// default through report.SystemStartedAt (/proc/stat's boot time on
+	// Linux; darwin's start already is one). With none, the boss shows no
+	// runtime (A47).
+	StartedAt func(start uint64) (time.Time, error)
 }
 
 // Spawned is the daemon process a Spawn hook started.
@@ -167,6 +172,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.Hooks.StartTime == nil {
 		o.Hooks.StartTime = startTimeFrom(report.SystemStat())
+	}
+	if o.Hooks.StartedAt == nil {
+		o.Hooks.StartedAt = report.SystemStartedAt()
 	}
 	if o.closeStore == nil {
 		o.closeStore = (*store.Store).Close

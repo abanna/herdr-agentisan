@@ -37,10 +37,15 @@ type launchModels struct {
 // launchModel is what one ask found in one pane.
 type launchModel struct {
 	terminal, agent string
-	// pid and start are the agent's process; pid is 0 for a miss.
+	// pid and start are the agent's process; pid is 0 for a miss, and timed
+	// is set once start was read.
 	pid   uint32
 	start uint64
-	model string
+	timed bool
+	// startedAt is start on the wall clock, once a poll has put it there
+	// (A47).
+	startedAt time.Time
+	model     string
 	// asked is when the pane was asked.
 	asked time.Time
 }
@@ -164,10 +169,38 @@ func read(info herdr.ProcessInfo, p herdr.PaneInfo, startTime func(pid int) (uin
 		if err != nil {
 			return e
 		}
-		e.start = start
+		e.start, e.timed = start, true
 	}
 	e.pid, e.model = pid, model
 	return e
+}
+
+// started is when each pane's agent process started, on the wall clock
+// through wall, for every pane whose agent's start was read (A47): the boss's
+// runtime counts from its pane's. An entry is put on the clock once and keeps
+// that time while it holds, so a start never moves from poll to poll; one
+// wall cannot place is tried again at the next poll. With no wall, or no
+// start time read, there is none.
+func (lm *launchModels) started(wall func(start uint64) (time.Time, error)) map[string]time.Time {
+	out := map[string]time.Time{}
+	if wall == nil {
+		return out
+	}
+	for id, e := range lm.byPane {
+		if !e.timed {
+			continue
+		}
+		if e.startedAt.IsZero() {
+			at, err := wall(e.start)
+			if err != nil || at.IsZero() {
+				continue
+			}
+			e.startedAt = at
+			lm.byPane[id] = e
+		}
+		out[id] = e.startedAt
+	}
+	return out
 }
 
 // holds reports whether e is still pane p's: the same terminal and agent,

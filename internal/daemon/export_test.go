@@ -47,6 +47,19 @@ func StillServedOver(ctx context.Context, socket string, ident Identity, protoco
 	return o.stillServed(ctx, ident, protocol)
 }
 
+// StillServedLogging is StillServedOver logging to log, where a ping that
+// failed and still leaves the server up is a debug line. dialed, when set,
+// runs once the ping is connected and before it is sent.
+func StillServedLogging(ctx context.Context, socket string, ident Identity, protocol uint32, log zerolog.Logger, dialed func()) error {
+	o := Options{HerdrSocket: socket, Logger: log}.withDefaults().forServer(ident)
+	if c, ok := o.Herdr.(herdr.Client); ok && dialed != nil {
+		check := c.Dialed
+		c.Dialed = func() error { dialed(); return check() }
+		o.Herdr = c
+	}
+	return o.stillServed(ctx, ident, protocol)
+}
+
 // FocusSnapshotOver takes one focus snapshot into st as the focus collector
 // of a daemon on socket, bound to the server ident names, takes it: through
 // the daemon's own client.
@@ -137,6 +150,11 @@ func DefaultStartTime() func(pid int) (uint64, error) {
 	return Options{}.withDefaults().Hooks.StartTime
 }
 
+// DefaultStartedAt is the StartedAt hook a daemon has when none is injected.
+func DefaultStartedAt() func(start uint64) (time.Time, error) {
+	return Options{}.withDefaults().Hooks.StartedAt
+}
+
 // ServedBudget is the budget the daemon's own op map gives op with args,
 // which the server enforces; OpBudget is the client's copy.
 func ServedBudget(op string, args json.RawMessage) time.Duration {
@@ -221,6 +239,12 @@ func NewLaunchModels() LaunchModels { return LaunchModels{m: newLaunchModels()} 
 // process_info reply held from earlier in the poll.
 func (l LaunchModels) Refresh(ctx context.Context, c herdr.Client, panes []herdr.PaneInfo, startTime func(int) (uint64, error), now time.Time, log zerolog.Logger) (map[string]string, error) {
 	return l.m.refresh(ctx, c, paneProcesses{}, panes, startTime, now, log)
+}
+
+// Started is when each pane's agent process started, on the wall clock
+// through wall, as the last Refresh left the entries (A47).
+func (l LaunchModels) Started(wall func(uint64) (time.Time, error)) map[string]time.Time {
+	return l.m.started(wall)
 }
 
 // PaneProcesses are one poll's process_info replies.
