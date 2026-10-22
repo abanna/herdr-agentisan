@@ -53,6 +53,9 @@ type teamHerdr struct {
 	onCall func(method string)
 	// prompt, when set, answers agent.prompt (messages_test.go).
 	prompt herdrtest.Handler
+	// toast, when set, answers notification.show, which is otherwise
+	// shown (ctxlevels_test.go).
+	toast herdrtest.Handler
 }
 
 // newTeamHerdr serves liveSpaces.
@@ -156,6 +159,14 @@ func (th *teamHerdr) serveTeam(normal herdrtest.Handler) herdrtest.Handler {
 			if prompt != nil {
 				return prompt(r)
 			}
+		case "notification.show":
+			th.mu.Lock()
+			toast := th.toast
+			th.mu.Unlock()
+			if toast != nil {
+				return toast(r)
+			}
+			return herdrtest.Reply{Result: map[string]any{"type": "notification_show", "shown": true, "reason": ""}}
 		}
 		return normal(r)
 	}

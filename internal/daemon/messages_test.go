@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -45,8 +46,9 @@ type typed struct{ Target, Pane, Text string }
 
 // prompter answers agent.prompt as herdr does (0.9.5 validate_agent_prompt):
 // it resolves the target to the pane agent.list names it on, refuses a name
-// no agent has (agent_not_found) and an empty text, and records what it typed
-// into which pane, so a test can tell a prompt to the right name in the wrong
+// no agent has (agent_not_found), a name two or more agents share
+// (agent_target_ambiguous) and an empty text, and records what it typed into
+// which pane, so a test can tell a prompt to the right name in the wrong
 // pane. refuse answers a target before anything is typed; after answers it
 // once the text is typed, and a hold makes that answer wait.
 type prompter struct {
@@ -82,7 +84,10 @@ func (p *prompter) handle(r herdrtest.Request) herdrtest.Reply {
 	if params.Text == "" {
 		return errReply("empty_agent_prompt", "agent prompt must not be empty")
 	}
-	pane := p.th.agentPane(params.Target)
+	pane, ambiguous := p.th.agentPane(params.Target)
+	if ambiguous {
+		return errReply("agent_target_ambiguous", "agent target "+params.Target+" is ambiguous")
+	}
 	p.mu.Lock()
 	code := p.refuse[params.Target]
 	after, answered := p.after[params.Target]
@@ -169,23 +174,29 @@ func (p *prompter) next(t *testing.T) typed {
 }
 
 // agentPane is the pane herdr resolves target to (0.9.5
-// resolve_agent_target): the pane of that id when an agent runs there, else
-// the pane agent.list names target on; "" for none.
-func (th *teamHerdr) agentPane(name string) string {
+// resolve_agent_target, src/app/terminal_targets.rs:74-104): the pane of
+// that id when an agent runs there, else the one pane agent.list names
+// target on; "" for none. A name two or more agents share is ambiguous,
+// and herdr types it into neither.
+func (th *teamHerdr) agentPane(name string) (pane string, ambiguous bool) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	for _, p := range th.panes {
 		if agent, _ := p["agent"].(string); p["pane_id"] == name && agent != "" {
-			return name
+			return name, false
 		}
 	}
+	matches := 0
 	for _, a := range th.agents {
 		if a["name"] == name {
-			pane, _ := a["pane_id"].(string)
-			return pane
+			matches++
+			pane, _ = a["pane_id"].(string)
 		}
 	}
-	return ""
+	if matches > 1 {
+		return "", true
+	}
+	return pane, false
 }
 
 func (th *teamHerdr) setAgents(agents ...map[string]any) {
@@ -483,6 +494,70 @@ func warnings(logs, msg string) int {
 		}
 	}
 	return n
+}
+
+// TestDispatcherWaitsOutAnAmbiguousWorkerName: a second agent takes the
+// worker's name on another pane. The poll's model still shows the name on
+// the bound pane, so the dispatcher prompts, and herdr refuses the name as
+// ambiguous before typing anything. The message stays queued, tried again
+// each pass and warned of once, and the boss is still served. Once the
+// duplicate is renamed, the message lands once, in the bound pane (QA #72).
+func TestDispatcherWaitsOutAnAmbiguousWorkerName(t *testing.T) {
+	t.Parallel()
+	th, p, dir := haTeam(t)
+	th.mu.Lock()
+	th.tabs = append(th.tabs, map[string]any{"tab_id": "w14:t3", "workspace_id": "w14", "label": "intruder"})
+	th.panes = append(th.panes, map[string]any{"pane_id": "w14:p3", "terminal_id": "term_w14:p3", "workspace_id": "w14", "tab_id": "w14:t3", "agent": "claude", "agent_status": "idle"})
+	th.mu.Unlock()
+	th.setAgents(named("w14:p1", "ha-boss"), named("w14:p2", "ha-coder-1"), named("w14:p3", "ha-coder-1"))
+	st := stateStore(t, dir, th)
+	m := sent(t, st, coder, haBoss, "which one?")
+	toBoss := sent(t, st, haBoss, coder, "the boss is served anyway")
+	var logs lockedLog
+	o := teamOpts(t, dir, th, workforceConfig(t))
+	o.Logger = zerolog.New(&logs)
+	serving(t, o, th.fakeHerdr)
+
+	require.Eventually(t, func() bool {
+		got := stateOf(t, st, m.ID)
+		return got.Attempts >= 3 && got.State == store.MessageQueued
+	}, ready, 5*time.Millisecond, "not retried, or not left queued")
+	eventuallyState(t, st, toBoss.ID, store.MessageDelivered)
+	assert.Empty(t, p.to("w14:p2"), "nothing typed into the bound pane")
+	assert.Empty(t, p.to("w14:p3"), "nothing typed into the intruder")
+	assert.Contains(t, stateOf(t, st, m.ID).Reason, "agent_target_ambiguous")
+	assert.Equal(t, 1, warnings(logs.String(), "herdr refused the prompt before typing it"), "warned once")
+
+	th.setAgents(named("w14:p1", "ha-boss"), named("w14:p2", "ha-coder-1"), named("w14:p3", "intruder"))
+	eventuallyState(t, st, m.ID, store.MessageDelivered)
+	polled(t, th.srv, 2)
+	assert.Equal(t, []typed{{Target: "ha-coder-1", Pane: "w14:p2", Text: "[msg " + m.ID + " from ha-boss] which one?"}}, p.to("w14:p2"), "once, in the bound pane")
+	assert.Empty(t, p.to("w14:p3"))
+}
+
+// TestDispatcherWaitsOutAnAmbiguousBossName: another agent named ha-boss
+// runs outside the boss place. The boss's own pane still proves the name,
+// herdr refuses it as ambiguous, and the message waits until the duplicate
+// is gone (QA #72).
+func TestDispatcherWaitsOutAnAmbiguousBossName(t *testing.T) {
+	t.Parallel()
+	th, p, dir := haTeam(t)
+	th.setAgents(named("w14:p1", "ha-boss"), named("w14:p2", "ha-coder-1"), named("wJ:p1", "ha-boss"))
+	st := stateStore(t, dir, th)
+	m := sent(t, st, haBoss, coder, "boss twice")
+	serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
+
+	require.Eventually(t, func() bool {
+		got := stateOf(t, st, m.ID)
+		return got.Attempts >= 2 && got.State == store.MessageQueued
+	}, ready, 5*time.Millisecond, "not retried, or not left queued")
+	assert.Empty(t, p.all(), "nothing typed into either ha-boss")
+	assert.Contains(t, stateOf(t, st, m.ID).Reason, "agent_target_ambiguous")
+
+	th.setAgents(named("w14:p1", "ha-boss"), named("w14:p2", "ha-coder-1"))
+	eventuallyState(t, st, m.ID, store.MessageDelivered)
+	polled(t, th.srv, 2)
+	assert.Equal(t, []typed{{Target: "ha-boss", Pane: "w14:p1", Text: "[msg " + m.ID + " from ha-coder-1] boss twice"}}, p.all(), "once, in the boss's pane")
 }
 
 // TestDispatcherHoldsAnUnprovenTarget is B1 and B2: a message is typed only
@@ -887,6 +962,59 @@ func TestDispatcherStopFinishesThePromptInFlight(t *testing.T) {
 	release()
 	require.NoError(t, r.wait(t, ready))
 	assert.Equal(t, store.MessageDelivered, stateOf(t, st, m.ID).State)
+}
+
+// TestDispatcherStopsBeforeTheNextClaim: two messages wait for one worker,
+// and the daemon stops while the first prompt is in flight. That prompt
+// finishes and is recorded, and the second is never claimed: serve checks
+// the stop before each claim, and that check is the only guard between
+// messages, since the claim, deliver and drop all go on past a stop (QA
+// #84, S2).
+func TestDispatcherStopsBeforeTheNextClaim(t *testing.T) {
+	t.Parallel()
+	th, p, dir := haTeam(t)
+	st := stateStore(t, dir, th)
+	release := p.hold(t, "ha-coder-1")
+	first := sent(t, st, coder, haBoss, "first")
+	second := sent(t, st, coder, haBoss, "second")
+	r := serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
+	p.next(t)
+
+	r.cancel()
+	time.Sleep(100 * time.Millisecond)
+	release()
+	require.NoError(t, r.wait(t, ready))
+	assert.Equal(t, store.MessageDelivered, stateOf(t, st, first.ID).State)
+	got := stateOf(t, st, second.ID)
+	assert.Equal(t, store.MessageQueued, got.State, "not claimed after the stop")
+	assert.Equal(t, 0, got.Attempts)
+	assert.Len(t, p.all(), 1, "one prompt typed: the one in flight")
+}
+
+// TestClaimIgnoresTheStop: a stop that lands while serve claims a message
+// does not cut the claim short (QA #72), as it cuts short neither deliver's
+// nor drop's write, so the claimed message goes on to its prompt and is
+// never left dispatching behind an error, to be failed at the next start
+// though never typed. A context already done stands in for the stop: the
+// claim still takes the message. database/sql returns on a done context
+// before the statement runs, so this pins that the claim ignores the stop,
+// not the race inside the statement itself.
+func TestClaimIgnoresTheStop(t *testing.T) {
+	t.Parallel()
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	m := sent(t, st, haBoss, store.Address{Kind: store.KindPane, ID: "term_w9:p9"}, "claimed through a stop")
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	got, ok, err := daemon.ClaimOver(ctx, st, haBoss)
+	require.NoError(t, err)
+	require.True(t, ok, "the stop did not cut the claim short")
+	assert.Equal(t, m.ID, got.ID)
+	after := stateOf(t, st, m.ID)
+	assert.Equal(t, store.MessageDispatching, after.State)
+	assert.Equal(t, 1, after.Attempts)
 }
 
 // TestDispatcherEmitsMessageEvents is A30's events: a delivered message, a
