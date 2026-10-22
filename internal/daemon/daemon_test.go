@@ -1721,9 +1721,10 @@ func TestStillServedACrashedServer(t *testing.T) {
 		require.NoError(t, ln.Close())
 		return sock, ident, held
 	}
-	// letGo waits until a connection waits on held, unaccepted, then closes
-	// held, as the child's exec does, which resets that connection.
-	letGo := func(t *testing.T, held *os.File) {
+	// letGo waits until a connection waits on held, unaccepted, then after
+	// pause closes held, as the child's exec does, which resets that
+	// connection.
+	letGo := func(t *testing.T, held *os.File, pause time.Duration) {
 		t.Helper()
 		fds := []unix.PollFd{{Fd: int32(held.Fd()), Events: unix.POLLIN}} //nolint:gosec // a descriptor fits an int32
 		for {
@@ -1735,6 +1736,7 @@ func TestStillServedACrashedServer(t *testing.T) {
 			require.Equal(t, 1, n, "a connection reaches the held listener")
 			break
 		}
+		time.Sleep(pause)
 		require.NoError(t, held.Close())
 	}
 	answer := func(t *testing.T, done <-chan error) error {
@@ -1756,18 +1758,62 @@ func TestStillServedACrashedServer(t *testing.T) {
 			_, err := herdr.Client{SocketPath: sock}.Ping(t.Context())
 			done <- err
 		}()
-		letGo(t, held)
+		letGo(t, held, 0)
 		err := answer(t, done)
 		assert.True(t, errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE), "reset, not refused: %v", err)
 	})
+	// The ping is reset by EPIPE when the listener goes before the ping is
+	// sent, and by ECONNRESET once it is. Each is the server up, so the
+	// case runs until both have been seen, up to 200 times (QA #81, S2).
+	// Even tries let the listener go while the ping is connected but not
+	// yet sent: EPIPE. Odd tries let it go 20 ms after the connection
+	// queues, the ping sent by then unless the scheduler held it back that
+	// long: ECONNRESET. The debug line the check logs for the failed ping
+	// says which; it carries the error as text.
 	t.Run("a reset ping is up, then the refusal is gone", func(t *testing.T) {
 		t.Parallel()
-		sock, ident, held := heldCrash(t)
-		done := make(chan error, 1)
-		go func() { done <- daemon.StillServedOver(t.Context(), sock, ident, 22) }()
-		letGo(t, held)
-		require.NoError(t, answer(t, done), "a reset ping is not the server gone")
-		require.ErrorIs(t, daemon.StillServedOver(t.Context(), sock, ident, 22), daemon.ErrHerdrGone, "now nothing holds the listener: refused, gone")
+		seen := map[syscall.Errno]int{}
+		for try := 0; try < 200 && (seen[syscall.ECONNRESET] == 0 || seen[syscall.EPIPE] == 0); try++ {
+			sock, ident, held := heldCrash(t)
+			var logged strings.Builder
+			early := try%2 == 0
+			var dialed func()
+			var first sync.Once
+			connected, gone := make(chan struct{}), make(chan struct{})
+			if early {
+				dialed = func() { first.Do(func() { close(connected); <-gone }) }
+			}
+			done := make(chan error, 1)
+			go func() {
+				done <- daemon.StillServedLogging(t.Context(), sock, ident, 22, zerolog.New(&logged).Level(zerolog.DebugLevel), dialed)
+			}()
+			if early {
+				select {
+				case <-connected:
+				case <-time.After(ready):
+					t.Fatal("the ping never connected")
+				}
+				err := held.Close()
+				close(gone)
+				require.NoError(t, err)
+			} else {
+				letGo(t, held, 20*time.Millisecond)
+			}
+			require.NoError(t, answer(t, done), "a reset ping is not the server gone")
+			var line struct{ Error string }
+			require.NoError(t, json.Unmarshal([]byte(logged.String()), &line), "the failed ping's one line: %q", logged.String())
+			reset := false
+			for _, e := range []syscall.Errno{syscall.ECONNRESET, syscall.EPIPE} {
+				if strings.Contains(line.Error, e.Error()) {
+					seen[e]++
+					reset = true
+				}
+			}
+			require.True(t, reset, "a held listener resets the ping, not %q", line.Error)
+			require.ErrorIs(t, daemon.StillServedOver(t.Context(), sock, ident, 22), daemon.ErrHerdrGone, "now nothing holds the listener: refused, gone")
+		}
+		assert.Positive(t, seen[syscall.ECONNRESET], "ECONNRESET is up: %v", seen)
+		assert.Positive(t, seen[syscall.EPIPE], "EPIPE is up: %v", seen)
 	})
 }
 

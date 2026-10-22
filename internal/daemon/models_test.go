@@ -369,6 +369,12 @@ func TestLaunchModelsStarted(t *testing.T) {
 		"w1:p3 placed at the next poll")
 	assert.Equal(t, map[uint64]int{100: 1, 200: 1, 300: 2}, calls, "a start once placed is not placed again")
 
+	// The same pid, a later process: the same model, so only the start
+	// differs (QA #81, S1).
+	pt.set(101, 9000)
+	refresh()
+	assert.Equal(t, at(9000), lm.Started(wall)["w1:p1"], "a reused pid is a new process: its own start")
+
 	exit(pt, 101)
 	pt.set(102, 150)
 	ph.set("w1:p1", agentProc(102, "claude"))

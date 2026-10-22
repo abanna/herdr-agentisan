@@ -126,7 +126,9 @@ func TestSystemStartedAtCoversLinuxAndDarwin(t *testing.T) {
 		got, err := at(s.Start)
 		require.NoError(t, err)
 		now := time.Now()
-		// btime is whole seconds, so the start can read up to 1 s late.
+		// btime is whole seconds, cut down, so the start reads up to 1 s
+		// early, never late; the second's slack is for a clock step
+		// between the two reads.
 		assert.False(t, got.After(now.Add(time.Second)), "started %v, after now %v", got, now)
 		assert.WithinDuration(t, now, got, time.Hour, "this test binary started moments ago")
 	default:

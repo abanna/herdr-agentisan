@@ -46,6 +46,19 @@ func StillServedOver(ctx context.Context, socket string, ident Identity, protoco
 	return o.stillServed(ctx, ident, protocol)
 }
 
+// StillServedLogging is StillServedOver logging to log, where a ping that
+// failed and still leaves the server up is a debug line. dialed, when set,
+// runs once the ping is connected and before it is sent.
+func StillServedLogging(ctx context.Context, socket string, ident Identity, protocol uint32, log zerolog.Logger, dialed func()) error {
+	o := Options{HerdrSocket: socket, Logger: log}.withDefaults().forServer(ident)
+	if c, ok := o.Herdr.(herdr.Client); ok && dialed != nil {
+		check := c.Dialed
+		c.Dialed = func() error { dialed(); return check() }
+		o.Herdr = c
+	}
+	return o.stillServed(ctx, ident, protocol)
+}
+
 // FocusSnapshotOver takes one focus snapshot into st as the focus collector
 // of a daemon on socket, bound to the server ident names, takes it: through
 // the daemon's own client.
