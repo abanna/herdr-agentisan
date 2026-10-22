@@ -439,8 +439,9 @@ func (s *Service) start(ctx context.Context, w opened, keys *keySender) error {
 }
 
 // waitReady polls agent.get until the agent is ready or fails, as herdr's CLI
-// does (src/cli/agent.rs:562-638 at v0.9.3): an error answer or an unreachable
-// herdr is polled again until ctx ends, and any other failure ends the wait.
+// does (src/cli/agent.rs:562-638 at v0.9.3): an error answer, an unreachable
+// herdr or a call that ran out of time is polled again until ctx ends, and any
+// other failure ends the wait.
 func (s *Service) waitReady(ctx context.Context, w opened) error {
 	for {
 		a, err := s.Herdr.GetAgent(ctx, w.id)
@@ -450,7 +451,7 @@ func (s *Service) waitReady(ctx context.Context, w opened) error {
 			if done || err != nil {
 				return err
 			}
-		case !errors.Is(err, herdr.ErrAPI) && !errors.Is(err, herdr.ErrUnavailable) && ctx.Err() == nil:
+		case !errors.Is(err, herdr.ErrAPI) && !errors.Is(err, herdr.ErrUnavailable) && !errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil:
 			return herdrFailed("ask herdr about "+w.id, err)
 		}
 		if err := sleep(ctx, orDefault(s.ReadyPoll, DefaultReadyPoll)); err != nil {

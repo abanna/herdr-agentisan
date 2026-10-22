@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1007,6 +1008,26 @@ func TestSpawnPollsAFailedAgentGet(t *testing.T) {
 			assert.GreaterOrEqual(t, countCalls(srv, "agent.get"), 4)
 		})
 	}
+}
+
+// TestSpawnPollsAnAgentGetThatTimesOut: an agent.get the client's own call
+// timeout ends is polled again, as an unreachable herdr is (QA #78, F1).
+func TestSpawnPollsAnAgentGetThatTimesOut(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	var held atomic.Bool
+	srv := wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+		if r.Method == "agent.get" && held.CompareAndSwap(false, true) {
+			time.Sleep(2 * time.Second)
+		}
+		return next()
+	})
+	f.svc.Herdr.Timeout = 500 * time.Millisecond
+
+	_, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1})
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusActive, f.row(t, "ha-coder-1").Status)
+	assert.GreaterOrEqual(t, countCalls(srv, "agent.get"), 2)
 }
 
 // TestSpawnStartTimeoutFollowsTheDeadline: agent.start's timeout is the time
