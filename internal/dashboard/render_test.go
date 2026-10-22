@@ -1210,7 +1210,13 @@ func cellsOf(l string, w int) []cell {
 // cell outside the box, in its own style, so the rest of the line, a
 // selected row's reverse video included, stays as it was, in the overview
 // and in a group's view. A zero-width character goes with the cell before
-// it, so one the box covers is not drawn beside it.
+// it, so one the box covers is not drawn beside it, and one beside the box
+// is, also where it starts the item's segment: every item starts with one,
+// and in a group's view the box's left edge falls where an item starts. An
+// emoji is cut by its cluster's width, as the rest of the renderer measures
+// it: a VS16 emoji, U+2764 U+FE0F, is two cells though its runes add up to
+// one, and a ZWJ emoji, three wide characters joined by U+200D, is two
+// though its runes add up to six.
 func TestHelpOverWideCharacters(t *testing.T) {
 	t.Parallel()
 
@@ -1218,7 +1224,7 @@ func TestHelpOverWideCharacters(t *testing.T) {
 	for i, name := range []string{"漢字漢字漢字漢字", "a漢字漢字漢字漢字", "ab漢字漢字漢字漢字"} {
 		agents = append(agents, snapshot.Agent{
 			Name: name, PaneID: fmt.Sprintf("w1:p%d", i), Status: snapshot.StatusWorking,
-			Item: strings.Repeat("項目\u200b", 20), Stage: strings.Repeat("レ\u200bビュー中です", 10),
+			Item: "\u200b" + strings.Repeat("❤\ufe0f\u200b👨\u200d👩\u200d👧項目\u200b", 20), Stage: strings.Repeat("レ\u200bビュー中です", 10),
 		})
 	}
 	snap := &snapshot.Snapshot{V: 1, At: at, Team: "t", Groups: []snapshot.Group{{Name: "g", Agents: agents}}}
@@ -1226,6 +1232,15 @@ func TestHelpOverWideCharacters(t *testing.T) {
 		t.Run("view "+view, func(t *testing.T) {
 			t.Parallel()
 			edges := map[string]int{}
+			// emoji counts a cluster the box cuts by the emoji it is.
+			emoji := func(c cell) {
+				if strings.Contains(c.text, "\ufe0f") {
+					edges["vs16"]++
+				}
+				if strings.Contains(c.text, "\u200d") {
+					edges["zwj"]++
+				}
+			}
 			for w := 50; w < 66; w++ {
 				for a := range agents {
 					f := dashboard.Frame{Snapshot: snap, Now: at, Selection: dashboard.Selection{Agent: a}, Group: view}
@@ -1252,10 +1267,12 @@ func TestHelpOverWideCharacters(t *testing.T) {
 						// A wide character's second cell is blank, but for the
 						// zero-width ones drawn after it.
 						if ansi.StringWidth(want[x0].text) == 0 {
+							emoji(want[x0-1])
 							want[x0-1].text = " "
 							edges["left"]++
 						}
 						if x1 < w && ansi.StringWidth(want[x1].text) == 0 {
+							emoji(want[x1-1])
 							want[x1].text = " " + want[x1].text
 							edges["right"]++
 						}
@@ -1272,7 +1289,79 @@ func TestHelpOverWideCharacters(t *testing.T) {
 			assert.Positive(t, edges["left"], "the sweep cuts a wide character at the box's left edge")
 			assert.Positive(t, edges["right"], "the sweep cuts a wide character at the box's right edge")
 			assert.Positive(t, edges["zero-width"], "the sweep covers a zero-width character with the box's right edge")
+			assert.Positive(t, edges["vs16"], "the sweep cuts a VS16 emoji at an edge of the box")
+			assert.Positive(t, edges["zwj"], "the sweep cuts a ZWJ emoji at an edge of the box")
 		})
+	}
+}
+
+// TestPlaceKeepsAZeroWidthClusterWithItsCell: place draws a box over a
+// line and keeps a zero-width cluster with the cell before it, wherever the
+// line's segments break: one after a cell the box covers is not drawn, and
+// one after a cell beside the box is, once. The box is "XY", over [x, x+2).
+func TestPlaceKeepsAZeroWidthClusterWithItsCell(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		base []string
+		x    int
+		want string
+	}{
+		"inside a segment, after the cell left of the box":  {[]string{"ab\u200bcd"}, 2, "ab\u200bXY"},
+		"starting the segment at the box's left edge":       {[]string{"ab", "\u200bcd"}, 2, "ab\u200bXY"},
+		"a segment of its own at the box's left edge":       {[]string{"ab", "\u200b", "cd"}, 2, "ab\u200bXY"},
+		"after an empty segment at the box's left edge":     {[]string{"ab", "", "\u200bcd"}, 2, "ab\u200bXY"},
+		"ending the segment at the box's left edge":         {[]string{"ab\u200b", "cd"}, 2, "ab\u200bXY"},
+		"inside a segment, after the box's last cell":       {[]string{"abcd\u0301ef"}, 2, "abXYef"},
+		"starting the segment at the box's right edge":      {[]string{"abcd", "\u0301ef"}, 2, "abXYef"},
+		"a segment of its own at the box's right edge":      {[]string{"abcd", "\u0301", "ef"}, 2, "abXYef"},
+		"ending the segment at the box's right edge":        {[]string{"abcd\u0301", "ef"}, 2, "abXYef"},
+		"after the cell right of the box, starting its own": {[]string{"abcde", "\u0301f"}, 2, "abXYe\u0301f"},
+		"at the line's start, the box there":                {[]string{"\u200b", "ab"}, 0, "\u200bXY"},
+		"at the line's start, the box past it":              {[]string{"\u200b", "abcd"}, 1, "\u200baXYd"},
+		"a wide character cut at each edge":                 {[]string{"a漢", "字b"}, 2, "a XY b"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, dashboard.PlaceText(tc.base, tc.x, "XY"))
+		})
+	}
+}
+
+// TestPlaceCutsAsTheUnsplitText: where a line's segments break changes
+// nothing place draws. Every split of a text at its grapheme clusters' edges
+// draws, with the box at every column, what the text as one segment draws:
+// its zero-width clusters (a ZWSP, a lone combining mark and a BOM) at
+// either edge of the box, and its VS16 and ZWJ emoji cut by it.
+func TestPlaceCutsAsTheUnsplitText(t *testing.T) {
+	t.Parallel()
+
+	const text = "a\u200b\u0301漢\u200b❤\ufe0fb👨\u200d👩\u200d👧\ufeffc"
+	var clusters []string
+	zeroWidth := 0
+	for rest := text; rest != ""; {
+		c, w := ansi.FirstGraphemeCluster(rest, ansi.GraphemeWidth)
+		clusters = append(clusters, c)
+		if w == 0 {
+			zeroWidth++
+		}
+		rest = rest[len(c):]
+	}
+	require.Len(t, clusters, 10, "%q", clusters)
+	require.Equal(t, 4, zeroWidth, "%q", clusters)
+	for split := range 1 << (len(clusters) - 1) {
+		segs := []string{clusters[0]}
+		for i, c := range clusters[1:] {
+			if split&(1<<i) != 0 {
+				segs = append(segs, c)
+			} else {
+				segs[len(segs)-1] += c
+			}
+		}
+		for x := range ansi.StringWidth(text) + 1 {
+			require.Equal(t, dashboard.PlaceText([]string{text}, x, "XY"), dashboard.PlaceText(segs, x, "XY"), "%q, the box at %d", segs, x)
+		}
 	}
 }
 

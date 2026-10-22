@@ -1235,30 +1235,38 @@ func (l line) pad(w int) line {
 
 // cut returns the cells [from, to) of l. A wide character cut at either end
 // leaves its cells inside as spaces, in its style, so what is drawn beside
-// the cut stays in its column.
+// the cut stays in its column. A zero-width cluster goes with the cell
+// before it wherever l's segments break, so a segment that starts at to
+// still gives the ones it starts with: of place's two cuts around a box,
+// exactly one keeps a zero-width cluster, and only when its cell is outside
+// the box.
 func (l line) cut(from, to int) line {
 	var out line
 	col := 0
 	for _, s := range l {
-		sw := ansi.StringWidth(s.text)
-		if a, b := max(from, col), min(to, col+sw); a < b {
-			out = append(out, seg{cutCells(s.text, a-col, b-col), s.style})
-		}
-		col += sw
-		if col >= to {
+		if col > to {
 			break
 		}
+		sw := ansi.StringWidth(s.text)
+		if col+sw >= from {
+			if text := cutCells(s.text, col, from, to); text != "" {
+				out = append(out, seg{text, s.style})
+			}
+		}
+		col += sw
 	}
 	return out
 }
 
 // cutCells returns the cells [from, to) of s, which is text without escape
-// sequences: a cluster partly inside is a space for each of its cells
-// inside. A zero-width cluster goes with the cell before it, as ansi.Cut
-// keeps it: after from, or anywhere when from is 0, and up to to.
-func cutCells(s string, from, to int) string {
+// sequences that starts at column at: a cluster partly inside is a space
+// for each of its cells inside. A zero-width cluster goes with the cell
+// before it, as ansi.Cut keeps it: after from, or anywhere when from is the
+// line's start, and up to to. The columns are the line's, not s's, so where
+// the line's segments break changes nothing.
+func cutCells(s string, at, from, to int) string {
 	var b strings.Builder
-	col := 0
+	col := at
 	for s != "" {
 		c, w := ansi.FirstGraphemeCluster(s, ansi.GraphemeWidth)
 		s = s[len(c):]
