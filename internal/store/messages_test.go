@@ -450,8 +450,8 @@ func TestRecoverDispatchingIsOneTransaction(t *testing.T) {
 // TestReturnToBoss: a worker's queued messages go to the boss once the
 // binding they were sent to has ended, when the row is retired or the id
 // was reused at a later generation, and keep their ids and order. A reused
-// id keeps only what was sent to it. A live binding, and a message in
-// flight, keep theirs.
+// id keeps only what was sent to it. A live binding, a message in flight,
+// and a queue asked for under another project keep theirs.
 func TestReturnToBoss(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
@@ -491,6 +491,29 @@ func TestReturnToBoss(t *testing.T) {
 
 	_, err = s.ReturnToBoss(ctx, "w", "agentisan", worker("x"), t1)
 	require.ErrorIs(t, err, store.ErrInvalid, "only a boss takes them back")
+}
+
+// TestCleanReason: a reason is kept, and carried by a message event, as UTF-8
+// with each control character a space, cut to 512 bytes on a character
+// boundary (QA #75, N3).
+func TestCleanReason(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct{ in, want string }{
+		"empty":                     {"", ""},
+		"plain":                     {"timed out", "timed out"},
+		"line breaks and an escape": {"a\r\nb\x1b[31mc", "a  b [31mc"},
+		"a NUL and a C1 control":    {"a\x00b\u0085c", "a b c"},
+		"bytes that are not UTF-8":  {"a\xffb\xc3", "a\ufffdb\ufffd"},
+		"512 bytes is kept whole":   {strings.Repeat("x", 512), strings.Repeat("x", 512)},
+		"one past is cut":           {strings.Repeat("x", 513), strings.Repeat("x", 512)},
+		"never inside a character":  {strings.Repeat("x", 511) + "é", strings.Repeat("x", 511)},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, store.CleanReason(tc.in))
+		})
+	}
 }
 
 // TestPruneMessages is A1's retention: a delivered or failed message is

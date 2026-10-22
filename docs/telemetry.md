@@ -198,7 +198,9 @@ the daemon starting after a crash gives `.failed` then. A notice of a failed
 delivery gives no `.queued`; a boss's notices (A44) give one when they start
 a new message, from `agentisan`, and none when added to one still queued. The body reads `<message id> queued for
 <recipient>` (or `delivered to`, `failed to`, `returned to`) and never
-carries the message's body.
+carries the message's body. A `.queued` record's time is the message's
+own queued time, so a trail sorted by `@timestamp` puts it first, even
+when the dispatcher delivers the message before `send` emits its event.
 
 | Attribute | Type | Value |
 | --- | --- | --- |
@@ -209,7 +211,7 @@ carries the message's body.
 | `agentisan.message.to.id` | string | The recipient; the boss for `.returned` |
 | `agentisan.message.returned_from` | string | The worker a message returned to the boss was sent to; `""` otherwise |
 | `agentisan.message.attempts` | int | The dispatches the message was claimed for; 0 for `.queued` |
-| `agentisan.message.reason` | string | Why it failed, for `.failed`; `""` otherwise |
+| `agentisan.message.reason` | string | Why it failed, for `.failed`, as `state.db` keeps it: control characters as spaces, at most 512 bytes; `""` otherwise |
 
 A message's trail, in ES|QL:
 

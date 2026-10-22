@@ -93,6 +93,13 @@ func (m merged) invalidf(path, format string, args ...any) error {
 	return fmt.Errorf("%s: %w: %s", m.at(path), ErrInvalid, fmt.Sprintf(format, args...))
 }
 
+// needsCount refuses a group whose count key is missing. A key no layer sets
+// has no source of its own, so the refusal names the group's table, with the
+// layer and file that added it, and then the key.
+func (m merged) needsCount(group, key string) error {
+	return fmt.Errorf("%s: %w: every group needs %s: %s", m.tableAt("groups."+group), ErrInvalid, key, m.at("groups."+group+"."+key))
+}
+
 func (m merged) get(path string) (any, bool) {
 	return lookup(m.values, path)
 }
@@ -188,14 +195,14 @@ func (m merged) checkGroups() error {
 		}
 		workers, ok := g["workers"].(int)
 		if !ok {
-			return m.invalidf(workersPath, "every group needs workers")
+			return m.needsCount(name, "workers")
 		}
 		if workers < 0 {
 			return m.invalidf(workersPath, "workers %d is below 0", workers)
 		}
 		slots, ok := g["slots"].(int)
 		if !ok {
-			return m.invalidf(slotsPath, "every group needs slots")
+			return m.needsCount(name, "slots")
 		}
 		if slots < workers {
 			return m.invalidf(slotsPath, "slots %d is below workers %d", slots, workers)
