@@ -40,7 +40,7 @@ refusal exits 1:
 | `timeout` | The op ran past its 10 s budget while a call failed. Nothing was queued: send again |
 | `unknown_op` | The daemon is a build without `send`. Nothing was queued: run the daemon-restart action, or fall back to `herdr agent prompt`, which is not durable |
 | `unsupported_version` | The daemon is another build of the plugin. Nothing was queued: run the daemon-restart action, then send again |
-| `daemon_no_answer` | The daemon took the request and gave no answer: it was killed, or ran past the command's wait (A52). The message may be queued, and a queued message is delivered once the daemon runs again, so don't resend it with `herdr agent prompt` |
+| `daemon_no_answer` | The daemon took the request and gave no answer: it was killed, or ran past the command's wait (A52). The message may be queued, and a queued message is delivered once the daemon runs again, so don't resend it with `herdr agent prompt`. If the daemon isn't running, run the daemon-restart action, and the message is delivered then |
 | `failed` | An answer no other code names, or one the command could not read. The message may be queued, as for `daemon_no_answer` |
 | `not_ready` | The daemon has just started; the command asks again for up to 10 s |
 | `daemon_unavailable` | No daemon answers under `--state-dir`, `HERDR_PLUGIN_STATE_DIR`, or else herdr's state directory for the plugin, from `XDG_STATE_HOME` or `HOME` (A51). Fall back to `herdr agent prompt`, which is not durable |

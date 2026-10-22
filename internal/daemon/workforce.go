@@ -232,7 +232,7 @@ func Workforce(ctx context.Context, socket, op string, args any) (json.RawMessag
 	var refused error
 	for {
 		data, err := callWith(ctx, socket, op, raw, wait)
-		if refused != nil && errors.Is(err, ErrUnavailable) && ctx.Err() != nil {
+		if refused != nil && errors.Is(err, ErrUnavailable) && (ctx.Err() != nil || deadlinePassed(ctx)) {
 			return nil, refused
 		}
 		if !errors.Is(err, ErrNotReady) {
@@ -249,4 +249,13 @@ func Workforce(ctx context.Context, socket, op string, args any) (json.RawMessag
 			return nil, err
 		}
 	}
+}
+
+// deadlinePassed reports whether ctx's deadline has passed. An exchange's
+// socket timeout, set to that deadline, can end a read a moment before the
+// context's own timer makes ctx.Err() say so (#90's F1, as herdr's
+// pastDeadline for #78's).
+func deadlinePassed(ctx context.Context) bool {
+	d, ok := ctx.Deadline()
+	return ok && !time.Now().Before(d)
 }

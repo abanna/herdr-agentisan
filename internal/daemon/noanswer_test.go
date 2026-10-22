@@ -157,4 +157,119 @@ func TestNotReadyWindow(t *testing.T) {
 		assert.ErrorIs(t, err, context.DeadlineExceeded, "its own wait ran out")
 		assert.Equal(t, int32(2), conns.Load())
 	})
+
+	// The same past the window's end: the daemon refuses until a second
+	// before the window ends, then takes the next ask and never answers, so
+	// that ask's wait runs out after the window. Still no answer, never the
+	// earlier not_ready, whose answer, sending again, would queue a message
+	// twice (QA #90, R1: the window's context is not the caller's).
+	t.Run("an ask the window began and never answered is no answer past the window", func(t *testing.T) {
+		t.Parallel()
+		sock := shortDir(t) + "/d.sock"
+		var startNs atomic.Int64
+		var held atomic.Int32
+		serveConns(t, sock, func(_ int32, conn net.Conn, ended <-chan struct{}) {
+			_, _ = bufio.NewReader(conn).ReadString('\n')
+			if time.Now().Before(time.Unix(0, startNs.Load()).Add(daemon.NotReadyWindow - time.Second)) {
+				_, _ = conn.Write([]byte(notReadyLine))
+				return
+			}
+			held.Add(1)
+			<-ended
+		})
+		start := time.Now()
+		startNs.Store(start.UnixNano())
+		_, err := daemon.Workforce(t.Context(), sock, "no-budget", struct{}{})
+		require.ErrorIs(t, err, daemon.ErrUnavailable)
+		assert.NotErrorIs(t, err, daemon.ErrNotReady, "not the earlier refusal")
+		assert.NotErrorIs(t, err, daemon.ErrNotSent, "the daemon took the ask")
+		assert.Equal(t, int32(1), held.Load())
+		assert.Greater(t, time.Since(start), daemon.NotReadyWindow, "its wait ran out after the window")
+	})
+
+	// A daemon that turns ready just as the window ends: whatever Workforce
+	// returns, an ok the daemon sent is the answer. An ask after the window
+	// whose answer is thrown away, however few milliseconds late, breaks it
+	// (QA #90, R2: Draft 7 item 3's M11 and M12 on the window's path).
+	t.Run("an ok the daemon sent is the answer", func(t *testing.T) {
+		t.Parallel()
+		sock := shortDir(t) + "/d.sock"
+		var startNs atomic.Int64
+		var sentOK atomic.Int32
+		serveConns(t, sock, func(_ int32, conn net.Conn, _ <-chan struct{}) {
+			_, _ = bufio.NewReader(conn).ReadString('\n')
+			if time.Now().Before(time.Unix(0, startNs.Load()).Add(daemon.NotReadyWindow)) {
+				_, _ = conn.Write([]byte(notReadyLine))
+				return
+			}
+			sentOK.Add(1)
+			_, _ = conn.Write([]byte(okLine))
+		})
+		startNs.Store(time.Now().UnixNano())
+		data, err := daemon.Workforce(t.Context(), sock, daemon.OpTeamStatus, struct{}{})
+		// An ask Workforce made and abandoned reaches the handler late.
+		time.Sleep(300 * time.Millisecond)
+		if sentOK.Load() > 0 {
+			require.NoError(t, err, "the daemon sent ok, so ok is the answer")
+			assert.JSONEq(t, `{"ok":true}`, string(data))
+			assert.Equal(t, int32(1), sentOK.Load(), "one ok, and no ask after it")
+			return
+		}
+		require.ErrorIs(t, err, daemon.ErrNotReady, "no ok sent: the window's last refusal")
+	})
+}
+
+// lateCtx is a caller's deadline that the socket sees before the context's
+// own timer fires: Deadline is d, but Done closes, and Err turns non-nil,
+// only lag later. A real timer's lag is a moment; this one is long enough to
+// place the read's timeout before it every time.
+type lateCtx struct {
+	context.Context
+	d    time.Time
+	done chan struct{}
+}
+
+func newLateCtx(t *testing.T, d time.Time, lag time.Duration) *lateCtx {
+	t.Helper()
+	c := &lateCtx{Context: t.Context(), d: d, done: make(chan struct{})}
+	tm := time.AfterFunc(time.Until(d)+lag, func() { close(c.done) })
+	t.Cleanup(func() { tm.Stop() })
+	return c
+}
+
+func (c *lateCtx) Deadline() (time.Time, bool) { return c.d, true }
+
+func (c *lateCtx) Done() <-chan struct{} { return c.done }
+
+func (c *lateCtx) Err() error {
+	select {
+	case <-c.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+// TestWorkforceKeepsNotReadyWhenTheSocketSeesTheDeadlineFirst: the caller's
+// own deadline cuts the ask after a not_ready short, and the read's socket
+// timeout, set to that deadline, fires before the context says so. That is
+// still the caller's deadline, so the refusal is the answer (A35), not no
+// answer (QA #90, F1: the subtest "the deadline cuts the next ask short" of
+// TestWorkforceKeepsNotReadyPastTheDeadline failed so 2 times in 140).
+func TestWorkforceKeepsNotReadyWhenTheSocketSeesTheDeadlineFirst(t *testing.T) {
+	t.Parallel()
+	sock := shortDir(t) + "/d.sock"
+	conns := serveConns(t, sock, func(n int32, conn net.Conn, ended <-chan struct{}) {
+		_, _ = bufio.NewReader(conn).ReadString('\n')
+		if n == 1 {
+			_, _ = conn.Write([]byte(notReadyLine))
+			return
+		}
+		<-ended
+	})
+	ctx := newLateCtx(t, time.Now().Add(500*time.Millisecond), time.Second)
+	_, err := daemon.Workforce(ctx, sock, daemon.OpTeamStatus, struct{}{})
+	require.ErrorIs(t, err, daemon.ErrNotReady, "the caller's own deadline after a refusal is that refusal")
+	assert.NotErrorIs(t, err, daemon.ErrUnavailable, "not no answer")
+	assert.Equal(t, int32(2), conns.Load(), "the second ask was the one cut short")
 }

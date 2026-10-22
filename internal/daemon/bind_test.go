@@ -567,11 +567,16 @@ func TestWorkforceKeepsNotReadyPastTheDeadline(t *testing.T) {
 						}
 						continue
 					}
+					if gone {
+						// The daemon and its socket go before it answers, so the
+						// client's next dial finds none however late this
+						// goroutine runs on: closed after the answer, a stall
+						// let that dial into the backlog, and the close then
+						// reset a request that was written (QA #90, R3).
+						_ = ln.Close()
+					}
 					_, _ = conn.Write([]byte(`{"ok":false,"error":{"code":"not_ready","message":"not yet"}}` + "\n"))
 					_ = conn.Close()
-					if gone {
-						_ = ln.Close() // and its socket with it
-					}
 				}
 			}()
 			start := time.Now()
