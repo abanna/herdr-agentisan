@@ -108,3 +108,40 @@ func TestCtxTokens(t *testing.T) {
 	}, team.CtxTokens(l))
 	assert.Empty(t, team.CtxTokens(team.Layout{}), "no panes, no tokens")
 }
+
+// TestCtxLevel: a level is crossed at its threshold or above (A33), so one
+// below it is the level under it; custom thresholds move every boundary, and
+// with none no level is ever crossed.
+func TestCtxLevel(t *testing.T) {
+	t.Parallel()
+
+	def := []int{55, 65, 75}
+	tests := map[string]struct {
+		ctx        int
+		thresholds []int
+		want       team.Level
+	}{
+		"zero":                    {0, def, team.LevelNone},
+		"one under soft":          {54, def, team.LevelNone},
+		"soft":                    {55, def, team.LevelSoft},
+		"one under hard":          {64, def, team.LevelSoft},
+		"hard":                    {65, def, team.LevelHard},
+		"one under the ceiling":   {74, def, team.LevelHard},
+		"the ceiling":             {75, def, team.LevelCeiling},
+		"full":                    {100, def, team.LevelCeiling},
+		"custom, under soft":      {29, []int{30, 40, 50}, team.LevelNone},
+		"custom, soft":            {30, []int{30, 40, 50}, team.LevelSoft},
+		"custom, the ceiling":     {50, []int{30, 40, 50}, team.LevelCeiling},
+		"the ceiling at 100":      {99, []int{1, 2, 100}, team.LevelHard},
+		"no thresholds":           {100, nil, team.LevelNone},
+		"a negative ctx":          {-1, def, team.LevelNone},
+		"two thresholds":          {100, []int{10, 20}, team.LevelHard},
+		"a fourth does not count": {100, []int{10, 20, 30, 40}, team.LevelCeiling},
+	}
+	for name, tc := range tests {
+		assert.Equalf(t, tc.want, team.CtxLevel(tc.ctx, tc.thresholds), "%s: CtxLevel(%d, %v)", name, tc.ctx, tc.thresholds)
+	}
+	for l, s := range map[team.Level]string{team.LevelNone: "none", team.LevelSoft: "soft", team.LevelHard: "hard", team.LevelCeiling: "ceiling", team.Level(9): "none"} {
+		assert.Equal(t, s, l.String())
+	}
+}

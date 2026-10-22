@@ -12,12 +12,14 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/abanna/herdr-agentisan/internal/github"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
+	"github.com/abanna/herdr-agentisan/internal/testslots"
 	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
@@ -33,7 +35,8 @@ var Held = held
 // HeldKeepingACopy is Held, with a copy of the probe's open file kept past
 // the probe, as a child forked while the probe had the lock keeps one until
 // it execs. The copy is a dup, which shares the open file as a fork's does;
-// letGo closes it. A probe that finds the lock held makes no copy.
+// letGo closes it. A probe that finds the lock held makes no copy. It is
+// Held's own probe: only the kept it passes differs from Held's.
 func HeldKeepingACopy(path string) (isHeld bool, letGo func() error, err error) {
 	fd, dupErr := -1, error(nil)
 	isHeld, err = heldKeeping(path, func(f *os.File) {
@@ -55,6 +58,12 @@ func HeldKeepingACopy(path string) (isHeld bool, letGo func() error, err error) 
 // st under ctx.
 func HealthOver(ctx context.Context, st *store.Store, base HealthInfo) HealthInfo {
 	return Options{Logger: zerolog.Nop()}.health(ctx, st, base)()
+}
+
+// ClaimOver is the dispatcher's claim of to's next message on st, under
+// ctx, as serve makes it.
+func ClaimOver(ctx context.Context, st *store.Store, to store.Address) (store.Message, bool, error) {
+	return (&dispatcher{st: st, now: time.Now}).claim(ctx, to)
 }
 
 // BackCode is the refusal code the back op answers err with.
@@ -138,6 +147,14 @@ func WithGitHubTicks(g GitHubOptions, ticks <-chan time.Time) GitHubOptions {
 	return g
 }
 
+// WithGitHubRounds returns g sending on rounds at each round's end, once
+// every repo's calls and notices are done, so a test waits for the round
+// itself rather than for its gh calls.
+func WithGitHubRounds(g GitHubOptions, rounds chan<- struct{}) GitHubOptions {
+	g.rounds = rounds
+	return g
+}
+
 // WithStoreClose returns o with closeStore standing in for closing the state
 // database when Run exits.
 func WithStoreClose(o Options, closeStore func(*store.Store) error) Options {
@@ -156,8 +173,15 @@ func WithProcLocks(t TeamOptions, procLocks string) TeamOptions {
 // with procLocks and proc standing in for /proc/locks and /proc: it reads
 // the lock list once, and gives each project's slots from that reading.
 func SlotsOfOnePoll(procLocks, proc string, locks settings.TestLocks) func(project string) *snapshot.Slots {
-	c := &slotCounter{locks: locks, procLocks: procLocks, proc: proc, failingFor: map[string]string{}}
+	c := &slotCounter{locks: locks, procLocks: procLocks, proc: proc, read: testslots.Read, failingFor: map[string]string{}}
 	return Options{Logger: zerolog.Nop()}.countSlots(c)
+}
+
+// WithLockReads returns t with read standing in for the team poll's one
+// reading of the held locks, so a test sees each reading the poll makes.
+func WithLockReads(t TeamOptions, read func(procLocks, proc string) (*testslots.Reading, error)) TeamOptions {
+	t.readLocks = read
+	return t
 }
 
 // WithProc returns t with proc standing in for /proc when the team poll
@@ -326,3 +350,19 @@ func (s ViewSync) Next() (clear bool, sent func(), ok bool) {
 	want, forgets, ok := s.v.next()
 	return want.clear, func() { s.v.sentAt(want, forgets) }, ok
 }
+
+// GitHubSource is the GitHub collector's notice source (A45) on its own.
+type GitHubSource struct{ g *githubNotices }
+
+// NewGitHubSource is o's source on st, with o's notices settings.
+func NewGitHubSource(o Options, st *store.Store) GitHubSource {
+	return GitHubSource{o.newGitHubNotices(st, o.newNotices())}
+}
+
+// Collected diffs h's list, open, as the collector does after a list.
+func (s GitHubSource) Collected(ctx context.Context, gh github.Runner, h settings.Header, open github.Open) {
+	s.g.collected(ctx, gh, h, open)
+}
+
+// Take is what the source has handed the poll since the last Take.
+func (s GitHubSource) Take() []notice.Notice { return s.g.n.github.take() }

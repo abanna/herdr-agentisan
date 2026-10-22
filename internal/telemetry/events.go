@@ -79,6 +79,25 @@ const (
 	AttrMessageReason = "agentisan.message.reason"
 )
 
+// EventCtxLevel is a pane's context crossing one of its rotation thresholds
+// (A33), as the daemon tells its boss.
+const EventCtxLevel = "agentisan.worker.ctx_level"
+
+// The attribute keys of EventCtxLevel, beside the worker's.
+const (
+	// AttrCtxLevel is soft, hard or ceiling.
+	AttrCtxLevel = "agentisan.ctx.level"
+	// AttrCtx is the context used, as a whole percentage.
+	AttrCtx = "agentisan.ctx.percent"
+	// AttrCtxThreshold is the level's percentage.
+	AttrCtxThreshold = "agentisan.ctx.threshold"
+	// AttrCtxAlerted is whether the user was asked to be alerted: only at
+	// the ceiling.
+	AttrCtxAlerted = "agentisan.ctx.alerted"
+	// AttrCtxShown is whether herdr showed that alert.
+	AttrCtxShown = "agentisan.ctx.shown"
+)
+
 // EventHandoff is a step of a worker's handoff (A33): so far its handoff
 // token set (HandoffReady) or cleared (HandoffCleared).
 const EventHandoff = "agentisan.worker.handoff"
@@ -143,6 +162,44 @@ func (e *Events) StatusChanged(ctx context.Context, c StatusChange) {
 	e.logger.Emit(ctx, r)
 }
 
+// CtxLevel is one EventCtxLevel.
+type CtxLevel struct {
+	WorkerID string
+	Bound    bool
+	Project  string
+	Group    string
+	Role     string
+	Agent    string
+	PaneID   string
+	// Level is soft, hard or ceiling.
+	Level          string
+	Ctx, Threshold int
+	Alerted, Shown bool
+}
+
+// CtxLevelCrossed emits c as an EventCtxLevel record.
+func (e *Events) CtxLevelCrossed(ctx context.Context, c CtxLevel) {
+	if e == nil {
+		return
+	}
+	r := record(EventCtxLevel, fmt.Sprintf("%s at %d%% crossed %s (%d%%)", c.WorkerID, c.Ctx, c.Level, c.Threshold))
+	r.AddAttributes(
+		attribute.String(AttrWorkerID, c.WorkerID),
+		attribute.Bool(AttrWorkerBound, c.Bound),
+		attribute.String(AttrProject, c.Project),
+		attribute.String(AttrGroup, c.Group),
+		attribute.String(AttrRole, c.Role),
+		attribute.String(AttrAgent, c.Agent),
+		attribute.String(AttrPaneID, c.PaneID),
+		attribute.String(AttrCtxLevel, c.Level),
+		attribute.Int(AttrCtx, c.Ctx),
+		attribute.Int(AttrCtxThreshold, c.Threshold),
+		attribute.Bool(AttrCtxAlerted, c.Alerted),
+		attribute.Bool(AttrCtxShown, c.Shown),
+	)
+	e.logger.Emit(ctx, r)
+}
+
 // Handoff is one EventHandoff.
 type Handoff struct {
 	WorkerID string
@@ -159,12 +216,7 @@ func (e *Events) HandoffStep(ctx context.Context, h Handoff) {
 	if e == nil {
 		return
 	}
-	var r log.Record
-	r.SetEventName(EventHandoff)
-	r.SetTimestamp(time.Now())
-	r.SetSeverity(log.SeverityInfo)
-	r.SetSeverityText("INFO")
-	r.SetBody(attribute.StringValue(h.WorkerID + " handoff " + h.Step))
+	r := record(EventHandoff, h.WorkerID+" handoff "+h.Step)
 	r.AddAttributes(
 		attribute.String(AttrWorkerID, h.WorkerID),
 		attribute.Bool(AttrWorkerBound, h.Bound),
@@ -174,6 +226,17 @@ func (e *Events) HandoffStep(ctx context.Context, h Handoff) {
 		attribute.String(AttrHandoffStep, h.Step),
 	)
 	e.logger.Emit(ctx, r)
+}
+
+// record is an INFO record named name, now, with body.
+func record(name, body string) log.Record {
+	var r log.Record
+	r.SetEventName(name)
+	r.SetTimestamp(time.Now())
+	r.SetSeverity(log.SeverityInfo)
+	r.SetSeverityText("INFO")
+	r.SetBody(attribute.StringValue(body))
+	return r
 }
 
 // Message is one message event: the message, never its body.

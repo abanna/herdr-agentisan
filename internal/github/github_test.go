@@ -53,9 +53,55 @@ func TestRunnerPRs(t *testing.T) {
 	assert.Len(t, prs, 5)
 	assert.Equal(t, []string{
 		"pr", "list", "--repo=abanna/herdr-agentisan", "--state=open", "--limit=100",
-		"--json=number,headRefName,mergeStateStatus,reactionGroups,statusCheckRollup",
+		"--json=number,headRefName,headRefOid,mergeStateStatus,reactionGroups,statusCheckRollup",
 	}, f.Args(t, "pr"))
 	assert.Equal(t, []string{"pr"}, f.Calls(t), "one call, and no issue count")
+}
+
+// TestRunnerPRView reads the state of a PR that left the open list, as
+// `gh pr view <n> --repo=<repo> --json=state,mergeCommit`: merged with its
+// merge commit, closed, or still open. Only that call's answer fails it: the
+// list may answer while a lookup fails.
+func TestRunnerPRView(t *testing.T) {
+	t.Parallel()
+	const oid = "e5f63b82f751b5bc2d44f874f045ae90a2789688"
+	f := ghtest.New(t)
+	f.View(t, 50, `{"mergeCommit":{"oid":"`+oid+`"},"state":"MERGED"}`)
+	f.View(t, 51, `{"mergeCommit":null,"state":"CLOSED"}`)
+	f.View(t, 59, `{"mergeCommit":null,"state":"OPEN"}`)
+	r := runner(f)
+	for _, tc := range []struct {
+		n    int
+		want github.PRState
+	}{
+		{50, github.PRState{State: github.StateMerged, MergeCommit: oid}},
+		{51, github.PRState{State: github.StateClosed}},
+		{59, github.PRState{State: github.StateOpen}},
+	} {
+		got, err := r.PRView(t.Context(), repo, tc.n)
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, got, "PR %d", tc.n)
+	}
+	assert.Equal(t, []string{"pr", "view", "59", "--repo=abanna/herdr-agentisan", "--json=state,mergeCommit"}, f.Args(t, "view"))
+
+	_, err := r.PRView(t.Context(), repo, 60)
+	require.ErrorIs(t, err, github.ErrGh, "a PR the stand-in has no answer for")
+	assert.Contains(t, err.Error(), "Could not resolve")
+
+	f.CallMode(t, "view", ghtest.ModeFail)
+	_, err = r.PRView(t.Context(), repo, 50)
+	require.ErrorIs(t, err, github.ErrGh)
+	_, err = r.OpenPRs(t.Context(), repo)
+	require.NoError(t, err, "the list still answers")
+
+	calls := len(f.Calls(t))
+	for _, n := range []int{0, -3} {
+		_, err = r.PRView(t.Context(), repo, n)
+		require.ErrorIs(t, err, github.ErrNumber)
+	}
+	_, err = r.PRView(t.Context(), "-x/y", 50)
+	require.ErrorIs(t, err, github.ErrRepo)
+	assert.Len(t, f.Calls(t), calls, "a bad number or repo never runs gh")
 }
 
 // TestRunnerOpenIssues asks GitHub's GraphQL for the exact count, the owner

@@ -37,7 +37,7 @@ var attrs = dashboard.Options{Profile: colorprofile.ASCII}
 var fullColour = dashboard.Options{Profile: colorprofile.TrueColor}
 
 // fixtures are every snapshot in testdata.
-var fixtures = []string{"full", "empty", "blocked", "crowd", "wide", "group", "shells", "aged"}
+var fixtures = []string{"full", "empty", "blocked", "crowd", "wide", "group", "shells", "aged", "held"}
 
 // fixture loads testdata/<name>.json through the same source the CLI uses.
 func fixture(t *testing.T, name string) *snapshot.Snapshot {
@@ -110,6 +110,10 @@ func TestRenderGolden(t *testing.T) {
 		"aged_68x12": {frame: frame("aged", first, true), w: 68, h: 12},
 		"aged_64x12": {frame: frame("aged", first, true), w: 64, h: 12},
 		"aged_60x12": {frame: frame("aged", first, true), w: 60, h: 12},
+		// A slot a hold keeps (ADR-001 A40): out of the denominator, and
+		// said, "slots 1/2 (1 held)".
+		"held_80x24":  {frame: frame("held", first, true), w: 80, h: 24},
+		"held_120x40": {frame: frame("held", first, true), w: 120, h: 40},
 		// A snapshot 42 s older than the clock: the footer says so.
 		"stale_80x24": {
 			frame: func(t *testing.T) dashboard.Frame {

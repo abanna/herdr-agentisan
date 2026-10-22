@@ -53,6 +53,9 @@ type teamHerdr struct {
 	onCall func(method string)
 	// prompt, when set, answers agent.prompt (messages_test.go).
 	prompt herdrtest.Handler
+	// toast, when set, answers notification.show, which is otherwise
+	// shown (ctxlevels_test.go).
+	toast herdrtest.Handler
 }
 
 // newTeamHerdr serves liveSpaces.
@@ -168,6 +171,14 @@ func (th *teamHerdr) serveTeam(normal herdrtest.Handler) herdrtest.Handler {
 			if prompt != nil {
 				return prompt(r)
 			}
+		case "notification.show":
+			th.mu.Lock()
+			toast := th.toast
+			th.mu.Unlock()
+			if toast != nil {
+				return toast(r)
+			}
+			return herdrtest.Reply{Result: map[string]any{"type": "notification_show", "shown": true, "reason": ""}}
 		}
 		return normal(r)
 	}
@@ -252,7 +263,9 @@ func teamCalls(srv *herdrtest.Server) []string {
 }
 
 // polled waits until srv has answered n more polls than it had, so every
-// push of the polls before has landed.
+// push of the polls before has landed. A poll counted can be one that listed
+// panes before a layout change, so polled(t, srv, n) promises n-1 whole polls
+// of the new layout.
 func polled(t *testing.T, srv *herdrtest.Server, n int) {
 	t.Helper()
 	from := lists(srv)

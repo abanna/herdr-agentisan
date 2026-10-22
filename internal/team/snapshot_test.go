@@ -386,7 +386,7 @@ func TestSnapshotRowStage(t *testing.T) {
 	}
 	clock := &team.IdleClock{}
 	var m team.Model
-	for i, status := range []string{"idle", "working", "idle"} {
+	for i, status := range []string{"idle", "working", "idle", "idle"} {
 		m = team.Build(layout(status), team.Spaces{}, nil)
 		clock.Observe(m, at.Add(time.Duration(i)*3*time.Second))
 	}

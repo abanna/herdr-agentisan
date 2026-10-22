@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -38,8 +39,9 @@ const waitDelay = 2 * time.Second
 // maxReason bounds how much of gh's stderr an error carries.
 const maxReason = 200
 
-// The fields `gh pr list` is asked for: what herdr-status.sh asked for.
-const prFields = "number,headRefName,mergeStateStatus,reactionGroups,statusCheckRollup"
+// The fields `gh pr list` is asked for: what herdr-status.sh asked for, and
+// the head commit the boss's notices are keyed by (A45).
+const prFields = "number,headRefName,headRefOid,mergeStateStatus,reactionGroups,statusCheckRollup"
 
 // issuesQuery counts a repo's open issues exactly; `gh issue list` caps
 // what it lists.
@@ -56,6 +58,8 @@ var (
 	ErrNoGh = errors.New("gh cannot be run")
 	// ErrRepo means a repo is not owner/name.
 	ErrRepo = errors.New("not a GitHub repo as owner/name")
+	// ErrNumber means a PR number is not one GitHub gives: below 1.
+	ErrNumber = errors.New("not a PR number")
 	// ErrGh means gh ran and failed: not logged in, no such repo, rate
 	// limited, killed. The error carries the first line of its stderr.
 	ErrGh = errors.New("gh failed")
@@ -99,14 +103,39 @@ func Find(path string) string {
 
 // PRs lists repo's open pull requests, release-please's skipped, by number.
 func (r Runner) PRs(ctx context.Context, repo string) ([]snapshot.PR, error) {
-	if err := checkRepo(repo); err != nil {
-		return nil, err
-	}
-	out, err := r.run(ctx, "pr", "list", "--repo="+repo, "--state=open", fmt.Sprintf("--limit=%d", PRLimit), "--json="+prFields)
+	o, err := r.OpenPRs(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
-	return ParsePRs(out)
+	return o.Headers(), nil
+}
+
+// OpenPRs lists repo's open pull requests as PRs does, each with its head
+// and check counts.
+func (r Runner) OpenPRs(ctx context.Context, repo string) (Open, error) {
+	if err := checkRepo(repo); err != nil {
+		return Open{}, err
+	}
+	out, err := r.run(ctx, "pr", "list", "--repo="+repo, "--state=open", fmt.Sprintf("--limit=%d", PRLimit), "--json="+prFields)
+	if err != nil {
+		return Open{}, err
+	}
+	return ParseOpenPRs(out)
+}
+
+// PRView reads the state of repo's PR n, which has left the open list.
+func (r Runner) PRView(ctx context.Context, repo string, n int) (PRState, error) {
+	if err := checkRepo(repo); err != nil {
+		return PRState{}, err
+	}
+	if n < 1 {
+		return PRState{}, fmt.Errorf("%w: %d", ErrNumber, n)
+	}
+	out, err := r.run(ctx, "pr", "view", strconv.Itoa(n), "--repo="+repo, "--json=state,mergeCommit")
+	if err != nil {
+		return PRState{}, err
+	}
+	return ParsePRView(out)
 }
 
 // OpenIssues counts repo's open issues, exactly.
@@ -159,16 +188,7 @@ func (r Runner) run(ctx context.Context, args ...string) ([]byte, error) {
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.WaitDelay = waitDelay
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		if err != nil {
-			return fmt.Errorf("kill gh's process group: %w", err)
-		}
-		return nil
-	}
+	cmd.Cancel = func() error { return killGroup(syscall.Kill, cmd.Process.Pid, "gh") }
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("%w: %s: %w", ErrNoGh, r.Bin, err)
 	}
@@ -188,6 +208,25 @@ func (r Runner) run(ctx context.Context, args ...string) ([]byte, error) {
 		return nil, fmt.Errorf("gh %s: %w: %w", verb, ErrGh, err)
 	}
 	return stdout.Bytes(), nil
+}
+
+// killGroup sends SIGKILL, through kill (syscall.Kill), to the process group
+// that pid leads, and is what run's Cancel does. A group already gone is
+// os.ErrProcessDone, which exec takes as done. Any other failure goes back
+// to exec, which kills the leader alone once WaitDelay passes, and run still
+// reports the cancel, the timeout or the output cap. kill passes over a
+// member the daemon may not signal, so an EPERM means it could signal none
+// of them, the leader included: exec's kill fails too, and run waits for the
+// leader to exit.
+func killGroup(kill func(pid int, sig syscall.Signal) error, pid int, what string) error {
+	err := kill(-pid, syscall.SIGKILL)
+	if errors.Is(err, syscall.ESRCH) {
+		return os.ErrProcessDone
+	}
+	if err != nil {
+		return fmt.Errorf("kill %s's process group: %w", what, err)
+	}
+	return nil
 }
 
 // capped keeps the first max bytes written to it and drops the rest. Going

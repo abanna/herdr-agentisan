@@ -139,11 +139,10 @@ herdr-agentisan report stage --item=NERD-5253 --stage=build_test
 
 It sets the pane's `item` and `stage` tokens, and `stage_at`, the report's
 time, source `agentisan`, with a 24 h TTL renewed by every report; they also
-leave with the pane. A value is at
-most 80 printable characters, and anything else is refused rather than cut
-short. Like `report statusline`, it prints nothing and exits 0 whether or not
-it reported; only a malformed command line (an unknown flag, an extra
-argument) fails.
+leave with the pane. A value is at most 80 printable characters, and anything
+else is refused rather than cut short. Like `report statusline`, it prints
+nothing and exits 0 whether or not it reported; only a malformed command line
+(an unknown flag, an extra argument) fails.
 
 Run by Codex (it carries `CODEX_THREAD_ID`), `report stage` reports only from
 the pane's own Codex started as `codex --no-daemon --sandbox danger-full-access`.
@@ -226,10 +225,11 @@ For Codex, paste the
 trust them once. `herdr-agentisan codex hooks` installs only the `ctx` hooks
 above. Each turn hook is a group of its own, so that command never finds one
 beside `report codex`. They need `codex --no-daemon`, as `report codex`
-does: a hook the shared app-server ran reports nothing. Codex runs hooks outside its sandbox, so they
-work under the default one, unlike `report stage` from a tool command. Both
-print nothing and always exit 0; `HERDR_AGENTISAN_LOG_LEVEL=debug` logs why
-nothing was reported. ADR-001 A42 has the details.
+does: a hook the shared app-server ran reports nothing. Codex runs hooks
+outside its sandbox, so they work under the default one, unlike `report stage`
+from a tool command. Both print nothing and always exit 0;
+`HERDR_AGENTISAN_LOG_LEVEL=debug` logs why nothing was reported. ADR-001 A42
+has the details.
 
 ## An old stage ages
 
@@ -243,7 +243,9 @@ stays current while the pane rests, so a `Stop` hook or a closing
 `report stage` keeps it so. It needs no hooks: it works on any agent pane a
 team places, from herdr's statuses and the `stage_at` every report writes.
 The daemon judges only a turn it saw begin and end, so after a restart a
-stage stays current until the agent's next turn.
+stage stays current until the agent's next turn. It calls a turn ended at
+the second poll that sees the pane at rest, about 3 s on, so a `Stop` hook's
+report that lands just after the turn ends is still in time.
 
 ## Search on prefix+/ and in the dashboard
 
@@ -338,6 +340,19 @@ The daemon tells each team's boss what its team poll sees (ADR-001 A44):
 - it left the team: its pane closed or moved away, or its agent exited and
   left a shell.
 
+From the GitHub collector (A45), it tells each project's boss when one of
+its repo's PRs merged, its CI failed or passed at a head, it has a merge
+conflict at a head, or it got its first 👍:
+
+```
+herdr-agentisan #50 merged as 1e0fb1b
+#50 CI failed at 1e0fb1b (2 of 7 checks)
+```
+
+Each is told once, across restarts, from `state.db`. A repo's first
+collection only records what is true then. GitHub's lines never carry a
+title, branch, body or comment.
+
 It also tells each boss, once, that the daemon started. Turns that end while
 the daemon is down are not reported. The boss's own panes and plain shells are
 never reported. Each line carries the worker's reported ctx, item and stage:
@@ -361,6 +376,32 @@ tail -F "$STATE_DIR/daemon.log" | grep --line-buffered '"message":"notice"'
 
 `$STATE_DIR` is the plugin's state directory, which herdr passes the daemon
 as `HERDR_PLUGIN_STATE_DIR`.
+
+### Rotation notices
+
+The boss is also told when a pane's context crosses one of its rotation
+thresholds (ADR-001 D7, A33). A level counts as crossed at its threshold or
+above:
+
+```
+ha-coder-1 is at 66% context (hard: 65%) · NERD-5261 · verify: rotate it now
+```
+
+- **What is covered:** every agent pane in a team, the boss's included. The
+  boss is told about its own: `you are at 80% context (ceiling: 75%): hand
+  off now; the user has been alerted`.
+- **Once per level:** each level is told once. It is told again only after the
+  context has fallen to its threshold less 5, or below.
+- **Unknown context:** a `ctx` that is absent or expired is unknown, and tells
+  nothing.
+- **The ceiling:** at the ceiling the daemon also shows the user a toast,
+  once, and the boss's line says whether it was shown.
+
+The thresholds are `rotation.thresholds`, by default `[55, 65, 75]`, for the
+project and the boss. A role can set its own with
+`groups.<type>.rotation.thresholds`. The daemon reads both when it starts,
+from the shared file, the project's table and the repo file. `skip` can name
+`ctx_soft` and `ctx_hard`, but never `ctx_ceiling`.
 
 ## The debugger
 
@@ -409,9 +450,10 @@ Just after the daemon starts, the command waits for its first poll.
 
 Each command resolves the project's profile with its repo's committed
 `.herdr-agentisan.toml`. So that file sets only `color`, `github`, a
-group's `workers` and `slots`, models and `rotation.thresholds` (ADR-001
-A46). Agent commands, `[spawn]`, `verify`, `[integrations]` and every other
-key belong in `herdr-agentisan.toml` or `--set`. A repo file that sets one
+group's `workers` and `slots`, models and the rotation thresholds, the
+project's and a group's (ADR-001 A46, A33). Agent commands, `[spawn]`,
+`verify`, `[integrations]` and every other key belong in
+`herdr-agentisan.toml` or `--set`. A repo file that sets one
 is refused, and names the key. A model, from any layer, is a letter or
 digit, then letters, digits and `. _ - : / @ [ ]`, such as `opus[1m]`.
 

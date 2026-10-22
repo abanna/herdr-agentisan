@@ -112,7 +112,7 @@ tasks:
   lint:
     desc: Lint the code
     cmds:
-      - go tool golangci-lint run ./...
+      - go tool golangci-lint run --allow-serial-runners ./...
 
   lint:fix:
     desc: Run linters and fix what can be fixed

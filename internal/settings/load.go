@@ -25,8 +25,8 @@ var bareKey = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // defaults is layer 1: the built-in values every profile starts from.
 func defaults() *source {
 	return &source{layer: LayerDefault, origin: "built-in", values: map[string]any{
-		"agent":    map[string]any{"command": []string{"claude"}},
-		"rotation": map[string]any{"thresholds": []int{55, 65, 75}},
+		"agent":     map[string]any{"command": []string{"claude"}},
+		rotationKey: map[string]any{"thresholds": []int{55, 65, 75}},
 		// One message to a boss every 30 s at most, and a repeat dropped for
 		// 5 min (A44).
 		"notices": map[string]any{"gap": 30, "repeat": 300},
@@ -287,6 +287,7 @@ var repoFileKeys = []string{
 	"color",
 	"github",
 	"groups.*.agent.model",
+	"groups.*.rotation.thresholds",
 	"groups.*.slots",
 	"groups.*.workers",
 	"rotation.thresholds",
@@ -294,14 +295,49 @@ var repoFileKeys = []string{
 
 // checkRepoFileKeys refuses a repo file that sets any key outside
 // repoFileKeys, whatever the value: an empty list still replaces the user's
-// own. The first such key in path order is the one reported.
+// own. An empty table sets nothing and passes, unless it adds an entry to a
+// table of names, such as [integrations.x], on no path to a key in
+// repoFileKeys (A53). The first such key or entry in path order is the one
+// reported, and the error lists repoFileKeys itself.
 func (s *source) checkRepoFileKeys() error {
-	for _, path := range leafPaths(s.values, "") {
-		if !slices.ContainsFunc(repoFileKeys, func(k string) bool { return matchPath(k, path) }) {
-			return fmt.Errorf("%s: %w: a repo file is committed, so it sets only color, github, a group's workers and slots, models and rotation; set it in %s or with --set", s.at(path), ErrInvalid, FileName)
+	for _, p := range repoPaths(profileSchema, s.values, "") {
+		fits := matchPath
+		if p.entry {
+			fits = leadsTo
+		}
+		if !slices.ContainsFunc(repoFileKeys, func(k string) bool { return fits(k, p.path) }) {
+			return fmt.Errorf("%s: %w: a repo file is committed, so it sets only %s; set it in %s or with --set", s.at(p.path), ErrInvalid, strings.Join(repoFileKeys, ", "), FileName)
 		}
 	}
 	return nil
+}
+
+// repoPath is one path checkRepoFileKeys judges: a leaf, or an entry of a
+// table of names that holds no leaf.
+type repoPath struct {
+	path  string
+	entry bool
+}
+
+// repoPaths are the paths checkRepoFileKeys judges in tree, which n
+// describes, each table's keys in order.
+func repoPaths(n *node, tree map[string]any, prefix string) []repoPath {
+	var out []repoPath
+	for _, k := range slices.Sorted(maps.Keys(tree)) {
+		p := join(prefix, k)
+		sub, ok := tree[k].(map[string]any)
+		switch {
+		case !ok:
+			out = append(out, repoPath{path: p})
+		case n.kind == kindNames && len(leafPaths(sub, p)) == 0:
+			out = append(out, repoPath{path: p, entry: true})
+		case n.kind == kindNames:
+			out = append(out, repoPaths(n.elem, sub, p)...)
+		default:
+			out = append(out, repoPaths(n.fields[k], sub, p)...)
+		}
+	}
+	return out
 }
 
 // leafPaths are the key paths of every leaf under tree, each table's keys in
@@ -332,6 +368,13 @@ func matchPath(pattern, path string) bool {
 		}
 	}
 	return true
+}
+
+// leadsTo reports whether path is pattern, or a table on the way to it, as
+// matchPath matches.
+func leadsTo(pattern, path string) bool {
+	want, got := strings.Split(pattern, "."), strings.Split(path, ".")
+	return len(got) <= len(want) && matchPath(strings.Join(want[:len(got)], "."), path)
 }
 
 // parseFlags turns each --set into a layer of its own, applied in order.

@@ -428,6 +428,59 @@ func TestEveryTeamCarriesTheSlotsAndItsOwnBoss(t *testing.T) {
 	}
 }
 
+// TestAPollReadsTheHeldLocksOnceForEveryTeam: a poll reads the held locks
+// once, and every team's snapshot counts from that one reading (A31, A40),
+// never from a reading of its own (NERD-5349's TM3, QA #48's SL2). The
+// stand-in's readings alternate held and free, and the poll stops in its
+// fourth: the teams' snapshots are then all the last whole poll's, its one
+// reading the third, held. A reading per team would have given the first
+// poll's three teams three readings, held, free and held.
+func TestAPollReadsTheHeldLocksOnceForEveryTeam(t *testing.T) {
+	t.Parallel()
+	locks := t.TempDir()
+	gate0, gate1 := filepath.Join(locks, "gate.0.lock"), filepath.Join(locks, "gate.1.lock")
+	for _, f := range []string{gate0, gate1} {
+		require.NoError(t, os.WriteFile(f, nil, 0o600))
+	}
+	held, free := filepath.Join(locks, "held"), filepath.Join(locks, "free")
+	replaceFile(t, held, lockLine(t, 1, 200, gate0))
+	replaceFile(t, free, "")
+	const stopAt = 4
+	var reads atomic.Int32
+	stopped, release := make(chan struct{}), make(chan struct{})
+	read := func(_, proc string) (*testslots.Reading, error) {
+		n := reads.Add(1)
+		if n == stopAt {
+			close(stopped)
+			<-release
+		}
+		if n%2 == 1 {
+			return testslots.Read(held, proc)
+		}
+		return testslots.Read(free, proc)
+	}
+	th := newTeamHerdr(t)
+	everyTeam(th)
+	dir := shortDir(t)
+	o := teamOpts(t, dir, th, configDir(t, everyTeamConfig+fmt.Sprintf("[tests]\nlocks = [%q, %q]\n", gate0, gate1)))
+	o.Team = new(daemon.WithLockReads(daemon.WithProc(*o.Team, t.TempDir()), read))
+	serving(t, o, th.fakeHerdr)
+	t.Cleanup(func() { close(release) }) // before run's own cleanup stops the daemon
+	sock := socketPath(t, dir, th.path)
+
+	select {
+	case <-stopped:
+	case <-time.After(ready):
+		t.Fatalf("the polls made %d readings, never %d", reads.Load(), stopAt)
+	}
+	for _, p := range []string{"agentisan", "alpha", "beta"} {
+		s := servedTeam(t, sock, p, func(snapshot.Snapshot) bool { return true })
+		require.NotNil(t, s.Project, p)
+		assert.Equal(t, &snapshot.Slots{Used: 1, Total: 2}, s.Project.Slots, "team %s counts the last whole poll's one reading", p)
+	}
+	assert.EqualValues(t, stopAt, reads.Load(), "nothing reads past the stopped poll")
+}
+
 // lockLine is a /proc/locks line: pid holding an exclusive flock on path.
 func lockLine(t *testing.T, n, pid int, path string) string {
 	t.Helper()
@@ -441,7 +494,8 @@ func lockLine(t *testing.T, n, pid int, path string) string {
 // files, from one reading of the held locks for every team (A40). A
 // project's own list replaces the shared one, an empty one included; a slot
 // a hold keeps is held, not used. A lock file one project cannot look at
-// costs that project's slots alone, logged once for it.
+// costs that project's slots alone, logged once for it; the lock list itself
+// read every poll, so nothing logs a recovery (QA #58's D8).
 func TestEachTeamCountsItsOwnLocks(t *testing.T) {
 	t.Parallel()
 	locks := t.TempDir()
@@ -506,6 +560,7 @@ func TestEachTeamCountsItsOwnLocks(t *testing.T) {
 			} else {
 				assert.NotContains(t, logs.String(), "cannot count")
 			}
+			assert.NotContains(t, logs.String(), "counting again", "nothing failed that could recover")
 		})
 	}
 }
@@ -552,10 +607,11 @@ func TestAProjectsLockFileRecovers(t *testing.T) {
 
 // TestOnePollOneReading: a poll reads the lock list once, and every project
 // counts its lock files from that one reading (A40). The stand-in
-// /proc/locks is a FIFO whose first reading, both its passes, lists a lock
-// as held, and whose every later reading lists nothing: two projects that
-// list that lock count it held, the same, where a reading of its own for
-// the second would read it free (QA #58, F1).
+// /proc/locks is a FIFO whose first two passes list a lock as held, both
+// within the poll's first reading, three staggered reads of the list, and
+// whose every later pass lists nothing: two projects that list that lock
+// count it held, the same, where a reading of its own for the second would
+// read it free (QA #58, F1).
 func TestOnePollOneReading(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -564,7 +620,8 @@ func TestOnePollOneReading(t *testing.T) {
 	fifo := filepath.Join(dir, "locks")
 	require.NoError(t, syscall.Mkfifo(fifo, 0o600))
 
-	// Each open of the FIFO is one pass; the first two get the held lock.
+	// Each open of the FIFO is one pass; the first two, both in the first
+	// reading, get the held lock.
 	held := lockLine(t, 1, 999999, lock)
 	var stop atomic.Bool
 	done := make(chan struct{})

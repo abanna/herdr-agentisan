@@ -41,10 +41,20 @@ const (
 	// CtxCeiling is a worker's context reaching D7's ceiling, which is never
 	// skipped.
 	CtxCeiling Kind = "ctx_ceiling"
+	// Merged is a PR merged (A45): the GitHub collector's kinds follow.
+	Merged Kind = "merged"
+	// CIFailed is a PR's CI failing at its head.
+	CIFailed Kind = "ci_failed"
+	// CIPassed is a PR's CI passing at its head.
+	CIPassed Kind = "ci_passed"
+	// Dirty is a PR with a merge conflict at its head.
+	Dirty Kind = "dirty"
+	// Approved is a PR's first 👍.
+	Approved Kind = "approved"
 )
 
 // Kinds are every kind, in the order the configuration documents them.
-var Kinds = []Kind{TurnEnded, Blocked, Unknown, Gone, Started, CtxSoft, CtxHard, CtxCeiling}
+var Kinds = []Kind{TurnEnded, Blocked, Unknown, Gone, Started, CtxSoft, CtxHard, CtxCeiling, Merged, CIFailed, CIPassed, Dirty, Approved}
 
 // Skippable reports whether a team's configuration can skip k: every kind
 // but the context ceiling, which always reaches the boss (D7).
@@ -53,9 +63,11 @@ func (k Kind) Skippable() bool { return k != CtxCeiling }
 // Repeats reports whether a notice of k again inside the repeat window is
 // dropped. A turn's end and a start are events, never repeats, and the
 // context levels are not either: their source keeps a memory of its own
-// per level, and a level crossed again after it re-armed is news.
+// per level, and a level crossed again after it re-armed is news. Nor are
+// GitHub's: its seen-set tells each once, and a PR's CI failing again at a
+// new head is news.
 func (k Kind) Repeats() bool {
-	return !slices.Contains([]Kind{TurnEnded, Started, CtxSoft, CtxHard, CtxCeiling}, k)
+	return !slices.Contains([]Kind{TurnEnded, Started, CtxSoft, CtxHard, CtxCeiling, Merged, CIFailed, CIPassed, Dirty, Approved}, k)
 }
 
 // Notice is one line for one team's boss.

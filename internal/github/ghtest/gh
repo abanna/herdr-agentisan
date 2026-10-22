@@ -1,19 +1,23 @@
 #!/bin/sh
 # ghtest's stand-in for gh. It records the call in $FAKE_GH_DIR, then answers
 # as the files there say. It never reaches GitHub, and it writes down only
-# the variables it names, never the rest of its environment.
+# the variables it names, never the rest of its environment. A call is `pr`
+# (pr list), `view` (pr view <n>) or `api`; mode.<call> overrides mode.
 set -u
 d=${FAKE_GH_DIR:?}
-verb=${1:-}
-echo "$verb" >>"$d/calls"
-printf '%s\n' "$@" >"$d/args.$verb"
+call=${1:-}
+if [ "$call" = pr ] && [ "${2:-}" = view ]; then call=view; fi
+echo "$call" >>"$d/calls"
+printf '%s\n' "$@" >"$d/args.$call"
 tty=none
 for fd in 0 1 2; do
 	if [ -t $fd ]; then tty=$fd; fi
 done
 printf 'GH_PROMPT_DISABLED=%s\nNO_COLOR=%s\nGH_NO_UPDATE_NOTIFIER=%s\nPROBE=%s\nTTY=%s\n' \
 	"${GH_PROMPT_DISABLED-}" "${NO_COLOR-}" "${GH_NO_UPDATE_NOTIFIER-}" "${PROBE-}" "$tty" >"$d/env"
-case $(cat "$d/mode" 2>/dev/null) in
+mode=$d/mode
+if [ -s "$d/mode.$call" ]; then mode=$d/mode.$call; fi
+case $(cat "$mode" 2>/dev/null) in
 fail)
 	cat "$d/stderr" >&2 2>/dev/null
 	exit 1
@@ -28,11 +32,15 @@ warn) echo "A new release of gh is available" >&2 ;;
 flood) exec yes ;;
 kill) kill -9 $$ ;;
 esac
-case $verb in
+case $call in
 pr) cat "$d/prs" ;;
+view) cat "$d/view.${3:-}" 2>/dev/null || {
+	echo "GraphQL: Could not resolve to a PullRequest with the number of ${3:-}." >&2
+	exit 1
+} ;;
 api) cat "$d/issues" ;;
 *)
-	echo "ghtest: unexpected gh $verb" >&2
+	echo "ghtest: unexpected gh $call" >&2
 	exit 2
 	;;
 esac

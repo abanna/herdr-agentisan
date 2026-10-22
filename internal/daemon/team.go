@@ -16,6 +16,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
 	"github.com/abanna/herdr-agentisan/internal/telemetry"
+	"github.com/abanna/herdr-agentisan/internal/testslots"
 )
 
 // TeamOptions turn on the team poll (D3, D4, D5): on start and every poll
@@ -37,8 +38,10 @@ type TeamOptions struct {
 	// the same file gives a github repo.
 	GitHub GitHubOptions
 	// procLocks and proc, when set, stand in for /proc/locks and /proc in
-	// counting the test slots (tests).
+	// counting the test slots, and readLocks for the reading of them
+	// (tests).
 	procLocks, proc string
+	readLocks       func(procLocks, proc string) (*testslots.Reading, error)
 }
 
 // teamConfig is what the poll reads of the configuration: the project the ◆
@@ -111,9 +114,10 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	header := newHeaderCache(o.Team.GitHub)
+	n := o.newNotices()
 	var wg sync.WaitGroup
-	wg.Go(func() { o.collectGitHub(ctx, header) })
-	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header, idle, views, ready, in) })
+	wg.Go(func() { o.collectGitHub(ctx, header, o.newGitHubNotices(st, n)) })
+	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header, idle, views, ready, in, n) })
 	wg.Go(func() { o.syncView(ctx, views, ident) })
 	wg.Go(func() { o.newDispatcher(st, in).run(ctx) })
 	return func() {
@@ -144,7 +148,7 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 //
 // Each poll gives in its model, or none when it built none, and so wakes the
 // dispatcher.
-func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, header *headerCache, idle *team.IdleClock, views *viewSync, ready *atomic.Bool, in *inbox) {
+func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, header *headerCache, idle *team.IdleClock, views *viewSync, ready *atomic.Bool, in *inbox, n *notices) {
 	teams, err := settings.Teams(o.Team.ConfigDir)
 	if err != nil {
 		o.Logger.Error().Err(err).Msg("herdr-agentisan.toml does not resolve; the ◆ spaces belong to the unnamed project, and no tabs team is found, until it is fixed and the daemon restarts")
@@ -161,7 +165,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 		cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, idle: idle, cache: cache, header: header,
 		models: newLaunchModels(), descriptions: newGroupDescriptions(o.Team.ConfigDir),
 		slots: o.newSlotCounter(), bind: &binder{ready: ready},
-		notices: o.newNotices(),
+		notices: n,
 	}
 	onServer := o.onServer(ident)
 	c := herdr.Client{SocketPath: o.HerdrSocket, Dialed: onServer}
@@ -224,6 +228,8 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 // daemon's server.
 // Each row carries its pane's launch model, which herdr is asked for only
 // when the pane changed (A39), and the boss its agent process's start (A47).
+// Each boss is told its team's status changes (A44) and the context levels
+// its panes crossed, a ceiling with a toast for the user first (A33).
 // The model it returns is nil when a pane, workspace or tab list failed and
 // no model was built; agent names change neither which panes it holds nor
 // their statuses, so a failed agent list still gives the status events their
@@ -276,6 +282,7 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	// stop the idle clock, nor the notices of a status change.
 	tp.idle.Observe(m, now)
 	tp.notices.observe(m, agents, agentsErr == nil, now)
+	o.observeCtx(ctx, c, tp.notices, m, now)
 	if agentsErr == nil {
 		tp.stages.Observe(m, now)
 		models, err := tp.models.refresh(ctx, c, pp, agentPanes(m, panes), o.Hooks.StartTime, now, o.Logger)

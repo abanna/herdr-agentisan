@@ -26,7 +26,7 @@ everything.
 
 | Task | Command |
 |------|---------|
-| Lint | `go tool golangci-lint run ./...` |
+| Lint | `go tool golangci-lint run --allow-serial-runners ./...` |
 | Format check | `go tool golangci-lint fmt --diff ./...` |
 | Vet | `go vet ./...` |
 | Run tests with a coverage profile | `go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage.out -covermode=atomic ./...` |
@@ -119,7 +119,7 @@ exempts whatever is later added under that name.
   `docs/config/claude-hooks.example.json` and
   `docs/config/codex-turn-hooks.example.toml`). They read `HERDR_PANE_ID`, a
   pane-shell variable, which is why it is not in `plugin.Env`.
-- `internal/codexhooks/` — installing those Codex hooks (ADR-001 A43):
+- `internal/codexhooks/` — installing the `ctx` Codex hooks (ADR-001 A43):
   `codex hooks` writes them into `$CODEX_HOME/hooks.json`, after every entry
   already there, which it keeps as written, and never edits `config.toml` or
   trusts a hook; `--check` only reports. Tests use temp Codex homes, never
@@ -144,7 +144,9 @@ exempts whatever is later added under that name.
   with its description, re-read when the shared file changes
   (`descriptions.go`, A36), and sends each status change since the last
   poll as a workflow event (`events.go`), and tells each team's boss what
-  the poll sees, through `internal/notice` (`notices.go`, A44). It keeps
+  the poll sees, through `internal/notice` (`notices.go`, A44), with the
+  context levels each agent pane crosses and, at the ceiling, a toast for
+  the user (A33). It keeps
   herdr's agent view on the focused team, which focus events and the poll
   feed it, and clears it outside every team and on a clean stop (`view.go`,
   the A28 addendum, A49).
@@ -174,10 +176,14 @@ exempts whatever is later added under that name.
 - `internal/notice/` — boss notices (ADR-001 A44): the team poll's source
   (`Watch`: a turn's end from `agent.list`'s `completion_seq`, blocked,
   unknown for two polls, gone (a pane closed or moved, or its agent exited),
-  and the daemon's start), the per-boss pacing (`Batcher`: coalesced, at
-  most one message per gap, repeats dropped, 8 KiB a message) and the `Sink`
-  that delivers it. The daemon's sink writes daemon.log until the inbox
-  delivers (NERD-5256). Pure: tests build models by hand.
+  and the daemon's start), the context levels' source (`CtxWatch`: each
+  agent pane's ctx crossing its rotation thresholds, the boss's included,
+  remembered by terminal and re-armed 5 under, A33), GitHub's events
+  (`github.go`, A45: merged, CI failed or passed, a conflict, a 👍, each
+  with its seen-set key), the per-boss pacing (`Batcher`: coalesced, at most
+  one message per gap, repeats dropped, 8 KiB a message) and the `Sink` that
+  delivers it. The daemon's sink writes daemon.log until the inbox delivers
+  (NERD-5256). Pure: tests build models by hand.
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
   `team status`, `worker spawn` and `worker retire` so far, and `send`'s
   sender and recipient (A30): each group's counts and members on a tabs team
@@ -194,9 +200,13 @@ exempts whatever is later added under that name.
   references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check,
   each group's one-line description (A36), never from a repo file, and each
   project's test-slot lock files, which the daemon reads once at start
-  (`tests.go`, A40). A repo file is committed, so it sets only colour, github,
-  group counts, models and rotation (A46, `repoFileKeys`, refused by default),
-  and a model from any layer is checked as safe to pass to an agent
+  (`tests.go`, A40), and every project's rotation thresholds, a group's
+  own included, which the daemon reads once at start, the repo file
+  included (`rotation.go`, A33). A repo file is committed, so it sets only
+  colour, github, group counts, models and rotation (A46, `repoFileKeys`,
+  refused by default, an empty table adding an entry included, A53), and
+  the merged model, whichever layer sets it, is checked as safe to pass to
+  an agent
   (`CheckModel`). Sample in `docs/config/herdr-agentisan.example.toml`.
 - `internal/routing/` — the model and effort each spawned worker starts
   with (ADR-001 A50, NERD-5289). It reads the user's routing rules,
@@ -214,8 +224,10 @@ exempts whatever is later added under that name.
   holds a worker's inbox until it completes, which rebinds the worker in the
   same transaction. A `workers` row binds its pane by terminal, with the
   shell the team poll read (migration 0003, A35), and the poll's writes are
-  compare-and-sets on the row as it read it. Tests open a fresh database in
-  a temp dir; the store is never mocked.
+  compare-and-sets on the row as it read it. The GitHub notices' seen-set,
+  open PRs and seed marks (`github.go`, migration 0004, A45) make each
+  event told once across restarts. Tests open a fresh database in a temp
+  dir; the store is never mocked.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real
@@ -226,7 +238,10 @@ exempts whatever is later added under that name.
   the snapshot's PR states. `ghtest` is a checked-in stand-in gh: tests run
   it with an environment they build, never the real gh or GitHub. The
   daemon's collector (`internal/daemon/github.go`) runs it every 60 s beside
-  the team poll and caches each project's result for the snapshot.
+  the team poll and caches each project's result for the snapshot, then
+  diffs each list against state.db and hands the boss's GitHub notices to
+  the poll (`ghnotices.go`, A45), looking up a PR that left the list with
+  `gh pr view`.
 - `internal/testslots/` — the dashboard header's test slots (ADR-001 A31,
   A40): which of a project's lock files some process holds a lock on, read
   from the kernel's `/proc/locks` once every team poll without opening or
