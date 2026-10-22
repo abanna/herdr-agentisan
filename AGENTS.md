@@ -301,6 +301,13 @@ exempts whatever is later added under that name.
   reads fenced to the repo it starts in and the daemon's directory.
   `herdr-agentisan events` and `debugger args` are its commands;
   `TestRoleMatchesTheLaunch` keeps the role, the CLI and the launch in step.
+- `roles/review.md` — the Codex review worker's role (ADR-001 A55):
+  agentisan-skills' `## Review guidelines`, vendored byte for byte, with the
+  reviewer's read-only rules, its report's fields and its final line. The
+  boss sends it whole with `send` before each review; no Go reads it.
+  `internal/settings/reviewrole_test.go` pins the section's hash and commit,
+  the guards and the read-only default, and
+  `internal/routing/reviewrole_test.go` routing's `findings_require`.
 - `.devcontainer/` — the reproducible dev environment: Go 1.26.10 plus the
   two tools `go tool` does not resolve (Task, uv).
 - `docs/architecture.md` — why the pieces are shaped this way, and the
