@@ -1,6 +1,7 @@
 package herdr
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -30,6 +31,12 @@ var (
 	// (timeout, src/api/wait.rs:114-126).
 	ErrWaitTimeout = errors.New("herdr wait timed out")
 )
+
+// ErrNotSwapped means pane.swap answered without swapping anything: a pane
+// it did not find, the same pane twice, or panes in two tabs. herdr answers
+// that as a success with changed false and the reason (src/api/schema/
+// panes.rs:521-540 at v0.9.5), so it is no ErrAPI.
+var ErrNotSwapped = errors.New("herdr swapped no panes")
 
 // workforceCodes maps the codes above to their sentinels; APIError.Is reads
 // it.
@@ -299,4 +306,96 @@ func (c Client) WaitForOutput(ctx context.Context, paneID, pattern string, timeo
 		return "", fmt.Errorf("%w: pane.wait_for_output: result type %q with no matched_line, want \"output_matched\"", ErrProtocol, out.Type)
 	}
 	return *out.MatchedLine, nil
+}
+
+// PluginSplit opens one of a plugin's manifest [[panes]] entrypoints as a
+// split of a pane, never focused. herdr splits right or down only
+// (src/api/schema/common.rs:72-75 at v0.9.5).
+type PluginSplit struct {
+	PluginID   string
+	Entrypoint string
+	// TargetPaneID is the pane split; Direction is "right" or "down".
+	TargetPaneID string
+	Direction    string
+}
+
+// OpenPluginSplit asks herdr to run a plugin pane as a split and returns the
+// new pane, which herdr labels with the entrypoint's manifest title:
+// plugin.pane.open with placement split, answered with plugin_pane_opened
+// {plugin_pane: {plugin_id, entrypoint, pane}} (src/app/api/plugins/
+// panes.rs:294, 329 at v0.9.5).
+func (c Client) OpenPluginSplit(ctx context.Context, s PluginSplit) (PaneInfo, error) {
+	params := struct {
+		PluginID     string `json:"plugin_id"`
+		Entrypoint   string `json:"entrypoint"`
+		Placement    string `json:"placement"`
+		TargetPaneID string `json:"target_pane_id"`
+		Direction    string `json:"direction"`
+		Focus        bool   `json:"focus"`
+	}{PluginID: s.PluginID, Entrypoint: s.Entrypoint, Placement: "split", TargetPaneID: s.TargetPaneID, Direction: s.Direction}
+	var out struct {
+		Type       string `json:"type"`
+		PluginPane *struct {
+			Pane *PaneInfo `json:"pane"`
+		} `json:"plugin_pane"`
+	}
+	if err := c.Call(ctx, "plugin.pane.open", params, &out); err != nil {
+		return PaneInfo{}, err
+	}
+	if out.Type != "plugin_pane_opened" {
+		return PaneInfo{}, fmt.Errorf("%w: plugin.pane.open: result type %q, want \"plugin_pane_opened\"", ErrProtocol, out.Type)
+	}
+	if out.PluginPane == nil || out.PluginPane.Pane == nil || out.PluginPane.Pane.PaneID == "" {
+		return PaneInfo{}, fmt.Errorf("%w: plugin.pane.open: result has no plugin_pane.pane.pane_id", ErrProtocol)
+	}
+	return *out.PluginPane.Pane, nil
+}
+
+// SwapPanes swaps two panes of one tab in its layout: pane.swap, answered
+// with pane_swap. A pane keeps its id and label, which are the pane's, not
+// the place's. herdr also focuses source and switches to its tab
+// (src/app/api/panes.rs:883-890 at v0.9.5). A swap herdr declines is
+// ErrNotSwapped, with its reason.
+func (c Client) SwapPanes(ctx context.Context, source, target string) error {
+	params := struct {
+		SourcePaneID string `json:"source_pane_id"`
+		TargetPaneID string `json:"target_pane_id"`
+	}{SourcePaneID: source, TargetPaneID: target}
+	var out struct {
+		Type string `json:"type"`
+		Swap *struct {
+			Changed bool   `json:"changed"`
+			Reason  string `json:"reason"`
+		} `json:"swap"`
+	}
+	if err := c.Call(ctx, "pane.swap", params, &out); err != nil {
+		return err
+	}
+	if out.Type != "pane_swap" || out.Swap == nil {
+		return fmt.Errorf("%w: pane.swap: result type %q with no swap, want \"pane_swap\"", ErrProtocol, out.Type)
+	}
+	if !out.Swap.Changed {
+		return fmt.Errorf("%w: %s with %s: %s", ErrNotSwapped, source, target, cmp.Or(out.Swap.Reason, "unchanged"))
+	}
+	return nil
+}
+
+// RenamePane sets a pane's label, which pane.list then reports: pane.rename,
+// answered with pane_info.
+func (c Client) RenamePane(ctx context.Context, paneID, label string) error {
+	params := struct {
+		PaneID string `json:"pane_id"`
+		Label  string `json:"label"`
+	}{PaneID: paneID, Label: label}
+	var out struct {
+		Type string    `json:"type"`
+		Pane *PaneInfo `json:"pane"`
+	}
+	if err := c.Call(ctx, "pane.rename", params, &out); err != nil {
+		return err
+	}
+	if out.Type != "pane_info" || out.Pane == nil || out.Pane.PaneID == "" {
+		return fmt.Errorf("%w: pane.rename: result type %q with no pane, want \"pane_info\"", ErrProtocol, out.Type)
+	}
+	return nil
 }

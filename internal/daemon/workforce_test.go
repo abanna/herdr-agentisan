@@ -90,17 +90,19 @@ func TestWorkforceOpsOverTheSocket(t *testing.T) {
 		args any
 		code string
 	}{
-		"an unknown project":         {op: daemon.OpTeamStatus, args: map[string]any{"project": "nope"}, code: "unknown_project"},
-		"an unknown arg":             {op: daemon.OpTeamStatus, args: map[string]any{"projekt": "ha"}, code: "bad_request"},
-		"args that are no obj":       {op: daemon.OpTeamStatus, args: []int{1}, code: "bad_request"},
-		"a caller pane not a string": {op: daemon.OpTeamStatus, args: map[string]any{"caller_pane": 7}, code: "bad_request"},
-		"a count below 1":            {op: daemon.OpWorkerSpawn, args: map[string]any{"group": "coder"}, code: "bad_request"},
-		"a count past int64":         {op: daemon.OpWorkerSpawn, args: json.RawMessage(`{"group":"coder","count":99999999999999999999}`), code: "bad_request"},
-		"past the slot cap":          {op: daemon.OpWorkerSpawn, args: map[string]any{"group": "coder", "count": 2}, code: "slot_cap"},
-		"an unknown group":           {op: daemon.OpWorkerSpawn, args: map[string]any{"group": "qa", "count": 1}, code: "unknown_group"},
-		"retire with no name":        {op: daemon.OpWorkerRetire, args: map[string]any{}, code: "bad_request"},
-		"retire the boss":            {op: daemon.OpWorkerRetire, args: map[string]any{"target": "w14:p1"}, code: "not_a_worker"},
-		"retire nobody":              {op: daemon.OpWorkerRetire, args: map[string]any{"target": "ha-coder-9"}, code: "unknown_worker"},
+		"an unknown project":          {op: daemon.OpTeamStatus, args: map[string]any{"project": "nope"}, code: "unknown_project"},
+		"an unknown arg":              {op: daemon.OpTeamStatus, args: map[string]any{"projekt": "ha"}, code: "bad_request"},
+		"args that are no obj":        {op: daemon.OpTeamStatus, args: []int{1}, code: "bad_request"},
+		"a caller pane not a string":  {op: daemon.OpTeamStatus, args: map[string]any{"caller_pane": 7}, code: "bad_request"},
+		"a count below 1":             {op: daemon.OpWorkerSpawn, args: map[string]any{"group": "coder"}, code: "bad_request"},
+		"a count past int64":          {op: daemon.OpWorkerSpawn, args: json.RawMessage(`{"group":"coder","count":99999999999999999999}`), code: "bad_request"},
+		"past the slot cap":           {op: daemon.OpWorkerSpawn, args: map[string]any{"group": "coder", "count": 2}, code: "slot_cap"},
+		"an unknown group":            {op: daemon.OpWorkerSpawn, args: map[string]any{"group": "qa", "count": 1}, code: "unknown_group"},
+		"team up, an unknown project": {op: daemon.OpTeamUp, args: map[string]any{"project": "nope"}, code: "unknown_project"},
+		"team up, an unknown arg":     {op: daemon.OpTeamUp, args: map[string]any{"group": "coder"}, code: "bad_request"},
+		"retire with no name":         {op: daemon.OpWorkerRetire, args: map[string]any{}, code: "bad_request"},
+		"retire the boss":             {op: daemon.OpWorkerRetire, args: map[string]any{"target": "w14:p1"}, code: "not_a_worker"},
+		"retire nobody":               {op: daemon.OpWorkerRetire, args: map[string]any{"target": "ha-coder-9"}, code: "unknown_worker"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -492,17 +494,24 @@ func TestAnOpEndsWithTheDaemon(t *testing.T) {
 }
 
 // TestTheWorkforceGetsThePreflightHook: Hooks.Preflight is the check the
-// daemon's spawns run (A34); with none, the service runs its default.
+// daemon's spawns run (A34); with none, the service runs its default. The
+// team's dashboard pane and Codex hooks check are the TeamOptions' own.
 func TestTheWorkforceGetsThePreflightHook(t *testing.T) {
 	t.Parallel()
 	var checked string
-	o := daemon.Options{Team: &daemon.TeamOptions{}, Hooks: daemon.Hooks{Preflight: func(_ context.Context, repo string) error {
+	dash := workforce.DashboardPane{PluginID: "p", Entrypoint: "dashboard", Title: "Dashboard"}
+	o := daemon.Options{Team: &daemon.TeamOptions{Dashboard: dash, CodexHooks: func() (bool, error) { return true, nil }}, Hooks: daemon.Hooks{Preflight: func(_ context.Context, repo string) error {
 		checked = repo
 		return nil
 	}}}
 	svc := daemon.WorkforceOf(o, daemon.Identity{})
 	require.NoError(t, svc.Preflight(t.Context(), "/repo"))
 	assert.Equal(t, "/repo", checked)
+	assert.Equal(t, dash, svc.Dashboard)
+	require.NotNil(t, svc.CodexHooks)
+	installed, err := svc.CodexHooks()
+	require.NoError(t, err)
+	assert.True(t, installed)
 	assert.Nil(t, daemon.WorkforceOf(daemon.Options{Team: &daemon.TeamOptions{}}, daemon.Identity{}).Preflight)
 }
 
@@ -536,9 +545,10 @@ func TestWorkforceCodes(t *testing.T) {
 	}
 }
 
-// TestOpBudgets: team status, retire and send get 10 s, spawn 100 s, and retire
-// --after-handoff 1,500 s, both in the client's wait and in the budget the
-// daemon's op map enforces; any other op none of its own.
+// TestOpBudgets: team status, retire and send get 10 s, spawn 100 s, team up
+// a spawn's, whatever that is, and retire --after-handoff 1,500 s, both in
+// the client's wait and in the budget the daemon's op map enforces; any other
+// op none of its own.
 func TestOpBudgets(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -548,6 +558,7 @@ func TestOpBudgets(t *testing.T) {
 	}{
 		{daemon.OpTeamStatus, ``, 10 * time.Second},
 		{daemon.OpWorkerSpawn, `{"group":"coder","count":1}`, 100 * time.Second},
+		{daemon.OpTeamUp, ``, daemon.OpBudget(daemon.OpWorkerSpawn, nil)},
 		{daemon.OpWorkerRetire, `{"target":"x"}`, 10 * time.Second},
 		{daemon.OpWorkerRetire, `{"target":"x","after_handoff":true}`, 1500 * time.Second},
 		{daemon.OpWorkerRetire, `not json`, 10 * time.Second},
@@ -558,7 +569,7 @@ func TestOpBudgets(t *testing.T) {
 		assert.Equal(t, tc.want, daemon.ServedBudget(tc.op, args), "the budget the daemon enforces: %s %s", tc.op, tc.args)
 	}
 	assert.Zero(t, daemon.OpBudget("health", nil))
-	assert.Equal(t, []string{daemon.OpSend, daemon.OpTeamStatus, daemon.OpWorkerRetire, daemon.OpWorkerSpawn}, daemon.WorkforceOpNames())
+	assert.Equal(t, []string{daemon.OpSend, daemon.OpTeamStatus, daemon.OpTeamUp, daemon.OpWorkerRetire, daemon.OpWorkerSpawn}, daemon.WorkforceOpNames())
 	for _, op := range daemon.WorkforceOpNames() {
 		assert.Positive(t, daemon.ServedBudget(op, nil), "%s has a budget in the table, not a nil one", op)
 	}
@@ -580,5 +591,6 @@ func TestAWorkforceCommandFitsTheWrapper(t *testing.T) {
 		assert.LessOrEqual(t, longest(op, ""), 115*time.Second, "%s's window, budget and exchange", op)
 	}
 	assert.Equal(t, 115*time.Second, longest(daemon.OpWorkerSpawn, `{"group":"coder","count":1}`), "a spawn takes all of it")
+	assert.Equal(t, 115*time.Second, longest(daemon.OpTeamUp, ""), "team up, with a spawn's budget, takes all of it too")
 	assert.LessOrEqual(t, longest(daemon.OpWorkerRetire, `{"target":"x","after_handoff":true}`), 1795*time.Second, "a retire after a handoff")
 }

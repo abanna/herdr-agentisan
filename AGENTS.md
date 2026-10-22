@@ -186,13 +186,16 @@ exempts whatever is later added under that name.
   delivers it. The daemon's sink writes daemon.log until the inbox delivers
   (NERD-5256). Pure: tests build models by hand.
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
-  `team status`, `worker spawn` and `worker retire` so far, and `send`'s
+  `team status`, `team up`, `worker spawn` and `worker retire`, and `send`'s
   sender and recipient (A30): each group's counts and members on a tabs team
   or the ◆ spaces, with idle times from the daemon's clock and the rows no
   pane is bound to (A35); opening a tab per worker and waiting for its agent,
-  after `internal/preflight`'s check; and closing the pane a worker's row is
-  bound to, after its handoff when asked, with the row retired. The daemon
-  runs them; `internal/cli` only asks it.
+  after `internal/preflight`'s check, each group up to its count for
+  `team up`, which also opens the team's dashboard above the boss
+  (`dashboard.go`); and closing the pane a worker's row is bound to, after
+  its handoff when asked, with the row retired. The daemon runs them, with
+  the plugin's dashboard pane and the Codex hooks check `internal/cli` gives
+  it; `internal/cli` only asks it.
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
@@ -302,6 +305,13 @@ exempts whatever is later added under that name.
   reads fenced to the repo it starts in and the daemon's directory.
   `herdr-agentisan events` and `debugger args` are its commands;
   `TestRoleMatchesTheLaunch` keeps the role, the CLI and the launch in step.
+- `roles/review.md` — the Codex review worker's role (ADR-001 A55):
+  agentisan-skills' `## Review guidelines`, vendored byte for byte, with the
+  reviewer's read-only rules, its report's fields and its final line. The
+  boss sends it whole with `send` before each review; no Go reads it.
+  `internal/settings/reviewrole_test.go` pins the section's hash and commit,
+  the guards and the read-only default, and
+  `internal/routing/reviewrole_test.go` routing's `findings_require`.
 - `.devcontainer/` — the reproducible dev environment: Go 1.26.10 plus the
   two tools `go tool` does not resolve (Task, uv).
 - `docs/architecture.md` — why the pieces are shaped this way, and the

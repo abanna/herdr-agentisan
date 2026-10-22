@@ -145,7 +145,7 @@ func TestPlanPassesAnEffort(t *testing.T) {
 	kind, args, err = workforce.Plan(p, settings.ReviewType, "gpt-5.1-codex", "high")
 	require.NoError(t, err)
 	assert.Equal(t, "codex", kind)
-	assert.Equal(t, []string{"--no-daemon", "--model", "gpt-5.1-codex", "-c", `model_reasoning_effort="high"`}, args)
+	assert.Equal(t, []string{"--no-daemon", "--sandbox", "read-only", "--model", "gpt-5.1-codex", "-c", `model_reasoning_effort="high"`}, args)
 
 	for _, effort := range []string{"High", "-high", "high;rm", "aaaaaaaaaaaaaaaaa"} {
 		_, _, err := workforce.Plan(p, "coder", "", effort)
@@ -182,12 +182,12 @@ func TestSpawnIDs(t *testing.T) {
 	assert.Equal(t, "ha-review-1", res.Workers[0].ID)
 	assert.Equal(t, "codex", res.Workers[0].Agent, "review launches codex")
 	starts := f.h.params("agent.start")
-	assert.Equal(t, []any{"--no-daemon"}, starts[len(starts)-1]["args"], "codex off the daemon (A22), with no --name and no model")
+	assert.Equal(t, []any{"--no-daemon", "--sandbox", "read-only"}, starts[len(starts)-1]["args"], "codex off the daemon (A22), read-only (A55), with no --name and no model")
 
 	cfg := strings.Replace(teamConfig, "workers = 2\nslots = 3", "workers = 2\nslots = 9", 1)
 	g := newFixture(t, cfg)
 	g.h.addTab(g.ws, "ha-coder-1", "", "unknown")
-	_, err = g.st.BindWorker(t.Context(), store.Worker{LogicalID: "ha-coder-2", PaneID: "w99:p1", TerminalID: "term_gone"}, time.Now())
+	_, err = g.st.BindWorker(t.Context(), store.Worker{LogicalID: "ha-coder-2", Project: "herdr-agentisan", PaneID: "w99:p1", TerminalID: "term_gone"}, time.Now())
 	require.NoError(t, err)
 	require.NoError(t, g.st.SetWorkerStatus(t.Context(), store.Worker{LogicalID: "ha-coder-2"}, store.StatusRetired, time.Now()))
 	res, err = g.svc.Spawn(t.Context(), workforce.SpawnRequest{Selector: workforce.Selector{Project: "herdr-agentisan"}, Group: "coder", Count: 1})
@@ -548,7 +548,7 @@ func TestSpawnReadiness(t *testing.T) {
 
 // TestSpawnRereadsABusyPane: a busy pane is re-read before each retry, and
 // one herdr reissued to another terminal meanwhile gets no command and stays
-// open (QA #78, F3.3).
+// open (QA #78, F3.3); a re-read herdr refuses ends the retries (QA #78 R2).
 func TestSpawnRereadsABusyPane(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, teamConfig)
@@ -568,12 +568,22 @@ func TestSpawnRereadsABusyPane(t *testing.T) {
 	assert.Len(t, f.h.params("agent.start"), 1, "nothing typed into another terminal")
 	assert.NotNil(t, f.h.tabByLabel("ha-coder-1"), "another terminal's pane is left open")
 	assert.Equal(t, store.StatusFailed, f.row(t, "ha-coder-1").Status)
+
+	g := newFixture(t, teamConfig)
+	g.h.busy = 1
+	g.h.fail["pane.get"] = "server_error"
+	_, err = g.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1})
+	require.ErrorIs(t, err, workforce.ErrSpawnFailed)
+	require.ErrorIs(t, err, workforce.ErrHerdr)
+	assert.Contains(t, err.Error(), "re-read ha-coder-1's pane")
+	assert.Len(t, g.h.params("agent.start"), 1, "no retry on a pane it could not re-read")
 }
 
 // TestSpawnTimesOut: an agent that never reports ready, or a shell whose
-// prompt never shows, fails the spawn when the op's budget ends, and is
-// cleaned up even so. A Claude that settles in unknown is not ready,
-// interactive or not: only codex reports that.
+// prompt never shows, fails the spawn when the op's budget ends, as out of
+// time and never as a herdr failure, and is cleaned up even so. A Claude
+// that settles in unknown is not ready, interactive or not: only codex
+// reports that.
 func TestSpawnTimesOut(t *testing.T) {
 	t.Parallel()
 	withPrompt := strings.Replace(teamConfig, "layout = \"tabs\"\n", "layout = \"tabs\"\n\n[projects.herdr-agentisan.spawn]\nshell_prompt = '❯\\s*$'\n", 1)
@@ -603,7 +613,49 @@ func TestSpawnTimesOut(t *testing.T) {
 			_, err := f.svc.Spawn(ctx, workforce.SpawnRequest{Group: "coder", Count: 1})
 			require.ErrorIs(t, err, workforce.ErrSpawnFailed)
 			require.ErrorIs(t, err, context.DeadlineExceeded)
+			assert.NotErrorIs(t, err, workforce.ErrHerdr, "%v", err)
 			assert.Equal(t, store.StatusFailed, f.row(t, "ha-coder-1").Status)
+		})
+	}
+}
+
+// edgeCtx has a deadline but never reports itself done: the instant between
+// its deadline passing and its timer firing, held open.
+type edgeCtx struct {
+	context.Context
+	deadline time.Time
+}
+
+func (c edgeCtx) Deadline() (time.Time, bool) { return c.deadline, true }
+
+// TestSpawnAtTheDeadlineEdge: a herdr call the op's deadline ends, in the
+// instant before the context's timer marks it done, is out of time, never a
+// herdr failure (QA #78 R1): the prompt wait, and agent.start.
+func TestSpawnAtTheDeadlineEdge(t *testing.T) {
+	t.Parallel()
+	withPrompt := strings.Replace(teamConfig, "layout = \"tabs\"\n", "layout = \"tabs\"\n\n[projects.herdr-agentisan.spawn]\nshell_prompt = '❯\\s*$'\n", 1)
+	tests := map[string]struct{ config, held, says string }{
+		"the prompt wait": {config: withPrompt, held: "pane.wait_for_output", says: "matched spawn.shell_prompt \"❯\\\\s*$\" in time: context deadline exceeded"},
+		"agent.start":     {config: teamConfig, held: "agent.start", says: "start ha-coder-1: out of time: context deadline exceeded"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, tc.config)
+			f.h.promptAfter = 1 << 30
+			wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+				if r.Method == tc.held {
+					time.Sleep(3 * time.Second) // herdr holding the call past the op's deadline
+				}
+				return next()
+			})
+			ctx := edgeCtx{Context: t.Context(), deadline: time.Now().Add(1500 * time.Millisecond)}
+
+			_, err := f.svc.Spawn(ctx, workforce.SpawnRequest{Group: "coder", Count: 1})
+			require.ErrorIs(t, err, workforce.ErrSpawnFailed)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			assert.NotErrorIs(t, err, workforce.ErrHerdr, "%v", err)
+			assert.Contains(t, err.Error(), tc.says)
 		})
 	}
 }
@@ -1205,4 +1257,130 @@ func TestSpawnRefusesABadModelBeforeThePreflight(t *testing.T) {
 	_, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1, Model: "-x"})
 	require.ErrorIs(t, err, workforce.ErrBadRequest)
 	assert.False(t, called)
+}
+
+// TestSpawnKeepsAnotherProjectsIDs: an id is one row across every project, so
+// another project's, retired or lost, is never rebound into this one: its
+// queue and handoffs stay that project's, and spawn takes the next free n
+// (QA #78 F4).
+func TestSpawnKeepsAnotherProjectsIDs(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	f.bindRow(t, "ha-coder-1", "coder", "w99:p1")
+	f.exec(t, "UPDATE workers SET project = 'old-ha', terminal_id = 'term_old1', status = 'retired', retired_at = 1 WHERE logical_id = 'ha-coder-1'")
+	f.bindRow(t, "ha-coder-2", "coder", "w99:p2")
+	f.exec(t, "UPDATE workers SET project = 'old-ha', terminal_id = 'term_old2', status = 'lost' WHERE logical_id = 'ha-coder-2'")
+
+	res, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 2})
+	require.NoError(t, err)
+	require.Len(t, res.Workers, 2)
+	assert.Equal(t, []string{"ha-coder-3", "ha-coder-4"}, []string{res.Workers[0].ID, res.Workers[1].ID})
+	for _, id := range []string{"ha-coder-1", "ha-coder-2"} {
+		row := f.row(t, id)
+		assert.Equal(t, "old-ha", row.Project, id)
+		assert.Zero(t, row.Generation, id)
+	}
+	assert.Equal(t, store.StatusLost, f.row(t, "ha-coder-2").Status)
+}
+
+// TestSpawnCleansUpAtOnce: the workers up are marked active first, then every
+// worker that did not come up is cleaned up at once, on one budget, so a
+// slow herdr holds the reply for one cleanup, not one after another (QA #78
+// N1).
+func TestSpawnCleansUpAtOnce(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	var (
+		mu       sync.Mutex
+		arrived  int
+		together int
+	)
+	all := make(chan struct{})
+	wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+		switch {
+		case r.Method == "agent.start" && !strings.Contains(string(r.Params), `"ha-coder-1"`):
+			return errReply("invalid_agent_name")
+		case r.Method == "pane.close":
+			mu.Lock()
+			if arrived++; arrived == 2 {
+				close(all)
+			}
+			mu.Unlock()
+			select {
+			case <-all:
+				mu.Lock()
+				together++
+				mu.Unlock()
+			case <-time.After(2 * time.Second):
+			}
+		}
+		return next()
+	})
+
+	res, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 3})
+	require.ErrorIs(t, err, workforce.ErrSpawnFailed)
+	mu.Lock()
+	assert.Equal(t, 2, together, "both cleanups were in flight at once")
+	mu.Unlock()
+	require.Len(t, res.Workers, 1)
+	assert.Equal(t, store.StatusActive, f.row(t, "ha-coder-1").Status)
+	for _, id := range []string{"ha-coder-2", "ha-coder-3"} {
+		assert.Equal(t, store.StatusFailed, f.row(t, id).Status)
+		assert.Nil(t, f.h.tabByLabel(id))
+	}
+}
+
+// TestSpawnMarksTheWorkersUpActiveFirst: one worker comes up while its
+// sibling fails, and herdr holds the sibling's cleanup past the whole settle
+// budget. The worker up was marked active before any cleanup ran, so it
+// stays active, and the sibling's row ends failed (QA #78 N1, QA #96 P3).
+func TestSpawnMarksTheWorkersUpActiveFirst(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	release := make(chan struct{})
+	wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+		switch {
+		case r.Method == "agent.start" && strings.Contains(string(r.Params), `"ha-coder-2"`):
+			return errReply("invalid_agent_name")
+		case r.Method == "pane.get":
+			<-release // the cleanup's pane.get, past the settle budget
+		}
+		return next()
+	})
+	// After wrapHerdr's own: cleanups run last first, so the held pane.get is
+	// released before the server closes.
+	t.Cleanup(func() { close(release) })
+
+	res, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 2})
+	require.ErrorIs(t, err, workforce.ErrSpawnFailed)
+	require.Len(t, res.Workers, 1)
+	assert.Equal(t, "ha-coder-1", res.Workers[0].ID)
+	assert.Equal(t, store.StatusActive, f.row(t, "ha-coder-1").Status)
+	assert.Equal(t, store.StatusFailed, f.row(t, "ha-coder-2").Status)
+}
+
+// TestSpawnFailsTheRowBeforeASlowClose: a herdr that holds the cleanup's
+// pane.get past the whole settle budget still leaves the row failed, never
+// starting, where it would hold its slot for good, and the op still answers
+// within the 5 s the daemon's exchange leaves it (QA #78 N1).
+func TestSpawnFailsTheRowBeforeASlowClose(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	release := make(chan struct{})
+	wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+		switch r.Method {
+		case "agent.start":
+			return errReply("invalid_agent_name")
+		case "pane.get":
+			<-release // herdr answering later than the whole budget
+		}
+		return next()
+	})
+	t.Cleanup(func() { close(release) })
+
+	began := time.Now()
+	_, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1})
+	require.ErrorIs(t, err, workforce.ErrSpawnFailed)
+	assert.Less(t, time.Since(began), 5*time.Second, "answered within the exchange")
+	assert.Equal(t, store.StatusFailed, f.row(t, "ha-coder-1").Status)
 }

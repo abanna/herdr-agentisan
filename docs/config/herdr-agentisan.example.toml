@@ -91,8 +91,9 @@ repeat = 300
 #
 # A group's own agent (ADR-001 A23), which `worker spawn` launches: with a
 # command of its own, a type runs that command and that model only, never the
-# [agent] model above. Without one, review runs codex --no-daemon (A22), and
-# every other type [agent]'s command, with the group's model or [agent]'s.
+# [agent] model above. Without one, review runs codex --no-daemon --sandbox
+# read-only (A22, A55), and every other type [agent]'s command, with the
+# group's model or [agent]'s.
 # Spawn adds --no-daemon to any codex command that lacks it (A22). The command
 # runs claude or codex (D12) and carries no --model, -m, --name, -n or
 # --effort, nor a codex -c setting model or model_reasoning_effort: the
@@ -245,6 +246,8 @@ description = "runs the pre-PR test gates and owns the test-slot queue"
 [projects.agentisan.groups.coders]
 description = "write fixes + new code · run their own review loop"
 
+# review is the Codex reviewer (ADR-001 A55): read-only, it takes
+# roles/review.md and one PR's inputs from the boss for each review.
 [projects.agentisan.groups.review]
 workers = 1
 slots = 1

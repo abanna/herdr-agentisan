@@ -145,7 +145,8 @@ func TestGroupDescriptions(t *testing.T) {
 
 // TestGroupDescriptionErrors: a description is one line every client draws
 // as written, at most 80 characters; a group that sets workers or slots
-// still needs both; a group that only describes takes no agent, from any
+// still needs both, and the count it lacks is refused naming the group's
+// table first; a group that only describes takes no agent, from any
 // layer, judged once the project's whole configuration is merged; boss is
 // never a group; and a repo file cannot set one, since the daemon reads no
 // repo file. Each error names the key path and its
@@ -162,6 +163,7 @@ func TestGroupDescriptionErrors(t *testing.T) {
 		repoFile string // the repo file after schema_version
 		set      []string
 		wantIn   []string
+		prefix   string // what the error names first
 		value    string // a part of the value the error must not hold
 		inRepo   bool   // only the repo file is wrong, which the daemon never reads
 		// whole is judged only on a project's whole merge, its repo file's
@@ -195,18 +197,18 @@ func TestGroupDescriptionErrors(t *testing.T) {
 		"a byte-order mark": {file: described(`\ufeffabc`), wantIn: []string{"U+FEFF at byte 0"}},
 		"an empty group table": {
 			file:   app + "[projects.app.groups.qa]\n",
-			wantIn: []string{"projects.app.groups.qa (project, ", "every group needs workers", "groups.qa.workers (not set in any layer)"},
+			prefix: "projects.app.groups.qa (project, ", wantIn: []string{"every group needs workers", "groups.qa.workers (not set in any layer)"},
 		},
 		"not a string": {
 			file: app + "[projects.app.groups.qa]\ndescription = 5\n", wantIn: []string{"groups.qa.description"},
 		},
 		"workers without slots": {
 			file:   app + "[projects.app.groups.qa]\nworkers = 1\ndescription = \"x\"\n",
-			wantIn: []string{"projects.app.groups.qa (project, ", "every group needs slots", "groups.qa.slots (not set in any layer)"},
+			prefix: "projects.app.groups.qa (project, ", wantIn: []string{"every group needs slots", "groups.qa.slots (not set in any layer)"},
 		},
 		"slots without workers": {
 			file:   app + "[projects.app.groups.qa]\nslots = 1\ndescription = \"x\"\n",
-			wantIn: []string{"projects.app.groups.qa (project, ", "every group needs workers", "groups.qa.workers (not set in any layer)"},
+			prefix: "projects.app.groups.qa (project, ", wantIn: []string{"every group needs workers", "groups.qa.workers (not set in any layer)"},
 		},
 		"an agent's model on a group that only describes": {
 			file:   app + "[projects.app.groups.qa]\ndescription = \"x\"\nagent = { model = \"sonnet\" }\n",
@@ -252,14 +254,27 @@ func TestGroupDescriptionErrors(t *testing.T) {
 			wantIn: []string{"groups.qa.description (repo, ", settings.RepoFileName, "set it in " + settings.FileName}, value: "from the repo",
 		},
 		// A count no layer sets has no source to name, so the refusal names
-		// the group's table and the file that added it (NERD-5369, Draft 22).
+		// first the group's table and the layer that added it, its file or
+		// --set (NERD-5369, Drafts 22 and 25), however the table was written.
 		"an empty group table from a repo file": {
 			file: app, repoFile: "[groups.qa]\n", inRepo: true,
-			wantIn: []string{"groups.qa (repo, ", settings.RepoFileName, "every group needs workers", "groups.qa.workers (not set in any layer)"},
+			prefix: "groups.qa (repo, ", wantIn: []string{settings.RepoFileName, "every group needs workers", "groups.qa.workers (not set in any layer)"},
 		},
 		"workers without slots from a repo file": {
 			file: app, repoFile: "[groups.qa]\nworkers = 1\n", inRepo: true,
-			wantIn: []string{"groups.qa (repo, ", settings.RepoFileName, "every group needs slots", "groups.qa.slots (not set in any layer)"},
+			prefix: "groups.qa (repo, ", wantIn: []string{settings.RepoFileName, "every group needs slots", "groups.qa.slots (not set in any layer)"},
+		},
+		"workers without slots from a repo file's dotted key": {
+			file: app, repoFile: "groups.qa.workers = 1\n", inRepo: true,
+			prefix: "groups.qa (repo, ", wantIn: []string{settings.RepoFileName, "every group needs slots", "groups.qa.slots (not set in any layer)"},
+		},
+		"workers without slots in a project's inline table": {
+			file:   app + "[projects.app.groups]\nqa = { workers = 1 }\n",
+			prefix: "projects.app.groups.qa (project, ", wantIn: []string{"every group needs slots", "groups.qa.slots (not set in any layer)"},
+		},
+		"workers without slots from --set": {
+			file: app, set: []string{"groups.qa.workers=1"},
+			prefix: "groups.qa (flag, ", wantIn: []string{"every group needs slots", "groups.qa.slots (not set in any layer)"},
 		},
 		"in a repo file, empty": {
 			file: app, repoFile: "[groups.qa]\nworkers = 1\nslots = 1\ndescription = \"\"\n", inRepo: true,
@@ -283,6 +298,9 @@ func TestGroupDescriptionErrors(t *testing.T) {
 			require.ErrorIs(t, err, settings.ErrInvalid)
 			for _, s := range tc.wantIn {
 				assert.Contains(t, err.Error(), s)
+			}
+			if tc.prefix != "" {
+				assert.True(t, strings.HasPrefix(err.Error(), tc.prefix), "%q first: %q", tc.prefix, err.Error())
 			}
 			if tc.value != "" {
 				assert.NotContains(t, err.Error(), tc.value, "the error never holds the value")

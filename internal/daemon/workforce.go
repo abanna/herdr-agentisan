@@ -20,6 +20,7 @@ import (
 // has a budget of its own, past the 5 s exchange every other op fits in.
 const (
 	OpTeamStatus   = "team.status"
+	OpTeamUp       = "team.up"
 	OpWorkerSpawn  = "worker.spawn"
 	OpWorkerRetire = "worker.retire"
 	// OpSend queues a message (A30).
@@ -29,8 +30,9 @@ const (
 // The workforce ops' budgets. A command waits at most NotReadyWindow, its
 // op's budget and an exchange (A52), and the skill's wrapper gives it 120 s,
 // or 1,800 s for a handoff wait; each sum leaves the wrapper 5 s. So a
-// spawn, which waits for agents to start, gets 100 s: 10 + 100 + 5 = 115.
-// A handoff wait gets 1,500 s.
+// spawn, which waits for agents to start, gets 100 s: 10 + 100 + 5 = 115,
+// and team up, which starts a team's, gets a spawn's budget. A handoff
+// wait gets 1,500 s.
 const (
 	StatusBudget  = 10 * time.Second
 	SpawnBudget   = 100 * time.Second
@@ -52,6 +54,7 @@ const NotReadyWindow = 10 * time.Second
 // server and its client both read.
 var opBudgets = map[string]func(json.RawMessage) time.Duration{
 	OpTeamStatus:   fixed(StatusBudget),
+	OpTeamUp:       fixed(SpawnBudget),
 	OpWorkerSpawn:  fixed(SpawnBudget),
 	OpWorkerRetire: retireBudget,
 	OpSend:         fixed(SendBudget),
@@ -117,6 +120,13 @@ func workforceOps(svc *workforce.Service, ready *atomic.Bool, queued func(contex
 				return nil, err
 			}
 			return svc.Status(ctx, req)
+		}},
+		OpTeamUp: {code: workforceCode, run: func(ctx context.Context, args json.RawMessage) (any, error) {
+			var req workforce.UpRequest
+			if err := decodeArgs(args, &req); err != nil {
+				return nil, err
+			}
+			return svc.Up(ctx, req)
 		}},
 		OpWorkerSpawn: {code: workforceCode, run: func(ctx context.Context, args json.RawMessage) (any, error) {
 			var req workforce.SpawnRequest
@@ -200,12 +210,14 @@ func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleCl
 		return nil
 	}
 	return &workforce.Service{
-		Herdr:     herdr.Client{SocketPath: o.HerdrSocket, Dialed: o.onServer(ident)},
-		Store:     st,
-		ConfigDir: o.Team.ConfigDir,
-		Idle:      idle,
-		Now:       o.Now,
-		Preflight: o.Hooks.Preflight,
+		Herdr:      herdr.Client{SocketPath: o.HerdrSocket, Dialed: o.onServer(ident)},
+		Store:      st,
+		ConfigDir:  o.Team.ConfigDir,
+		Idle:       idle,
+		Now:        o.Now,
+		Preflight:  o.Hooks.Preflight,
+		CodexHooks: o.Team.CodexHooks,
+		Dashboard:  o.Team.Dashboard,
 	}
 }
 

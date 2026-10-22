@@ -245,6 +245,21 @@ func Install(home string) (Result, error) {
 	return res, nil
 }
 
+// InstalledIn reports whether Codex, in the home lookup names (Home), runs
+// every hook as Install writes it: each one installed, and hooks not turned
+// off in config.toml. It writes nothing.
+func InstalledIn(lookup func(string) (string, bool)) (bool, error) {
+	home, err := Home(lookup)
+	if err != nil {
+		return false, err
+	}
+	res, err := Check(home)
+	if err != nil {
+		return false, err
+	}
+	return res.Installed() && !res.HooksOff, nil
+}
+
 // Check reports each event's hook, in the hooks file or else in
 // config.toml, and writes nothing. A home that does not exist has none.
 func Check(home string) (Result, error) {

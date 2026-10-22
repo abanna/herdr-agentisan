@@ -17,6 +17,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/team"
 	"github.com/abanna/herdr-agentisan/internal/telemetry"
 	"github.com/abanna/herdr-agentisan/internal/testslots"
+	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
 // TeamOptions turn on the team poll (D3, D4, D5): on start and every poll
@@ -37,6 +38,13 @@ type TeamOptions struct {
 	// GitHub is the header's GitHub collection (A29), for every project
 	// the same file gives a github repo.
 	GitHub GitHubOptions
+	// Dashboard is the plugin pane team up opens as a team's dashboard
+	// (A18, A23): internal/plugin's, which this package cannot import.
+	Dashboard workforce.DashboardPane
+	// CodexHooks reports whether Codex's ctx hooks are installed, read from
+	// the daemon's own environment, for the warning a Codex spawn gives
+	// without them (A22, A43); nil checks nothing.
+	CodexHooks func() (bool, error)
 	// procLocks and proc, when set, stand in for /proc/locks and /proc in
 	// counting the test slots, and readLocks for the reading of them
 	// (tests).
@@ -178,9 +186,10 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 	var last *team.Model
 	for {
 		// Checked here as well as on every dial: a socket that is gone fails
-		// the dial itself, before Dialed runs, and a failed dial is only
-		// ErrUnavailable, which the poll logs and retries. This stops it at
-		// once instead.
+		// the dial itself, before Dialed runs, and a failed dial is never
+		// herdr_gone (ErrUnavailable, or ErrNotSent with the deadline that
+		// ended it), which the poll logs and retries. This stops it at once
+		// instead.
 		err := onServer()
 		var built *team.Model
 		focused := ""
