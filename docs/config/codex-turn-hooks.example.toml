@@ -3,9 +3,11 @@
 # `herdr-agentisan codex hooks --turn` installs them, with the three `ctx`
 # hooks of codex-hooks.example.toml, in ~/.codex/hooks.json
 # ($CODEX_HOME/hooks.json), after any hooks already there (A43). Or paste them
-# at the end of ~/.codex/config.toml, or of a trusted project's
-# .codex/config.toml; `--turn` then refuses to add a second copy. Trust them
-# once when Codex asks.
+# at the end of ~/.codex/config.toml; `--turn` then refuses to add a second
+# copy. A trusted project's .codex/config.toml works too, for that repo only,
+# but `--turn` and spawn's check read only $CODEX_HOME's: with them there,
+# skip `--turn`, or each report runs twice, which is harmless. Trust them once
+# when Codex asks.
 #
 # - Plain `herdr-agentisan codex hooks` installs only the `ctx` hooks. Each
 #   hook here is a group of its own, so that command never finds one beside

@@ -236,10 +236,12 @@ For Codex, run `herdr-agentisan codex hooks --turn`. It installs the
 [Codex turn hooks](docs/config/codex-turn-hooks.example.toml) with the `ctx`
 hooks above, in `~/.codex/hooks.json`, each in a group of its own, and
 `--check --turn` says where all five are; then trust them once. Or paste
-them at the end of `~/.codex/config.toml`, or of a trusted project's
-`.codex/config.toml`: `--turn` then refuses to add a second copy, and plain
-`codex hooks` installs only the `ctx` hooks. A Codex worker spawned without
-them is warned of. They need `codex --no-daemon`, as `report codex`
+them at the end of `~/.codex/config.toml`: `--turn` then refuses to add a
+second copy, and plain `codex hooks` installs only the `ctx` hooks. A
+trusted project's `.codex/config.toml` works too, for that repo only, but
+neither `--turn` nor spawn's check reads it: with them there, skip `--turn`,
+or each report runs twice, which is harmless. A Codex worker spawned without
+them in `~/.codex` is warned of. They need `codex --no-daemon`, as `report codex`
 does: a hook the shared app-server ran reports nothing. Codex runs hooks
 outside its sandbox, so they work under the default one, unlike `report stage`
 from a tool command. Both print nothing and always exit 0;
