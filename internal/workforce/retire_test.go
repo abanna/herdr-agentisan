@@ -3,6 +3,7 @@ package workforce_test
 import (
 	"context"
 	"slices"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -370,6 +371,24 @@ func TestRetireAfterHandoff(t *testing.T) {
 		got := <-done
 		require.NoError(t, got.err, "a herdr away for a while does not end the wait")
 		assert.Equal(t, workforce.OutcomeRetired, got.res.Outcome)
+	})
+	t.Run("a call that times out", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t, teamConfig)
+		w := f.worker(t, "ha-coder-1", "coder")
+		var lists atomic.Int32
+		wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+			if r.Method == "pane.list" && lists.Add(1) == 2 { // the wait's first poll, held past its call's timeout
+				time.Sleep(2 * time.Second)
+				f.h.setPane(w.PaneID, func(p *fakePane) { p.tokens = map[string]string{team.HandoffKey: "⟳ READY"} })
+			}
+			return next()
+		})
+		f.svc.Herdr.Timeout = 500 * time.Millisecond
+
+		res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID, AfterHandoff: true})
+		require.NoError(t, err, "a call that times out does not end the wait (QA #78, F1)")
+		assert.Equal(t, workforce.OutcomeRetired, res.Outcome)
 	})
 	t.Run("pane gone first", func(t *testing.T) {
 		t.Parallel()

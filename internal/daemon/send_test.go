@@ -163,7 +163,7 @@ func TestSendWakesTheDispatcher(t *testing.T) {
 	seeded := sent(t, st, haBoss, coder, "before the start")
 	o := teamOpts(t, dir, th, workforceConfig(t))
 	o.Poll = time.Hour // only the poll at start runs
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	assert.Equal(t, "ha-boss", p.next(t).Target)
 	eventuallyState(t, st, seeded.ID, store.MessageDelivered)
 

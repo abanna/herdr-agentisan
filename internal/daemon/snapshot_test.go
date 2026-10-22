@@ -177,7 +177,7 @@ func TestSnapshotOpServesTheTeam(t *testing.T) {
 	dir := shortDir(t)
 	o := teamOpts(t, dir, th, projectConfig(t))
 	o.Now = func() time.Time { return t0 }
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 
 	got := served(t, sock, anySnapshot)
@@ -210,7 +210,7 @@ func TestNoCtxWithoutADetectedAgent(t *testing.T) {
 	dir := shortDir(t)
 	o := teamOpts(t, dir, th, projectConfig(t))
 	o.Now = func() time.Time { return t0 }
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 
 	got := served(t, socketPath(t, dir, th.path), anySnapshot)
 	i := slices.IndexFunc(got.Groups, func(g snapshot.Group) bool { return g.Name == "coders" })
@@ -279,7 +279,7 @@ func TestRunAgesAStaleStage(t *testing.T) {
 	dir := shortDir(t)
 	o := teamOpts(t, dir, th, projectConfig(t))
 	o.Now = func() time.Time { return t0 }
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 
 	polled(t, th.srv, 2)
@@ -322,7 +322,7 @@ func TestRunRestartRaisesNoFalseAlarm(t *testing.T) {
 	o := teamOpts(t, dir, th, cfg)
 	o.Now = clk.Now
 	th.layout(ws, stagedPane("idle", t0.Add(-2*time.Hour)), agents)
-	first := run(t, o)
+	first := serving(t, o, th.fakeHerdr)
 	polled(t, th.srv, 2)
 	th.layout(ws, stagedPane("working", t0.Add(-2*time.Hour)), agents)
 	polled(t, th.srv, 2)
@@ -338,7 +338,7 @@ func TestRunRestartRaisesNoFalseAlarm(t *testing.T) {
 	// The restarted daemon first sees the pane at work; the turn ends.
 	o = restarted(teamOpts(t, dir, th, cfg))
 	o.Now = clk.Now
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 	polled(t, th.srv, 2)
 	assert.Equal(t, current, stagePushed(t, th), "a turn running")
@@ -381,7 +381,7 @@ func TestSnapshotOpBeforeTheFirstPoll(t *testing.T) {
 		}
 		t.Cleanup(func() { release.Do(func() { close(hold) }) })
 		dir := shortDir(t)
-		run(t, teamOpts(t, dir, th, ""))
+		serving(t, teamOpts(t, dir, th, ""), th.fakeHerdr)
 		select {
 		case <-entered:
 		case <-time.After(ready):
@@ -430,7 +430,7 @@ func TestSnapshotStageTimer(t *testing.T) {
 	dir := shortDir(t)
 	o := teamOpts(t, dir, th, "")
 	o.Now = c.Now
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 	row := func(s snapshot.Snapshot) snapshot.Agent { return s.Groups[0].Agents[0] }
 
@@ -489,7 +489,7 @@ func TestSnapshotNamesTheConfiguredProject(t *testing.T) {
 			t.Parallel()
 			th := newTeamHerdr(t)
 			dir := shortDir(t)
-			run(t, teamOpts(t, dir, th, tc.config(t)))
+			serving(t, teamOpts(t, dir, th, tc.config(t)), th.fakeHerdr)
 
 			got := served(t, socketPath(t, dir, th.path), anySnapshot)
 			assert.Equal(t, tc.wantTeam, got.Team)
@@ -511,7 +511,7 @@ func TestSnapshotKeepsTheLastGoodTeam(t *testing.T) {
 	dir := shortDir(t)
 	o := teamOpts(t, dir, th, "")
 	o.Now = c.Now
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 
 	polled(t, th.srv, 2)
@@ -846,7 +846,7 @@ func TestSnapshotOpServesConcurrentReaders(t *testing.T) {
 	th := newTeamHerdr(t)
 	th.layout(fullTeam())
 	dir := shortDir(t)
-	run(t, teamOpts(t, dir, th, projectConfig(t)))
+	serving(t, teamOpts(t, dir, th, projectConfig(t)), th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 	served(t, sock, anySnapshot)
 
@@ -959,7 +959,7 @@ func everyTeamDaemon(t *testing.T) (*teamHerdr, string) {
 	dir := shortDir(t)
 	o := teamOpts(t, dir, th, configDir(t, everyTeamConfig))
 	o.Now = func() time.Time { return t0 }
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 	served(t, sock, anySnapshot)
 	require.Eventually(t, func() bool {
@@ -1099,7 +1099,7 @@ func TestSnapshotOpBeforeAnyPollSelectsNothing(t *testing.T) {
 	th := newTeamHerdr(t)
 	th.agentsErr = true
 	dir := shortDir(t)
-	run(t, teamOpts(t, dir, th, configDir(t, everyTeamConfig)))
+	serving(t, teamOpts(t, dir, th, configDir(t, everyTeamConfig)), th.fakeHerdr)
 	polled(t, th.srv, 1)
 	sock := socketPath(t, dir, th.path)
 	for _, sel := range []daemon.Selector{{}, {Project: "alpha"}, {Project: "gamma"}, {WorkspaceID: "wN"}, {WorkspaceID: "w99"}} {
@@ -1287,7 +1287,7 @@ func TestSnapshotOpNeverPairsTwoPolls(t *testing.T) {
 	dir := shortDir(t)
 	o := teamOpts(t, dir, th, configDir(t, "[projects.alpha]\nrepo = \"/y\"\nshort = \"al\"\n[projects.beta]\nrepo = \"/z\"\nshort = \"be\"\n"))
 	o.Poll = 5 * time.Millisecond
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 	require.Eventually(t, func() bool {
 		_, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{WorkspaceID: "w1"})

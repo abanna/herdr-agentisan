@@ -286,7 +286,8 @@ func workerPane(id string, teams []settings.Team, l layout) (herdr.PaneInfo, boo
 
 // waitHandoff waits for the handoff token of the pane with tg's terminal
 // and returns that pane's id now, which a move can have changed. gone is
-// true when herdr stops listing the terminal first.
+// true when herdr stops listing the terminal first. An unreachable herdr or
+// a call that ran out of time is polled again until ctx ends.
 func (s *Service) waitHandoff(ctx context.Context, tg target) (pane string, gone bool, err error) {
 	for {
 		panes, err := s.Herdr.ListPanes(ctx)
@@ -299,7 +300,7 @@ func (s *Service) waitHandoff(ctx context.Context, tg target) (pane string, gone
 			if p.Tokens[team.HandoffKey] != "" {
 				return p.PaneID, false, nil
 			}
-		case ctx.Err() == nil && !errors.Is(err, herdr.ErrUnavailable):
+		case ctx.Err() == nil && !errors.Is(err, herdr.ErrUnavailable) && !errors.Is(err, context.DeadlineExceeded):
 			return "", false, herdrFailed("list panes", err)
 		}
 		if err := sleep(ctx, orDefault(s.HandoffPoll, DefaultHandoffPoll)); err != nil {

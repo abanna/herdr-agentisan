@@ -228,7 +228,8 @@ func TestDashboardEnterFocusesThroughHerdr(t *testing.T) {
 
 // TestDashboardReadsTheDaemon: with no fixture the dashboard reads the
 // daemon of the herdr server in HERDR_SOCKET_PATH, under the plugin state
-// directory from HERDR_PLUGIN_STATE_DIR or --state-dir, exactly where
+// directory from HERDR_PLUGIN_STATE_DIR or --state-dir, or else herdr's own
+// for the plugin, from HOME, as in a pane shell (ADR-001 A51), exactly where
 // `daemon health` looks. With no daemon there it says so, keeps polling and
 // still quits on q. It asks herdr only where its own pane is (A24), and
 // with --project not even that.
@@ -245,6 +246,7 @@ func TestDashboardReadsTheDaemon(t *testing.T) {
 	}
 	tests := map[string]struct {
 		flag    bool   // the state dir comes from --state-dir, not the environment
+		home    bool   // no HERDR_PLUGIN_STATE_DIR: the state dir is herdr's under HOME
 		daemon  bool   // a daemon answers at the socket
 		reply   string // what it answers; "" for the sample
 		project string // --project
@@ -253,6 +255,7 @@ func TestDashboardReadsTheDaemon(t *testing.T) {
 	}{
 		"the state dir from HERDR_PLUGIN_STATE_DIR": {daemon: true, asked: `{"workspace_id":"w2"}`, waitFor: []string{"pee01"}},
 		"the state dir from --state-dir":            {flag: true, daemon: true, asked: `{"workspace_id":"w2"}`, waitFor: []string{"pee01"}},
+		"herdr's state dir, from HOME":              {home: true, daemon: true, asked: `{"workspace_id":"w2"}`, waitFor: []string{"pee01"}},
 		"no daemon running":                         {waitFor: []string{"waiting for the daemon", "daemon not running"}},
 		"a project's team":                          {daemon: true, project: "alpha", asked: `{"project":"alpha"}`, waitFor: []string{"pee01"}},
 		"outside every team": {
@@ -267,6 +270,10 @@ func TestDashboardReadsTheDaemon(t *testing.T) {
 			stateDir, err := os.MkdirTemp("", "cs")
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = os.RemoveAll(stateDir) })
+			home := stateDir
+			if tc.home {
+				stateDir = filepath.Join(home, ".local", "state", "herdr", "plugins", plugin.ID)
+			}
 			paths, err := daemon.PathsFor(stateDir, srv.Path)
 			require.NoError(t, err)
 			var asked *lockedBuffer
@@ -289,6 +296,10 @@ func TestDashboardReadsTheDaemon(t *testing.T) {
 			if tc.flag {
 				env["HERDR_PLUGIN_STATE_DIR"] = filepath.Join(stateDir, "elsewhere")
 				args = append(args, "--state-dir", stateDir)
+			}
+			if tc.home {
+				delete(env, "HERDR_PLUGIN_STATE_DIR")
+				env["HOME"] = home
 			}
 
 			s := startDashboardWith(t, envCtx(t, env), args...)

@@ -858,6 +858,40 @@ func TestStartClasses(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, daemon.StartResult{PID: os.Getpid(), AlreadyRunning: true, Healthy: true}, res)
 	})
+	// Stop's probe of the lock takes it for an instant once the daemon has
+	// let go. A child another test forks then keeps a copy of the probe's
+	// open file until it execs. The record the stopped daemon left still
+	// reads as alive, as every in-process daemon's does under the cli's
+	// harness, so a lock read as held there was a live daemon: the restart
+	// spawned nothing and waited out StartWait (QA debt Draft 8).
+	t.Run("a stopped daemon's lock a fork's copy of a probe kept is free", func(t *testing.T) {
+		t.Parallel()
+		h := newHerdr(t, 22)
+		dir := shortDir(t)
+		o := opts(t, dir, h)
+		r := serving(t, o, h)
+		r.cancel()
+		require.NoError(t, r.wait(t, ready))
+		paths, err := daemon.PathsFor(dir, h.path)
+		require.NoError(t, err)
+		// A child another test forked while the daemon ran can hold a copy
+		// of the daemon's own descriptor until it execs (see restarted).
+		// Once nothing holds the lock, nothing can take it back.
+		require.Eventually(t, func() bool { isHeld, err := daemon.Held(paths.Lock); return err == nil && !isHeld },
+			ready, 10*time.Millisecond, "the stopped daemon's lock was never free")
+		isHeld, letGo, err := daemon.HeldKeepingACopy(paths.Lock)
+		require.NoError(t, err)
+		require.False(t, isHeld)
+		t.Cleanup(func() { assert.NoError(t, letGo()) })
+
+		var spawned []*running
+		var mu sync.Mutex
+		o.Hooks.Spawn = spawnInProcess(t, o, &spawned, &mu)
+		res, err := daemon.Start(t.Context(), o)
+		require.NoError(t, err)
+		assert.Equal(t, daemon.StartResult{PID: os.Getpid(), Healthy: true}, res)
+		assert.Len(t, spawned, 1, "nothing holds the lock: the start spawns")
+	})
 	// During a live handoff the old daemon still answers health until it
 	// notices its socket is gone. Its answer names the old server, so it
 	// must not count as the new server's daemon having started.

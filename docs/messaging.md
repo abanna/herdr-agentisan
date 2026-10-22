@@ -43,7 +43,7 @@ refusal exits 1:
 | `daemon_no_answer` | The daemon took the request and gave no answer: it was killed, or ran past the command's wait (A52). The message may be queued, and a queued message is delivered once the daemon runs again, so don't resend it with `herdr agent prompt` |
 | `failed` | An answer no other code names, or one the command could not read. The message may be queued, as for `daemon_no_answer` |
 | `not_ready` | The daemon has just started; the command asks again for up to 10 s |
-| `daemon_unavailable` | No daemon answers. Fall back to `herdr agent prompt`, which is not durable |
+| `daemon_unavailable` | No daemon answers under `--state-dir`, `HERDR_PLUGIN_STATE_DIR`, or else herdr's state directory for the plugin, from `XDG_STATE_HOME` or `HOME` (A51). Fall back to `herdr agent prompt`, which is not durable |
 
 ## Who the sender is
 
