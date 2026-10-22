@@ -1330,6 +1330,35 @@ func TestSpawnCleansUpAtOnce(t *testing.T) {
 	}
 }
 
+// TestSpawnMarksTheWorkersUpActiveFirst: one worker comes up while its
+// sibling fails, and herdr holds the sibling's cleanup past the whole settle
+// budget. The worker up was marked active before any cleanup ran, so it
+// stays active, and the sibling's row ends failed (QA #78 N1, QA #96 P3).
+func TestSpawnMarksTheWorkersUpActiveFirst(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	release := make(chan struct{})
+	wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+		switch {
+		case r.Method == "agent.start" && strings.Contains(string(r.Params), `"ha-coder-2"`):
+			return errReply("invalid_agent_name")
+		case r.Method == "pane.get":
+			<-release // the cleanup's pane.get, past the settle budget
+		}
+		return next()
+	})
+	// After wrapHerdr's own: cleanups run last first, so the held pane.get is
+	// released before the server closes.
+	t.Cleanup(func() { close(release) })
+
+	res, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 2})
+	require.ErrorIs(t, err, workforce.ErrSpawnFailed)
+	require.Len(t, res.Workers, 1)
+	assert.Equal(t, "ha-coder-1", res.Workers[0].ID)
+	assert.Equal(t, store.StatusActive, f.row(t, "ha-coder-1").Status)
+	assert.Equal(t, store.StatusFailed, f.row(t, "ha-coder-2").Status)
+}
+
 // TestSpawnFailsTheRowBeforeASlowClose: a herdr that holds the cleanup's
 // pane.get past the whole settle budget still leaves the row failed, never
 // starting, where it would hold its slot for good, and the op still answers

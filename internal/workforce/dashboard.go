@@ -48,8 +48,10 @@ const dashboardBudget = 5 * time.Second
 // snapshot names the boss. herdr splits only right or down, so that is a
 // split down from the boss, then a swap with it. The label comes first: a
 // swap that fails still leaves a dashboard the next run finds. herdr's swap
-// focuses the dashboard and switches to its tab, so focus goes back to the
-// pane that had it. It holds the workforce lock, so two runs open one.
+// focuses the dashboard in the boss's tab and switches to that tab, so the
+// boss is focused again, which the tab keeps for the user's next visit, and
+// then the pane that had focus, when it was not the boss. It holds the
+// workforce lock, so two runs open one.
 func (s *Service) ensureDashboard(ctx context.Context, project string) DashboardOutcome {
 	d := s.Dashboard
 	if d.PluginID == "" || d.Entrypoint == "" {
@@ -85,12 +87,18 @@ func (s *Service) ensureDashboard(ctx context.Context, project string) Dashboard
 	if err := s.Herdr.RenamePane(ctx, p.PaneID, label); err != nil {
 		errs = append(errs, herdrFailed("label the dashboard "+label, err))
 	}
+	var back []string
 	if err := s.Herdr.SwapPanes(ctx, p.PaneID, boss); err != nil {
 		errs = append(errs, herdrFailed("move the dashboard above the boss; it is below", err))
+	} else {
+		back = append(back, boss)
 	}
-	if focused := focusedPane(st.layout.Panes); focused != "" {
-		if _, err := s.Herdr.FocusPane(ctx, focused); err != nil {
-			errs = append(errs, herdrFailed("give focus back to "+focused, err))
+	if focused := focusedPane(st.layout.Panes); focused != "" && !slices.Contains(back, focused) {
+		back = append(back, focused)
+	}
+	for _, id := range back {
+		if _, err := s.Herdr.FocusPane(ctx, id); err != nil {
+			errs = append(errs, herdrFailed("give focus back to "+id, err))
 		}
 	}
 	out := DashboardOutcome{Dashboard: &Dashboard{PaneID: p.PaneID, Opened: true}}

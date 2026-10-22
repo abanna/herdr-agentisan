@@ -75,6 +75,10 @@ type fakeHerdr struct {
 	alias map[string]string
 	// focused is the pane with the user's focus; "" for none.
 	focused string
+	// tabFocus is each tab's own focused pane, which herdr keeps per tab and
+	// shows on the user's next visit: a swap that changes the layout and a
+	// pane.focus set it.
+	tabFocus map[string]string
 }
 
 // dashTitle is the dashboard entrypoint's manifest title, which herdr labels
@@ -98,7 +102,7 @@ type fakePane struct {
 
 func newFake(t *testing.T) *fakeHerdr {
 	t.Helper()
-	f := &fakeHerdr{t: t, fail: map[string]string{}, failAfter: map[string]int{}, calls: map[string]int{}, keys: map[string][][]string{}, waits: map[string]int{}, alias: map[string]string{}}
+	f := &fakeHerdr{t: t, fail: map[string]string{}, failAfter: map[string]int{}, calls: map[string]int{}, keys: map[string][][]string{}, waits: map[string]int{}, alias: map[string]string{}, tabFocus: map[string]string{}}
 	f.srv = herdrtest.Start(t, f.handle)
 	return f
 }
@@ -389,6 +393,7 @@ func (f *fakeHerdr) answer(r herdrtest.Request) herdrtest.Reply {
 			i, j := slices.Index(f.panes, src), slices.Index(f.panes, dst)
 			f.panes[i], f.panes[j] = dst, src
 			f.focused, swap["changed"], swap["focused_pane_id"] = src.id, true, src.id
+			f.tabFocus[src.tab] = src.id
 		}
 		return herdrtest.Reply{Result: map[string]any{"type": "pane_swap", "swap": swap}}
 	case "pane.rename", "pane.focus":
@@ -400,6 +405,7 @@ func (f *fakeHerdr) answer(r herdrtest.Request) herdrtest.Reply {
 			pane.label = str("label")
 		} else {
 			f.focused = pane.id
+			f.tabFocus[pane.tab] = pane.id
 		}
 		return herdrtest.Reply{Result: map[string]any{"type": "pane_info", "pane": f.paneInfo(pane)}}
 	case "pane.get":
