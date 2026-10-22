@@ -368,6 +368,13 @@ its layer, then `routing policy:`, the version a decision records.
 `worker spawn` asks routing from NERD-5289 part 1b on; until then the keys
 resolve and nothing reads them.
 
+## Messaging
+
+`herdr-agentisan send <to> <body|->` queues a message in the daemon, which
+types it into the recipient's agent once, holds it through a worker's
+handoff, and tells the sender when a prompt may not have arrived (ADR-001
+A30). `boss` is your own team's boss. See [`docs/messaging.md`](docs/messaging.md).
+
 ## The dashboard
 
 `herdr-agentisan dashboard` draws a team from the daemon (ADR-001 D5,

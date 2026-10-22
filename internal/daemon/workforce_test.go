@@ -437,7 +437,7 @@ func TestWorkforceCodes(t *testing.T) {
 	}
 }
 
-// TestOpBudgets: team status and retire get 10 s, and retire
+// TestOpBudgets: team status, retire and send get 10 s, and retire
 // --after-handoff 1,500 s, both in the client's wait and in the budget the
 // daemon's op map enforces; any other op none of its own.
 func TestOpBudgets(t *testing.T) {
@@ -451,13 +451,14 @@ func TestOpBudgets(t *testing.T) {
 		{daemon.OpWorkerRetire, `{"target":"x"}`, 10 * time.Second},
 		{daemon.OpWorkerRetire, `{"target":"x","after_handoff":true}`, 1500 * time.Second},
 		{daemon.OpWorkerRetire, `not json`, 10 * time.Second},
+		{daemon.OpSend, `{"to":"boss","body":"hi"}`, 10 * time.Second},
 	} {
 		args := json.RawMessage(tc.args)
 		assert.Equal(t, tc.want, daemon.OpBudget(tc.op, args), "the client's wait: %s %s", tc.op, tc.args)
 		assert.Equal(t, tc.want, daemon.ServedBudget(tc.op, args), "the budget the daemon enforces: %s %s", tc.op, tc.args)
 	}
 	assert.Zero(t, daemon.OpBudget("health", nil))
-	assert.Equal(t, []string{daemon.OpTeamStatus, daemon.OpWorkerRetire}, daemon.WorkforceOpNames())
+	assert.Equal(t, []string{daemon.OpSend, daemon.OpTeamStatus, daemon.OpWorkerRetire}, daemon.WorkforceOpNames())
 	for _, op := range daemon.WorkforceOpNames() {
 		assert.Positive(t, daemon.ServedBudget(op, nil), "%s has a budget in the table, not a nil one", op)
 	}

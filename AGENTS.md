@@ -141,9 +141,11 @@ exempts whatever is later added under that name.
   focused team, which focus events and the poll feed it, and clears it
   outside every team and on a clean stop (`view.go`, the A28 addendum, A49).
   It types each queued message into its recipient with `agent.prompt`, by
-  the agent name the poll's last model shows where it belongs, returns an
-  ended binding's queue to its boss, and fails, never retrying, whatever a
-  timeout or a crash may have typed (`messages.go`, A2, A30).
+  the agent name the poll's last model shows where it belongs, or a pane
+  sender's by the pane showing its terminal, returns an ended binding's
+  queue to its boss, and fails, never retrying, whatever a timeout or a
+  crash may have typed (`messages.go`, A2, A30). The `send` op queues them
+  (`docs/messaging.md`).
   `daemon start` spawns a detached `daemon run` and waits for its health or
   its exit (A48); herdr's `[[startup]]` hook runs it, and the
   `daemon-restart` action covers linking. Tests run daemons in process
@@ -160,7 +162,8 @@ exempts whatever is later added under that name.
   in the resolver's group order, with the in-memory stage clock (A18) and
   idle clock (A23).
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
-  `team status` and `worker retire` so far: each group's counts and members
+  `team status` and `worker retire` so far, and `send`'s sender and
+  recipient (A30): each group's counts and members
   on a tabs team or the ◆ spaces, with idle times from the daemon's clock and
   the rows no pane is bound to (A35), and closing the pane a worker's row is
   bound to, after its handoff when asked, with the row retired. The daemon

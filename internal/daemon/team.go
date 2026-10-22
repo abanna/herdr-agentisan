@@ -103,13 +103,12 @@ type teamPoll struct {
 // returns stops all four and waits for them, so once it returns nothing more
 // is pushed or typed, the view is cleared unless the server is gone, and no
 // gh is left running.
-func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, idle *team.IdleClock, views *viewSync, ready *atomic.Bool) (stop func()) {
+func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, idle *team.IdleClock, views *viewSync, ready *atomic.Bool, in *inbox) (stop func()) {
 	if o.Team == nil {
 		return func() {}
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	header := newHeaderCache(o.Team.GitHub)
-	in := newInbox()
 	var wg sync.WaitGroup
 	wg.Go(func() { o.collectGitHub(ctx, header) })
 	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header, idle, views, ready, in) })
