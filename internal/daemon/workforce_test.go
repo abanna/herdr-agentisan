@@ -7,7 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -246,20 +248,25 @@ func TestDaemonStopEndsAHandoffWait(t *testing.T) {
 			stateDir := shortDir(t)
 			r := run(t, teamOpts(t, stateDir, th, workforceConfig(t)))
 			healthy(t, stateDir, th.fakeHerdr)
+			poll := freezePoll(t, th)
 
 			done := make(chan error, 1)
 			go func() {
 				_, err := daemon.Workforce(context.Background(), socketPath(t, stateDir, th.path), daemon.OpWorkerRetire, workforce.RetireRequest{Target: "ha-coder-1", AfterHandoff: true})
 				done <- err
 			}()
-			// The op reads the config, herdr and state.db first; a second is
-			// ample for that, and the handoff wait itself has 1,500 s.
-			time.Sleep(time.Second)
+			// The op reads herdr's layout, agent.list last, then state.db's
+			// workers rows, and then lists the panes: its handoff wait's
+			// first look. A stop before that list fails a read (herdr_failed,
+			// store_failed) rather than ending the wait, which has 1,500 s.
+			require.Eventually(t, func() bool { return poll.askedAfter("agent.list", "pane.list") }, ready, 5*time.Millisecond,
+				"the retire never reached its handoff wait")
 			select {
 			case err := <-done:
 				t.Fatalf("the retire ended before the stop: %v", err)
 			default:
 			}
+			poll.release() // a crash waits for every handler, a held push's too
 			tc.stop(r, th)
 			select {
 			case err := <-r.done:
@@ -284,6 +291,62 @@ func TestDaemonStopEndsAHandoffWait(t *testing.T) {
 			}
 		})
 	}
+}
+
+// frozenPoll holds th's team poll at its pushes, which only the poll makes,
+// so every herdr call made meanwhile is another caller's.
+type frozenPoll struct {
+	frozen chan struct{}
+	// release lets the held pushes answer; the poll goes on.
+	release func()
+	mu      sync.Mutex
+	asked   []string // the methods herdr was asked while the poll was held
+}
+
+// freezePoll holds th's team poll at its next push until release, and
+// returns once it is held. A push follows the poll's reconcile, which opens
+// the workforce ops, so they are open by then. Each held push holds the poll
+// until its call's timeout, and a poll pushes to every team and agent pane,
+// so it stays held for many seconds even unreleased.
+func freezePoll(t *testing.T, th *teamHerdr) *frozenPoll {
+	t.Helper()
+	held := make(chan struct{})
+	f := &frozenPoll{frozen: make(chan struct{}), release: sync.OnceFunc(func() { close(held) })}
+	freeze := sync.OnceFunc(func() { close(f.frozen) })
+	th.mu.Lock()
+	th.onCall = func(method string) {
+		if method == "workspace.report_metadata" || method == "pane.report_metadata" {
+			freeze()
+			<-held
+			return
+		}
+		select {
+		case <-f.frozen:
+			f.mu.Lock()
+			f.asked = append(f.asked, method)
+			f.mu.Unlock()
+		default:
+		}
+	}
+	th.mu.Unlock()
+	// After the fake herdr's own cleanup, so it runs first: herdrtest's Close
+	// waits for every handler, a held push's too.
+	t.Cleanup(f.release)
+	select {
+	case <-f.frozen:
+	case <-time.After(ready):
+		t.Fatal("the team poll never pushed")
+	}
+	return f
+}
+
+// askedAfter reports whether herdr was asked then after first while the
+// poll was held.
+func (f *frozenPoll) askedAfter(first, then string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i := slices.Index(f.asked, first)
+	return i >= 0 && slices.Contains(f.asked[i+1:], then)
 }
 
 // TestAClientWaitsOutItsOpsBudget: a client waits an op's own budget, past
