@@ -555,7 +555,8 @@ func TestTeamPushIgnoresAServerReplacedMidPoll(t *testing.T) {
 		// Two rows with no shell: the second read dials the replacement.
 		"while a worker's shell is read": {during: "pane.process_info"},
 		// No rows, so only the model asks call it: the second agent pane's
-		// dials the replacement.
+		// dials the replacement. The swap must finish inside the first ask's
+		// 1 s ModelBudget, not herdr's CallTimeout, or the second is not asked.
 		"while a pane's model is asked": {during: "pane.process_info", models: true},
 	} {
 		t.Run(name, func(t *testing.T) {

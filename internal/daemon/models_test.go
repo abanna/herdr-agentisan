@@ -493,6 +493,34 @@ func TestLaunchModelsHeldReplyPastTheBudget(t *testing.T) {
 	assert.Equal(t, logged, logs.String(), "and logs nothing, the held refusal included")
 }
 
+// TestLaunchModelsHeldFailureAfterTheWallBudget: once a slow pane has run the
+// ask's context out on the wall clock, as a slow herdr does in production, a
+// held refusal behind it is still a failed ask, logged, and not the overrun;
+// and a held success behind it still gives its model (A39). QA's #82 probe.
+func TestLaunchModelsHeldFailureAfterTheWallBudget(t *testing.T) {
+	t.Parallel()
+	ph := newProcHerdr(t)
+	ph.set("w1:p1", agentProc(101, "claude", "--model", "opus"))
+	ph.delay("w1:p1", daemon.ModelBudget+300*time.Millisecond)
+	ph.refuse("w1:p2", "server_error")
+	ph.set("w1:p3", agentProc(301, "claude", "--model", "haiku"))
+	pt := &procs{start: map[int]uint64{101: 1, 301: 1}}
+	c := herdr.Client{SocketPath: ph.srv.Path}
+	pp := daemon.NewPaneProcesses()
+	for _, pane := range []string{"w1:p2", "w1:p3"} {
+		_, _ = pp.Ask(t.Context(), c, pane)
+	}
+	var logs lockedLog
+	panes := []herdr.PaneInfo{agentPane("w1:p1", "t1", "claude"), agentPane("w1:p2", "t2", "claude"), agentPane("w1:p3", "t3", "claude")}
+
+	got, err := daemon.NewLaunchModels().RefreshHeld(t.Context(), c, pp, panes, pt.startTime, t0, zerolog.New(&logs))
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"w1:p3": "haiku"}, got, "the held success gives its model past the wall budget")
+	assert.Equal(t, 1, strings.Count(logs.String(), "read a pane's processes"), "the held refusal is a failed ask")
+	assert.Contains(t, logs.String(), `"pane":"w1:p2"`)
+	assert.Equal(t, 1, strings.Count(logs.String(), "herdr is slow"), "w1:p1, cut off, is the overrun")
+}
+
 // TestAgentPanes: a team's agent panes, workers and bosses, as pane.list
 // lists them; never a shell, nor a pane in no team.
 func TestAgentPanes(t *testing.T) {
