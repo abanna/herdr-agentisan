@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/preflight"
 	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
@@ -97,6 +98,9 @@ type Hooks struct {
 	// report.SystemStat (/proc on Linux, sysctl on darwin). With none, a
 	// holder is checked by pid alone.
 	StartTime func(pid int) (uint64, error)
+	// Preflight is the check a spawn's repo must pass before any pane opens
+	// (A34); nil means preflight.HostCheck.
+	Preflight preflight.Check
 	// StartedAt puts a start StartTime returned on the wall clock, by
 	// default through report.SystemStartedAt (/proc/stat's boot time on
 	// Linux; darwin's start already is one). With none, the boss shows no

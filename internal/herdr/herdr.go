@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -161,6 +162,9 @@ func (c Client) Call(ctx context.Context, method string, params, out any) error 
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", c.SocketPath)
 	if err != nil {
+		if pastDeadline(ctx, err) {
+			return fmt.Errorf("%w: dial %s: %w", ErrNotSent, c.SocketPath, context.DeadlineExceeded)
+		}
 		return fmt.Errorf("%w: %w: dial %s: %w", ErrUnavailable, ErrNotSent, c.SocketPath, err)
 	}
 	defer conn.Close() //nolint:errcheck // one-shot connection; the response is already read or the call failed
@@ -225,7 +229,18 @@ func (c Client) ioError(ctx context.Context, method string, err error) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return fmt.Errorf("%s: %w", method, ctxErr)
 	}
+	if pastDeadline(ctx, err) {
+		return fmt.Errorf("%s: %w", method, context.DeadlineExceeded)
+	}
 	return fmt.Errorf("%w: %s: %w", ErrUnavailable, method, err)
+}
+
+// pastDeadline reports whether err is ctx's deadline passing. The dialer's
+// and the socket's deadlines are the context's, and can fire before the
+// context's own timer marks it done.
+func pastDeadline(ctx context.Context, err error) bool {
+	d, ok := ctx.Deadline()
+	return ok && !time.Now().Before(d) && (errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, context.DeadlineExceeded))
 }
 
 // readLine reads one newline-terminated line of at most maxResponseBytes.

@@ -103,6 +103,9 @@ exempts whatever is later added under that name.
 - `internal/plugin/` — the plugin's domain: the runtime environment herdr
   injects (`EnvFrom`), the manifest (`LoadManifest`, with its actions and
   panes) and the actions' logic, such as Back's toast when it went nowhere.
+  Also the state directory a command finds the daemon under: herdr's own
+  for the plugin, worked out as herdr 0.9.5 does, when herdr set none, as
+  in a pane shell (`StateDir`, ADR-001 A51).
 - `internal/report/` — an agent pushing its own state to its pane as herdr
   tokens (ADR-001 D4), and the token contract for the keys it writes.
   `report statusline` turns Claude's statusline JSON into `ctx`,
@@ -176,10 +179,11 @@ exempts whatever is later added under that name.
   that delivers it. The daemon's sink writes daemon.log until the inbox
   delivers (NERD-5256). Pure: tests build models by hand.
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
-  `team status` and `worker retire` so far, and `send`'s sender and
-  recipient (A30): each group's counts and members
-  on a tabs team or the ◆ spaces, with idle times from the daemon's clock and
-  the rows no pane is bound to (A35), and closing the pane a worker's row is
+  `team status`, `worker spawn` and `worker retire` so far, and `send`'s
+  sender and recipient (A30): each group's counts and members on a tabs team
+  or the ◆ spaces, with idle times from the daemon's clock and the rows no
+  pane is bound to (A35); opening a tab per worker and waiting for its agent,
+  after `internal/preflight`'s check; closing the pane a worker's row is
   bound to, after its handoff when asked, with the row retired; and
   `handoff ready` (`handoff.go`, A33), the daemon writing the `handoff` token
   on a worker's agent pane once `pane.get` proves its terminal, with no row
