@@ -36,7 +36,10 @@ func TestUpgradeFromTheFirstSchema(t *testing.T) {
 
 	s := open(t, path)
 	assert.Equal(t, store.SchemaVersion(), s.UserVersion())
-	assert.Equal(t, 4, s.UserVersion())
+	assert.Equal(t, 5, s.UserVersion())
+	row, err := s.WorkerRow(t.Context(), "w")
+	require.NoError(t, err)
+	assert.Nil(t, row.Routing, "a worker bound before 0005 was not launched by routing")
 	ws, err := s.Workers(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, []store.Worker{{LogicalID: "w", Project: "agentisan", Group: "coders", PaneID: "w14:p2", Generation: 2, Status: "active", HandoffPending: true}}, ws)

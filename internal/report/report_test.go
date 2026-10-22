@@ -234,7 +234,7 @@ func TestStatuslinePushesTheTokenContract(t *testing.T) {
 
 	got, err := report.Statusline(t.Context(), herdr.Client{SocketPath: srv.Path}, pane, strings.NewReader(statusline("42.6")))
 	require.NoError(t, err)
-	assert.Equal(t, report.Result{Ctx: 43, PaneID: "w14:p1"}, got)
+	assert.Equal(t, report.Result{Ctx: 43, HasCtx: true, PaneID: "w14:p1"}, got)
 
 	reqs := srv.Requests()
 	require.Len(t, reqs, 1)
@@ -353,7 +353,7 @@ func TestStatuslineBoundsTheCallByCallTimeout(t *testing.T) {
 	got, err := report.Statusline(context.Background(), rep,
 		report.Pane{SocketPath: "/x", PaneID: "w1:p1", Lineage: lineage}, strings.NewReader(statusline("5")))
 	require.NoError(t, err)
-	assert.Equal(t, report.Result{Ctx: 5, PaneID: "w2:p1"}, got)
+	assert.Equal(t, report.Result{Ctx: 5, HasCtx: true, PaneID: "w2:p1"}, got)
 
 	require.Len(t, rep.deadlines, 4, "process_info, list, process_info, report")
 	for i, d := range rep.deadlines {
@@ -683,7 +683,7 @@ func TestStatuslineResolvesTheReportingPane(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			assert.Equal(t, report.Result{Ctx: 43, PaneID: tc.want}, got)
+			assert.Equal(t, report.Result{Ctx: 43, HasCtx: true, PaneID: tc.want}, got)
 			assert.Equal(t, []string{tc.want}, reportedTo(t, reqs))
 		})
 	}
@@ -764,7 +764,7 @@ func TestStatuslineConcurrentResolutionsAreIndependent(t *testing.T) {
 			got, err := report.Statusline(t.Context(), herdr.Client{SocketPath: srv.Path}, pane,
 				strings.NewReader(statusline(strconv.Itoa(i))))
 			assert.NoError(t, err)
-			assert.Equal(t, report.Result{Ctx: i, PaneID: "wN:p2"}, got)
+			assert.Equal(t, report.Result{Ctx: i, HasCtx: true, PaneID: "wN:p2"}, got)
 		})
 	}
 	wg.Wait()

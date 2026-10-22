@@ -12,10 +12,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math"
 	"os"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 )
@@ -43,6 +48,21 @@ const (
 	MaxStatuslineBytes = 1 << 20
 )
 
+// The model token contract (ADR-001 A56). The agent reports the model it runs
+// now in the same report as its ctx, with ctx's TTL: Claude's statusline its
+// model.id, a Codex hook its model, so a /model switch shows without a
+// restart. The daemon prefers it to the launch model (A39).
+const (
+	// ModelKey is the pane token holding the model the pane's agent reported
+	// it runs, such as claude-sonnet-5-5 or gpt-5.5.
+	ModelKey = "model"
+	// ModelAtKey is the pane token holding when the model was reported, in
+	// Unix milliseconds (FormatModelAt), so a reader can tell the current
+	// agent's report from one an agent before it in the pane left: herdr
+	// gives no token a time. It is set in every report that sets the model.
+	ModelAtKey = "model_at"
+)
+
 // Sentinel errors. Callers branch on these with errors.Is.
 var (
 	// ErrNotInPane means HERDR_SOCKET_PATH or HERDR_PANE_ID is unset or
@@ -51,7 +71,8 @@ var (
 	// ErrNoContext means there is no context use to report yet: Claude's
 	// statusline carries no percentage, as before Claude has measured one,
 	// or a Codex session has no transcript, or no token count with a usable
-	// context window in the tail of it.
+	// context window in the tail of it. Statusline and Codex return it only
+	// when there is no model to report either.
 	ErrNoContext = errors.New("no context percentage to report")
 	// ErrMalformed means the input is unusable: a terminal rather than piped
 	// JSON, unreadable, over its size cap, not one JSON object, or a
@@ -125,49 +146,135 @@ type PaneFinder interface {
 	ListPanes(ctx context.Context) ([]herdr.PaneInfo, error)
 }
 
+// Reading is what an agent's statusline or hook gives a report: its context
+// use, when it has measured one, and the model it runs, when it names one.
+type Reading struct {
+	// Ctx is the context use from 0 to 100; HasCtx says there is one.
+	Ctx    int
+	HasCtx bool
+	// Model is the model, already ValidModel's; "" when there is none.
+	Model string
+}
+
 // Result is what a report pushed, and where.
 type Result struct {
-	Ctx int
-	// PaneID is the pane the token landed on: Pane.PaneID, or the pane's
+	Ctx    int
+	HasCtx bool
+	Model  string
+	// PaneID is the pane the tokens landed on: Pane.PaneID, or the pane's
 	// current id when Pane.PaneID is stale or an alias.
 	PaneID string
+}
+
+// ValidModel is m when it may be a row's model, else "" (ADR-001 A39, A56):
+// it is printable UTF-8 of at most MaxValueChars code points, a herdr token
+// value's limit, and does not start with "-", as a flag would. U+FFFD, which
+// invalid bytes decode to, is not printable here.
+func ValidModel(m string) string {
+	if m == "" || strings.HasPrefix(m, "-") || !utf8.ValidString(m) || utf8.RuneCountInString(m) > MaxValueChars {
+		return ""
+	}
+	for _, r := range m {
+		if !unicode.IsPrint(r) || r == utf8.RuneError {
+			return ""
+		}
+	}
+	return m
+}
+
+// modelOf is the model raw names, a JSON string ValidModel keeps, else "".
+// Anything else, a number or an object, is no model rather than malformed
+// input: the agent owns the field's shape, and a change to it must not
+// silence ctx.
+func modelOf(raw json.RawMessage) string {
+	var m string
+	if json.Unmarshal(raw, &m) != nil {
+		return ""
+	}
+	return ValidModel(m)
+}
+
+// FormatModelAt is t as a model_at value: whole Unix milliseconds, in
+// decimal. Milliseconds, not stage_at's seconds, so a report made within a
+// second of its agent's start is never read as older than the agent.
+func FormatModelAt(t time.Time) string { return strconv.FormatInt(t.UnixMilli(), 10) }
+
+// ParseModelAt reads a model_at value as FormatModelAt writes it: a positive
+// count of Unix milliseconds in canonical decimal, with no sign, space or
+// leading zero. Anything else is no model_at, and a model without one is
+// never taken as current.
+func ParseModelAt(v string) (time.Time, bool) {
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n <= 0 || strconv.FormatInt(n, 10) != v {
+		return time.Time{}, false
+	}
+	return time.UnixMilli(n), true
 }
 
 // ParseContext reads Claude's statusline JSON from r and returns
 // .context_window.used_percentage rounded to the nearest integer, halves
 // away from zero. The range is checked before rounding, so 100.4 is
-// malformed rather than 100.
+// malformed rather than 100. A statusline with a model but no percentage is
+// ErrNoContext here; ParseStatusline reads both.
 func ParseContext(r io.Reader) (int, error) {
+	rd, err := ParseStatusline(r)
+	if err != nil {
+		return 0, err
+	}
+	if !rd.HasCtx {
+		return 0, ErrNoContext
+	}
+	return rd.Ctx, nil
+}
+
+// ParseStatusline reads Claude's statusline JSON from r: the context use as
+// ParseContext rounds it, and .model.id, when it is a string ValidModel
+// keeps (A56). It returns ErrNoContext when there is neither, and
+// ErrMalformed for unusable input, a percentage that is not a JSON number
+// from 0 to 100 included, whatever model it names.
+func ParseStatusline(r io.Reader) (Reading, error) {
 	// Run by hand in a pane, stdin is the terminal: reading it would wait
 	// for Ctrl-D with nothing on screen to say so.
 	if isCharDevice(r) {
-		return 0, fmt.Errorf("%w: stdin is a terminal or other character device, not piped statusline JSON", ErrMalformed)
+		return Reading{}, fmt.Errorf("%w: stdin is a terminal or other character device, not piped statusline JSON", ErrMalformed)
 	}
 	raw, err := io.ReadAll(io.LimitReader(r, MaxStatuslineBytes+1))
 	if err != nil {
-		return 0, fmt.Errorf("%w: read: %w", ErrMalformed, err)
+		return Reading{}, fmt.Errorf("%w: read: %w", ErrMalformed, err)
 	}
 	if len(raw) > MaxStatuslineBytes {
-		return 0, fmt.Errorf("%w: input exceeds %d bytes", ErrMalformed, MaxStatuslineBytes)
+		return Reading{}, fmt.Errorf("%w: input exceeds %d bytes", ErrMalformed, MaxStatuslineBytes)
 	}
 	// Unknown fields are ignored on purpose: Claude adds statusline fields
 	// between versions, and rejecting them would silence ctx on an upgrade.
+	// The model is read loosely for the same reason (modelOf).
 	var in struct {
+		Model         json.RawMessage `json:"model"`
 		ContextWindow *struct {
 			UsedPercentage *float64 `json:"used_percentage"`
 		} `json:"context_window"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
-		return 0, fmt.Errorf("%w: %w", ErrMalformed, err)
+		return Reading{}, fmt.Errorf("%w: %w", ErrMalformed, err)
 	}
-	if in.ContextWindow == nil || in.ContextWindow.UsedPercentage == nil {
-		return 0, ErrNoContext
+	var rd Reading
+	var model struct {
+		ID json.RawMessage `json:"id"`
 	}
-	pct := *in.ContextWindow.UsedPercentage
-	if pct < 0 || pct > 100 {
-		return 0, fmt.Errorf("%w: used_percentage %v is outside 0..100", ErrMalformed, pct)
+	if json.Unmarshal(in.Model, &model) == nil {
+		rd.Model = modelOf(model.ID)
 	}
-	return int(math.Round(pct)), nil
+	if in.ContextWindow != nil && in.ContextWindow.UsedPercentage != nil {
+		pct := *in.ContextWindow.UsedPercentage
+		if pct < 0 || pct > 100 {
+			return Reading{}, fmt.Errorf("%w: used_percentage %v is outside 0..100", ErrMalformed, pct)
+		}
+		rd.Ctx, rd.HasCtx = int(math.Round(pct)), true
+	}
+	if !rd.HasCtx && rd.Model == "" {
+		return Reading{}, ErrNoContext
+	}
+	return rd, nil
 }
 
 // isCharDevice reports whether r is a file that is a character device, such
@@ -181,10 +288,11 @@ func isCharDevice(r io.Reader) bool {
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
 }
 
-// Statusline pushes the ctx token from Claude's statusline JSON in r to the
-// pane the reporting process runs in, and returns what it pushed where.
-// Outside a pane it returns ErrNotInPane before reading r; on unusable input
-// it returns before calling herdr.
+// Statusline pushes the ctx token, and the model token with its model_at,
+// from Claude's statusline JSON in r to the pane the reporting process runs
+// in, and returns what it pushed where. A statusline with only one of them
+// pushes that one. Outside a pane it returns ErrNotInPane before reading r;
+// on unusable input it returns before calling herdr.
 //
 // One herdr.CallTimeout bounds the whole report, finding the pane included:
 // the caller runs it in the background on every statusline refresh, and a
@@ -193,24 +301,33 @@ func Statusline(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (Resu
 	if pane.SocketPath == "" || pane.PaneID == "" {
 		return Result{}, ErrNotInPane
 	}
-	pct, err := ParseContext(r)
+	rd, err := ParseStatusline(r)
 	if err != nil {
 		return Result{}, err
 	}
-	return pushCtx(ctx, rep, pane, pct, CtxTTL)
+	return push(ctx, rep, pane, rd, CtxTTL)
 }
 
-// pushCtx sets the ctx token to pct, expiring after ttl, on the pane the
-// reporting process runs in. One herdr.CallTimeout bounds the whole push,
-// finding the pane included.
-func pushCtx(ctx context.Context, rep Reporter, pane Pane, pct int, ttl time.Duration) (Result, error) {
+// push sets rd's tokens in one report, each expiring after ttl, on the pane
+// the reporting process runs in: ctx when rd has one, and the model with
+// model_at from pane's clock when rd has one. One herdr.CallTimeout bounds
+// the whole push, finding the pane included.
+func push(ctx context.Context, rep Reporter, pane Pane, rd Reading, ttl time.Duration) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, herdr.CallTimeout)
 	defer cancel()
 	target, err := ResolvePane(ctx, rep, pane)
 	if err != nil {
 		return Result{}, err
 	}
-	m := herdr.PaneMetadata{PaneID: target, Source: Source, Tokens: map[string]string{CtxKey: strconv.Itoa(pct)}}
+	tokens := map[string]string{}
+	if rd.HasCtx {
+		tokens[CtxKey] = strconv.Itoa(rd.Ctx)
+	}
+	if rd.Model != "" {
+		tokens[ModelKey] = rd.Model
+		tokens[ModelAtKey] = FormatModelAt(pane.now())
+	}
+	m := herdr.PaneMetadata{PaneID: target, Source: Source, Tokens: tokens}
 	// ttl is CtxTTL or CodexCtxTTL; the guard keeps the conversion from
 	// wrapping, and a zero ttl would be omitted, never expiring.
 	if ttl > 0 {
@@ -218,9 +335,9 @@ func pushCtx(ctx context.Context, rep Reporter, pane Pane, pct int, ttl time.Dur
 	}
 	err = rep.ReportPaneMetadata(ctx, m)
 	if err != nil {
-		return Result{}, fmt.Errorf("report %s to %s: %w", CtxKey, target, err)
+		return Result{}, fmt.Errorf("report %s to %s: %w", strings.Join(slices.Sorted(maps.Keys(tokens)), ", "), target, err)
 	}
-	return Result{Ctx: pct, PaneID: target}, nil
+	return Result{Ctx: rd.Ctx, HasCtx: rd.HasCtx, Model: rd.Model, PaneID: target}, nil
 }
 
 // ResolvePane returns the current id of the pane the reporting process runs

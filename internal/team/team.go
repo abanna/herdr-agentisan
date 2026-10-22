@@ -143,6 +143,12 @@ type Pane struct {
 	// StageAt is when the stage was last reported, from its stage_at token
 	// (A42); zero when absent or not a time report.ParseStageAt reads.
 	StageAt time.Time
+	// Model is the model the pane's agent reported it runs, from its model
+	// token, and ModelAt when, from model_at (A56): "" and zero when either
+	// is absent or not a value the report writes, and when herdr detects no
+	// agent in the pane, as for Ctx.
+	Model   string
+	ModelAt time.Time
 }
 
 // IsAgent reports whether an agent runs in the pane: herdr detected one, or
@@ -329,7 +335,24 @@ func worker(p herdr.PaneInfo, t Target, ids, names map[string]string) Worker {
 	if at, ok := report.ParseStageAt(p.Tokens[report.StageAtKey]); ok {
 		w.Pane.StageAt = at
 	}
+	w.Pane.Model, w.Pane.ModelAt = reportedModel(p)
 	return w
+}
+
+// reportedModel is p's model token and its model_at, or none when herdr
+// detects no agent in p (ADR-001 A56), as ctxOf: a Codex's model lives 24 h,
+// past its agent's exit. A model with no model_at the report writes is
+// none, since nothing could tell whose it is.
+func reportedModel(p herdr.PaneInfo) (string, time.Time) {
+	if p.Agent == "" {
+		return "", time.Time{}
+	}
+	model := report.ValidModel(p.Tokens[report.ModelKey])
+	at, ok := report.ParseModelAt(p.Tokens[report.ModelAtKey])
+	if model == "" || !ok {
+		return "", time.Time{}
+	}
+	return model, at
 }
 
 // byPlace orders workers by target, then pane id.

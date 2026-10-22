@@ -52,7 +52,10 @@ pinned in `go.mod` under the `tool` directive — nothing to install globally.
 ## Report `$ctx` from Claude's statusline
 
 Each Claude agent pushes its own context use to its pane as the `ctx` token:
-a bare integer from 0 to 100, source `agentisan`, with a 180 s TTL. After
+a bare integer from 0 to 100, source `agentisan`, with a 180 s TTL. In the
+same report it pushes the model it runs, the statusline's `model.id`, as the
+`model` token, with `model_at` (ADR-001 A56), so the dashboard's model column
+follows a `/model` switch. After
 `task install` puts `herdr-agentisan` on your `PATH`, add one line to the
 statusline script (`~/.claude/statusline.sh`), after it has read stdin into
 `$input`:
@@ -62,13 +65,15 @@ herdr-agentisan report statusline <<<"$input" >/dev/null 2>&1 &
 ```
 
 It prints nothing and always exits 0. Outside a herdr pane, or when the
-statusline has no context percentage yet, it reports nothing. Set
+statusline has neither a context percentage nor a model yet, it reports
+nothing. Set
 `HERDR_AGENTISAN_LOG_LEVEL=debug` and drop the redirect to see why.
 
 ## Report `$ctx` from Codex
 
 Each Codex agent pushes the same `ctx` token through three Codex hooks, with
-the number Codex itself shows as "Context N% used". Install them once:
+the number Codex itself shows as "Context N% used", and the hook's `model` as
+the `model` token, as the statusline does. Install them once:
 
 ```bash
 herdr-agentisan codex hooks
@@ -173,10 +178,11 @@ what the turn's text states, and sets the tokens `report stage` sets:
   sets `blocked: 1Password agent`. `BOSS:` is the line a worker ends each
   turn with; `STATUS:` is for a pane with no boss above it.
 - **The item** is an `item: <id>` line: the first one in a prompt, as a
-  dispatch carries it, or the last one in the final message's closing
-  paragraph, beside the status line. A new item stated with no stage clears
-  the old stage. An item alone never sets `stage_at`, so it never makes an
-  old stage look reported again.
+  dispatch carries it (behind the header a `send` message is typed with,
+  too), or the last one in the final message's closing paragraph, beside
+  the status line. A new item stated with no stage clears the old stage. An
+  item alone never sets `stage_at`, so it never makes an old stage look
+  reported again.
 
 Markdown bold and code ticks around a line are fine; a value over 80
 characters is cut to 79 and `…`. A turn that states neither reports nothing,
@@ -446,9 +452,9 @@ agentisan-skills' review guidelines, which `roles/review.md` vendors byte
 for byte (ADR-001 A55). The review type starts `codex --no-daemon --sandbox
 read-only` unless its group names a command. For each review, prepare a
 worktree at the PR's head, then send the role whole and the inputs alone,
-from the plugin's checkout. The daemon types `[msg <id> from <sender>]`
-before a message's first line, so the item goes on the second, where
-`report turn` reads it:
+from the plugin's checkout. `report turn` reads the inputs' `item:` line
+on any line: on the first, it reads behind the `[msg <id> from <sender>]`
+header the daemon types there:
 
 ```bash
 herdr-agentisan send ha-review-1 - < roles/review.md
@@ -519,12 +525,23 @@ The user's routing rules, built in byte for byte
 reasoning effort each worker starts with, by its type's role (ADR-001 A50).
 `[routing]` in the shared `herdr-agentisan.toml` holds what they leave to
 the deployment: `enabled` (off by default, and while it is on no
-`agent.model` key may be set), each binding's real `model_id`, efforts and
-`enabled`, and `[routing.overrides]`, the user's standing choice for a role
-and the only way to a premium binding. `config resolve` shows each key with
-its layer, then `routing policy:`, the version a decision records.
-`worker spawn` asks routing from NERD-5289 part 1b on; until then the keys
-resolve and nothing reads them.
+`agent.model` key nor codex `--profile` may be set), each binding's real
+`model_id`, efforts its client takes and `enabled`, and
+`[routing.overrides]`, the user's standing choice for a role and the only
+way to a premium binding. `config resolve` shows each key with its layer,
+then `routing policy:`, the version a decision records; with `--project` it
+also refuses an override a worker type with that role cannot run, such as a
+claude binding for a type on codex.
+
+`worker spawn` asks routing once per spawn, and `team up` once per group it
+fills, before it opens anything: while routing is on, a group it refuses
+stops the whole `team up`. While it is on, the decision is
+the launch: `--model` must then name a binding the role allows, by its name
+or model id, and `--effort` one it takes. While it is off, spawn launches as
+before and only records what routing would have chosen. `--task-file
+<path|->` hands routing the boss's task packet, the rules' `task_packet` as
+JSON, at most 64 KiB. Each worker's row keeps the decision it was launched
+with, and each is an `agentisan.worker.routed` event.
 
 ## Messaging
 
@@ -606,13 +623,20 @@ does not resolve keeps the last ones, and `daemon.log` says why.
 
 ### The model column
 
-Each row shows the model its agent was started with: Claude's `--model`, or
-Codex's `-m` or `--model`, read from the pane's processes through herdr
-(ADR-001 A39). The daemon asks herdr again only when a pane's agent
-restarted or changed, and a pane where it finds no agent process once a
-minute. It is the launch model: a `/model` switch shows once the agent
-restarts, and an agent started without the flag, such as a Codex that takes
-its model from `config.toml`, shows none.
+Each row shows the model its agent reports it runs (ADR-001 A56): Claude's
+statusline `model.id`, or the model a Codex hook names. A `/model` switch
+therefore shows at the agent's next report. For Claude that is within a
+minute when the statusline sets `refreshInterval: 60`, else at its next
+message. For Codex it is after the next tool use or turn end.
+
+Until an agent has reported, or when its report is older than the agent's
+process, as a model left by an earlier agent in the pane is, the row shows
+the model the agent was started with. That is Claude's `--model`, or Codex's
+`-m` or `--model`, read from the pane's processes through herdr (A39).
+
+The daemon asks herdr again only when a pane's agent restarted or changed,
+and once a minute for a pane where it finds no agent process. An agent
+started without the flag that has not reported yet shows none.
 
 ### A group's view
 

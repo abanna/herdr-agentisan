@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/routing"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
 )
@@ -22,8 +23,14 @@ type SpawnRequest struct {
 	Selector
 	Group string `json:"group"`
 	Count int    `json:"count"`
-	// Model overrides the type's model for these workers.
+	// Model overrides the type's model for these workers. While routing is
+	// on (A50) it must name a binding the type's role allows, by its name or
+	// model id.
 	Model string `json:"model,omitempty"`
+	// Effort overrides the effort they start at.
+	Effort string `json:"effort,omitempty"`
+	// Task is the boss's task packet, which routing reads; nil for none.
+	Task *routing.Task `json:"task,omitempty"`
 }
 
 // Spawned is one worker whose agent came up.
@@ -34,6 +41,26 @@ type Spawned struct {
 	Generation int64  `json:"generation"`
 	// Agent is herdr's kind for it: claude or codex.
 	Agent string `json:"agent"`
+	// Binding, Model and Effort are what routing chose for it, and
+	// FallbackReason why that was the role's default; empty while routing
+	// is off.
+	Binding        string         `json:"binding,omitempty"`
+	Model          string         `json:"model,omitempty"`
+	Effort         string         `json:"effort,omitempty"`
+	FallbackReason routing.Reason `json:"fallback_reason,omitempty"`
+}
+
+// Routed is one routing decision, applied or not, and the workers it was
+// made for: every worker of a spawn, or of one group team up fills.
+type Routed struct {
+	// Op is the command that asked: "worker spawn" or "team up".
+	Op             string
+	Project, Group string
+	IDs            []string
+	// Decision is nil when routing, off, would have refused the spawn:
+	// Refused says why.
+	Decision *routing.Decision
+	Refused  error
 }
 
 // SpawnResult is worker spawn's answer.
@@ -60,6 +87,14 @@ func (s *Service) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 	if err := settings.CheckModel(req.Model); err != nil {
 		return SpawnResult{}, fmt.Errorf("%w: --model: %w", ErrBadRequest, err)
 	}
+	if req.Effort != "" && !effortPattern.MatchString(req.Effort) {
+		return SpawnResult{}, fmt.Errorf("%w: --effort is not 1 to 16 lowercase letters", ErrBadRequest)
+	}
+	if req.Task != nil {
+		if err := req.Task.CheckBounds(); err != nil {
+			return SpawnResult{}, fmt.Errorf("%w: %w", ErrBadRequest, err)
+		}
+	}
 	// The preflight can take seconds, so it runs before the lock: it reads
 	// the host, not the team.
 	_, p, _, err := s.resolve(ctx, req.Selector)
@@ -67,6 +102,11 @@ func (s *Service) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 		return SpawnResult{}, err
 	}
 	if err := s.preflight(ctx, p.Repo); err != nil {
+		return SpawnResult{}, err
+	}
+	// Routing also runs before the lock: Jev's answer can take seconds.
+	d, refused, err := s.route(p, req)
+	if err != nil {
 		return SpawnResult{}, err
 	}
 	pending, st, err := s.planAndOpen(ctx, req.Selector, func(st state) ([]planned, error) {
@@ -85,13 +125,109 @@ func (s *Service) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 		if err != nil {
 			return nil, err
 		}
-		return plan(st.profile, req.Group, choice{model: cmp.Or(req.Model, st.profile.AgentFor(req.Group).Model)}, ids)
+		c := choice{model: cmp.Or(req.Model, st.profile.AgentFor(req.Group).Model), effort: req.Effort}
+		return planRouted(st.profile, req.Group, c, d, ids)
 	})
 	if err != nil {
 		return SpawnResult{}, err
 	}
+	s.tellRouted(ctx, Routed{Op: "worker spawn", Project: st.team.Project, Group: req.Group, Decision: d, Refused: refused}, pending)
 	workers, err := s.bringUp(ctx, st.profile.Spawn, pending)
+	for i := range workers {
+		routedResult(&workers[i], d)
+	}
 	return SpawnResult{Project: st.team.Project, Workers: workers, Warnings: s.codexWarnings(pending)}, err
+}
+
+// route asks routing for the spawn's model and effort (A50), on the profile
+// the preflight checked: one decision for every worker of the spawn. While
+// routing is off the spawn launches as it would without it, so the decision
+// is what routing would have chosen, and a refusal is only recorded, as
+// refused; a malformed task packet is refused either way.
+func (s *Service) route(p *settings.Profile, req SpawnRequest) (d *routing.Decision, refused, err error) {
+	if g, ok := p.Groups[req.Group]; !ok || g.DescribesOnly {
+		return nil, nil, fmt.Errorf("%w: %q is not a group of %s; configured: %s", ErrUnknownGroup, req.Group, p.Name, strings.Join(configured(p), ", "))
+	}
+	policy, err := p.Policy()
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: %w", ErrConfig, err)
+	}
+	role, err := routing.RoleFor(req.Group)
+	var dec routing.Decision
+	if err == nil {
+		r := routing.Request{Role: role, Provider: kindOf(p.AgentFor(req.Group)), Task: req.Task, Type: req.Group}
+		if policy.Enabled() {
+			r.Model, r.Effort = req.Model, req.Effort
+		}
+		dec, err = policy.Resolve(r, s.now())
+	}
+	switch {
+	case err == nil:
+		return &dec, nil, nil
+	case errors.Is(err, routing.ErrInvalid):
+		return nil, nil, fmt.Errorf("%w: %w", ErrBadRequest, err)
+	case !policy.Enabled():
+		return nil, err, nil //nolint:wrapcheck // recorded as routing's own refusal
+	}
+	return nil, nil, err //nolint:wrapcheck // routing's sentinels are the refusal, each with its own code
+}
+
+// rowOf is what a worker's row records of d: nil unless d chose its launch.
+func rowOf(d *routing.Decision) *store.Routing {
+	if d == nil || !d.Applied {
+		return nil
+	}
+	r := &store.Routing{
+		Role: d.Role, Provider: d.Provider, Binding: d.SelectedBinding, ModelID: d.ModelID, Effort: d.Effort,
+		AssignmentDigest: d.AssignmentDigest, PolicyVersion: d.PolicyVersion, RoutedAt: d.Timestamp,
+	}
+	if o := d.Override; o != nil {
+		r.OverrideBinding, r.OverrideBy, r.OverrideEffort = o.Binding, o.By, o.Effort
+	}
+	return r
+}
+
+// planRouted plans ids of typ with base's launch, or with the one d chose
+// when routing applied it, and gives each planned row d's record (A50).
+// Spawn and team up plan through it, so both launch what routing chose.
+func planRouted(p *settings.Profile, typ string, base choice, d *routing.Decision, ids []string) ([]planned, error) {
+	if d != nil && d.Applied {
+		base = choice{model: d.ModelID, effort: d.Effort, provider: d.Provider}
+	}
+	ps, err := plan(p, typ, base, ids)
+	for i := range ps {
+		ps[i].routing = rowOf(d)
+	}
+	return ps, err
+}
+
+// tellRouted hands s.Routed r with the ids of the workers in ws that are of
+// r's group; with none, it tells nothing.
+func (s *Service) tellRouted(ctx context.Context, r Routed, ws []opened) {
+	for _, w := range ws {
+		if w.group == r.Group {
+			r.IDs = append(r.IDs, w.id)
+		}
+	}
+	if s.Routed != nil && len(r.IDs) > 0 {
+		s.Routed(ctx, r)
+	}
+}
+
+// routedResult names in w the binding, model, effort and fallback reason d
+// launched it with, when routing applied d.
+func routedResult(w *Spawned, d *routing.Decision) {
+	if d != nil && d.Applied {
+		w.Binding, w.Model, w.Effort, w.FallbackReason = d.SelectedBinding, d.ModelID, d.Effort, d.FallbackReason
+	}
+}
+
+// kindOf is the agent an agent command runs: its executable's name.
+func kindOf(a settings.Agent) string {
+	if len(a.Command) == 0 {
+		return ""
+	}
+	return filepath.Base(a.Command[0])
 }
 
 // codexWarnings warns when a Codex worker was planned and Codex's ctx hooks
@@ -113,6 +249,9 @@ func (s *Service) codexWarnings(ws []opened) []string {
 type planned struct {
 	id, group string
 	launch    launch
+	// routing is the decision its row records; nil when routing did not
+	// choose its launch.
+	routing *store.Routing
 }
 
 // opened is one worker whose tab is open and whose row is bound.
@@ -170,7 +309,7 @@ func (s *Service) open(ctx context.Context, st *state, p planned) (opened, error
 			return opened{}, herdrFailed("open "+p.id+"'s tab", err)
 		}
 	}
-	gen, err := s.Store.BindWorker(ctx, store.Worker{LogicalID: p.id, Project: st.team.Project, Group: p.group, PaneID: c.RootPane.PaneID, TerminalID: c.RootPane.TerminalID}, s.now())
+	gen, err := s.Store.BindWorker(ctx, store.Worker{LogicalID: p.id, Project: st.team.Project, Group: p.group, PaneID: c.RootPane.PaneID, TerminalID: c.RootPane.TerminalID, Routing: p.routing}, s.now())
 	if err != nil {
 		return opened{}, errors.Join(fmt.Errorf("record %s: %w", p.id, err), s.closeQuietly(ctx, c.RootPane.PaneID, c.RootPane.TerminalID))
 	}
@@ -276,10 +415,12 @@ type launch struct {
 	args []string
 }
 
-// choice is the model and effort ("" for none) a spawn's agents start with:
-// --model or the type's, until NERD-5289's routing chooses at plan's one call.
+// choice is the model and effort ("" for none) a spawn's agents start with,
+// chosen before plan: routing's decision while it is on, else --model or the
+// type's agent, and --effort. provider is the agent routing decided for; ""
+// when it did not decide.
 type choice struct {
-	model, effort string
+	model, effort, provider string
 }
 
 // effortPattern is an effort, such as high or xhigh: safe in any shell.
@@ -308,6 +449,9 @@ func plan(p *settings.Profile, typ string, c choice, ids []string) ([]planned, e
 	kind := filepath.Base(agent.Command[0])
 	if kind != agent.Command[0] {
 		return nil, fmt.Errorf("%w: %s's agent command names the path %s; herdr runs %s from the shell's PATH, so name it bare", ErrConfig, typ, agent.Command[0], kind)
+	}
+	if c.provider != "" && kind != c.provider {
+		return nil, fmt.Errorf("%w: %s's agent changed from %s to %s while routing chose its model; spawn again", ErrConfig, typ, c.provider, kind)
 	}
 	out := make([]planned, 0, len(ids))
 	for _, id := range ids {

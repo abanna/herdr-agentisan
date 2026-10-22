@@ -2,7 +2,9 @@ package telemetry_test
 
 import (
 	"context"
+	"encoding/json"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/log"
 
+	"github.com/abanna/herdr-agentisan/internal/routing"
 	"github.com/abanna/herdr-agentisan/internal/telemetry"
 	"github.com/abanna/herdr-agentisan/internal/telemetry/telemetrytest"
 )
@@ -169,9 +172,78 @@ func TestNilEventsEmitNothing(t *testing.T) {
 	var events *telemetry.Events
 	assert.NotPanics(t, func() {
 		events.StatusChanged(t.Context(), telemetry.StatusChange{WorkerID: "w", From: "idle", To: "working"})
+		events.WorkerRouted(t.Context(), "w", "p", "coder", routing.Decision{})
 		events.CtxLevelCrossed(t.Context(), telemetry.CtxLevel{WorkerID: "w", Level: "soft"})
 		events.HandoffStep(t.Context(), telemetry.Handoff{WorkerID: "w", Step: telemetry.HandoffReady})
 	})
+}
+
+// TestWorkerRoutedEmitsTheSchema is A50's audit as the debugger queries it:
+// every audit field under agentisan.routing, present even when the decision
+// has none of it, spelled out by hand so a renamed key fails here.
+func TestWorkerRoutedEmitsTheSchema(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 10, 21, 12, 0, 0, 5, time.FixedZone("CDT", -5*3600))
+	id := "NERD-5289"
+	base := map[string]any{
+		"agentisan.worker.id": "ha-coder-1", "agentisan.project": "herdr-agentisan", "agentisan.group": "coder",
+		"agentisan.routing.role": "coder", "agentisan.routing.provider": "claude",
+		"agentisan.routing.selected_binding": "claude_mid", "agentisan.routing.model_id": "claude-sonnet-5-5",
+		"agentisan.routing.effort": "high", "agentisan.routing.policy_version": "v1-0123456789ab",
+		"agentisan.routing.jev_model_returned": "", "agentisan.routing.selection": "jev_complexity",
+		"agentisan.routing.timestamp": "2026-10-21T17:00:00.000000005Z",
+		"agentisan.routing.unchecked": []string{"tool_compatibility", "context_headroom", "availability", "spending_limits"},
+	}
+	with := func(kv map[string]any) map[string]any {
+		out := maps.Clone(base)
+		maps.Copy(out, kv)
+		return out
+	}
+	decision := routing.Decision{
+		TaskLookupStatus: routing.LookupNotFound, Role: "coder", Provider: "claude", SelectedBinding: "claude_mid",
+		ModelID: "claude-sonnet-5-5", Effort: "high", PolicyVersion: "v1-0123456789ab", FallbackReason: routing.ReasonTaskNotFound,
+		Timestamp: at, Selection: "jev_complexity", Unchecked: routing.Unchecked,
+		// JSON's null, as a decision read back from JSON carries no answers.
+		Answers: json.RawMessage("null"),
+	}
+	overridden := decision
+	overridden.TaskID, overridden.TaskLookupStatus, overridden.AssignmentDigest = &id, routing.LookupFound, "sha256:ab"
+	overridden.Override, overridden.FallbackReason, overridden.Applied = &routing.Override{Binding: "claude_mid", By: "boss", Effort: "high"}, routing.ReasonNone, true
+	overridden.Answers = json.RawMessage(`{"complexity":"bounded"}`)
+	tests := map[string]struct {
+		in   routing.Decision
+		want map[string]any
+	}{
+		"would have, with nothing to name": {in: decision, want: with(map[string]any{
+			"agentisan.routing.task_id": "", "agentisan.routing.task_lookup_status": "not_found", "agentisan.routing.assignment_digest": "",
+			"agentisan.routing.answers": "", "agentisan.routing.fallback_reason": "task_not_found",
+			"agentisan.routing.override.binding": "", "agentisan.routing.override.by": "", "agentisan.routing.override.effort": "",
+			"agentisan.routing.applied": false,
+		})},
+		"applied, with a task and an override": {in: overridden, want: with(map[string]any{
+			"agentisan.routing.task_id": id, "agentisan.routing.task_lookup_status": "found", "agentisan.routing.assignment_digest": "sha256:ab",
+			"agentisan.routing.answers": `{"complexity":"bounded"}`, "agentisan.routing.fallback_reason": "",
+			"agentisan.routing.override.binding": "claude_mid", "agentisan.routing.override.by": "boss", "agentisan.routing.override.effort": "high",
+			"agentisan.routing.applied": true,
+		})},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			events, rec := telemetrytest.NewEvents()
+
+			events.WorkerRouted(t.Context(), "ha-coder-1", "herdr-agentisan", "coder", tc.in)
+
+			got := rec.Events()
+			require.Len(t, got, 1)
+			assert.Equal(t, "agentisan.worker.routed", got[0].Name)
+			assert.Equal(t, tc.want, got[0].Attrs, "exactly the schema's attributes, no more")
+			records := rec.Records()
+			assert.Equal(t, log.SeverityInfo, records[0].Severity())
+			assert.Equal(t, "ha-coder-1 claude_mid high", records[0].Body().AsString())
+			assert.True(t, records[0].Timestamp().Equal(at), "the decision's own time")
+		})
+	}
 }
 
 // TestCtxLevelEmitsTheSchema is A33's contract for the ctx level event, as

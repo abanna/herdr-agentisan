@@ -292,6 +292,11 @@ func hookJSON(path string, pad int) string {
 		`"tool_response":"` + strings.Repeat("o", pad) + `","tool_use_id":"call_1"}`
 }
 
+// noModel is payload with no model field, as from a hook that names none.
+func noModel(payload string) string {
+	return strings.Replace(payload, `"model":"gpt-5",`, "", 1)
+}
+
 // eventHook is hookJSON fired as event, or naming no event when it is empty.
 func eventHook(path, event string) string {
 	field := ""
@@ -307,8 +312,9 @@ func sessionEnd(path string) string {
 	return `{"session_id":"0199","transcript_path":` + strconv.Quote(path) + `,"cwd":"/w","hook_event_name":"SessionEnd","reason":"other"}`
 }
 
-// TestParseCodexHookClasses walks the payload shapes. Only transcript_path
-// and agent_id matter; every other field is Codex's to add or change.
+// TestParseCodexHookClasses walks the payload shapes. Only transcript_path,
+// agent_id and model matter; every other field is Codex's to add or change.
+// The model's own shapes are TestParseCodexHookModelClasses'.
 func TestParseCodexHookClasses(t *testing.T) {
 	t.Parallel()
 
@@ -317,8 +323,8 @@ func TestParseCodexHookClasses(t *testing.T) {
 		want report.CodexHook
 		err  error
 	}{
-		"a PostToolUse payload":      {in: hookJSON("/r.jsonl", 3), want: report.CodexHook{TranscriptPath: "/r.jsonl"}},
-		"a null transcript":          {in: hookJSON("", 3)},
+		"a PostToolUse payload":      {in: hookJSON("/r.jsonl", 3), want: report.CodexHook{TranscriptPath: "/r.jsonl", Model: "gpt-5"}},
+		"a null transcript":          {in: hookJSON("", 3), want: report.CodexHook{Model: "gpt-5"}},
 		"no transcript field":        {in: `{"hook_event_name":"Stop"}`},
 		"a subagent's hook":          {in: `{"transcript_path":"/r.jsonl","agent_id":"a1","agent_type":"worker"}`, want: report.CodexHook{TranscriptPath: "/r.jsonl", AgentID: "a1"}},
 		"a null agent_id":            {in: `{"transcript_path":"/r.jsonl","agent_id":null}`, want: report.CodexHook{TranscriptPath: "/r.jsonl"}},
@@ -452,32 +458,42 @@ func codexLineage(procs map[int]report.Stat, cmds map[int][]string) *report.Line
 
 // TestCodexPushesTheTokenContract: from an embedded Codex, every hook sets
 // ctx on the pane the TUI runs in, under Claude's contract but for Codex's
-// 24 h TTL (A27). The event is never read: the count is the same whichever
+// 24 h TTL (A27), with the payload's model and its model_at in the same
+// report (A56). The event is never read: the count is the same whichever
 // hook read it. SessionEnd included: Codex also runs it when it unloads an
-// old thread after /new or /resume, so it must never clear ctx.
+// old thread after /new or /resume, so it must never clear ctx; it names no
+// model, so it sets none.
 func TestCodexPushesTheTokenContract(t *testing.T) {
 	t.Parallel()
 
 	event := func(name string) func(string) string {
 		return func(path string) string { return eventHook(path, name) }
 	}
-	for name, payload := range map[string]func(path string) string{
-		"PostToolUse": event("PostToolUse"), "Stop": event("Stop"), "PostCompact": event("PostCompact"), "no event": event(""),
-		"a SessionEnd payload": sessionEnd,
+	withModel := `{"ctx":"5","model":"gpt-5","model_at":"1761066000900"}`
+	for name, tc := range map[string]struct {
+		payload func(path string) string
+		model   string
+		tokens  string
+	}{
+		"PostToolUse":          {payload: event("PostToolUse"), model: "gpt-5", tokens: withModel},
+		"Stop":                 {payload: event("Stop"), model: "gpt-5", tokens: withModel},
+		"PostCompact":          {payload: event("PostCompact"), model: "gpt-5", tokens: withModel},
+		"no event":             {payload: event(""), model: "gpt-5", tokens: withModel},
+		"a SessionEnd payload": {payload: sessionEnd, tokens: `{"ctx":"5"}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			srv := herdrtest.Start(t, fakeHerdr([]fakePane{{id: "w15:p4", shell: 600, pgid: 899, fg: []uint32{899, 900}}}))
-			pane := report.Pane{SocketPath: srv.Path, PaneID: "w15:p4", Lineage: codexLineage(embeddedProcs(), embeddedArgv)}
+			pane := report.Pane{SocketPath: srv.Path, PaneID: "w15:p4", Lineage: codexLineage(embeddedProcs(), embeddedArgv), Now: reportedAt}
 			path := transcript(t, tokenCount(24610, window)+"\n")
 
-			got, err := report.Codex(t.Context(), herdr.Client{SocketPath: srv.Path}, pane, strings.NewReader(payload(path)))
+			got, err := report.Codex(t.Context(), herdr.Client{SocketPath: srv.Path}, pane, strings.NewReader(tc.payload(path)))
 			require.NoError(t, err)
-			assert.Equal(t, report.Result{Ctx: 5, PaneID: "w15:p4"}, got)
+			assert.Equal(t, report.Result{Ctx: 5, HasCtx: true, Model: tc.model, PaneID: "w15:p4"}, got)
 
 			reqs := srv.Requests()
 			require.Equal(t, []string{process, reportM}, methods(reqs))
-			assert.JSONEq(t, `{"pane_id":"w15:p4","source":"agentisan","tokens":{"ctx":"5"},"ttl_ms":86400000}`, string(reqs[1].Params))
+			assert.JSONEq(t, `{"pane_id":"w15:p4","source":"agentisan","tokens":`+tc.tokens+`,"ttl_ms":86400000}`, string(reqs[1].Params))
 		})
 	}
 }
@@ -534,7 +550,7 @@ func TestCodexRefusesWhatItCannotPlace(t *testing.T) {
 		"only codex helpers, never codex":    {lineage: codexLineage(embeddedProcs(), helpersOnly), want: report.ErrNoCodexHost},
 		"an ancestor's pid reused mid-check": {lineage: reusedLineage, want: report.ErrHostUnverified},
 		"a hook inside a subagent":           {lineage: codexLineage(embeddedProcs(), embeddedArgv), hook: `{"transcript_path":"/r","agent_id":"a1"}`, want: report.ErrSubagent},
-		"an ephemeral session":               {lineage: codexLineage(embeddedProcs(), embeddedArgv), hook: hookJSON("", 1), want: report.ErrNoContext},
+		"an ephemeral session, no model":     {lineage: codexLineage(embeddedProcs(), embeddedArgv), hook: noModel(hookJSON("", 1)), want: report.ErrNoContext},
 		"an unreadable payload":              {lineage: codexLineage(embeddedProcs(), embeddedArgv), hook: `{`, want: report.ErrMalformed},
 	}
 	for name, tc := range tests {
@@ -572,7 +588,7 @@ func TestCodexDrainsStdinOnEveryPath(t *testing.T) {
 		"inside a subagent":      {pane: report.Pane{SocketPath: "/nowhere", PaneID: "w1:p1"}, payload: strings.Replace(big, `"cwd"`, `"agent_id":"a1","cwd"`, 1), want: report.ErrSubagent},
 		"on an unverified host":  {pane: report.Pane{SocketPath: "/nowhere", PaneID: "w1:p1"}, payload: big, want: report.ErrHostUnverified},
 		"over the size cap":      {pane: report.Pane{SocketPath: "/nowhere", PaneID: "w1:p1"}, payload: hookJSON("/r.jsonl", report.MaxCodexHookBytes), want: report.ErrMalformed},
-		"with nothing to report": {pane: report.Pane{SocketPath: "/nowhere", PaneID: "w1:p1", Lineage: codexLineage(embeddedProcs(), embeddedArgv)}, payload: hookJSON("", 200<<10), want: report.ErrNoContext},
+		"with nothing to report": {pane: report.Pane{SocketPath: "/nowhere", PaneID: "w1:p1", Lineage: codexLineage(embeddedProcs(), embeddedArgv)}, payload: noModel(hookJSON("", 200<<10)), want: report.ErrNoContext},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

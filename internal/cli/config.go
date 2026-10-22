@@ -102,6 +102,11 @@ func newConfigResolveCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("config resolve: %w", err)
 			}
+			if res.Profile != nil {
+				if err := res.Profile.CheckRoutingProviders(); err != nil {
+					return fmt.Errorf("config resolve: %w", err)
+				}
+			}
 			policy, err := res.Policy()
 			if err != nil {
 				return fmt.Errorf("config resolve: %w", err)

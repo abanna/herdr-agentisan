@@ -15,8 +15,8 @@ import (
 
 // The Codex ctx adapter (ADR-001 A22, A27). Codex runs `report codex` as an
 // async PostToolUse, Stop and PostCompact hook and passes the hook's JSON on
-// stdin; ctx keeps the token contract Statusline writes but for its TTL,
-// CodexCtxTTL.
+// stdin; ctx and the model (A56) keep the token contract Statusline writes
+// but for their TTL, CodexCtxTTL.
 const (
 	// MaxCodexHookBytes bounds the hook payload kept from stdin. A PostToolUse
 	// payload carries the tool's input and output, so it can be large; one
@@ -64,21 +64,26 @@ type CodexHook struct {
 	TranscriptPath string
 	// AgentID is set only when the hook fired inside a subagent.
 	AgentID string
+	// Model is the turn's model, as Codex fills every hook's model field
+	// (its turn context's model slug), when ValidModel keeps it; else "".
+	Model string
 }
 
 // ParseCodexHook reads a Codex hook payload from r, and reads r to its end
 // whatever it finds, so Codex's write of the payload always completes rather
 // than meeting a closed pipe. (Codex 0.161 tolerates a closed pipe too: a
 // broken pipe on a hook's stdin counts as written.) Fields other than
-// transcript_path and agent_id are Codex's to add or change, and ignored.
+// transcript_path, agent_id and model are Codex's to add or change, and
+// ignored; a model that is not a string is no model, as for Statusline.
 func ParseCodexHook(r io.Reader) (CodexHook, error) {
 	raw, err := readHook(r, MaxCodexHookBytes)
 	if err != nil {
 		return CodexHook{}, err
 	}
 	var in struct {
-		TranscriptPath *string `json:"transcript_path"`
-		AgentID        *string `json:"agent_id"`
+		TranscriptPath *string         `json:"transcript_path"`
+		AgentID        *string         `json:"agent_id"`
+		Model          json.RawMessage `json:"model"`
 	}
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return CodexHook{}, fmt.Errorf("%w: %w", ErrMalformed, err)
@@ -90,6 +95,7 @@ func ParseCodexHook(r io.Reader) (CodexHook, error) {
 	if in.AgentID != nil {
 		h.AgentID = *in.AgentID
 	}
+	h.Model = modelOf(in.Model)
 	return h, nil
 }
 
@@ -349,10 +355,12 @@ func (i codexTokenInfo) percent() (int, error) {
 
 // Codex pushes the ctx token from a Codex hook's payload in r: the latest
 // token count in the session's transcript, as the TUI's "Context N% used"
-// shows it, set on the pane the session's Codex runs in for CodexCtxTTL. It
-// reads r to its end first, then reports nothing outside a pane, from a
-// subagent, from a session it cannot place (CheckCodexHost), or with no count
-// to report.
+// shows it, set on the pane the session's Codex runs in for CodexCtxTTL, with
+// the payload's model and its model_at in the same report (A56). With no
+// count, ErrNoContext, it pushes the model alone. It reads r to its end
+// first, then reports nothing outside a pane, from a subagent, from a session
+// it cannot place (CheckCodexHost), with neither a count nor a model, or for
+// a transcript it cannot read.
 //
 // One herdr.CallTimeout bounds the herdr calls, finding the pane included.
 func Codex(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (Result, error) {
@@ -369,12 +377,22 @@ func Codex(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (Result, e
 	if err := pane.Lineage.CheckCodexHost(); err != nil {
 		return Result{}, err
 	}
-	if hook.TranscriptPath == "" {
-		return Result{}, fmt.Errorf("%w: the codex session keeps no transcript", ErrNoContext)
-	}
-	pct, err := TranscriptContext(hook.TranscriptPath)
-	if err != nil {
+	rd := Reading{Model: hook.Model}
+	pct, err := codexContext(hook.TranscriptPath)
+	switch {
+	case err == nil:
+		rd.Ctx, rd.HasCtx = pct, true
+	case !errors.Is(err, ErrNoContext) || rd.Model == "":
 		return Result{}, err
 	}
-	return pushCtx(ctx, rep, pane, pct, CodexCtxTTL)
+	return push(ctx, rep, pane, rd, CodexCtxTTL)
+}
+
+// codexContext is TranscriptContext's count for the rollout at path, and
+// ErrNoContext when the session keeps none.
+func codexContext(path string) (int, error) {
+	if path == "" {
+		return 0, fmt.Errorf("%w: the codex session keeps no transcript", ErrNoContext)
+	}
+	return TranscriptContext(path)
 }
