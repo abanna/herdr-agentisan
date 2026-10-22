@@ -257,7 +257,8 @@ func shellWords(t *testing.T, command string, env ...string) []string {
 // under the plugin's state directory, with no HERDR_PLUGIN_STATE_DIR set.
 // herdr's state directory is $XDG_STATE_HOME/herdr when XDG_STATE_HOME is
 // set, else $HOME/.local/state/herdr (src/config/io.rs:37-42,88-94), and
-// the plugin's is plugins/<id> under it (src/plugin_paths.rs:21-25).
+// the plugin's is plugins/<id> under it (herdr 0.9.5
+// src/plugin_paths.rs:50-54).
 func TestTabBarSnippet(t *testing.T) {
 	t.Parallel()
 	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "config", "herdr-tab-bar.example.toml"))
