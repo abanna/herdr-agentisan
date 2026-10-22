@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -108,6 +109,48 @@ func TestDaemonStartNeverDerivesTheStateDir(t *testing.T) {
 			assert.NoDirExists(t, e.stateDir, "nothing made under herdr's directory for the plugin")
 		})
 	}
+}
+
+// TestDaemonRunTakesTheFlagOverTheVariable: `daemon run --state-dir X`, with
+// HERDR_PLUGIN_STATE_DIR another directory, runs the daemon under X and makes
+// nothing under the variable's (QA #83, F-1). Start and restart take the same
+// options; the in-process spawner always runs in the test's own directory,
+// so run is the command that shows it.
+func TestDaemonRunTakesTheFlagOverTheVariable(t *testing.T) {
+	t.Parallel()
+	e := newDaemonEnv(t)
+	other, err := os.MkdirTemp("", "qe")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(other) })
+	var logs bytes.Buffer
+	ctx, cancel := context.WithCancel(daemonCtx(t, e, nil, &logs))
+	defer cancel()
+	ctx = cli.WithLookupEnv(ctx, e.lookup(map[string]string{"HERDR_PLUGIN_STATE_DIR": other}))
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := runCtx(ctx, "daemon", "run", "--state-dir", e.stateDir)
+		done <- err
+	}()
+	paths, err := daemon.PathsFor(e.stateDir, e.herdrSock)
+	require.NoError(t, err)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if _, err := daemon.Health(t.Context(), paths.Socket); err == nil {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("daemon run ended before answering under --state-dir: %v", err)
+		case <-time.After(20 * time.Millisecond):
+		}
+		require.True(t, time.Now().Before(deadline), "no daemon answered under --state-dir")
+	}
+	cancel()
+	<-done
+	entries, err := os.ReadDir(other)
+	require.NoError(t, err)
+	assert.Empty(t, entries, "nothing under HERDR_PLUGIN_STATE_DIR's directory")
 }
 
 // TestNoDaemonUnderHerdrsStateDir: a workforce op that found no daemon in a

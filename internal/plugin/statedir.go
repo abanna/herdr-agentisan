@@ -30,7 +30,9 @@ func StateDir(flag string, lookup func(string) (string, bool)) (dir string, deri
 
 // HerdrStateDir is the directory herdr 0.9.5 gives this plugin as
 // HERDR_PLUGIN_STATE_DIR, worked out from the environment as herdr does
-// (ADR-001 A51). herdr's plugin_state_dir is state_dir()/plugins/<ID>
+// (ADR-001 A51), cleaned as filepath.Join cleans it: for a variable holding
+// "//", "/./" or "/../" it is herdr's path cleaned, which daemon.PathsFor
+// gives herdr's own value too, so both name the same socket. herdr's plugin_state_dir is state_dir()/plugins/<ID>
 // (src/plugin_paths.rs:50-54), and state_dir is $XDG_STATE_HOME/herdr when
 // XDG_STATE_HOME is set at all, else $HOME/.local/state/herdr
 // (src/config/io.rs:37-42,88-94). herdr reads each with std::env::var, so a
