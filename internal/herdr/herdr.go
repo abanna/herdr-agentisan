@@ -79,8 +79,10 @@ func (e *APIError) Error() string {
 func (e *APIError) Unwrap() error { return ErrAPI }
 
 // Is lets errors.Is(err, ErrPaneNotFound) match herdr's pane_not_found code,
-// and errors.Is(err, ErrEventsLost) its events_lost code, so callers never
-// compare code strings themselves.
+// errors.Is(err, ErrEventsLost) its events_lost code, and each workforce
+// sentinel its code in workforceCodes, ErrWaitTimeout herdr's timeout from
+// any call (see ErrWaitTimeout), so callers never compare code strings
+// themselves.
 func (e *APIError) Is(target error) bool {
 	if target == ErrPaneNotFound {
 		return e.Code == codePaneNotFound
