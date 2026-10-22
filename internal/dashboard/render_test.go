@@ -1385,6 +1385,17 @@ func TestPlaceCutsAsTheUnsplitText(t *testing.T) {
 	}
 }
 
+// TestCutKeepsNothingItCutsAway: a segment cut down to nothing is not kept,
+// so a frame drops the spaces that end its line, as it does where no
+// reverse-video segment follows them: an empty one, or one that starts
+// where the frame ends.
+func TestCutKeepsNothingItCutsAway(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "ab", dashboard.ClipText([]string{"ab  ", ""}, []bool{false, true}, 10), "an empty reverse segment")
+	assert.Equal(t, "ab", dashboard.ClipText([]string{"ab  ", "cd"}, []bool{false, true}, 4), "a reverse segment past the frame")
+}
+
 // TestSampleSnapshotMirrorsTheFixture: docs/dashboard/sample-snapshot.json is
 // what a reader copies to try the dashboard. It must stay the snapshot the
 // goldens were drawn from.

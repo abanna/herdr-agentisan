@@ -16,3 +16,21 @@ func PlaceText(base []string, x int, over string) string {
 	}
 	return b.String()
 }
+
+// ClipText clips a line of plain segments, those marked reverse in reverse
+// video, to w cells as a frame does, and returns the text it keeps.
+func ClipText(base []string, reverse []bool, w int) string {
+	l := make(line, 0, len(base))
+	for i, s := range base {
+		st := plainStyle
+		if reverse[i] {
+			st = st.Reverse(true)
+		}
+		l = append(l, seg{s, st})
+	}
+	var b strings.Builder
+	for _, s := range l.cut(0, w).trimRight() {
+		b.WriteString(s.text)
+	}
+	return b.String()
+}
