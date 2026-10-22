@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -230,6 +231,135 @@ func TestNoCtxWithoutADetectedAgent(t *testing.T) {
 		bands := map[string]string{"ctx_ok": push.Tokens["ctx_ok"], "ctx_warn": push.Tokens["ctx_warn"], "ctx_hot": push.Tokens["ctx_hot"]}
 		assert.Equal(t, map[string]string{"ctx_ok": want, "ctx_warn": "", "ctx_hot": ""}, bands, pane)
 	}
+}
+
+// stagedPane is fullTeam's wN:p1 at status, its stage reported at reported.
+func stagedPane(status string, reported time.Time) []map[string]any {
+	return []map[string]any{teamPane("wN:p1", "wN", "claude", status, "", map[string]string{
+		"item": "NERD-5334", "stage": "qa: reading", "stage_at": strconv.FormatInt(reported.Unix(), 10),
+	})}
+}
+
+// stagePushed is the stage_now and stage_old of wN:p1's last sidebar push.
+func stagePushed(t *testing.T, th *teamHerdr) [2]string {
+	t.Helper()
+	params := panePushes(t, th.srv)["wN:p1"]
+	require.NotEmpty(t, params)
+	var push struct {
+		Tokens map[string]string `json:"tokens"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(params[len(params)-1]), &push))
+	return [2]string{push.Tokens[team.StageNowKey], push.Tokens[team.StageOldKey]}
+}
+
+// stagedRow is wN:p1's row in s, or the zero Agent.
+func stagedRow(s snapshot.Snapshot) snapshot.Agent {
+	for _, g := range s.Groups {
+		for _, a := range g.Agents {
+			if a.PaneID == "wN:p1" {
+				return a
+			}
+		}
+	}
+	return snapshot.Agent{}
+}
+
+// TestRunAgesAStaleStage is A42 on a herdrtest team, over the poll's own
+// clock: a stage carried into a turn that reports nothing is current while
+// the daemon has seen no turn and while the turn runs; once it ends, the
+// sidebar's stage moves from stage_now to stage_old with its age and the
+// snapshot marks it stale with its stage_at. Reported again, it is current.
+func TestRunAgesAStaleStage(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	ws, _, _ := fullTeam()
+	agents := []map[string]any{named("wN:p1", "pee01")}
+	reported := t0.Add(-2 * time.Hour)
+	th.layout(ws, stagedPane("idle", reported), agents)
+	dir := shortDir(t)
+	o := teamOpts(t, dir, th, projectConfig(t))
+	o.Now = func() time.Time { return t0 }
+	run(t, o)
+	sock := socketPath(t, dir, th.path)
+
+	polled(t, th.srv, 2)
+	assert.Equal(t, [2]string{"qa: reading", ""}, stagePushed(t, th), "no turn seen yet")
+	th.layout(ws, stagedPane("working", reported), agents)
+	polled(t, th.srv, 2)
+	assert.Equal(t, [2]string{"qa: reading", ""}, stagePushed(t, th), "a turn running")
+	th.layout(ws, stagedPane("idle", reported), agents)
+	polled(t, th.srv, 2)
+	assert.Equal(t, [2]string{"", "qa: reading · 2h"}, stagePushed(t, th), "the turn ended with no report")
+	got := stagedRow(served(t, sock, func(s snapshot.Snapshot) bool { return stagedRow(s).StageStale }))
+	require.NotNil(t, got.StageAt)
+	assert.Equal(t, reported, *got.StageAt)
+
+	th.layout(ws, stagedPane("idle", t0), agents)
+	polled(t, th.srv, 2)
+	assert.Equal(t, [2]string{"qa: reading", ""}, stagePushed(t, th), "reported again")
+	got = stagedRow(served(t, sock, func(s snapshot.Snapshot) bool { return !stagedRow(s).StageStale }))
+	require.NotNil(t, got.StageAt)
+	assert.Equal(t, t0, *got.StageAt)
+}
+
+// TestRunRestartRaisesNoFalseAlarm: a daemon restarted while a pane is
+// mid-turn never saw that turn begin, so a stage reported in it before the
+// restart is still current when the turn ends; the next whole turn that
+// reports nothing ages it. stage_at, a herdr token, outlives the daemon.
+// Every stage_at is at or before the daemon's clock, so none reads as absent.
+func TestRunRestartRaisesNoFalseAlarm(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	ws, _, _ := fullTeam()
+	agents := []map[string]any{named("wN:p1", "pee01")}
+	clk := &clock{now: t0}
+	dir := shortDir(t)
+	cfg := projectConfig(t)
+	current := [2]string{"qa: reading", ""}
+
+	// The first daemon sees the pane rest, then a turn begin, in which the
+	// agent reports its stage; it stops before the turn ends.
+	o := teamOpts(t, dir, th, cfg)
+	o.Now = clk.Now
+	th.layout(ws, stagedPane("idle", t0.Add(-2*time.Hour)), agents)
+	first := run(t, o)
+	polled(t, th.srv, 2)
+	th.layout(ws, stagedPane("working", t0.Add(-2*time.Hour)), agents)
+	polled(t, th.srv, 2)
+	clk.advance(10 * time.Second)
+	reported := clk.Now()
+	th.layout(ws, stagedPane("working", reported), agents)
+	polled(t, th.srv, 2)
+	require.Equal(t, current, stagePushed(t, th))
+	clk.advance(10 * time.Second)
+	first.cancel()
+	require.NoError(t, first.wait(t, ready))
+
+	// The restarted daemon first sees the pane at work; the turn ends.
+	o = restarted(teamOpts(t, dir, th, cfg))
+	o.Now = clk.Now
+	run(t, o)
+	sock := socketPath(t, dir, th.path)
+	polled(t, th.srv, 2)
+	assert.Equal(t, current, stagePushed(t, th), "a turn running")
+	th.layout(ws, stagedPane("idle", reported), agents)
+	polled(t, th.srv, 2)
+	assert.Equal(t, current, stagePushed(t, th), "reported in the turn that just ended")
+	got := stagedRow(served(t, sock, func(s snapshot.Snapshot) bool { return stagedRow(s).Status == snapshot.StatusIdle }))
+	assert.False(t, got.StageStale, "the snapshot agrees")
+
+	// The next whole turn reports nothing: the stage is old.
+	clk.advance(10 * time.Second)
+	polled(t, th.srv, 2)
+	th.layout(ws, stagedPane("working", reported), agents)
+	polled(t, th.srv, 2)
+	clk.advance(10 * time.Second)
+	th.layout(ws, stagedPane("idle", reported), agents)
+	polled(t, th.srv, 2)
+	assert.Equal(t, [2]string{"", "qa: reading · 0m"}, stagePushed(t, th), "a whole turn with no report")
+	got = stagedRow(served(t, sock, func(s snapshot.Snapshot) bool { return stagedRow(s).StageStale }))
+	require.NotNil(t, got.StageAt)
+	assert.Equal(t, reported, *got.StageAt, "stage_at outlives the daemon")
 }
 
 // TestSnapshotOpBeforeTheFirstPoll: until the team poll has built a

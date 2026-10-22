@@ -49,6 +49,36 @@ const (
 	RoleWorker = "worker"
 )
 
+// The message events (A30): a message send queued; a dispatch the daemon
+// recorded as delivered, or as failed, since it may not have reached its
+// pane (A2); and a message returned to the boss once the binding it was sent
+// to ended. None carries a message's body.
+const (
+	EventMessageQueued    = "agentisan.message.queued"
+	EventMessageDelivered = "agentisan.message.delivered"
+	EventMessageFailed    = "agentisan.message.failed"
+	EventMessageReturned  = "agentisan.message.returned"
+)
+
+// The attribute keys of the message events.
+const (
+	// AttrMessageID is the message's ULID.
+	AttrMessageID = "agentisan.message.id"
+	// AttrMessageFromKind and AttrMessageToKind are worker, boss, pane or,
+	// for a sender, daemon.
+	AttrMessageFromKind = "agentisan.message.from.kind"
+	AttrMessageFrom     = "agentisan.message.from.id"
+	AttrMessageToKind   = "agentisan.message.to.kind"
+	AttrMessageTo       = "agentisan.message.to.id"
+	// AttrMessageReturnedFrom is the worker a message returned to the boss
+	// was sent to; "" for any other.
+	AttrMessageReturnedFrom = "agentisan.message.returned_from"
+	// AttrMessageAttempts counts the dispatches the message was claimed for.
+	AttrMessageAttempts = "agentisan.message.attempts"
+	// AttrMessageReason is why a message failed; "" for the other events.
+	AttrMessageReason = "agentisan.message.reason"
+)
+
 // scope names the instrumentation the events come from.
 const scope = "github.com/abanna/herdr-agentisan/internal/telemetry"
 
@@ -96,6 +126,59 @@ func (e *Events) StatusChanged(ctx context.Context, c StatusChange) {
 		attribute.String(AttrPaneID, c.PaneID),
 		attribute.String(AttrFrom, c.From),
 		attribute.String(AttrTo, c.To),
+	)
+	e.logger.Emit(ctx, r)
+}
+
+// Message is one message event: the message, never its body.
+type Message struct {
+	ID             string
+	FromKind, From string
+	ToKind, To     string
+	ReturnedFrom   string
+	Attempts       int
+	Reason         string
+}
+
+// MessageQueued emits m as an EventMessageQueued record.
+func (e *Events) MessageQueued(ctx context.Context, m Message) {
+	e.message(ctx, EventMessageQueued, "queued for", m)
+}
+
+// MessageDelivered emits m as an EventMessageDelivered record.
+func (e *Events) MessageDelivered(ctx context.Context, m Message) {
+	e.message(ctx, EventMessageDelivered, "delivered to", m)
+}
+
+// MessageFailed emits m as an EventMessageFailed record.
+func (e *Events) MessageFailed(ctx context.Context, m Message) {
+	e.message(ctx, EventMessageFailed, "failed to", m)
+}
+
+// MessageReturned emits m as an EventMessageReturned record.
+func (e *Events) MessageReturned(ctx context.Context, m Message) {
+	e.message(ctx, EventMessageReturned, "returned to", m)
+}
+
+func (e *Events) message(ctx context.Context, name, what string, m Message) {
+	if e == nil {
+		return
+	}
+	var r log.Record
+	r.SetEventName(name)
+	r.SetTimestamp(time.Now())
+	r.SetSeverity(log.SeverityInfo)
+	r.SetSeverityText("INFO")
+	r.SetBody(attribute.StringValue(m.ID + " " + what + " " + m.To))
+	r.AddAttributes(
+		attribute.String(AttrMessageID, m.ID),
+		attribute.String(AttrMessageFromKind, m.FromKind),
+		attribute.String(AttrMessageFrom, m.From),
+		attribute.String(AttrMessageToKind, m.ToKind),
+		attribute.String(AttrMessageTo, m.To),
+		attribute.String(AttrMessageReturnedFrom, m.ReturnedFrom),
+		attribute.Int(AttrMessageAttempts, m.Attempts),
+		attribute.String(AttrMessageReason, m.Reason),
 	)
 	e.logger.Emit(ctx, r)
 }

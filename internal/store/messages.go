@@ -18,8 +18,9 @@ const (
 	KindWorker = "worker"
 	// KindBoss is a team's boss, <short>-boss. It has no workers row.
 	KindBoss = "boss"
-	// KindPane is a herdr pane id: a sender with no other identity, and so
-	// where its notices go.
+	// KindPane is a sender with no other identity, by the terminal its pane
+	// shows, which herdr never gives another pane (A30), and so where its
+	// notices go.
 	KindPane = "pane"
 	// KindDaemon is the daemon itself. It sends; nothing is sent to it.
 	KindDaemon = "daemon"
@@ -284,54 +285,68 @@ func (s *Store) Fail(ctx context.Context, id, reason string, at time.Time) error
 }
 
 // RecoverDispatching fails every message still dispatching, with reason,
-// and notifies their senders, in one transaction. A daemon runs it when it
-// starts: a row left dispatching is a dispatch a crash cut off, which may
-// or may not have reached its pane (A2).
-func (s *Store) RecoverDispatching(ctx context.Context, reason string, at time.Time) (int64, error) {
+// and notifies their senders, in one transaction, and returns them failed,
+// oldest first. A daemon runs it when it starts: a row left dispatching is a
+// dispatch a crash cut off, which may or may not have reached its pane (A2).
+func (s *Store) RecoverDispatching(ctx context.Context, reason string, at time.Time) ([]Message, error) {
 	ns, err := nanos(at)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, fmt.Errorf("%w: recover: %w", ErrStore, err)
+		return nil, fmt.Errorf("%w: recover: %w", ErrStore, err)
 	}
 	defer tx.Rollback() //nolint:errcheck // a no-op once committed
-	ids, err := dispatching(ctx, tx)
+	ms, err := dispatching(ctx, tx)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	reason = cleanReason(reason)
-	for _, id := range ids {
-		if err := fail(ctx, tx, id, reason, at, ns); err != nil {
-			return 0, err
+	for i := range ms {
+		if err := fail(ctx, tx, ms[i].ID, reason, at, ns); err != nil {
+			return nil, err
 		}
+		ms[i].State, ms[i].Reason = MessageFailed, reason
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, fmt.Errorf("%w: recover: %w", ErrStore, err)
+		return nil, fmt.Errorf("%w: recover: %w", ErrStore, err)
 	}
-	return int64(len(ids)), nil
+	return ms, nil
 }
 
+// selectDispatching lists the messages dispatching, oldest first.
+const selectDispatching = `SELECT ` + messageColumns + `
+FROM messages WHERE state = 'dispatching' ORDER BY seq`
+
 // dispatching lists the messages dispatching, oldest first.
-func dispatching(ctx context.Context, tx *sql.Tx) ([]string, error) {
-	rows, err := tx.QueryContext(ctx, "SELECT id FROM messages WHERE state = 'dispatching' ORDER BY seq")
+func dispatching(ctx context.Context, tx *sql.Tx) ([]Message, error) {
+	rows, err := tx.QueryContext(ctx, selectDispatching)
 	if err != nil {
 		return nil, fmt.Errorf("%w: recover: %w", ErrStore, err)
 	}
-	defer rows.Close() //nolint:errcheck // read-only; rows.Err reports what matters
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, fmt.Errorf("%w: recover: %w", ErrStore, err)
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
+	ms, err := scanMessages(rows)
+	if err != nil {
 		return nil, fmt.Errorf("%w: recover: %w", ErrStore, err)
 	}
-	return ids, nil
+	return ms, nil
+}
+
+// scanMessages reads every message rows holds, and closes it.
+func scanMessages(rows *sql.Rows) ([]Message, error) {
+	defer rows.Close() //nolint:errcheck // read-only; rows.Err reports what matters
+	var ms []Message
+	for rows.Next() {
+		m, err := scanMessage(rows)
+		if err != nil {
+			return nil, err
+		}
+		ms = append(ms, m)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read messages: %w", err)
+	}
+	return ms, nil
 }
 
 const (
@@ -375,36 +390,41 @@ func fail(ctx context.Context, tx *sql.Tx, id, reason string, at time.Time, ns i
 	return nil
 }
 
+// returnToBoss re-addresses ?1's queued messages in project ?4 whose
+// binding has ended to the boss ?2, at ?3, and returns them.
+const returnToBoss = `UPDATE messages
+SET recipient_kind = 'boss', recipient = ?2, generation = NULL, returned_from = ?1, updated_at = max(?3, created_at)
+WHERE recipient_kind = 'worker' AND recipient = ?1 AND project = ?4 AND state = 'queued'
+	AND NOT EXISTS (SELECT 1 FROM workers AS w WHERE w.logical_id = ?1 AND w.retired_at IS NULL AND w.generation = messages.generation)
+RETURNING ` + messageColumns
+
 // ReturnToBoss gives boss the messages still queued for worker in project
 // whose binding has ended: its row is retired, or the id was reused at a
 // later generation (D11: undelivered messages return to the boss). They keep
-// their ids and order, and record the worker in ReturnedFrom. Messages sent
-// to a live binding, any in flight, and those of another project, which go
-// to that project's boss, stay.
-func (s *Store) ReturnToBoss(ctx context.Context, worker, project string, boss Address, at time.Time) (int64, error) {
+// their ids and order, and record the worker in ReturnedFrom; it returns
+// them as returned, in no set order. Messages sent to a live binding, any in
+// flight, and those of another project, which go to that project's boss,
+// stay.
+func (s *Store) ReturnToBoss(ctx context.Context, worker, project string, boss Address, at time.Time) ([]Message, error) {
 	if boss.Kind != KindBoss {
-		return 0, fmt.Errorf("%w: messages return to a boss, not a %s", ErrInvalid, boss.Kind)
+		return nil, fmt.Errorf("%w: messages return to a boss, not a %s", ErrInvalid, boss.Kind)
 	}
 	if err := errors.Join(checkID(KindWorker, worker), checkID(KindBoss, boss.ID)); err != nil {
-		return 0, err
+		return nil, err
 	}
 	ns, err := nanos(at)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE messages
-SET recipient_kind = 'boss', recipient = ?2, generation = NULL, returned_from = ?1, updated_at = max(?3, created_at)
-WHERE recipient_kind = 'worker' AND recipient = ?1 AND project = ?4 AND state = 'queued'
-	AND NOT EXISTS (SELECT 1 FROM workers AS w WHERE w.logical_id = ?1 AND w.retired_at IS NULL AND w.generation = messages.generation)`,
-		worker, boss.ID, ns, project)
+	rows, err := s.db.QueryContext(ctx, returnToBoss, worker, boss.ID, ns, project)
 	if err != nil {
-		return 0, fmt.Errorf("%w: return %s's messages: %w", ErrStore, worker, err)
+		return nil, fmt.Errorf("%w: return %s's messages: %w", ErrStore, worker, err)
 	}
-	n, err := res.RowsAffected()
+	ms, err := scanMessages(rows)
 	if err != nil {
-		return 0, fmt.Errorf("%w: return %s's messages: %w", ErrStore, worker, err)
+		return nil, fmt.Errorf("%w: return %s's messages: %w", ErrStore, worker, err)
 	}
-	return n, nil
+	return ms, nil
 }
 
 // QueuedRecipients lists every address with a message still queued, once

@@ -187,6 +187,39 @@ FROM logs-agentisan.otel-*
 `coders-1`, once a `workers` row binds the pane, and the pane id, such as
 `w14:p8`, until then; `attributes.agentisan.worker.bound` says which.
 
+### `agentisan.message.queued`, `.delivered`, `.failed` and `.returned`
+
+`send` queued a message (ADR-001 A30), or the daemon's dispatcher recorded
+one delivered, or failed, since its prompt may have been typed (a timeout, a
+crash, a failure after the write) or will never be (a pane sender's notice
+whose pane is gone or took nothing within an hour), or returned it to its
+project's boss once the binding it was sent to ended. A message failed by
+the daemon starting after a crash gives `.failed` then. The daemon's own
+notices give no `.queued`. The body reads `<message id> queued for
+<recipient>` (or `delivered to`, `failed to`, `returned to`) and never
+carries the message's body.
+
+| Attribute | Type | Value |
+| --- | --- | --- |
+| `agentisan.message.id` | string | The message's ULID |
+| `agentisan.message.from.kind` | string | `worker`, `boss`, `pane` or `daemon` |
+| `agentisan.message.from.id` | string | The sender: a logical worker id, a boss's name, a pane's terminal, or `agentisan` |
+| `agentisan.message.to.kind` | string | `worker`, `boss` or `pane` |
+| `agentisan.message.to.id` | string | The recipient; the boss for `.returned` |
+| `agentisan.message.returned_from` | string | The worker a message returned to the boss was sent to; `""` otherwise |
+| `agentisan.message.attempts` | int | The dispatches the message was claimed for; 0 for `.queued` |
+| `agentisan.message.reason` | string | Why it failed, for `.failed`; `""` otherwise |
+
+A message's trail, in ES|QL:
+
+```
+FROM logs-agentisan.otel-*
+| WHERE event_name LIKE "agentisan.message.*"
+    AND attributes.agentisan.message.id == "01JB4Z0Y8E5W3W6S0Q9D7XKJ2M"
+| SORT @timestamp
+| KEEP @timestamp, event_name, attributes.agentisan.message.to.id, attributes.agentisan.message.reason
+```
+
 ## Coming
 
 The same helper carries these when their items land: stage changes (fast

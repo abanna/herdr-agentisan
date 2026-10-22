@@ -2,8 +2,10 @@ package team
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
+	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 )
@@ -81,15 +83,16 @@ func OrderKey(pr Project) string {
 	return orderKeyPrefix + pr.Short
 }
 
-// SidebarTokens are CtxTokens, each agent pane a team places also carrying
-// its place in the team under the team's OrderKey: the boss first, then the
-// groups in the order the snapshot shows them, each group's workers in the
-// model's order. Only agent panes count, so the places run from 0 without a
-// gap, as three digits, or as many as the team's last place needs, so herdr's
-// string order is the team's. A pane carries no other team's key: one it
-// carried in a team it left expires with the push's TTL, and the view's
-// filter, not its key, says which team a pane is in.
-func SidebarTokens(m Model, l Layout) []PaneTokens {
+// SidebarTokens are CtxTokens, each pane also carrying its stage display at
+// now, by the stretches idle saw (StageDisplay, A42), and each agent pane a
+// team places its place in the team under the team's OrderKey: the boss
+// first, then the groups in the order the snapshot shows them, each group's
+// workers in the model's order. Only agent panes count, so the places run
+// from 0 without a gap, as three digits, or as many as the team's last place
+// needs, so herdr's string order is the team's. A pane carries no other
+// team's key: one it carried in a team it left expires with the push's TTL,
+// and the view's filter, not its key, says which team a pane is in.
+func SidebarTokens(m Model, l Layout, idle *IdleClock, now time.Time) []PaneTokens {
 	type place struct{ key, value string }
 	places := map[string]place{}
 	for _, pr := range m.Projects {
@@ -111,10 +114,12 @@ func SidebarTokens(m Model, l Layout) []PaneTokens {
 		}
 	}
 	out := CtxTokens(l)
+	stages := stageTokens(l, idle, now)
 	for _, pt := range out {
 		if p, ok := places[pt.PaneID]; ok {
 			pt.Tokens[p.key] = p.value
 		}
+		maps.Copy(pt.Tokens, stages[pt.PaneID])
 	}
 	return out
 }

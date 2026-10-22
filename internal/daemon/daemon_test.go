@@ -35,6 +35,23 @@ import (
 // fresh store.Open took a median of 2.3 s and up to 5.3 s, against 40 ms
 // idle. A daemon that is ready ends every wait at once, so the size costs
 // nothing when nothing is wrong.
+//
+// It covers one bounded thing at a time. The tests NERD-5354 F3 named,
+// TestBackWalksTheHistory (through backDaemon),
+// TestTeamPushStopsWithTheDaemon and TestRunClearsTheViewOutsideEveryTeam,
+// wait for what a daemon does once it serves (its focus subscription, a
+// poll) from when it serves (serving), not from its start: with its start
+// forced to 7 s and the subscription and first poll to 4 s after it serves,
+// those 7 (sub)tests failed timing from the start and pass timing from
+// serving. A new wait for such an event should use serving too; the rest of
+// the package still times its waits from run, a follow-up (QA #77, F-5).
+//
+// It assumes memory headroom, not an idle CPU. In this package's -race
+// -count=10 run on 2 cores, a start took p99 0.5 s and the run peaked at
+// 367 MiB; capped at 300 MiB (129k major page faults), store.Open took up
+// to 86 s and a first poll up to 19 s, past any fixed wait, and 25 tests
+// failed. A timeout on a machine out of memory or swap is that, not the
+// test.
 const ready = herdr.CallTimeout + store.BusyTimeout
 
 // shortDir returns a fresh directory with a short path: unix socket paths
@@ -282,6 +299,20 @@ func run(t *testing.T, o daemon.Options) *running {
 			t.Errorf("daemon did not stop within %v of cancel", ready)
 		}
 	})
+	return r
+}
+
+// serving runs a daemon with o, as run does, and returns once it answers
+// health in o.StateDir for h's herdr: once its start is over. A wait for
+// something it does once serving, such as subscribing to focus or polling,
+// then gets ready of its own, not what its start left of it (NERD-5354
+// F3): its start and that wait are each bounded by the daemon's own
+// herdr and state database bounds, and a slow store.Open, measured at up
+// to 86 s under memory pressure, is no longer charged to the wait after it.
+func serving(t *testing.T, o daemon.Options, h *fakeHerdr) *running {
+	t.Helper()
+	r := run(t, o)
+	r.healthy(t, o.StateDir, h)
 	return r
 }
 

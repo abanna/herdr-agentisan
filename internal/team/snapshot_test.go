@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -352,6 +353,70 @@ func TestSnapshotRowTabAndIdle(t *testing.T) {
 	for _, r := range team.Snapshot(m, "", at, nil, nil).Groups[0].Agents {
 		assert.Nil(t, r.IdleSince, "no clock: no rest, %s", r.PaneID)
 	}
+}
+
+// TestSnapshotRowStage: a row carries its stage's stage_at, in UTC, and
+// whether it is stale, by the idle clock's stretches (ADR-001 A42), the
+// boss's included: here the boss and wN:p1 worked a turn that reported
+// nothing, wN:p2 reported at its end, wN:p3's agent is gone and wN:p4 has
+// no stage_at. With no clock no stage ages but the one whose agent is gone.
+func TestSnapshotRowStage(t *testing.T) {
+	t.Parallel()
+	before := time.Unix(at.Unix()-3600, 0)
+	after := time.Unix(at.Unix()+5, 0)
+	layout := func(status string) team.Layout {
+		tokens := func(reported time.Time) map[string]string {
+			out := map[string]string{"stage": "build_test"}
+			if !reported.IsZero() {
+				out["stage_at"] = strconv.FormatInt(reported.Unix(), 10)
+			}
+			return out
+		}
+		return team.Layout{
+			Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wJ", Label: "◆ boss"}, {WorkspaceID: "wN", Label: "◆ coders"}},
+			Panes: []herdr.PaneInfo{
+				pane("wJ:p1", "wJ", "claude", status, tokens(before)),
+				pane("wN:p1", "wN", "claude", status, tokens(before)),
+				pane("wN:p2", "wN", "claude", status, tokens(after)),
+				pane("wN:p3", "wN", "", "unknown", tokens(before)),
+				pane("wN:p4", "wN", "claude", status, tokens(time.Time{})),
+			},
+			Agents: []herdr.AgentInfo{{Name: "gone", PaneID: "wN:p3"}},
+		}
+	}
+	clock := &team.IdleClock{}
+	var m team.Model
+	for i, status := range []string{"idle", "working", "idle"} {
+		m = team.Build(layout(status), team.Spaces{}, nil)
+		clock.Observe(m, at.Add(time.Duration(i)*3*time.Second))
+	}
+	now := at.Add(time.Minute)
+
+	type state struct {
+		at    *time.Time
+		stale bool
+	}
+	rowsOf := func(s snapshot.Snapshot) map[string]state {
+		require.NotNil(t, s.Boss)
+		require.Len(t, s.Groups, 1)
+		out := map[string]state{}
+		for _, r := range append([]snapshot.Agent{s.Boss.Agent}, s.Groups[0].Agents...) {
+			if r.StageAt != nil {
+				assert.Equal(t, time.UTC, r.StageAt.Location(), r.PaneID)
+			}
+			out[r.PaneID] = state{r.StageAt, r.StageStale}
+		}
+		return out
+	}
+	utc := func(t time.Time) *time.Time { u := t.UTC(); return &u }
+	assert.Equal(t, map[string]state{
+		"wJ:p1": {utc(before), true}, "wN:p1": {utc(before), true}, "wN:p2": {utc(after), false},
+		"wN:p3": {utc(before), true}, "wN:p4": {nil, false},
+	}, rowsOf(team.Snapshot(m, "", now, nil, clock)))
+	assert.Equal(t, map[string]state{
+		"wJ:p1": {utc(before), false}, "wN:p1": {utc(before), false}, "wN:p2": {utc(after), false},
+		"wN:p3": {utc(before), true}, "wN:p4": {nil, false},
+	}, rowsOf(team.Snapshot(m, "", now, nil, nil)))
 }
 
 // groupsLayout is one ◆ space per name, each with one agent, listed in the
