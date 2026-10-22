@@ -80,6 +80,7 @@ func TestIdleClockStretch(t *testing.T) {
 		"the stage held as it began":                    {polls: []seen{{status: team.StatusIdle, stage: "a"}, {status: team.StatusIdle, stage: "b"}, {status: team.StatusWorking, stage: "c"}, {status: team.StatusIdle, stage: "d"}, {status: team.StatusIdle, stage: "e"}}, from: poll(1), stage: "b"},
 		"the latest of two stretches":                   {polls: []seen{idle, working, idle, idle, working, idle, idle}, from: poll(3), stage: "build_test"},
 		"each stretch's end counts its rests anew":      {polls: []seen{idle, working, idle, idle, working, idle}, unknownTo: true},
+		"a blocked stretch's end counts them anew too":  {polls: []seen{idle, working, idle, idle, blocked, idle}, unknownTo: true},
 		"a stretch still going":                         {polls: []seen{idle, working}, unknownTo: true},
 		"blocked, still going":                          {polls: []seen{idle, blocked}, unknownTo: true},
 		"first seen at work":                            {polls: []seen{working, idle, idle}, unknownTo: true},

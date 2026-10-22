@@ -240,7 +240,9 @@ func teamCalls(srv *herdrtest.Server) []string {
 }
 
 // polled waits until srv has answered n more polls than it had, so every
-// push of the polls before has landed.
+// push of the polls before has landed. A poll counted can be one that listed
+// panes before a layout change, so polled(t, srv, n) promises n-1 whole polls
+// of the new layout.
 func polled(t *testing.T, srv *herdrtest.Server, n int) {
 	t.Helper()
 	from := lists(srv)
