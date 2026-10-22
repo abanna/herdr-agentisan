@@ -194,18 +194,19 @@ func TestGroupDescriptionErrors(t *testing.T) {
 		"a private-use one": {file: described(`a\ue000b`), wantIn: []string{"U+E000 at byte 1"}},
 		"a byte-order mark": {file: described(`\ufeffabc`), wantIn: []string{"U+FEFF at byte 0"}},
 		"an empty group table": {
-			file: app + "[projects.app.groups.qa]\n", wantIn: []string{"groups.qa.workers (not set in any layer)", "every group needs workers"},
+			file:   app + "[projects.app.groups.qa]\n",
+			wantIn: []string{"projects.app.groups.qa (project, ", "every group needs workers", "groups.qa.workers (not set in any layer)"},
 		},
 		"not a string": {
 			file: app + "[projects.app.groups.qa]\ndescription = 5\n", wantIn: []string{"groups.qa.description"},
 		},
 		"workers without slots": {
 			file:   app + "[projects.app.groups.qa]\nworkers = 1\ndescription = \"x\"\n",
-			wantIn: []string{"groups.qa.slots (not set in any layer)", "every group needs slots"},
+			wantIn: []string{"projects.app.groups.qa (project, ", "every group needs slots", "groups.qa.slots (not set in any layer)"},
 		},
 		"slots without workers": {
 			file:   app + "[projects.app.groups.qa]\nslots = 1\ndescription = \"x\"\n",
-			wantIn: []string{"groups.qa.workers (not set in any layer)", "every group needs workers"},
+			wantIn: []string{"projects.app.groups.qa (project, ", "every group needs workers", "groups.qa.workers (not set in any layer)"},
 		},
 		"an agent's model on a group that only describes": {
 			file:   app + "[projects.app.groups.qa]\ndescription = \"x\"\nagent = { model = \"sonnet\" }\n",
@@ -249,6 +250,16 @@ func TestGroupDescriptionErrors(t *testing.T) {
 		"in a repo file": {
 			file: app, repoFile: "[groups.qa]\ndescription = \"from the repo\"\n", inRepo: true,
 			wantIn: []string{"groups.qa.description (repo, ", settings.RepoFileName, "set it in " + settings.FileName}, value: "from the repo",
+		},
+		// A count no layer sets has no source to name, so the refusal names
+		// the group's table and the file that added it (NERD-5369, Draft 22).
+		"an empty group table from a repo file": {
+			file: app, repoFile: "[groups.qa]\n", inRepo: true,
+			wantIn: []string{"groups.qa (repo, ", settings.RepoFileName, "every group needs workers", "groups.qa.workers (not set in any layer)"},
+		},
+		"workers without slots from a repo file": {
+			file: app, repoFile: "[groups.qa]\nworkers = 1\n", inRepo: true,
+			wantIn: []string{"groups.qa (repo, ", settings.RepoFileName, "every group needs slots", "groups.qa.slots (not set in any layer)"},
 		},
 		"in a repo file, empty": {
 			file: app, repoFile: "[groups.qa]\nworkers = 1\nslots = 1\ndescription = \"\"\n", inRepo: true,
