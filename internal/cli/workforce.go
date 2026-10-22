@@ -17,8 +17,8 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
-// The workforce commands (ADR-001 D11, A23): team status, worker spawn and
-// worker retire here; team up follows. The daemon runs each; the command
+// The workforce commands (ADR-001 D11, A23): team status, team up, worker
+// spawn and worker retire. The daemon runs each; the command
 // parses, asks and prints. On every path, a flag it does not know included, stdout is exactly
 // one JSON object, the contract the herdr-workforce skill's wrapper reads:
 // {"ok":true,"data":…} or {"ok":false,"error":{"code","message"}}. It exits 0
@@ -85,7 +85,7 @@ func workforceGroup(use, short string, subs ...*cobra.Command) *cobra.Command {
 }
 
 func newTeamCmd() *cobra.Command {
-	return workforceGroup("team", "Inspect the boss's team (the herdr-workforce skill)", newTeamStatusCmd())
+	return workforceGroup("team", "Inspect and fill the boss's team (the herdr-workforce skill)", newTeamStatusCmd(), newTeamUpCmd())
 }
 
 func newWorkerCmd() *cobra.Command {
@@ -162,6 +162,30 @@ func newTeamStatusCmd() *cobra.Command {
 			return f.runOp(cmd, args, daemon.OpTeamStatus, func() (any, error) {
 				sel, err := f.selector(cmd.Context())
 				return workforce.StatusRequest{Selector: sel}, err
+			})
+		},
+	}
+	f.add(c, true)
+	return c
+}
+
+func newTeamUpCmd() *cobra.Command {
+	var f opFlags
+	c := &cobra.Command{
+		Use:   "up",
+		Short: "Fill each group up to its default count, and open the team's dashboard",
+		Long: "Adds workers to every group of the team until it has its configured\n" +
+			"workers count, filling empty slots only, so a team already full gets\n" +
+			"none; refused whole when the repo fails the preflight (tdaddy in a Go\n" +
+			"repo). It opens the team's dashboard above the boss when none is open;\n" +
+			"the dashboard never refuses the command. A worker that does not come up\n" +
+			"refuses it with spawn_failed, naming the worker; the others stay, and\n" +
+			"team status shows them.",
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return f.runOp(cmd, args, daemon.OpTeamUp, func() (any, error) {
+				sel, err := f.selector(cmd.Context())
+				return workforce.UpRequest{Selector: sel}, err
 			})
 		},
 	}

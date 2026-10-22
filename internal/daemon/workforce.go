@@ -20,6 +20,7 @@ import (
 // has a budget of its own, past the 5 s exchange every other op fits in.
 const (
 	OpTeamStatus   = "team.status"
+	OpTeamUp       = "team.up"
 	OpWorkerSpawn  = "worker.spawn"
 	OpWorkerRetire = "worker.retire"
 	// OpSend queues a message (A30).
@@ -27,8 +28,8 @@ const (
 )
 
 // The workforce ops' budgets. A spawn waits for agents to start, and the
-// skill's wrapper gives a command 120 s; a handoff wait gets 1,500 s of the
-// wrapper's 1,800.
+// skill's wrapper gives a command 120 s, and team up, which starts a team's,
+// gets a spawn's budget; a handoff wait gets 1,500 s of the wrapper's 1,800.
 const (
 	StatusBudget  = 10 * time.Second
 	SpawnBudget   = 110 * time.Second
@@ -45,6 +46,7 @@ const notReadyRetry = 100 * time.Millisecond
 // server and its client both read.
 var opBudgets = map[string]func(json.RawMessage) time.Duration{
 	OpTeamStatus:   fixed(StatusBudget),
+	OpTeamUp:       fixed(SpawnBudget),
 	OpWorkerSpawn:  fixed(SpawnBudget),
 	OpWorkerRetire: retireBudget,
 	OpSend:         fixed(SendBudget),
@@ -110,6 +112,13 @@ func workforceOps(svc *workforce.Service, ready *atomic.Bool, queued func(contex
 				return nil, err
 			}
 			return svc.Status(ctx, req)
+		}},
+		OpTeamUp: {code: workforceCode, run: func(ctx context.Context, args json.RawMessage) (any, error) {
+			var req workforce.UpRequest
+			if err := decodeArgs(args, &req); err != nil {
+				return nil, err
+			}
+			return svc.Up(ctx, req)
 		}},
 		OpWorkerSpawn: {code: workforceCode, run: func(ctx context.Context, args json.RawMessage) (any, error) {
 			var req workforce.SpawnRequest
@@ -193,12 +202,14 @@ func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleCl
 		return nil
 	}
 	return &workforce.Service{
-		Herdr:     herdr.Client{SocketPath: o.HerdrSocket, Dialed: o.onServer(ident)},
-		Store:     st,
-		ConfigDir: o.Team.ConfigDir,
-		Idle:      idle,
-		Now:       o.Now,
-		Preflight: o.Hooks.Preflight,
+		Herdr:      herdr.Client{SocketPath: o.HerdrSocket, Dialed: o.onServer(ident)},
+		Store:      st,
+		ConfigDir:  o.Team.ConfigDir,
+		Idle:       idle,
+		Now:        o.Now,
+		Preflight:  o.Hooks.Preflight,
+		CodexHooks: o.Team.CodexHooks,
+		Dashboard:  o.Team.Dashboard,
 	}
 }
 

@@ -180,23 +180,36 @@ func (s *Service) open(ctx context.Context, st *state, p planned) (opened, error
 // abandon closes the panes of workers opened before a failure, and marks
 // their rows failed.
 func (s *Service) abandon(ctx context.Context, ws []opened) error {
-	errs := make([]error, 0, len(ws))
-	for _, w := range ws {
-		errs = append(errs, s.fail(ctx, w))
-	}
-	return errors.Join(errs...)
+	settle, cancel := settling(ctx)
+	defer cancel()
+	return errors.Join(s.failAll(settle, ws)...)
 }
 
-// cleanupBudget bounds the cleanup of a failed worker, which runs even when
-// the op's own deadline is what failed it.
-const cleanupBudget = 10 * time.Second
+// settleBudget bounds what an op does once its own deadline may have passed:
+// marking the workers that came up active, then cleaning up every other at
+// once. It fits in the 5 s the daemon's exchange leaves a reply past the op's
+// budget, so an op its deadline ended still answers (QA #78 N1).
+const settleBudget = 4 * time.Second
 
-// fail closes w's pane and marks its row failed on a context of its own, so
-// an op out of time still leaves no pane open and no row starting.
-func (s *Service) fail(ctx context.Context, w opened) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupBudget)
-	defer cancel()
-	return errors.Join(s.closeQuietly(ctx, w.paneID, w.terminalID), ignoreGone(s.Store.SetWorkerStatus(ctx, w.row(), store.StatusFailed, s.now())))
+// settling is the context that work runs on, of its own: it runs even when
+// the op's deadline is what failed the workers.
+func settling(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), settleBudget)
+}
+
+// failAll closes each worker's pane and marks its row failed, all at once on
+// ctx, so no pane is left open and no row starting; it returns each one's
+// error, in ws's order.
+func (s *Service) failAll(ctx context.Context, ws []opened) []error {
+	errs := make([]error, len(ws))
+	var wg sync.WaitGroup
+	for i, w := range ws {
+		wg.Go(func() {
+			errs[i] = errors.Join(s.closeQuietly(ctx, w.paneID, w.terminalID), ignoreGone(s.Store.SetWorkerStatus(ctx, w.row(), store.StatusFailed, s.now())))
+		})
+	}
+	wg.Wait()
+	return errs
 }
 
 // row is the workers row w bound.
@@ -218,26 +231,32 @@ func (s *Service) bringUp(ctx context.Context, cfg settings.Spawn, ws []opened) 
 		wg.Go(func() { errs[i] = s.startAndWait(ctx, cfg, w) })
 	}
 	wg.Wait()
-	// The rows settle on a context of their own, as fail's cleanup does: a
-	// sibling that ran the op to its deadline must not fail a worker that is up.
-	settle, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupBudget)
+	// The rows settle on a context of their own: a sibling that ran the op to
+	// its deadline must not fail a worker that is up. Every worker up is
+	// marked active before any cleanup runs.
+	settle, cancel := settling(ctx)
 	defer cancel()
 	out := []Spawned{}
-	var failed []error
+	var down []opened
+	var why []error
 	for i, w := range ws {
 		if errs[i] == nil {
 			errs[i] = s.Store.SetWorkerStatus(settle, w.row(), store.StatusActive, s.now())
 		}
 		if errs[i] != nil {
-			failed = append(failed, fmt.Errorf("%s: %w", w.id, errors.Join(errs[i], s.fail(ctx, w))))
+			down, why = append(down, w), append(why, errs[i])
 			continue
 		}
 		out = append(out, Spawned{ID: w.id, Group: w.group, PaneID: w.paneID, Generation: w.generation, Agent: w.launch.kind})
 	}
-	if len(failed) > 0 {
-		return out, fmt.Errorf("%w: %w", ErrSpawnFailed, errors.Join(failed...))
+	if len(down) == 0 {
+		return out, nil
 	}
-	return out, nil
+	failed := s.failAll(settle, down)
+	for i, w := range down {
+		failed[i] = fmt.Errorf("%s: %w", w.id, errors.Join(why[i], failed[i]))
+	}
+	return out, fmt.Errorf("%w: %w", ErrSpawnFailed, errors.Join(failed...))
 }
 
 // codexKind is herdr's kind for Codex.
@@ -351,7 +370,7 @@ func (s *Service) checkHookReview(ctx context.Context, w opened) error {
 	case errors.Is(err, herdr.ErrWaitTimeout):
 		return nil
 	}
-	return herdrFailed("read "+w.id+"'s screen", err)
+	return callFailed(ctx, "read "+w.id+"'s screen", err)
 }
 
 // keySender sends the configured keys to a worker's pane at most once, and
@@ -395,8 +414,8 @@ func (s *Service) waitForPrompt(ctx context.Context, cfg settings.Spawn, w opene
 			return nil
 		case errors.Is(err, herdr.ErrWaitTimeout):
 			keys.maybe(ctx)
-		case ctx.Err() != nil:
-			return fmt.Errorf("no line of %s's screen matched spawn.shell_prompt %q in time: %w", w.paneID, cfg.ShellPrompt, ctx.Err())
+		case outOfTime(ctx, err) != nil:
+			return fmt.Errorf("no line of %s's screen matched spawn.shell_prompt %q in time: %w", w.paneID, cfg.ShellPrompt, outOfTime(ctx, err))
 		default:
 			return herdrFailed(fmt.Sprintf("wait for %s's shell prompt, spawn.shell_prompt %q", w.paneID, cfg.ShellPrompt), err)
 		}
@@ -428,14 +447,37 @@ func (s *Service) start(ctx context.Context, w opened, keys *keySender) error {
 			p, err := s.Herdr.GetPane(ctx, w.paneID)
 			switch {
 			case err != nil:
-				return herdrFailed("re-read "+w.id+"'s pane", err)
+				return callFailed(ctx, "re-read "+w.id+"'s pane", err)
 			case p.TerminalID != w.terminalID:
 				return fmt.Errorf("%s is no longer %s's pane", w.paneID, w.id)
 			}
 		default:
-			return herdrFailed("start "+w.id, err)
+			return callFailed(ctx, "start "+w.id, err)
 		}
 	}
+}
+
+// outOfTime is why ctx ended a herdr call that failed with err: ctx's own
+// error, or context.DeadlineExceeded when the call ran into ctx's deadline
+// before ctx's timer marked it done (QA #78 R1); nil when ctx did not end it.
+// A call that times out on its own, before ctx's deadline, is herdr's.
+func outOfTime(ctx context.Context, err error) error {
+	if late := ctx.Err(); late != nil {
+		return late //nolint:wrapcheck // the caller wraps it with what ran out of time
+	}
+	if d, ok := ctx.Deadline(); ok && errors.Is(err, context.DeadlineExceeded) && !time.Now().Before(d) {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
+// callFailed is a failed herdr call made to do what: out of time when ctx
+// ended it, else ErrHerdr.
+func callFailed(ctx context.Context, what string, err error) error {
+	if late := outOfTime(ctx, err); late != nil {
+		return fmt.Errorf("%s: out of time: %w", what, late)
+	}
+	return herdrFailed(what, err)
 }
 
 // waitReady polls agent.get until the agent is ready or fails, as herdr's CLI

@@ -163,6 +163,27 @@ func TestWorkforceCallsSendTheSchemaShape(t *testing.T) {
 			params: `{"pane_id":"w14:p7","source":"visible","match":{"type":"regex","value":"❯\\s*$"},"timeout_ms":2000}`,
 			want:   "~/repo ❯",
 		},
+		"plugin.pane.open, a split": {
+			result: map[string]any{"type": "plugin_pane_opened", "plugin_pane": map[string]any{"plugin_id": "nerdsrun.agentisan", "entrypoint": "dashboard", "pane": rootPaneOf("w14:p9", "w14")}},
+			call: func(c herdr.Client) (any, error) {
+				return c.OpenPluginSplit(t.Context(), herdr.PluginSplit{PluginID: "nerdsrun.agentisan", Entrypoint: "dashboard", TargetPaneID: "w14:p1", Direction: "down"})
+			},
+			method: "plugin.pane.open",
+			params: `{"plugin_id":"nerdsrun.agentisan","entrypoint":"dashboard","placement":"split","target_pane_id":"w14:p1","direction":"down","focus":false}`,
+			want:   herdr.PaneInfo{PaneID: "w14:p9", TerminalID: "term-w14:p9", WorkspaceID: "w14", TabID: "w14:t2", AgentStatus: "unknown"},
+		},
+		"pane.swap": {
+			result: map[string]any{"type": "pane_swap", "swap": map[string]any{"changed": true, "source_pane_id": "w14:p9", "target_pane_id": "w14:p1", "focused_pane_id": "w14:p9", "layout": map[string]any{}}},
+			call:   func(c herdr.Client) (any, error) { return nil, c.SwapPanes(t.Context(), "w14:p9", "w14:p1") },
+			method: "pane.swap",
+			params: `{"source_pane_id":"w14:p9","target_pane_id":"w14:p1"}`,
+		},
+		"pane.rename": {
+			result: map[string]any{"type": "pane_info", "pane": rootPaneOf("w14:p9", "w14")},
+			call:   func(c herdr.Client) (any, error) { return nil, c.RenamePane(t.Context(), "w14:p9", "ha-dashboard") },
+			method: "pane.rename",
+			params: `{"pane_id":"w14:p9","label":"ha-dashboard"}`,
+		},
 		"pane.wait_for_output, no time at all": {
 			result: map[string]any{"type": "output_matched", "pane_id": "w14:p7", "revision": 4, "matched_line": "$", "read": map[string]any{}},
 			call:   func(c herdr.Client) (any, error) { return c.WaitForOutput(t.Context(), "w14:p7", `\$$`, 0) },
@@ -249,6 +270,19 @@ func TestWorkforceCallFailureClasses(t *testing.T) {
 	getPane := func(c herdr.Client) error { _, err := c.GetPane(t.Context(), "w14:p7"); return err }
 	keys := func(c herdr.Client) error { return c.SendKeys(t.Context(), "w14:p7", []string{"enter"}) }
 	renameTab := func(c herdr.Client) error { return c.RenameTab(t.Context(), "w14:t2", "x") }
+	split := func(c herdr.Client) error {
+		_, err := c.OpenPluginSplit(t.Context(), herdr.PluginSplit{PluginID: "p", Entrypoint: "dashboard", TargetPaneID: "w14:p1", Direction: "down"})
+		return err
+	}
+	swap := func(c herdr.Client) error { return c.SwapPanes(t.Context(), "w14:p9", "w14:p1") }
+	swapped := func(changed bool, reason string) map[string]any {
+		sw := map[string]any{"changed": changed, "source_pane_id": "w14:p9", "focused_pane_id": "w14:p9", "layout": map[string]any{}}
+		if reason != "" {
+			sw["reason"] = reason
+		}
+		return map[string]any{"type": "pane_swap", "swap": sw}
+	}
+	renamePane := func(c herdr.Client) error { return c.RenamePane(t.Context(), "w14:p9", "x") }
 
 	tests := map[string]struct {
 		handler herdrtest.Handler
@@ -287,6 +321,20 @@ func TestWorkforceCallFailureClasses(t *testing.T) {
 		"pane.close: pane not found":                   {handler: apiErr("pane_not_found"), call: closePane, want: []error{herdr.ErrPaneNotFound, herdr.ErrAPI}},
 		"pane.close: wrong type":                       {handler: reply(map[string]any{"type": "pane_info"}), call: closePane, want: []error{herdr.ErrProtocol}},
 		"pane.send_keys: invalid key":                  {handler: apiErr("invalid_key"), call: keys, want: []error{herdr.ErrAPI}},
+		"plugin.pane.open: wrong type":                 {handler: reply(ok), call: split, want: []error{herdr.ErrProtocol}},
+		"plugin.pane.open: no plugin pane":             {handler: reply(map[string]any{"type": "plugin_pane_opened"}), call: split, want: []error{herdr.ErrProtocol}},
+		"plugin.pane.open: no pane":                    {handler: reply(map[string]any{"type": "plugin_pane_opened", "plugin_pane": map[string]any{"plugin_id": "p"}}), call: split, want: []error{herdr.ErrProtocol}},
+		"plugin.pane.open: a pane with no id":          {handler: reply(map[string]any{"type": "plugin_pane_opened", "plugin_pane": map[string]any{"pane": map[string]any{"terminal_id": "t"}}}), call: split, want: []error{herdr.ErrProtocol}},
+		"plugin.pane.open: refused":                    {handler: apiErr("plugin_pane_open_failed"), call: split, want: []error{herdr.ErrAPI}},
+		"pane.swap: wrong type":                        {handler: reply(ok), call: swap, want: []error{herdr.ErrProtocol}},
+		"pane.swap: no swap":                           {handler: reply(map[string]any{"type": "pane_swap"}), call: swap, want: []error{herdr.ErrProtocol}},
+		"pane.swap: declined":                          {handler: reply(swapped(false, "cross_tab")), call: swap, want: []error{herdr.ErrNotSwapped}, not: []error{herdr.ErrAPI, herdr.ErrProtocol}},
+		"pane.swap: unchanged, no reason":              {handler: reply(swapped(false, "")), call: swap, want: []error{herdr.ErrNotSwapped}},
+		"pane.swap: invalid":                           {handler: apiErr("invalid_pane_swap"), call: swap, want: []error{herdr.ErrAPI}, not: []error{herdr.ErrNotSwapped}},
+		"pane.rename: pane not found":                  {handler: apiErr("pane_not_found"), call: renamePane, want: []error{herdr.ErrPaneNotFound, herdr.ErrAPI}},
+		"pane.rename: wrong type":                      {handler: reply(map[string]any{"type": "tab_info", "pane": rootPaneOf("w14:p9", "w14")}), call: renamePane, want: []error{herdr.ErrProtocol}},
+		"pane.rename: no pane":                         {handler: reply(map[string]any{"type": "pane_info"}), call: renamePane, want: []error{herdr.ErrProtocol}},
+		"pane.rename: a pane with no id":               {handler: reply(map[string]any{"type": "pane_info", "pane": map[string]any{"terminal_id": "t"}}), call: renamePane, want: []error{herdr.ErrProtocol}},
 		"closed without a reply":                       {handler: silent, call: closePane, want: []error{herdr.ErrUnavailable}},
 	}
 	for name, tc := range tests {
