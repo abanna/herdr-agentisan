@@ -964,6 +964,33 @@ func TestDispatcherStopFinishesThePromptInFlight(t *testing.T) {
 	assert.Equal(t, store.MessageDelivered, stateOf(t, st, m.ID).State)
 }
 
+// TestDispatcherStopsBeforeTheNextClaim: two messages wait for one worker,
+// and the daemon stops while the first prompt is in flight. That prompt
+// finishes and is recorded, and the second is never claimed: serve checks
+// the stop before each claim, and that check is the only guard between
+// messages, since the claim, deliver and drop all go on past a stop (QA
+// #84, S2).
+func TestDispatcherStopsBeforeTheNextClaim(t *testing.T) {
+	t.Parallel()
+	th, p, dir := haTeam(t)
+	st := stateStore(t, dir, th)
+	release := p.hold(t, "ha-coder-1")
+	first := sent(t, st, coder, haBoss, "first")
+	second := sent(t, st, coder, haBoss, "second")
+	r := run(t, teamOpts(t, dir, th, workforceConfig(t)))
+	p.next(t)
+
+	r.cancel()
+	time.Sleep(100 * time.Millisecond)
+	release()
+	require.NoError(t, r.wait(t, ready))
+	assert.Equal(t, store.MessageDelivered, stateOf(t, st, first.ID).State)
+	got := stateOf(t, st, second.ID)
+	assert.Equal(t, store.MessageQueued, got.State, "not claimed after the stop")
+	assert.Equal(t, 0, got.Attempts)
+	assert.Len(t, p.all(), 1, "one prompt typed: the one in flight")
+}
+
 // TestClaimIgnoresTheStop: a stop that lands while serve claims a message
 // does not cut the claim short (QA #72), as it cuts short neither deliver's
 // nor drop's write, so the claimed message goes on to its prompt and is

@@ -307,7 +307,9 @@ func (d *dispatcher) serve(ctx context.Context, to store.Address, target string)
 // deliver's nor drop's write: a stop inside the statement could leave the
 // row dispatching while the claim reports an error, and the next start
 // would fail a message that was never typed (QA #72). It is bounded on its
-// own, by settleTimeout, so a busy database cannot hold up a stop for long.
+// own: settleTimeout ends its wait for the store's one connection, and
+// SQLite ends a busy statement at store.BusyTimeout whatever the deadline,
+// so a busy database holds up a stop for about 10 s at most (QA #84).
 func (d *dispatcher) claim(ctx context.Context, to store.Address) (store.Message, bool, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), settleTimeout)
 	defer cancel()
