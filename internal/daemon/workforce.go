@@ -26,12 +26,14 @@ const (
 	OpSend = "send"
 )
 
-// The workforce ops' budgets. A spawn waits for agents to start, and the
-// skill's wrapper gives a command 120 s; a handoff wait gets 1,500 s of the
-// wrapper's 1,800.
+// The workforce ops' budgets. A command waits at most NotReadyWindow, its
+// op's budget and an exchange (A52), and the skill's wrapper gives it 120 s,
+// or 1,800 s for a handoff wait; each sum leaves the wrapper 5 s. So a
+// spawn, which waits for agents to start, gets 100 s: 10 + 100 + 5 = 115.
+// A handoff wait gets 1,500 s.
 const (
 	StatusBudget  = 10 * time.Second
-	SpawnBudget   = 110 * time.Second
+	SpawnBudget   = 100 * time.Second
 	RetireBudget  = 10 * time.Second
 	HandoffBudget = 1500 * time.Second
 	SendBudget    = 10 * time.Second

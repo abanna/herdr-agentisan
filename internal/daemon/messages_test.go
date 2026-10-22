@@ -956,7 +956,7 @@ func TestAFailedEventCarriesTheReasonAsKept(t *testing.T) {
 	events, rec := telemetrytest.NewEvents()
 	o := teamOpts(t, dir, th, workforceConfig(t))
 	o.Team.Events = events
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 
 	got := eventuallyState(t, st, m.ID, store.MessageFailed)
 	var reason any
