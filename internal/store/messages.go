@@ -132,7 +132,7 @@ func (s *Store) Send(ctx context.Context, to, from Address, body string, at time
 	if err := checkAddress(from, false); err != nil {
 		return Message{}, err
 	}
-	if err := checkBody(body); err != nil {
+	if err := CheckBody(body); err != nil {
 		return Message{}, err
 	}
 	ns, err := nanos(at)
@@ -238,7 +238,7 @@ func (s *Store) Delivered(ctx context.Context, id string, at time.Time) error {
 func (s *Store) Requeue(ctx context.Context, id, reason string, at time.Time) error {
 	return s.settle(ctx, id, at, "requeue",
 		"UPDATE messages SET state = 'queued', updated_at = max(?2, created_at), reason = ?3 WHERE id = ?1 AND state = 'dispatching'",
-		cleanReason(reason))
+		CleanReason(reason))
 }
 
 // settle moves the dispatching message id with query, whose first two
@@ -275,7 +275,7 @@ func (s *Store) Fail(ctx context.Context, id, reason string, at time.Time) error
 		return fmt.Errorf("%w: fail %s: %w", ErrStore, id, err)
 	}
 	defer tx.Rollback() //nolint:errcheck // a no-op once committed
-	if err := fail(ctx, tx, id, cleanReason(reason), at, ns); err != nil {
+	if err := fail(ctx, tx, id, CleanReason(reason), at, ns); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -302,7 +302,7 @@ func (s *Store) RecoverDispatching(ctx context.Context, reason string, at time.T
 	if err != nil {
 		return nil, err
 	}
-	reason = cleanReason(reason)
+	reason = CleanReason(reason)
 	for i := range ms {
 		if err := fail(ctx, tx, ms[i].ID, reason, at, ns); err != nil {
 			return nil, err
@@ -551,8 +551,10 @@ func checkID(kind, id string) error {
 
 func invisible(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }
 
-// checkBody refuses a body Send must not queue. The error never repeats it.
-func checkBody(body string) error {
+// CheckBody refuses a body Send must not queue: ErrInvalid, or ErrTooLarge.
+// The error never repeats it. A client checks a body with it before its
+// encoding would replace bytes that are not UTF-8.
+func CheckBody(body string) error {
 	switch {
 	case body == "":
 		return fmt.Errorf("%w: an empty body", ErrInvalid)
@@ -566,9 +568,10 @@ func checkBody(body string) error {
 	return nil
 }
 
-// cleanReason is reason as kept: UTF-8, control characters as spaces, cut to
-// maxReason bytes on a character boundary.
-func cleanReason(reason string) string {
+// CleanReason is reason as kept: UTF-8, control characters as spaces, cut to
+// maxReason bytes on a character boundary. A message event carries it, so
+// the event and the row agree.
+func CleanReason(reason string) string {
 	reason = strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return ' '

@@ -216,6 +216,9 @@ func WorkforceOpNames() []string {
 	return slices.Sorted(maps.Keys(workforceOps(&workforce.Service{}, new(atomic.Bool), nil)))
 }
 
+// IOTimeout is the exchange, which a client waits past an op's budget.
+const IOTimeout = ioTimeout
+
 // GroupDescriptions is the team poll's reader of the group descriptions
 // (A36), driven one poll at a time.
 type GroupDescriptions struct{ d *groupDescriptions }
