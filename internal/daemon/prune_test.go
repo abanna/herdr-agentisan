@@ -50,7 +50,7 @@ func TestRunPrunesFinishedMessages(t *testing.T) {
 
 	o := opts(t, dir, h)
 	o.Now = func() time.Time { return t0 }
-	run(t, o)
+	serving(t, o, h)
 	require.Eventually(t, func() bool {
 		return assert.ObjectsAreEqual([]string{"queued", "recent"}, query(t, p.DB, "SELECT recipient FROM messages ORDER BY recipient"))
 	}, ready, 10*time.Millisecond, "the prune at start removes the finished messages past retention")
@@ -77,7 +77,7 @@ func TestRunPrunesGitHubNoticeRows(t *testing.T) {
 
 	o := opts(t, dir, h)
 	o.Now = func() time.Time { return t0 }
-	run(t, o)
+	serving(t, o, h)
 	require.Eventually(t, func() bool {
 		return assert.ObjectsAreEqual([]string{"recent", "recent", "recent"}, query(t, p.DB, "SELECT project FROM github_seen UNION ALL SELECT project FROM github_open UNION ALL SELECT project FROM github_seeded"))
 	}, ready, 10*time.Millisecond)

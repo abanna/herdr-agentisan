@@ -52,6 +52,8 @@ func droppedLine(n int) string {
 // Batcher holds each team's notices until its boss may be told again. Only
 // one goroutine uses it, the team poll's.
 type Batcher struct {
+	// Mutes, when set, are the workers whose notices are dropped (A44).
+	Mutes   *Mutes
 	configs Configs
 	pending map[string][]Notice
 	// sent is when each team's boss was last sent a message.
@@ -71,14 +73,14 @@ func NewBatcher(configs Configs) *Batcher {
 }
 
 // Add queues ns for their bosses, as of now. A notice of a kind its team
-// skips, or a repeat inside its team's window, is dropped and acknowledged
-// here; a line longer than MaxLine is cut. Whose pane a notice is about
+// skips, one about a muted worker, or a repeat inside its team's window, is
+// dropped and acknowledged here; a line longer than MaxLine is cut. Whose pane a notice is about
 // never matters here: a source decides that (the poll's leaves the boss's
 // own panes out; a context source may tell the boss about its own).
 func (b *Batcher) Add(now time.Time, ns []Notice) {
 	for _, n := range ns {
 		cfg := b.configs.For(n.Project)
-		if (cfg.Skip[n.Kind] && n.Kind.Skippable()) || b.repeat(cfg, n, now) {
+		if (cfg.Skip[n.Kind] && n.Kind.Skippable()) || b.Mutes.Muted(n, now) || b.repeat(cfg, n, now) {
 			if n.Ack != nil {
 				n.Ack()
 			}

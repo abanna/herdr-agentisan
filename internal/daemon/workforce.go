@@ -58,6 +58,10 @@ var opBudgets = map[string]func(json.RawMessage) time.Duration{
 	OpWorkerSpawn:  fixed(SpawnBudget),
 	OpWorkerRetire: retireBudget,
 	OpSend:         fixed(SendBudget),
+	// The notices ops (A44), which the daemon serves beside the workforce's.
+	OpNoticesMute:   fixed(NoticesBudget),
+	OpNoticesUnmute: fixed(NoticesBudget),
+	OpNoticesList:   fixed(NoticesBudget),
 }
 
 func fixed(d time.Duration) func(json.RawMessage) time.Duration {
@@ -180,8 +184,8 @@ func retireBudget(args json.RawMessage) time.Duration {
 	return RetireBudget
 }
 
-// OpBudget is how long op may run; zero for an op that is not a workforce
-// op. A client waits that long, and an exchange more.
+// OpBudget is how long op may run; zero for an op with no budget of its
+// own. A client waits that long, and an exchange more.
 func OpBudget(op string, args json.RawMessage) time.Duration {
 	if b, ok := opBudgets[op]; ok {
 		return b(args)
