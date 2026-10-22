@@ -91,8 +91,10 @@ refused whole, with `config_invalid`, before any tab opens: no `env_file`,
 no role (a regular file) under the checkout, the env file in the repo or the
 daemon's directory, an `.mcp.json` it cannot read, or a path a tool rule
 cannot carry. Its model is `--model`, else its group's, else `[agent]`'s
-when `[agent]`'s command is claude. A debugger reports no `ctx` and writes no handoff, so retire
-it with a plain `worker retire <id>`: `--after-handoff` is refused.
+when `[agent]`'s command is claude. A debugger reports no `ctx` and writes
+no handoff, so retire it with a plain `worker retire <id>`:
+`--after-handoff` is refused for one bound to a pane (an unbound one is
+retired with nothing closed, as any is).
 
 `herdr-agentisan debugger args` prints the same launch for a start by hand,
 outside the team:
@@ -127,11 +129,13 @@ same as `dir`, `env` and `argv`. The parts of the launch:
   such as `HERDR_PLUGIN_CONFIG_DIR=… <bin> events …`, or behind `env`: an
   allow rule matches past an assignment only of the variables Claude Code
   counts as safe, so the debugger cannot point `events` at another env file.
-  Nor does it approve a command substitution inside its argument, such as
-  `<bin> events query "$(cat …)"`: the live check on #76 (2026-10-22) saw
-  `dontAsk` deny that call, while `<bin> events query 'FROM … | LIMIT 1'`
-  ran. Claude Code's reference documents only that deny and ask rules see
-  the nested command.
+  The live check on #76 (2026-10-22) saw `dontAsk` deny
+  `<bin> events query "$(cat …)"`, whose nested `cat` read a file outside
+  the read fence, while `<bin> events query 'FROM … | LIMIT 1'` ran. It did
+  not try a substitution whose nested command stays inside the fence; such a
+  command reads nothing the fence does not already admit, and the env file
+  lies outside it. Claude Code's reference documents only that deny and ask
+  rules see the nested command.
 - **Denied outright:** reading the repo's `.env*` files and the env file
   (by its name, and its target when it is a link), Edit, Write, NotebookEdit,
   WebFetch and WebSearch. A redirect such as `> file` is checked as an Edit,
