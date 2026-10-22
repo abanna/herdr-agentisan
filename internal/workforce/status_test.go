@@ -2,7 +2,9 @@ package workforce_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -61,6 +63,70 @@ func TestStatus(t *testing.T) {
 	got, err = f.svc.Status(t.Context(), workforce.StatusRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, int64(0), *got.Groups[0].Members[0].IdleS, "a clock stepped back reports no rest, not a negative one")
+}
+
+// TestStatusStage: each member's stage carries its stage_at, in UTC, and
+// stage_stale from the poll's clock, the same rule the snapshot uses (ADR-001
+// A42): the coder worked a turn the clock saw whole and reported nothing in
+// it; the designer reported during its turn; the boss's named shell, whose
+// agent herdr no longer detects, is stale whatever the clock saw, and a
+// stage_at that is no time is null.
+func TestStatusStage(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	coder := f.h.addTab(f.ws, "ha-coder-1", "claude", "idle")
+	f.bindRow(t, "ha-coder-1", "coder", coder)
+	hand := f.h.addTab(f.ws, "ha-designer-1", "claude", "idle")
+	split := f.h.addPane(f.boss, "", "unknown")
+	t0 := time.Date(2026, 10, 19, 21, 0, 0, 0, time.UTC)
+	reported := t0.Add(-time.Hour)
+	f.h.setPane(coder, func(p *fakePane) {
+		p.tokens = map[string]string{"item": "NERD-5254", "stage": "build_test", "stage_at": strconv.FormatInt(reported.Unix(), 10)}
+	})
+	f.h.setPane(hand, func(p *fakePane) {
+		p.tokens = map[string]string{"stage": "review", "stage_at": strconv.FormatInt(t0.Add(4*time.Second).Unix(), 10)}
+	})
+	f.h.setPane(split, func(p *fakePane) {
+		p.name, p.tokens = "ha-hooked", map[string]string{"stage": "waiting: boss", "stage_at": "soon"}
+	})
+	model := func(st team.Status) team.Model {
+		pane := func(id string) team.Worker {
+			return team.Worker{Pane: team.Pane{ID: id, Agent: "claude", Status: st, Stage: "build_test"}}
+		}
+		return team.Model{Projects: []team.Project{{Name: "herdr-agentisan", Groups: []team.Group{{Name: "coder", Workers: []team.Worker{pane(coder)}}}}}}
+	}
+	for i, st := range []team.Status{team.StatusIdle, team.StatusWorking, team.StatusIdle} {
+		f.svc.Idle.Observe(model(st), t0.Add(time.Duration(3*i)*time.Second))
+	}
+	f.svc.Now = func() time.Time { return t0.Add(90 * time.Second) }
+
+	got, err := f.svc.Status(t.Context(), workforce.StatusRequest{})
+	require.NoError(t, err)
+	members := map[string]workforce.Member{}
+	for _, g := range got.Groups {
+		for _, m := range g.Members {
+			members[m.PaneID] = m
+		}
+	}
+	for _, m := range got.Boss {
+		members[m.PaneID] = m
+	}
+	require.Contains(t, members, coder)
+	assert.True(t, members[coder].StageStale, "a turn that reported nothing has ended")
+	require.NotNil(t, members[coder].StageAt)
+	assert.Equal(t, reported, *members[coder].StageAt)
+	assert.Equal(t, time.UTC, members[coder].StageAt.Location())
+	assert.False(t, members[hand].StageStale, "the clock saw no turn of it")
+	require.NotNil(t, members[hand].StageAt)
+	assert.True(t, members[split].StageStale, "no agent detected")
+	assert.Nil(t, members[split].StageAt)
+
+	raw, err := json.Marshal(members[coder])
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"stage_stale":true,"stage_at":"2026-10-19T20:00:00Z"`)
+	raw, err = json.Marshal(members[split])
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"stage_stale":true,"stage_at":null`)
 }
 
 // TestStatusCountsEveryTakenSlot: an agent started by hand takes a slot, and

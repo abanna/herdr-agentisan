@@ -641,7 +641,12 @@ func bossParts(f Frame, th Thresholds) parts {
 		out = append(out, piece{partItem, line{{item, plainStyle}}.truncate(bossItemCap)})
 	}
 	if stage := clean(b.Stage); stage != "" {
-		out = append(out, piece{partStage, line{{stage, stageStyle(stage)}}.truncate(bossStageCap)})
+		l := line{{stage, agentStageStyle(b.Agent)}}.truncate(bossStageCap)
+		if b.StageStale {
+			// The words say it is old, as a row's time column does.
+			l = append(l, seg{" · " + stageTime(b.Agent, f.Now), staleStyle})
+		}
+		out = append(out, piece{partStage, l})
 	}
 	ctx := slices.Concat(line{{"ctx ", dimStyle}}, bar(b.Ctx, bossBarCells, th), line{{" ", plainStyle}, pct(b.Ctx, 0, th)})
 	out = append(out, piece{partFixed, ctx})
@@ -786,7 +791,7 @@ func planColumns(groups []snapshot.Group, now time.Time, inner int) columns {
 			c.width[colState] = max(c.width[colState], ansi.StringWidth(rowLabel(a)))
 			c.width[colModel] = max(c.width[colModel], ansi.StringWidth(ShortModel(a.Model)))
 			c.width[colItem] = max(c.width[colItem], ansi.StringWidth(clean(a.Item)))
-			c.width[colTime] = max(c.width[colTime], ansi.StringWidth(Elapsed(a.StageStartedAt, now)))
+			c.width[colTime] = max(c.width[colTime], ansi.StringWidth(stageTime(a, now)))
 			stage = stage || clean(a.Stage) != ""
 		}
 	}
@@ -813,7 +818,7 @@ func planColumns(groups []snapshot.Group, now time.Time, inner int) columns {
 // row is one agent's line: "◐ pee04  working  opus  ▓▓▓░░  61%  NERD-5255
 // go-review  3m", each column cut with "…" to its width. The stage is
 // coloured by what the whole of it says (stageStyle), so a cut stage keeps
-// its colour.
+// its colour, unless it is stale: then it and its time are staleStyle.
 func (c columns) row(a snapshot.Agent, now time.Time, th Thresholds) line {
 	gap := seg{strings.Repeat(" ", colGap), plainStyle}
 	out := slices.Concat(line{{rowIcon(a), statusStyle(a.Status)}, {" ", plainStyle}}, cell(clean(a.Name), boldStyle, c.name))
@@ -828,13 +833,57 @@ func (c columns) row(a snapshot.Agent, now time.Time, th Thresholds) line {
 		out = slices.Concat(out, line{gap}, cell(clean(a.Item), plainStyle, w))
 	}
 	if w := c.width[colStage]; w > 0 {
-		stage := clean(a.Stage)
-		out = slices.Concat(out, line{gap}, cell(stage, stageStyle(stage), w))
+		out = slices.Concat(out, line{gap}, c.stageCell(a, now, w))
 	}
 	if w := c.width[colTime]; w > 0 {
-		out = slices.Concat(out, line{gap, {padLeft(Elapsed(a.StageStartedAt, now), w), dimStyle}})
+		st := dimStyle
+		if a.StageStale {
+			st = staleStyle
+		}
+		out = slices.Concat(out, line{gap, {padLeft(stageTime(a, now), w), st}})
 	}
 	return out
+}
+
+// stageCell is a row's stage cut to w cells. A stale stage whose time
+// column has dropped carries the words in the cell instead, so they still
+// say it is old where the style does not show (A42): " · 3h05m ago", or
+// " · stale" when that leaves too little of the stage, kept whole while the
+// stage is cut to at least three cells and "…"; with no room for that, the
+// time alone, or staleWord.
+func (c columns) stageCell(a snapshot.Agent, now time.Time, w int) line {
+	stage := clean(a.Stage)
+	if !a.StageStale || c.width[colTime] > 0 {
+		return cell(stage, agentStageStyle(a), w)
+	}
+	when := stageTime(a, now)
+	for _, suffix := range []string{" · " + when, " · " + staleWord} {
+		if room := w - ansi.StringWidth(suffix); room >= 4 {
+			return slices.Concat(line{{stage, staleStyle}}.truncate(room), line{{suffix, staleStyle}}).pad(w)
+		}
+	}
+	if ansi.StringWidth(when) > w {
+		when = staleWord
+	}
+	return cell(when, staleStyle, w)
+}
+
+// staleWord stands for a stale stage's age when its stage_at is not known,
+// as on a pane whose agent is gone and no report gave a time (A42).
+const staleWord = "stale"
+
+// stageTime is a row's time column (ADR-001 A42): how long a current stage
+// has been held, "12m", or how long ago a stale one was reported, "3h05m
+// ago", or "stale" when that is not known. The words say it alone, since
+// not every terminal draws staleStyle.
+func stageTime(a snapshot.Agent, now time.Time) string {
+	if !a.StageStale {
+		return Elapsed(a.StageStartedAt, now)
+	}
+	if e := Elapsed(a.StageAt, now); e != "" {
+		return e + " ago"
+	}
+	return staleWord
 }
 
 // cell is text cut to w cells, ending in "…" when cut, then padded to w.

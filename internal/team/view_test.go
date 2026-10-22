@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
@@ -220,10 +221,10 @@ func TestSidebarTokens(t *testing.T) {
 	m := team.Build(l, r, nil)
 
 	got := map[string]map[string]string{}
-	for _, pt := range team.SidebarTokens(m, l) {
+	for _, pt := range team.SidebarTokens(m, l, nil, time.Time{}) {
 		got[pt.PaneID] = pt.Tokens
 	}
-	ctx := map[string]string{"ctx_ok": "ctx  --", "ctx_warn": "", "ctx_hot": ""}
+	ctx := map[string]string{"ctx_ok": "ctx  --", "ctx_warn": "", "ctx_hot": "", "stage_now": "", "stage_old": ""}
 	with := func(key, value string) map[string]string {
 		out := map[string]string{key: value}
 		maps.Copy(out, ctx)
@@ -257,7 +258,7 @@ func TestSidebarTokensFollowTheSnapshotsGroupOrder(t *testing.T) {
 	l := team.Layout{Panes: []herdr.PaneInfo{{PaneID: "w1:p1", WorkspaceID: "w1", Agent: "claude"}, {PaneID: "w1:p2", WorkspaceID: "w1", Agent: "claude"}}}
 
 	got := map[string]string{}
-	for _, pt := range team.SidebarTokens(m, l) {
+	for _, pt := range team.SidebarTokens(m, l, nil, time.Time{}) {
 		got[pt.PaneID] = pt.Tokens["order_pp"]
 	}
 	assert.Equal(t, map[string]string{"w1:p2": "000", "w1:p1": "001"}, got)
@@ -281,7 +282,7 @@ func TestSidebarTokensWidenPastAThousand(t *testing.T) {
 			m := team.Model{Projects: []team.Project{{Name: "big", Short: "bg", Workspaces: []string{"w1"}, Groups: []team.Group{g}}}}
 
 			place := map[string]string{}
-			for _, pt := range team.SidebarTokens(m, l) {
+			for _, pt := range team.SidebarTokens(m, l, nil, time.Time{}) {
 				place[pt.PaneID] = pt.Tokens["order_bg"]
 			}
 			values := make([]string, n)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -354,6 +355,70 @@ func TestSnapshotRowTabAndIdle(t *testing.T) {
 	}
 }
 
+// TestSnapshotRowStage: a row carries its stage's stage_at, in UTC, and
+// whether it is stale, by the idle clock's stretches (ADR-001 A42), the
+// boss's included: here the boss and wN:p1 worked a turn that reported
+// nothing, wN:p2 reported at its end, wN:p3's agent is gone and wN:p4 has
+// no stage_at. With no clock no stage ages but the one whose agent is gone.
+func TestSnapshotRowStage(t *testing.T) {
+	t.Parallel()
+	before := time.Unix(at.Unix()-3600, 0)
+	after := time.Unix(at.Unix()+5, 0)
+	layout := func(status string) team.Layout {
+		tokens := func(reported time.Time) map[string]string {
+			out := map[string]string{"stage": "build_test"}
+			if !reported.IsZero() {
+				out["stage_at"] = strconv.FormatInt(reported.Unix(), 10)
+			}
+			return out
+		}
+		return team.Layout{
+			Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wJ", Label: "◆ boss"}, {WorkspaceID: "wN", Label: "◆ coders"}},
+			Panes: []herdr.PaneInfo{
+				pane("wJ:p1", "wJ", "claude", status, tokens(before)),
+				pane("wN:p1", "wN", "claude", status, tokens(before)),
+				pane("wN:p2", "wN", "claude", status, tokens(after)),
+				pane("wN:p3", "wN", "", "unknown", tokens(before)),
+				pane("wN:p4", "wN", "claude", status, tokens(time.Time{})),
+			},
+			Agents: []herdr.AgentInfo{{Name: "gone", PaneID: "wN:p3"}},
+		}
+	}
+	clock := &team.IdleClock{}
+	var m team.Model
+	for i, status := range []string{"idle", "working", "idle"} {
+		m = team.Build(layout(status), team.Spaces{}, nil)
+		clock.Observe(m, at.Add(time.Duration(i)*3*time.Second))
+	}
+	now := at.Add(time.Minute)
+
+	type state struct {
+		at    *time.Time
+		stale bool
+	}
+	rowsOf := func(s snapshot.Snapshot) map[string]state {
+		require.NotNil(t, s.Boss)
+		require.Len(t, s.Groups, 1)
+		out := map[string]state{}
+		for _, r := range append([]snapshot.Agent{s.Boss.Agent}, s.Groups[0].Agents...) {
+			if r.StageAt != nil {
+				assert.Equal(t, time.UTC, r.StageAt.Location(), r.PaneID)
+			}
+			out[r.PaneID] = state{r.StageAt, r.StageStale}
+		}
+		return out
+	}
+	utc := func(t time.Time) *time.Time { u := t.UTC(); return &u }
+	assert.Equal(t, map[string]state{
+		"wJ:p1": {utc(before), true}, "wN:p1": {utc(before), true}, "wN:p2": {utc(after), false},
+		"wN:p3": {utc(before), true}, "wN:p4": {nil, false},
+	}, rowsOf(team.Snapshot(m, "", now, nil, clock)))
+	assert.Equal(t, map[string]state{
+		"wJ:p1": {utc(before), false}, "wN:p1": {utc(before), false}, "wN:p2": {utc(after), false},
+		"wN:p3": {utc(before), true}, "wN:p4": {nil, false},
+	}, rowsOf(team.Snapshot(m, "", now, nil, nil)))
+}
+
 // groupsLayout is one ◆ space per name, each with one agent, listed in the
 // order given.
 func groupsLayout(names ...string) team.Layout {
@@ -685,117 +750,23 @@ func TestStageClock(t *testing.T) {
 	})
 }
 
-// TestStageClockBossStart: the clock also knows when it first saw each
-// agent pane in a boss's place: the boss's started_at, its runtime's start
-// (A31). The start holds while the pane stays there running an agent,
-// whatever its stage does. A pane new there starts again, and one that
-// leaves, or turns back into a shell, is forgotten. A worker never has one.
-func TestStageClockBossStart(t *testing.T) {
+// TestSnapshotLeavesTheBossRuntimeOut: the model's snapshot names the boss
+// but leaves its started_at out, however long the stage clock has watched
+// its pane: the daemon fills it from the boss agent's process (A47), so a
+// daemon restart cannot start it again.
+func TestSnapshotLeavesTheBossRuntimeOut(t *testing.T) {
 	t.Parallel()
-
-	// l is a ◆ boss space holding boss, pane id to agent ("" for a shell),
-	// and a ◆ coders space holding one agent pane, wN:p1.
-	l := func(boss map[string]string, stage string) team.Model {
-		layout := team.Layout{Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wJ", Label: "◆ boss"}, {WorkspaceID: "wN", Label: "◆ coders"}}}
-		for _, id := range slices.Sorted(maps.Keys(boss)) {
-			var tokens map[string]string
-			if stage != "" {
-				tokens = map[string]string{"stage": stage}
-			}
-			layout.Panes = append(layout.Panes, pane(id, "wJ", boss[id], "working", tokens))
-		}
-		layout.Panes = append(layout.Panes, pane("wN:p1", "wN", "claude", "working", nil))
-		return team.Build(layout, team.Spaces{}, nil)
-	}
-	one := func(id string) map[string]string { return map[string]string{id: "claude"} }
-	t0, t1, t2 := at, at.Add(3*time.Second), at.Add(6*time.Second)
-	start := func(c *team.StageClock, id string) time.Time {
-		got, ok := c.BossSince(id)
-		if !ok {
-			return time.Time{}
-		}
-		return got
-	}
-
-	t.Run("kept while the boss stays, whatever its stage", func(t *testing.T) {
-		t.Parallel()
-		c := &team.StageClock{}
-		c.Observe(l(one("wJ:p1"), "plan"), t0)
-		c.Observe(l(one("wJ:p1"), "review"), t1)
-		c.Observe(l(one("wJ:p1"), ""), t2)
-		assert.Equal(t, t0, start(c, "wJ:p1"))
-	})
-	t.Run("a handoff to a new pane starts again", func(t *testing.T) {
-		t.Parallel()
-		c := &team.StageClock{}
-		c.Observe(l(one("wJ:p1"), ""), t0)
-		c.Observe(l(map[string]string{"wJ:p1": "claude", "wJ:p2": "claude"}, ""), t1)
-		c.Observe(l(one("wJ:p2"), ""), t2)
-		assert.Equal(t, t1, start(c, "wJ:p2"), "from when it was first seen there")
-		_, ok := c.BossSince("wJ:p1")
-		assert.False(t, ok, "the old boss is forgotten")
-	})
-	t.Run("a shell has none, and an agent started again starts again", func(t *testing.T) {
-		t.Parallel()
-		c := &team.StageClock{}
-		c.Observe(l(one("wJ:p1"), ""), t0)
-		c.Observe(l(map[string]string{"wJ:p1": ""}, ""), t1)
-		_, ok := c.BossSince("wJ:p1")
-		assert.False(t, ok, "a shell is no boss")
-		c.Observe(l(one("wJ:p1"), ""), t2)
-		assert.Equal(t, t2, start(c, "wJ:p1"))
-	})
-	t.Run("a pane that leaves is forgotten", func(t *testing.T) {
-		t.Parallel()
-		c := &team.StageClock{}
-		c.Observe(l(one("wJ:p1"), ""), t0)
-		c.Observe(l(map[string]string{}, ""), t1)
-		c.Observe(l(one("wJ:p1"), ""), t2)
-		assert.Equal(t, t2, start(c, "wJ:p1"))
-	})
-	t.Run("a worker has none", func(t *testing.T) {
-		t.Parallel()
-		c := &team.StageClock{}
-		c.Observe(l(one("wJ:p1"), ""), t0)
-		_, ok := c.BossSince("wN:p1")
-		assert.False(t, ok)
-	})
-	t.Run("a restart starts fresh", func(t *testing.T) {
-		t.Parallel()
-		before := &team.StageClock{}
-		before.Observe(l(one("wJ:p1"), ""), t0)
-		after := &team.StageClock{}
-		after.Observe(l(one("wJ:p1"), ""), t2)
-		assert.Equal(t, t2, start(after, "wJ:p1"))
-	})
-	t.Run("a nil clock knows none", func(t *testing.T) {
-		t.Parallel()
-		var c *team.StageClock
-		c.Observe(l(one("wJ:p1"), ""), t0)
-		_, ok := c.BossSince("wJ:p1")
-		assert.False(t, ok)
-	})
-	t.Run("the snapshot carries the named boss's, in UTC", func(t *testing.T) {
-		t.Parallel()
-		c := &team.StageClock{}
-		c.Observe(l(one("wJ:p2"), ""), t0.In(time.FixedZone("x", 5*3600)))
-		m := l(map[string]string{"wJ:p1": "claude", "wJ:p2": "claude"}, "")
-		c.Observe(m, t1)
-		s := team.Snapshot(m, "", t2, c, nil)
-		require.NotNil(t, s.Boss)
-		assert.Equal(t, "wJ:p1", s.Boss.PaneID, "the first agent pane by id")
-		require.NotNil(t, s.Boss.StartedAt)
-		assert.Equal(t, t1, *s.Boss.StartedAt, "its own start, not the other pane's")
-		assert.Equal(t, time.UTC, s.Boss.StartedAt.Location())
-		assert.Nil(t, team.Snapshot(m, "", t2, nil, nil).Boss.StartedAt, "no clock, no start")
-	})
-	t.Run("a local start is reported in UTC", func(t *testing.T) {
-		t.Parallel()
-		c := &team.StageClock{}
-		c.Observe(l(one("wJ:p1"), ""), t0.In(time.FixedZone("x", 5*3600)))
-		s := team.Snapshot(l(one("wJ:p1"), ""), "", t2, c, nil)
-		require.NotNil(t, s.Boss.StartedAt)
-		assert.Equal(t, t0, *s.Boss.StartedAt)
-		assert.Equal(t, time.UTC, s.Boss.StartedAt.Location())
-	})
+	m := team.Build(team.Layout{
+		Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wJ", Label: "◆ boss"}},
+		Panes:      []herdr.PaneInfo{pane("wJ:p1", "wJ", "claude", "working", map[string]string{"stage": "plan"})},
+	}, team.Spaces{}, nil)
+	c := &team.StageClock{}
+	c.Observe(m, at)
+	c.Observe(m, at.Add(time.Hour))
+	s := team.Snapshot(m, "", at.Add(time.Hour), c, nil)
+	require.NotNil(t, s.Boss)
+	assert.Equal(t, "wJ:p1", s.Boss.PaneID)
+	require.NotNil(t, s.Boss.StageStartedAt, "the stage clock still times its stage")
+	assert.Equal(t, at, *s.Boss.StageStartedAt)
+	assert.Nil(t, s.Boss.StartedAt)
 }

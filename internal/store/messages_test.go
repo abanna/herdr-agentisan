@@ -384,10 +384,10 @@ func TestRecoverDispatchingAfterACrash(t *testing.T) {
 	require.NoError(t, s.Close()) // the daemon dies here
 
 	s = open(t, path)
-	n, err := s.RecoverDispatching(t.Context(), "the daemon stopped mid-dispatch", t1)
+	failed, err := s.RecoverDispatching(t.Context(), "the daemon stopped mid-dispatch", t1)
 	require.NoError(t, err)
-	assert.EqualValues(t, 1, n)
 	got := message(t, s, inFlight.ID)
+	assert.Equal(t, []store.Message{got}, failed, "returned as failed")
 	assert.Equal(t, store.MessageFailed, got.State)
 	assert.Equal(t, "the daemon stopped mid-dispatch", got.Reason)
 	assert.Equal(t, next.ID, claim(t, s, worker("w")).ID, "never redelivered: the next message is")
@@ -395,12 +395,13 @@ func TestRecoverDispatchingAfterACrash(t *testing.T) {
 	assert.Equal(t, inFlight.ID, notice.NoticeOf)
 
 	require.NoError(t, s.Delivered(t.Context(), next.ID, t1))
-	n, err = s.RecoverDispatching(t.Context(), "again", t1)
+	failed, err = s.RecoverDispatching(t.Context(), "again", t1)
 	require.NoError(t, err)
-	assert.EqualValues(t, 1, n, "the notice in flight is failed too, with no notice of its own")
-	n, err = s.RecoverDispatching(t.Context(), "again", t1)
+	require.Len(t, failed, 1, "the notice in flight is failed too, with no notice of its own")
+	assert.Equal(t, notice.ID, failed[0].ID)
+	failed, err = s.RecoverDispatching(t.Context(), "again", t1)
 	require.NoError(t, err)
-	assert.Zero(t, n)
+	assert.Empty(t, failed)
 	noClaim(t, s, boss, "no notice of a notice")
 }
 
@@ -449,8 +450,8 @@ func TestRecoverDispatchingIsOneTransaction(t *testing.T) {
 // TestReturnToBoss: a worker's queued messages go to the boss once the
 // binding they were sent to has ended, when the row is retired or the id
 // was reused at a later generation, and keep their ids and order. A reused
-// id keeps only what was sent to it. A live binding, a message in flight,
-// and a queue asked for under another project keep theirs.
+// id keeps only what was sent to it. A live binding, and a message in
+// flight, keep theirs.
 func TestReturnToBoss(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
@@ -459,9 +460,9 @@ func TestReturnToBoss(t *testing.T) {
 	old1 := send(t, s, worker("w"), pane, "old 1")
 	old2 := send(t, s, worker("w"), pane, "old 2")
 
-	n, err := s.ReturnToBoss(ctx, "w", "agentisan", boss, t1)
+	returned, err := s.ReturnToBoss(ctx, "w", "agentisan", boss, t1)
 	require.NoError(t, err)
-	assert.Zero(t, n, "the binding is live")
+	assert.Empty(t, returned, "the binding is live")
 
 	inFlight := send(t, s, worker("w"), pane, "in flight")
 	_, err = store.DB(s).ExecContext(ctx, "UPDATE messages SET state = 'dispatching' WHERE id = ?", inFlight.ID)
@@ -471,12 +472,12 @@ func TestReturnToBoss(t *testing.T) {
 	fresh := send(t, s, worker("w"), pane, "fresh")
 	assert.Equal(t, int64(1), fresh.Generation)
 
-	n, err = s.ReturnToBoss(ctx, "w", "elsewhere", boss, t1)
+	returned, err = s.ReturnToBoss(ctx, "w", "elsewhere", boss, t1)
 	require.NoError(t, err)
-	assert.Zero(t, n, "another project's ended queue goes to that project's boss")
-	n, err = s.ReturnToBoss(ctx, "w", "agentisan", boss, t1)
+	assert.Empty(t, returned, "another project's ended queue goes to that project's boss")
+	returned, err = s.ReturnToBoss(ctx, "w", "agentisan", boss, t1)
 	require.NoError(t, err)
-	assert.EqualValues(t, 2, n)
+	assert.ElementsMatch(t, []store.Message{message(t, s, old1.ID), message(t, s, old2.ID)}, returned, "returned as returned")
 	for _, id := range []string{old1.ID, old2.ID} {
 		got := message(t, s, id)
 		assert.Equal(t, boss, got.To)

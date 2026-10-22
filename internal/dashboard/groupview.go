@@ -218,7 +218,7 @@ func (l layout) boxLine(i, k, w int, th Thresholds) line {
 	case 2:
 		body = line{{clean(a.Item), plainStyle}}
 	case 3, 4:
-		body = wrapStage(a.Stage, inner)[k-3]
+		body = wrapStage(a.Stage, a.StageStale, inner)[k-3]
 	case 5:
 		body = boxTimes(a, l)
 	default:
@@ -271,8 +271,9 @@ func modelAndCtx(a snapshot.Agent, th Thresholds) line {
 // wrapStage is the stage as stageLines lines of at most w cells, wrapped at
 // words, the last ending in "…" when the stage is longer, in the colour of
 // the rule the whole stage matches (stageRule, A38), or plain when it
-// matches none. A stage not reported is noStage, dim, so the gap shows.
-func wrapStage(stage string, w int) [stageLines]line {
+// matches none, or staleStyle when it is stale (A42). A stage not reported
+// is noStage, dim, so the gap shows.
+func wrapStage(stage string, stale bool, w int) [stageLines]line {
 	var out [stageLines]line
 	s := strings.Join(strings.Fields(clean(stage)), " ")
 	if s == "" {
@@ -283,6 +284,9 @@ func wrapStage(stage string, w int) [stageLines]line {
 		return out
 	}
 	st, _ := stageRule(s)
+	if stale {
+		st = staleStyle
+	}
 	// Wrap only breaks s into lines, dropping the space where it breaks at
 	// one, so each line starts what the lines before it leave of s. The last
 	// line is all the rest, cut: a line broken after a hyphen or inside a
@@ -300,11 +304,20 @@ func wrapStage(stage string, w int) [stageLines]line {
 	return out
 }
 
-// boxTimes is "in stage 12m · idle 3m": each part only when it is known.
+// boxTimes is "in stage 12m · idle 3m": each part only when it is known. A
+// stale stage's part is "reported 3h ago", or "stage stale" when when is not
+// known, in staleStyle (A42).
 func boxTimes(a snapshot.Agent, l layout) line {
 	var parts []line
-	if e := Elapsed(a.StageStartedAt, l.now); e != "" {
-		parts = append(parts, line{{"in stage " + e, plainStyle}})
+	switch e := Elapsed(a.StageAt, l.now); {
+	case a.StageStale && e != "":
+		parts = append(parts, line{{"reported " + e + " ago", staleStyle}})
+	case a.StageStale:
+		parts = append(parts, line{{"stage " + staleWord, staleStyle}})
+	default:
+		if e := Elapsed(a.StageStartedAt, l.now); e != "" {
+			parts = append(parts, line{{"in stage " + e, plainStyle}})
+		}
 	}
 	if e := Elapsed(a.IdleSince, l.now); e != "" {
 		parts = append(parts, line{{"idle " + e, plainStyle}})

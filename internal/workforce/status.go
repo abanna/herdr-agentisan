@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
@@ -37,6 +38,13 @@ type Member struct {
 	// the poll does not time its team: the poll reads the teams once, at
 	// start (A19), so one added since has none until the daemon restarts.
 	IdleS *int64 `json:"idle_s"`
+	// StageStale is set when the stage no longer says what the worker is
+	// doing (ADR-001 A42): nothing reported it again in the pane's latest
+	// turn, as far as this daemon has seen, or herdr detects no agent in it.
+	StageStale bool `json:"stage_stale"`
+	// StageAt is when the stage was last reported, from the pane's stage_at
+	// token; null when absent, unreadable or ahead of the daemon's clock.
+	StageAt *time.Time `json:"stage_at"`
 }
 
 // GroupStatus is one group of a team.
@@ -105,11 +113,7 @@ func (s *Service) Status(ctx context.Context, req StatusRequest) (StatusResult, 
 	if err != nil {
 		return StatusResult{}, fmt.Errorf("read workers: %w", err)
 	}
-	var r team.Resolver = tabsOf(t)
-	if t.Layout == settings.LayoutSpaces {
-		r = team.Spaces{Project: t.Project, Color: t.Color}
-	}
-	m := team.Build(l.Layout, r, rows)
+	m := team.Build(l.Layout, resolverOf(t), rows)
 	var pr team.Project
 	if i := slices.IndexFunc(m.Projects, func(p team.Project) bool { return p.Name == t.Project }); i >= 0 {
 		pr = m.Projects[i]
@@ -189,6 +193,12 @@ func (s *Service) member(w team.Worker, l layout) Member {
 	if since, ok := s.Idle.Since(w.Pane.ID); ok {
 		idle := max(int64(s.now().Sub(since).Seconds()), 0)
 		m.IdleS = &idle
+	}
+	st := team.StageOf(w.Pane, s.Idle, s.now())
+	m.StageStale = st.Stale
+	if !st.At.IsZero() {
+		at := st.At.UTC()
+		m.StageAt = &at
 	}
 	return m
 }

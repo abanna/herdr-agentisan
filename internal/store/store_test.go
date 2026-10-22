@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -379,6 +380,141 @@ func TestOpenWaitsForALockUpToTheBusyTimeout(t *testing.T) {
 	}
 }
 
+// TestOpenWaitsAgainWhileAnotherOpenerProgresses: an opener racing another
+// one on the same file waits out the busy timeout behind it when the disk is
+// slow. If the other opener made progress meanwhile, by applying a migration
+// or giving the fresh file its first write (its switch to WAL), Open waits
+// again instead of failing, so racing openers all succeed (NERD-5364). It
+// waits again once per progress: if the other opener then keeps its lock past
+// that second wait, Open fails with ErrOpen after it. Any other write is no
+// such progress: Open fails with ErrOpen after BusyTimeout, as with a lock
+// held and never used.
+func TestOpenWaitsAgainWhileAnotherOpenerProgresses(t *testing.T) {
+	t.Parallel()
+	const (
+		// Early in Open's first wait, so the other connection's progress is
+		// on disk before that wait runs out however loaded the machine is;
+		// that connection also runs with synchronous=OFF, so it never waits
+		// on an fsync.
+		progressAt = 1500 * time.Millisecond
+		releaseAt  = store.BusyTimeout + 2*time.Second // past Open's first wait
+		// Past Open's second wait, and inside the third one a retry without
+		// bound would make, which would then succeed.
+		heldUntil = 2*store.BusyTimeout + 3*time.Second
+	)
+	file := func(sql string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(sql)} }
+	one := fstest.MapFS{"0001_a.sql": file("CREATE TABLE a (x INTEGER);")}
+	two := fstest.MapFS{"0001_a.sql": one["0001_a.sql"], "0002_b.sql": file("CREATE TABLE b (y INTEGER);")}
+
+	tests := map[string]struct {
+		migrated bool   // the file is at one's version, else empty
+		lock     string // how the other connection takes its lock, before Open
+		progress string // what it runs at progressAt, keeping its lock
+		held     bool   // it keeps the lock until heldUntil, not releaseAt
+		want     error
+	}{
+		"another opener applies the last migration": {
+			migrated: true, lock: "BEGIN IMMEDIATE",
+			progress: "CREATE TABLE b (y INTEGER); PRAGMA user_version = 2; COMMIT; BEGIN IMMEDIATE",
+		},
+		"another opener gives the fresh file its first write": {
+			// The switch to WAL, as a racing opener makes it, writes the
+			// empty file's first page. Exclusive locking mode then locks
+			// WAL readers out again until the release.
+			lock:     "BEGIN EXCLUSIVE",
+			progress: "COMMIT; PRAGMA journal_mode = WAL; PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE",
+		},
+		"after a migration it waits once more, not twice": {
+			migrated: true, lock: "BEGIN IMMEDIATE",
+			progress: "CREATE TABLE b (y INTEGER); PRAGMA user_version = 2; COMMIT; BEGIN IMMEDIATE",
+			held:     true, want: store.ErrOpen,
+		},
+		"after the first write it waits once more, not twice": {
+			lock:     "BEGIN EXCLUSIVE",
+			progress: "COMMIT; PRAGMA journal_mode = WAL; PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE",
+			held:     true, want: store.ErrOpen,
+		},
+		"a newer build's migration is refused at once": {
+			migrated: true, lock: "BEGIN IMMEDIATE",
+			progress: "PRAGMA user_version = 3; COMMIT; BEGIN IMMEDIATE", want: store.ErrSchemaTooNew,
+		},
+		"another write is no migration": {
+			migrated: true, lock: "BEGIN IMMEDIATE",
+			progress: "INSERT INTO a VALUES (1); COMMIT; BEGIN IMMEDIATE", want: store.ErrOpen,
+		},
+		"a file already written is no first write": {
+			migrated: true, lock: "PRAGMA locking_mode = EXCLUSIVE; BEGIN EXCLUSIVE; COMMIT",
+			progress: "INSERT INTO a VALUES (1)", want: store.ErrOpen,
+		},
+		"another write to a written file is no first write": {
+			lock: "PRAGMA locking_mode = EXCLUSIVE; PRAGMA user_version = 0", progress: "CREATE TABLE z (x INTEGER)",
+			want: store.ErrOpen,
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			// Open can take the lock in the moment between the other
+			// connection's COMMIT and its next BEGIN. It then ends before its
+			// first wait is out, which tests nothing: that attempt is redone.
+			for attempt := 0; ; attempt++ {
+				require.Less(t, attempt, 3, "Open took the lock between the other connection's statements every time")
+				path := dbPath(t)
+				if tc.migrated {
+					s, err := store.OpenWith(t.Context(), path, one)
+					require.NoError(t, err)
+					require.NoError(t, s.Close())
+				}
+				other := raw(t, path)
+				conn, err := other.Conn(t.Context())
+				require.NoError(t, err)
+				_, err = conn.ExecContext(t.Context(), "PRAGMA synchronous = OFF")
+				require.NoError(t, err)
+				_, err = conn.ExecContext(t.Context(), tc.lock)
+				require.NoError(t, err)
+				progressed := time.AfterFunc(progressAt, func() {
+					if _, err := conn.ExecContext(context.Background(), tc.progress); err != nil {
+						t.Logf("progress: %v", err)
+					}
+				})
+				release := releaseAt
+				if tc.held {
+					release = heldUntil
+				}
+				released := time.AfterFunc(release, func() { _ = conn.Close(); _ = other.Close() })
+				t.Cleanup(func() { progressed.Stop(); released.Stop(); _ = conn.Close(); _ = other.Close() })
+
+				start := time.Now()
+				s, err := store.OpenWith(t.Context(), path, two)
+				elapsed := time.Since(start)
+				if elapsed < store.BusyTimeout-200*time.Millisecond {
+					t.Logf("attempt %d ended after %v, inside the first wait: redone", attempt, elapsed)
+					if s != nil {
+						require.NoError(t, s.Close())
+					}
+					continue
+				}
+				if tc.held {
+					require.ErrorIs(t, err, tc.want)
+					assert.GreaterOrEqual(t, elapsed, 2*store.BusyTimeout-300*time.Millisecond, "it waited once more after the progress")
+					assert.Less(t, elapsed, heldUntil, "it waited only once more")
+					return
+				}
+				if tc.want != nil {
+					require.ErrorIs(t, err, tc.want)
+					assert.Less(t, elapsed, releaseAt, "it failed without waiting again")
+					return
+				}
+				require.NoError(t, err)
+				assert.GreaterOrEqual(t, elapsed, store.BusyTimeout, "its first wait ran out, and it waited again")
+				assert.Equal(t, 2, s.UserVersion())
+				require.NoError(t, s.Close())
+				return
+			}
+		})
+	}
+}
+
 // TestMigrationClasses walks what a migration set can hold. Migrations run in
 // order, each in its own transaction, from the version the file records; a
 // set that is not exactly 0001..N is refused before anything runs.
@@ -495,6 +631,13 @@ func TestOpenPathClasses(t *testing.T) {
 		"no parent":       {path: func(t *testing.T) string { return filepath.Join(t.TempDir(), "absent", "state.db") }, want: store.ErrOpen},
 		"an empty path":   {path: func(*testing.T) string { return "" }, want: store.ErrOpen},
 		"an embedded NUL": {path: func(t *testing.T) string { return filepath.Join(t.TempDir(), "state\x00.db") }, want: store.ErrOpen},
+		// A read-only open of a named pipe would wait for a writer: Open
+		// fails on one instead of hanging (NERD-5364).
+		"a named pipe": {path: func(t *testing.T) string {
+			p := dbPath(t)
+			require.NoError(t, syscall.Mkfifo(p, 0o600))
+			return p
+		}, want: store.ErrOpen},
 		"not a database": {path: func(t *testing.T) string {
 			p := dbPath(t)
 			require.NoError(t, os.WriteFile(p, []byte(strings.Repeat("not sqlite ", 100)), 0o600))

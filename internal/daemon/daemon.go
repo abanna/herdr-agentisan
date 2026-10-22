@@ -97,6 +97,11 @@ type Hooks struct {
 	// report.SystemStat (/proc on Linux, sysctl on darwin). With none, a
 	// holder is checked by pid alone.
 	StartTime func(pid int) (uint64, error)
+	// StartedAt puts a start StartTime returned on the wall clock, by
+	// default through report.SystemStartedAt (/proc/stat's boot time on
+	// Linux; darwin's start already is one). With none, the boss shows no
+	// runtime (A47).
+	StartedAt func(start uint64) (time.Time, error)
 }
 
 // Spawned is the daemon process a Spawn hook started.
@@ -167,6 +172,9 @@ func (o Options) withDefaults() Options {
 	}
 	if o.Hooks.StartTime == nil {
 		o.Hooks.StartTime = startTimeFrom(report.SystemStat())
+	}
+	if o.Hooks.StartedAt == nil {
+		o.Hooks.StartedAt = report.SystemStartedAt()
 	}
 	if o.closeStore == nil {
 		o.closeStore = (*store.Store).Close
@@ -286,9 +294,10 @@ func Run(ctx context.Context, o Options) (err error) {
 	snapshots := &snapshotCache{}
 	idle := &team.IdleClock{} // shared: the poll times rests, team status reads them
 	ready := &atomic.Bool{}   // shared: the poll's first reconcile opens the workforce ops (A35)
+	in := newInbox()          // shared: the poll feeds the dispatcher, and send wakes it
 	var ops map[string]op
 	if svc := o.newWorkforce(st, ident, idle); svc != nil {
-		ops = workforceOps(svc, ready)
+		ops = workforceOps(svc, ready, o.queued(in))
 	}
 	opsCtx, stopOps := context.WithCancel(ctx)
 	srv, err := listen(opsCtx, paths.Socket, o.health(ctx, st, HealthInfo{
@@ -312,7 +321,7 @@ func Run(ctx context.Context, o Options) (err error) {
 		stopFocus()
 		focus.Wait()
 	}()
-	stopTeam := o.startTeam(ctx, st, ident, snapshots, idle, views, ready)
+	stopTeam := o.startTeam(ctx, st, ident, snapshots, idle, views, ready, in)
 	defer stopTeam()
 	o.Logger.Info().Int("pid", os.Getpid()).Uint32("protocol", pong.Protocol).Str("socket", paths.Socket).
 		Int("store_version", st.UserVersion()).Msg("daemon running")

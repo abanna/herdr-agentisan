@@ -3,8 +3,10 @@ package team_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
@@ -155,4 +157,42 @@ func TestFillModels(t *testing.T) {
 	team.FillModels(noBoss, map[string]string{"w1:p2": "sonnet"})
 	assert.Nil(t, noBoss.Boss)
 	assert.Equal(t, "sonnet", noBoss.Groups[0].Agents[1].Model)
+}
+
+// TestFillBossStart: the boss's started_at is its own pane's agent process
+// start, in UTC (A47); with none for its pane it has none, whatever it held,
+// and no boss is no matter. Another pane's start never becomes the boss's.
+func TestFillBossStart(t *testing.T) {
+	t.Parallel()
+	started := time.Date(2026, 10, 21, 9, 30, 0, 0, time.FixedZone("x", 5*3600))
+	other := started.Add(time.Hour)
+	s := func() *snapshot.Snapshot {
+		return &snapshot.Snapshot{
+			Boss:   &snapshot.Boss{Agent: snapshot.Agent{Name: "boss", PaneID: "wJ:p1"}},
+			Groups: []snapshot.Group{{Name: "coder", Agents: []snapshot.Agent{{Name: "a", PaneID: "w1:p1"}}}},
+		}
+	}
+
+	got := s()
+	team.FillBossStart(got, map[string]time.Time{"wJ:p1": started, "w1:p1": other})
+	require.NotNil(t, got.Boss.StartedAt)
+	assert.True(t, started.Equal(*got.Boss.StartedAt), "its own pane's start")
+	assert.Equal(t, time.UTC, got.Boss.StartedAt.Location())
+	want := s()
+	want.Boss.StartedAt = got.Boss.StartedAt
+	assert.Equal(t, want, got, "nothing else changes")
+
+	unread := s()
+	unread.Boss.StartedAt = &other
+	team.FillBossStart(unread, map[string]time.Time{"w1:p1": other})
+	assert.Nil(t, unread.Boss.StartedAt, "no start read for its pane: no runtime, never a guess")
+
+	none := s()
+	team.FillBossStart(none, nil)
+	assert.Equal(t, s(), none)
+
+	noBoss := s()
+	noBoss.Boss = nil
+	team.FillBossStart(noBoss, map[string]time.Time{"wJ:p1": started})
+	assert.Nil(t, noBoss.Boss)
 }

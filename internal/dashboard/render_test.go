@@ -37,7 +37,7 @@ var attrs = dashboard.Options{Profile: colorprofile.ASCII}
 var fullColour = dashboard.Options{Profile: colorprofile.TrueColor}
 
 // fixtures are every snapshot in testdata.
-var fixtures = []string{"full", "empty", "blocked", "crowd", "wide", "group", "shells"}
+var fixtures = []string{"full", "empty", "blocked", "crowd", "wide", "group", "shells", "aged"}
 
 // fixture loads testdata/<name>.json through the same source the CLI uses.
 func fixture(t *testing.T, name string) *snapshot.Snapshot {
@@ -101,6 +101,15 @@ func TestRenderGolden(t *testing.T) {
 		// and an unnamed agent stays ?.
 		"shells_80x24":  {frame: frame("shells", first, true), w: 80, h: 24},
 		"shells_120x40": {frame: frame("shells", first, true), w: 120, h: 40},
+		// Stale stages (ADR-001 A42): the time column says how long ago one
+		// was reported, "3h05m ago", or "stale" when no report gave a
+		// time; a current stage keeps its time in it.
+		"aged_80x24": {frame: frame("aged", first, true), w: 80, h: 24},
+		// Too narrow for the time column: the words move into the stage
+		// cell, " · 1d00h ago", or " · stale" for room, or the time alone.
+		"aged_68x12": {frame: frame("aged", first, true), w: 68, h: 12},
+		"aged_64x12": {frame: frame("aged", first, true), w: 64, h: 12},
+		"aged_60x12": {frame: frame("aged", first, true), w: 60, h: 12},
 		// A snapshot 42 s older than the clock: the footer says so.
 		"stale_80x24": {
 			frame: func(t *testing.T) dashboard.Frame {

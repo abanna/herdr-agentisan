@@ -104,6 +104,19 @@ type Focus struct {
 // file, even a fresh one, all succeed: each migration runs once, under the
 // write lock. A lock another connection holds is waited for up to
 // BusyTimeout, then is ErrOpen.
+//
+// One exception keeps racing openers succeeding on a slow disk (NERD-5364):
+// every commit under synchronous=FULL is an fsync, and an opener waiting
+// behind another's switch to WAL and migrations can run out BusyTimeout while
+// that opener is still making progress. A step whose wait ran out runs once
+// more if, during that wait, the fresh file got its first write (once per
+// Open: in a race that is the other opener's switch to WAL) or the schema
+// version advanced (at most once per version). A lock held by anything
+// else, such as a person's sqlite3 on a database already written, makes
+// neither change and is ErrOpen after BusyTimeout as before. In production
+// the exception never applies: one daemon opens state.db, under daemon.lock's
+// flock, so no other opener exists to write or migrate the file while it
+// waits.
 func Open(ctx context.Context, path string) (*Store, error) {
 	sub, err := fs.Sub(embedded, "migrations")
 	if err != nil {
@@ -148,15 +161,15 @@ func open(ctx context.Context, path string, migrations fs.FS) (*Store, error) {
 }
 
 func (s *Store) init(ctx context.Context, path string, set []migration) error {
-	if err := s.db.PingContext(ctx); err != nil {
+	if err := retryOnFirstWrite(path, func() error { return s.db.PingContext(ctx) }); err != nil {
 		return fmt.Errorf("%w: %s: %w", ErrOpen, path, err)
 	}
 	// A database a newer build migrated is refused before anything writes
 	// to it: the switch to WAL below rewrites the file's header.
-	if err := checkVersion(ctx, s.db, len(set)); err != nil {
+	if err := retryOnFirstWrite(path, func() error { return checkVersion(ctx, s.db, len(set)) }); err != nil {
 		return err
 	}
-	if err := enableWAL(ctx, s.db); err != nil {
+	if err := retryOnFirstWrite(path, func() error { return enableWAL(ctx, s.db) }); err != nil {
 		return fmt.Errorf("%w: %s: %w", ErrOpen, path, err)
 	}
 	if err := verifyPragmas(ctx, s.db); err != nil {
@@ -168,6 +181,33 @@ func (s *Store) init(ctx context.Context, path string, set []migration) error {
 	}
 	s.version = v
 	return nil
+}
+
+// retryOnFirstWrite runs step, one of Open's steps before the migrations,
+// and runs it once more if its busy wait ran out while the fresh, empty file
+// got its first write (see Open). A file is empty only until its first write,
+// so of those steps only the one waiting when it happens runs again.
+//
+// It looks at the file's size and never opens the file: POSIX locks belong to
+// the process, so closing any descriptor this process has on state.db drops
+// every lock SQLite holds on it here, and a sqlite3 elsewhere could then
+// delete the live WAL.
+func retryOnFirstWrite(path string, step func() error) error {
+	wasEmpty := fileSize(path) == 0
+	err := step()
+	if err != nil && busy(err) && wasEmpty && fileSize(path) > 0 {
+		return step()
+	}
+	return err
+}
+
+// fileSize is the size of the file at path, or -1 when it cannot be stat'ed.
+func fileSize(path string) int64 {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return -1
+	}
+	return fi.Size()
 }
 
 // dsn is the driver's name for path with the per-connection settings A1

@@ -19,6 +19,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/report"
@@ -122,6 +123,9 @@ type Pane struct {
 	ID string
 	// TabID is the tab herdr lists the pane in; "" when it lists none.
 	TabID string
+	// TerminalID is the terminal pane.list says the pane shows, which a
+	// reissued pane id does not carry over (A35); "" when it lists none.
+	TerminalID string
 	// Name is the name herdr knows the pane's agent by (agent.list), the
 	// name agent.focus takes; "" for a shell or an agent nobody named.
 	Name string
@@ -136,6 +140,9 @@ type Pane struct {
 	// their writers left them (ADR-001 token contract); "" when absent, and
 	// Ctx "" too when herdr detects no agent in the pane (A27).
 	Ctx, Item, Stage string
+	// StageAt is when the stage was last reported, from its stage_at token
+	// (A42); zero when absent or not a time report.ParseStageAt reads.
+	StageAt time.Time
 }
 
 // IsAgent reports whether an agent runs in the pane: herdr detected one, or
@@ -314,10 +321,13 @@ func worker(p herdr.PaneInfo, t Target, ids, names map[string]string) Worker {
 		ID: p.PaneID, Name: names[p.PaneID], Label: p.Label, Agent: p.Agent,
 		Status: statusOf(p.AgentStatus), Handoff: p.Tokens[HandoffKey] != "",
 		Ctx: ctxOf(p), Item: p.Tokens[report.ItemKey], Stage: p.Tokens[report.StageKey],
-		TabID: p.TabID,
+		TabID: p.TabID, TerminalID: p.TerminalID,
 	}}
 	if id, ok := ids[p.TerminalID]; ok {
 		w.ID, w.Bound = id, true
+	}
+	if at, ok := report.ParseStageAt(p.Tokens[report.StageAtKey]); ok {
+		w.Pane.StageAt = at
 	}
 	return w
 }

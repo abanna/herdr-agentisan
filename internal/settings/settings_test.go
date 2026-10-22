@@ -77,6 +77,8 @@ func TestLoadLayerPrecedence(t *testing.T) {
 			want: map[string]want{
 				"rotation.thresholds": {[]int{55, 65, 75}, settings.LayerDefault},
 				"agent.command":       {[]string{"claude"}, settings.LayerDefault},
+				"notices.gap":         {30, settings.LayerDefault},
+				"notices.repeat":      {300, settings.LayerDefault},
 			},
 		},
 		"shared beats default": {
@@ -309,13 +311,15 @@ short = "a"
 	assert.Equal(t, map[string]string{
 		"agent.command":       settings.LayerDefault,
 		"agent.model":         settings.LayerShared,
+		"notices.gap":         settings.LayerDefault,
+		"notices.repeat":      settings.LayerDefault,
 		"rotation.thresholds": settings.LayerFlag,
 	}, got.Sources, "no project's values leak into a no-project resolve")
 	var paths []string
 	for _, l := range got.Leaves() {
 		paths = append(paths, l.Path)
 	}
-	assert.Equal(t, []string{"agent.command", "agent.model", "rotation.thresholds"}, paths, "leaves are sorted")
+	assert.Equal(t, []string{"agent.command", "agent.model", "notices.gap", "notices.repeat", "rotation.thresholds"}, paths, "leaves are sorted")
 }
 
 // TestLoadMissingFilesAreNotErrors: with no shared file only the defaults
@@ -329,6 +333,8 @@ func TestLoadMissingFilesAreNotErrors(t *testing.T) {
 	assert.Empty(t, got.Projects)
 	assert.Equal(t, map[string]string{
 		"agent.command":       settings.LayerDefault,
+		"notices.gap":         settings.LayerDefault,
+		"notices.repeat":      settings.LayerDefault,
 		"rotation.thresholds": settings.LayerDefault,
 	}, got.Sources)
 

@@ -567,22 +567,22 @@ func TestFocusAgentSendsTheSchemaShape(t *testing.T) {
 		reply  map[string]any
 		want   herdr.AgentInfo
 	}{
-		"focuses by name":                     {target: "pee01", reply: agentInfo("w2:p1", "pee01"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "pee01"}},
-		"an unnamed agent decodes to no name": {target: "w2:p3", reply: agentInfo("w2:p3", ""), want: herdr.AgentInfo{PaneID: "w2:p3"}},
+		"focuses by name":                     {target: "pee01", reply: agentInfo("w2:p1", "pee01"), want: herdr.AgentInfo{TerminalID: "t1", PaneID: "w2:p1", Name: "pee01"}},
+		"an unnamed agent decodes to no name": {target: "w2:p3", reply: agentInfo("w2:p3", ""), want: herdr.AgentInfo{TerminalID: "t1", PaneID: "w2:p3"}},
 		// Agent names come from the snapshot: whatever bytes they hold, the
 		// request stays one valid JSON line.
-		"target with a newline":           {target: "pee\n01", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "x"}},
-		"target with invalid UTF-8":       {target: "pee\xff", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "x"}},
-		"target with shell metachars":     {target: "pé;$(x) *", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "x"}},
-		"a non-ASCII target":              {target: "エージェント", reply: agentInfo("w2:p1", "エージェント"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "エージェント"}},
-		"a truncated multibyte target":    {target: "pee\xe2\x82", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "x"}},
-		"a target with a NUL":             {target: "pee\x0001", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "x"}},
-		"a target with a byte-order mark": {target: "\ufeffpee01", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "x"}},
+		"target with a newline":           {target: "pee\n01", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{TerminalID: "t1", PaneID: "w2:p1", Name: "x"}},
+		"target with invalid UTF-8":       {target: "pee\xff", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{TerminalID: "t1", PaneID: "w2:p1", Name: "x"}},
+		"target with shell metachars":     {target: "pé;$(x) *", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{TerminalID: "t1", PaneID: "w2:p1", Name: "x"}},
+		"a non-ASCII target":              {target: "エージェント", reply: agentInfo("w2:p1", "エージェント"), want: herdr.AgentInfo{TerminalID: "t1", PaneID: "w2:p1", Name: "エージェント"}},
+		"a truncated multibyte target":    {target: "pee\xe2\x82", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{TerminalID: "t1", PaneID: "w2:p1", Name: "x"}},
+		"a target with a NUL":             {target: "pee\x0001", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{TerminalID: "t1", PaneID: "w2:p1", Name: "x"}},
+		"a target with a byte-order mark": {target: "\ufeffpee01", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{TerminalID: "t1", PaneID: "w2:p1", Name: "x"}},
 		// Sent as a JSON value, never an argv: an option-like name is a name.
-		"an option-like target": {target: "--help", reply: agentInfo("w2:p1", "--help"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "--help"}},
+		"an option-like target": {target: "--help", reply: agentInfo("w2:p1", "--help"), want: herdr.AgentInfo{TerminalID: "t1", PaneID: "w2:p1", Name: "--help"}},
 		// The client sends what it is given; herdr decides an empty target
 		// names no agent.
-		"an empty target is sent": {target: "", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{PaneID: "w2:p1", Name: "x"}},
+		"an empty target is sent": {target: "", reply: agentInfo("w2:p1", "x"), want: herdr.AgentInfo{TerminalID: "t1", PaneID: "w2:p1", Name: "x"}},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

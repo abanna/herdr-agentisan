@@ -114,6 +114,14 @@ type Agent struct {
 	// last turn ended. Nil means not reported, as for an agent at work
 	// (ADR-001 A37).
 	IdleSince *time.Time `json:"idle_since,omitempty"`
+	// StageAt is when the agent last reported Stage, from its pane's
+	// stage_at token. Nil means not reported, as from an older binary
+	// (ADR-001 A42).
+	StageAt *time.Time `json:"stage_at,omitempty"`
+	// StageStale is set when Stage no longer says what the agent is doing:
+	// nothing reported it again in the agent's last turn, or no agent runs
+	// in the pane any more (A42). Left out, it is false.
+	StageStale bool `json:"stage_stale,omitempty"`
 }
 
 // Boss is the team's boss: an agent, plus what only the boss reports.
@@ -124,10 +132,9 @@ type Boss struct {
 	// draw it (ADR-001 A38); it stays so that every v1 document holding it
 	// still decodes.
 	Watchers *int `json:"watchers,omitempty"`
-	// StartedAt is when the daemon first saw the boss's pane run an agent in
-	// the boss's place (ADR-001 A31), not the session's own start, which
-	// herdr does not report; its runtime counts from it. Nil means not
-	// reported.
+	// StartedAt is when the boss's agent process started (ADR-001 A47); its
+	// runtime counts from it. Nil means not reported, as when the start
+	// cannot be read.
 	StartedAt *time.Time `json:"started_at,omitempty"`
 }
 
@@ -417,7 +424,7 @@ var (
 	timeShape = &shape{time: true}
 	agentKeys = map[string]*shape{
 		"name": nil, "unnamed": nil, "shell": nil, "pane_id": nil, "tab_id": nil, "status": nil, "model": nil, "ctx": nil, "item": nil, "stage": nil,
-		"stage_started_at": timeShape, "idle_since": timeShape,
+		"stage_started_at": timeShape, "idle_since": timeShape, "stage_at": timeShape, "stage_stale": nil,
 	}
 	agentShape = &shape{keys: agentKeys}
 	bossShape  = &shape{keys: union(agentKeys, map[string]*shape{"watchers": nil, "started_at": timeShape})}

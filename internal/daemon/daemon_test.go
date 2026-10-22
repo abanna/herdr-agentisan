@@ -18,6 +18,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
@@ -34,6 +35,23 @@ import (
 // fresh store.Open took a median of 2.3 s and up to 5.3 s, against 40 ms
 // idle. A daemon that is ready ends every wait at once, so the size costs
 // nothing when nothing is wrong.
+//
+// It covers one bounded thing at a time. The tests NERD-5354 F3 named,
+// TestBackWalksTheHistory (through backDaemon),
+// TestTeamPushStopsWithTheDaemon and TestRunClearsTheViewOutsideEveryTeam,
+// wait for what a daemon does once it serves (its focus subscription, a
+// poll) from when it serves (serving), not from its start: with its start
+// forced to 7 s and the subscription and first poll to 4 s after it serves,
+// those 7 (sub)tests failed timing from the start and pass timing from
+// serving. A new wait for such an event should use serving too; the rest of
+// the package still times its waits from run, a follow-up (QA #77, F-5).
+//
+// It assumes memory headroom, not an idle CPU. In this package's -race
+// -count=10 run on 2 cores, a start took p99 0.5 s and the run peaked at
+// 367 MiB; capped at 300 MiB (129k major page faults), store.Open took up
+// to 86 s and a first poll up to 19 s, past any fixed wait, and 25 tests
+// failed. A timeout on a machine out of memory or swap is that, not the
+// test.
 const ready = herdr.CallTimeout + store.BusyTimeout
 
 // shortDir returns a fresh directory with a short path: unix socket paths
@@ -211,6 +229,15 @@ func (p *procs) set(pid int, start uint64) {
 	p.start[pid] = start
 }
 
+// boot is when ticksSinceBoot's machine booted.
+var boot = time.Date(2026, 10, 21, 6, 0, 0, 0, time.UTC)
+
+// ticksSinceBoot is a StartedAt hook as Linux's is: a start is clock ticks,
+// 10 ms each, since boot.
+func ticksSinceBoot(start uint64) (time.Time, error) {
+	return boot.Add(time.Duration(start) * 10 * time.Millisecond), nil
+}
+
 // opts builds Options for one daemon on h, with fast polling.
 func opts(t *testing.T, stateDir string, h *fakeHerdr) daemon.Options {
 	t.Helper()
@@ -227,6 +254,7 @@ func opts(t *testing.T, stateDir string, h *fakeHerdr) daemon.Options {
 		Logger:      zerolog.Nop(),
 		Hooks: daemon.Hooks{
 			StartTime: (&procs{start: map[int]uint64{os.Getpid(): 77}}).startTime,
+			StartedAt: ticksSinceBoot,
 		},
 	}
 }
@@ -271,6 +299,20 @@ func run(t *testing.T, o daemon.Options) *running {
 			t.Errorf("daemon did not stop within %v of cancel", ready)
 		}
 	})
+	return r
+}
+
+// serving runs a daemon with o, as run does, and returns once it answers
+// health in o.StateDir for h's herdr: once its start is over. A wait for
+// something it does once serving, such as subscribing to focus or polling,
+// then gets ready of its own, not what its start left of it (NERD-5354
+// F3): its start and that wait are each bounded by the daemon's own
+// herdr and state database bounds, and a slow store.Open, measured at up
+// to 86 s under memory pressure, is no longer charged to the wait after it.
+func serving(t *testing.T, o daemon.Options, h *fakeHerdr) *running {
+	t.Helper()
+	r := run(t, o)
+	r.healthy(t, o.StateDir, h)
 	return r
 }
 
@@ -1283,6 +1325,28 @@ func TestStartTimeComesFromTheLineageReader(t *testing.T) {
 	assert.Equal(t, want.Start, got)
 }
 
+// TestStartedAtComesFromTheReport: with no hook injected, a daemon puts the
+// starts its StartTime hook reads on the wall clock through
+// report.SystemStartedAt (A47): this process's own start is in the past and
+// recent. Where the OS has no reader there is none, so the boss shows no
+// runtime.
+func TestStartedAtComesFromTheReport(t *testing.T) {
+	t.Parallel()
+	def := daemon.DefaultStartedAt()
+	if report.SystemStartedAt() == nil {
+		assert.Nil(t, def)
+		return
+	}
+	require.NotNil(t, def)
+	start, err := daemon.DefaultStartTime()(os.Getpid())
+	require.NoError(t, err)
+	got, err := def(start)
+	require.NoError(t, err)
+	now := time.Now()
+	assert.False(t, got.After(now.Add(time.Second)), "started %v, after now %v", got, now)
+	assert.WithinDuration(t, now, got, time.Hour, "this test binary started moments ago")
+}
+
 // request sends one raw line to the daemon socket and returns the raw reply.
 func request(t *testing.T, sock string, line []byte) map[string]any {
 	t.Helper()
@@ -1619,10 +1683,6 @@ func TestStillServedClasses(t *testing.T) {
 			require.NoError(t, os.Remove(sock))
 			return nil
 		},
-		"crashed, its socket file left behind": func(_ *testing.T, _ string, srv *herdrtest.Server) *herdrtest.Server {
-			srv.Crash()
-			return nil
-		},
 		"behind a parent it cannot search": func(t *testing.T, sock string, _ *herdrtest.Server) *herdrtest.Server {
 			dir := filepath.Dir(sock)
 			require.NoError(t, os.Chmod(dir, 0o600))
@@ -1647,6 +1707,145 @@ func TestStillServedClasses(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestStillServedACrashedServer: a herdr that crashed leaves its socket file
+// behind, and the poll check takes it as gone (A3) once nothing answers it:
+// a refused connection. A child forked anywhere in the daemon's process
+// keeps a copy of the listener's descriptor until it execs, and a ping that
+// reaches that copy is reset when the child lets it go. A reset is a ping
+// that failed, which the check takes, as any other, as the server still up,
+// never as gone, so the next poll decides (NERD-5349).
+func TestStillServedACrashedServer(t *testing.T) {
+	t.Parallel()
+	t.Run("gone once nothing holds its listener", func(t *testing.T) {
+		t.Parallel()
+		sock := filepath.Join(shortDir(t), "h.sock")
+		srv := herdrtest.StartAt(t, sock, pong(22))
+		ident := mustIdentity(t, sock)
+		srv.Crash()
+		// A child another test forks may hold the listener for a moment:
+		// until it lets go, each check reads the server as up.
+		require.Eventually(t, func() bool {
+			err := daemon.StillServedOver(t.Context(), sock, ident, 22)
+			if err != nil && !errors.Is(err, daemon.ErrHerdrGone) {
+				t.Errorf("a crashed server is up or gone, never %v", err)
+			}
+			return errors.Is(err, daemon.ErrHerdrGone)
+		}, ready, 5*time.Millisecond)
+	})
+
+	// heldCrash is a server on a socket of its own that crashed while a
+	// second descriptor of its listener, as a forked child holds, stays
+	// open; nothing accepts on it. It returns the socket, the identity it
+	// had and that descriptor.
+	heldCrash := func(t *testing.T) (string, daemon.Identity, *os.File) {
+		t.Helper()
+		sock := filepath.Join(shortDir(t), "h.sock")
+		ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
+		require.NoError(t, err)
+		ln.SetUnlinkOnClose(false)
+		ident := mustIdentity(t, sock)
+		held, err := ln.File()
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = held.Close() })
+		require.NoError(t, ln.Close())
+		return sock, ident, held
+	}
+	// letGo waits until a connection waits on held, unaccepted, then after
+	// pause closes held, as the child's exec does, which resets that
+	// connection.
+	letGo := func(t *testing.T, held *os.File, pause time.Duration) {
+		t.Helper()
+		fds := []unix.PollFd{{Fd: int32(held.Fd()), Events: unix.POLLIN}} //nolint:gosec // a descriptor fits an int32
+		for {
+			n, err := unix.Poll(fds, int(ready/time.Millisecond))
+			if errors.Is(err, unix.EINTR) {
+				continue
+			}
+			require.NoError(t, err)
+			require.Equal(t, 1, n, "a connection reaches the held listener")
+			break
+		}
+		time.Sleep(pause)
+		require.NoError(t, held.Close())
+	}
+	answer := func(t *testing.T, done <-chan error) error {
+		t.Helper()
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(ready):
+			t.Fatal("the ping never returned")
+			return nil
+		}
+	}
+
+	t.Run("a held listener resets the ping", func(t *testing.T) {
+		t.Parallel()
+		sock, _, held := heldCrash(t)
+		done := make(chan error, 1)
+		go func() {
+			_, err := herdr.Client{SocketPath: sock}.Ping(t.Context())
+			done <- err
+		}()
+		letGo(t, held, 0)
+		err := answer(t, done)
+		assert.True(t, errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.EPIPE), "reset, not refused: %v", err)
+	})
+	// The ping is reset by EPIPE when the listener goes before the ping is
+	// sent, and by ECONNRESET once it is. Each is the server up, so the
+	// case runs until both have been seen, up to 200 times (QA #81, S2).
+	// Even tries let the listener go while the ping is connected but not
+	// yet sent: EPIPE. Odd tries let it go 20 ms after the connection
+	// queues, the ping sent by then unless the scheduler held it back that
+	// long: ECONNRESET. The debug line the check logs for the failed ping
+	// says which; it carries the error as text.
+	t.Run("a reset ping is up, then the refusal is gone", func(t *testing.T) {
+		t.Parallel()
+		seen := map[syscall.Errno]int{}
+		for try := 0; try < 200 && (seen[syscall.ECONNRESET] == 0 || seen[syscall.EPIPE] == 0); try++ {
+			sock, ident, held := heldCrash(t)
+			var logged strings.Builder
+			early := try%2 == 0
+			var dialed func()
+			var first sync.Once
+			connected, gone := make(chan struct{}), make(chan struct{})
+			if early {
+				dialed = func() { first.Do(func() { close(connected); <-gone }) }
+			}
+			done := make(chan error, 1)
+			go func() {
+				done <- daemon.StillServedLogging(t.Context(), sock, ident, 22, zerolog.New(&logged).Level(zerolog.DebugLevel), dialed)
+			}()
+			if early {
+				select {
+				case <-connected:
+				case <-time.After(ready):
+					t.Fatal("the ping never connected")
+				}
+				err := held.Close()
+				close(gone)
+				require.NoError(t, err)
+			} else {
+				letGo(t, held, 20*time.Millisecond)
+			}
+			require.NoError(t, answer(t, done), "a reset ping is not the server gone")
+			var line struct{ Error string }
+			require.NoError(t, json.Unmarshal([]byte(logged.String()), &line), "the failed ping's one line: %q", logged.String())
+			reset := false
+			for _, e := range []syscall.Errno{syscall.ECONNRESET, syscall.EPIPE} {
+				if strings.Contains(line.Error, e.Error()) {
+					seen[e]++
+					reset = true
+				}
+			}
+			require.True(t, reset, "a held listener resets the ping, not %q", line.Error)
+			require.ErrorIs(t, daemon.StillServedOver(t.Context(), sock, ident, 22), daemon.ErrHerdrGone, "now nothing holds the listener: refused, gone")
+		}
+		assert.Positive(t, seen[syscall.ECONNRESET], "ECONNRESET is up: %v", seen)
+		assert.Positive(t, seen[syscall.EPIPE], "EPIPE is up: %v", seen)
+	})
 }
 
 // TestStillServedChecksTheServerAfterThePing: the socket is replaced while

@@ -40,7 +40,21 @@ var (
 	// bold green and bold red.
 	stageReadyStyle = lipgloss.NewStyle().Bold(true).Foreground(colGreen)
 	stageRedStyle   = lipgloss.NewStyle().Bold(true).Foreground(colRed)
+	// staleStyle is a stale stage and its age (ADR-001 A42): dim, faint and
+	// italic, which no current stage is. Not every terminal draws faint or
+	// italic, so the age's own words, "3h ago", say the stage is old.
+	staleStyle = lipgloss.NewStyle().Foreground(colDim).Faint(true).Italic(true)
 )
+
+// agentStageStyle is a's stage's style in a row and on the boss line:
+// staleStyle when the stage is stale, which takes no rule's colour, so an
+// old "blocked" never shows red (A42's F4), else stageStyle.
+func agentStageStyle(a snapshot.Agent) lipgloss.Style {
+	if a.StageStale {
+		return staleStyle
+	}
+	return stageStyle(clean(a.Stage))
+}
 
 // stageStyle is a stage's colour in a row and on the boss line: its rule's
 // (stageRule), or dim when it matches none.

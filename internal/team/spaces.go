@@ -24,6 +24,10 @@ const (
 	EditShellGroup = "herdr"
 )
 
+// SpacesBoss is the name herdr knows the ◆ spaces' boss agent by (A7),
+// which messages to it are typed to (A30).
+const SpacesBoss = "boss"
+
 // Spaces is the resolver for today's layout: one workspace per group,
 // labelled with SpacePrefix (or LegacySpacePrefix) and the group's name, all
 // in one project. A group's target is its workspace. The group is the rest of
