@@ -209,7 +209,7 @@ func (r Runner) Run(ctx context.Context, dir, bin string, args ...string) error 
 	if r.Env != nil {
 		cmd.Env = slices.Clip(r.Env)
 	}
-	out := &capped{max: maxOutput}
+	out := newCapture()
 	cmd.Stdout, cmd.Stderr = out, out
 	cmd.WaitDelay = waitDelay
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -234,10 +234,11 @@ func (r Runner) Run(ctx context.Context, dir, bin string, args ...string) error 
 
 // killGroup sends SIGKILL, through kill (syscall.Kill), to the process group
 // that pid leads, and is what Run's Cancel does. A group already gone is
-// os.ErrProcessDone, which exec takes as done. Any other failure, such as
-// EPERM for a member the daemon may not signal, goes back to exec, which
-// then kills only the leader once WaitDelay passes; Run still reports the
-// cancel or the timeout.
+// os.ErrProcessDone, which exec takes as done. Any other failure goes back
+// to exec, which kills the leader alone once WaitDelay passes, and Run still
+// reports the cancel or the timeout. kill passes over a member the daemon
+// may not signal, so an EPERM means it could signal none of them, the leader
+// included: exec's kill fails too, and Run waits for the leader to exit.
 func killGroup(kill func(pid int, sig syscall.Signal) error, pid int, what string) error {
 	err := kill(-pid, syscall.SIGKILL)
 	if errors.Is(err, syscall.ESRCH) {
@@ -257,6 +258,10 @@ type capped struct {
 	buf []byte
 	max int
 }
+
+// newCapture is what a run gives tdaddy's stdout and stderr: the first
+// maxOutput bytes are kept.
+func newCapture() *capped { return &capped{max: maxOutput} }
 
 func (c *capped) Write(p []byte) (int, error) {
 	c.mu.Lock()

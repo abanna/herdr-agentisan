@@ -1,7 +1,6 @@
 package preflight_test
 
 import (
-	"bytes"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,9 +29,13 @@ func TestCaptureKeepsTheFirstBytes(t *testing.T) {
 			c := preflight.NewCapture()
 			var all []byte
 			for i, n := range sizes {
-				// Each write has its own letter, so the kept bytes show
-				// which writes they came from, and in what order.
-				p := bytes.Repeat([]byte{byte('a' + i)}, n)
+				// A byte's value follows its write and its place in it, so
+				// the kept bytes show which writes they came from, in what
+				// order, and which end of the write that crosses the cap.
+				p := make([]byte, n)
+				for j := range p {
+					p[j] = byte('a' + (7*i+j)%26)
+				}
 				took, err := c.Write(p)
 				require.NoError(t, err)
 				assert.Equal(t, n, took, "write %d takes all of p", i)

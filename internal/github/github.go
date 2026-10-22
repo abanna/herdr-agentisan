@@ -183,10 +183,12 @@ func (r Runner) run(ctx context.Context, args ...string) ([]byte, error) {
 
 // killGroup sends SIGKILL, through kill (syscall.Kill), to the process group
 // that pid leads, and is what run's Cancel does. A group already gone is
-// os.ErrProcessDone, which exec takes as done. Any other failure, such as
-// EPERM for a member the daemon may not signal, goes back to exec, which
-// then kills only the leader once WaitDelay passes; run still reports the
-// cancel, the timeout or the output cap.
+// os.ErrProcessDone, which exec takes as done. Any other failure goes back
+// to exec, which kills the leader alone once WaitDelay passes, and run still
+// reports the cancel, the timeout or the output cap. kill passes over a
+// member the daemon may not signal, so an EPERM means it could signal none
+// of them, the leader included: exec's kill fails too, and run waits for the
+// leader to exit.
 func killGroup(kill func(pid int, sig syscall.Signal) error, pid int, what string) error {
 	err := kill(-pid, syscall.SIGKILL)
 	if errors.Is(err, syscall.ESRCH) {
