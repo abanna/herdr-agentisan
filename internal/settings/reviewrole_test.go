@@ -111,9 +111,11 @@ func TestReviewRoleAddsNoRule(t *testing.T) {
 }
 
 // TestReviewRoleAddsNoRuleWords: outside the vendored guidelines the role
-// names no severity and states no scope, evidence or severity rule beyond
-// its own sentences below, so even an edit whose hash was set without a
-// re-read fails on the words such a rule needs.
+// uses no severity label and none of the scope, evidence or severity words
+// below beyond its own sentences, so an edit whose hash was set without a
+// re-read still fails when its rule uses one of those words. A rule in
+// other words is caught only by the re-read TestReviewRoleAddsNoRule's hash
+// asks for.
 func TestReviewRoleAddsNoRuleWords(t *testing.T) {
 	t.Parallel()
 	own := strings.Join(strings.Fields(roleOwnText(readReviewRole(t))), " ")
