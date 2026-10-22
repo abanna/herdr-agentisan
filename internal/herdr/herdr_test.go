@@ -213,6 +213,7 @@ func TestCallFailureClasses(t *testing.T) {
 			_, err := herdr.Client{SocketPath: srv.Path}.Ping(t.Context())
 			require.Error(t, err)
 			require.ErrorIs(t, err, tc.want)
+			assert.NotErrorIs(t, err, herdr.ErrNotSent, "it failed after the request was written, so it may have taken effect")
 			if tc.check != nil {
 				tc.check(t, err)
 			}
@@ -328,6 +329,7 @@ func TestResponseFramingClasses(t *testing.T) {
 				return
 			}
 			require.ErrorIs(t, err, tc.want)
+			assert.NotErrorIs(t, err, herdr.ErrNotSent, "it failed after the request was written, so it may have taken effect")
 		})
 	}
 }

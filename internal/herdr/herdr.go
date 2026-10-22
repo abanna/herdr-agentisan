@@ -29,10 +29,10 @@ var (
 	// failed mid-call.
 	ErrUnavailable = errors.New("herdr is unavailable")
 	// ErrNotSent means a call ended before any of its request was written:
-	// its dial failed, or the Dialed check refused the server. Whatever the
-	// call asked for certainly did not happen, so it can be tried again; a
-	// call that fails after writing may have taken effect, and never says
-	// this.
+	// it had no socket path (an ErrNoSocket too), its dial failed, or the
+	// Dialed check refused the server. Whatever the call asked for certainly
+	// did not happen, so it can be tried again; a call that fails after
+	// writing may have taken effect, and never says this.
 	ErrNotSent = errors.New("nothing was sent to herdr")
 	// ErrProtocol means herdr answered with something the schema does not allow.
 	ErrProtocol = errors.New("herdr protocol violation")
@@ -154,7 +154,7 @@ type response struct {
 // marshal to a JSON object: the schema requires it even when empty.
 func (c Client) Call(ctx context.Context, method string, params, out any) error {
 	if c.SocketPath == "" {
-		return ErrNoSocket
+		return fmt.Errorf("%w: %w", ErrNoSocket, ErrNotSent)
 	}
 	ctx, cancel := context.WithTimeout(ctx, c.timeout())
 	defer cancel()
