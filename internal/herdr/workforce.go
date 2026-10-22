@@ -28,10 +28,11 @@ var (
 	// (agent_not_found).
 	ErrAgentNotFound = errors.New("herdr agent not found")
 	// ErrWaitTimeout is herdr's timeout code. pane.wait_for_output answers it
-	// when it saw no match in time (src/api/wait.rs:114-126), but agent.wait,
-	// agent.prompt's own wait and events.wait answer the same code (0.9.5
-	// src/api/wait.rs:657, :747), so it means no match only straight after
-	// WaitForOutput.
+	// when it saw no match in time (src/api/wait.rs:114-126), but agent.prompt
+	// answers it too when typing its text timed out (0.9.5
+	// src/app/api/agents.rs:111-112), as do agent.wait, agent.prompt's wait
+	// and events.wait (src/api/wait.rs:657, :747), so it means no match only
+	// straight after WaitForOutput.
 	ErrWaitTimeout = errors.New("herdr wait timed out")
 )
 
