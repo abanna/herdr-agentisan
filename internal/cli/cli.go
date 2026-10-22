@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/rs/zerolog"
 	"github.com/spf13/cobra"
 
 	"github.com/abanna/herdr-agentisan/internal/config"
@@ -214,7 +215,7 @@ func newReportStatuslineCmd() *cobra.Command {
 				logger.Debug().Err(err).Str("pane", pane.PaneID).Ints("lineage", lineage.PIDs()).Msg("report statusline: nothing reported")
 				return nil
 			}
-			logger.Debug().Str("pane", pane.PaneID).Str("reported_to", res.PaneID).Int(report.CtxKey, res.Ctx).Msg("report statusline")
+			logReported(logger, pane, res, "report statusline")
 			return nil
 		},
 	}
@@ -248,10 +249,23 @@ func newReportCodexCmd() *cobra.Command {
 				logger.Debug().Err(err).Str("pane", pane.PaneID).Ints("lineage", lineage.PIDs()).Msg("report codex: nothing reported")
 				return nil
 			}
-			logger.Debug().Str("pane", pane.PaneID).Str("reported_to", res.PaneID).Int(report.CtxKey, res.Ctx).Msg("report codex")
+			logReported(logger, pane, res, "report codex")
 			return nil
 		},
 	}
+}
+
+// logReported writes what a ctx report pushed, and where, to the debug log:
+// ctx when it pushed one, and the model when it pushed one (A56).
+func logReported(logger zerolog.Logger, pane report.Pane, res report.Result, msg string) {
+	ev := logger.Debug().Str("pane", pane.PaneID).Str("reported_to", res.PaneID)
+	if res.HasCtx {
+		ev = ev.Int(report.CtxKey, res.Ctx)
+	}
+	if res.Model != "" {
+		ev = ev.Str(report.ModelKey, res.Model)
+	}
+	ev.Msg(msg)
 }
 
 func newReportTurnCmd() *cobra.Command {

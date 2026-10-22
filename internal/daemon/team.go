@@ -291,6 +291,9 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 		}
 		// The boss's runtime is its agent process's (A47).
 		started := tp.models.started(o.Hooks.StartedAt)
+		// A model the pane's agent reported wins over its launch model
+		// while it is the current agent's (A56).
+		models = team.CurrentModels(m, models, started)
 		// The held locks are read once for every team, so a list that
 		// changes mid-poll cannot give two teams two counts; each team
 		// counts its own project's lock files (A40).

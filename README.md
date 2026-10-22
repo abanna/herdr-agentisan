@@ -52,7 +52,10 @@ pinned in `go.mod` under the `tool` directive — nothing to install globally.
 ## Report `$ctx` from Claude's statusline
 
 Each Claude agent pushes its own context use to its pane as the `ctx` token:
-a bare integer from 0 to 100, source `agentisan`, with a 180 s TTL. After
+a bare integer from 0 to 100, source `agentisan`, with a 180 s TTL. In the
+same report it pushes the model it runs, the statusline's `model.id`, as the
+`model` token, with `model_at` (ADR-001 A56), so the dashboard's model column
+follows a `/model` switch. After
 `task install` puts `herdr-agentisan` on your `PATH`, add one line to the
 statusline script (`~/.claude/statusline.sh`), after it has read stdin into
 `$input`:
@@ -62,13 +65,15 @@ herdr-agentisan report statusline <<<"$input" >/dev/null 2>&1 &
 ```
 
 It prints nothing and always exits 0. Outside a herdr pane, or when the
-statusline has no context percentage yet, it reports nothing. Set
+statusline has neither a context percentage nor a model yet, it reports
+nothing. Set
 `HERDR_AGENTISAN_LOG_LEVEL=debug` and drop the redirect to see why.
 
 ## Report `$ctx` from Codex
 
 Each Codex agent pushes the same `ctx` token through three Codex hooks, with
-the number Codex itself shows as "Context N% used". Install them once:
+the number Codex itself shows as "Context N% used", and the hook's `model` as
+the `model` token, as the statusline does. Install them once:
 
 ```bash
 herdr-agentisan codex hooks
@@ -547,13 +552,19 @@ does not resolve keeps the last ones, and `daemon.log` says why.
 
 ### The model column
 
-Each row shows the model its agent was started with: Claude's `--model`, or
-Codex's `-m` or `--model`, read from the pane's processes through herdr
-(ADR-001 A39). The daemon asks herdr again only when a pane's agent
-restarted or changed, and a pane where it finds no agent process once a
-minute. It is the launch model: a `/model` switch shows once the agent
-restarts, and an agent started without the flag, such as a Codex that takes
-its model from `config.toml`, shows none.
+Each row shows the model its agent reports it runs (ADR-001 A56): Claude's
+statusline `model.id`, or the model a Codex hook names. A `/model` switch
+therefore shows at the agent's next report: within a minute for Claude, and
+after Codex's next tool use or turn end.
+
+Until an agent has reported, or when its report is older than the agent's
+process, as a model left by an earlier agent in the pane is, the row shows
+the model the agent was started with. That is Claude's `--model`, or Codex's
+`-m` or `--model`, read from the pane's processes through herdr (A39).
+
+The daemon asks herdr again only when a pane's agent restarted or changed,
+and once a minute for a pane where it finds no agent process. An agent
+started without the flag that has not reported yet shows none.
 
 ### A group's view
 
