@@ -288,7 +288,7 @@ func TestRunAgesAStaleStage(t *testing.T) {
 	polled(t, th.srv, 2)
 	assert.Equal(t, [2]string{"qa: reading", ""}, stagePushed(t, th), "a turn running")
 	th.layout(ws, stagedPane("idle", reported), agents)
-	polled(t, th.srv, 2)
+	polled(t, th.srv, 3)
 	assert.Equal(t, [2]string{"", "qa: reading · 2h"}, stagePushed(t, th), "the turn ended with no report")
 	got := stagedRow(served(t, sock, func(s snapshot.Snapshot) bool { return stagedRow(s).StageStale }))
 	require.NotNil(t, got.StageAt)
@@ -300,6 +300,47 @@ func TestRunAgesAStaleStage(t *testing.T) {
 	got = stagedRow(served(t, sock, func(s snapshot.Snapshot) bool { return !stagedRow(s).StageStale }))
 	require.NotNil(t, got.StageAt)
 	assert.Equal(t, t0, *got.StageAt)
+}
+
+// TestRunGivesTheStopHookAPoll is A42's second poll at rest on the daemon's
+// own poll: the first poll that sees a turn end with no report pushes the
+// stage current, since the Stop hook may still report, and the second pushes
+// it old. Each layout carries a ctx of its own, so every push says which
+// layout its poll listed.
+func TestRunGivesTheStopHookAPoll(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	ws, _, _ := fullTeam()
+	agents := []map[string]any{named("wN:p1", "pee01")}
+	reported := t0.Add(-2 * time.Hour)
+	pane := func(status, ctx string) []map[string]any {
+		p := stagedPane(status, reported)
+		p[0]["tokens"].(map[string]string)["ctx"] = ctx
+		return p
+	}
+	th.layout(ws, pane("idle", "40"), agents)
+	o := teamOpts(t, shortDir(t), th, projectConfig(t))
+	o.Now = func() time.Time { return t0 }
+	run(t, o)
+	polled(t, th.srv, 2)
+	th.layout(ws, pane("working", "41"), agents)
+	polled(t, th.srv, 2)
+	th.layout(ws, pane("idle", "42"), agents)
+	polled(t, th.srv, 3)
+
+	var ended [][2]string
+	for _, params := range panePushes(t, th.srv)["wN:p1"] {
+		var push struct {
+			Tokens map[string]string `json:"tokens"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(params), &push))
+		if push.Tokens["ctx_ok"] == "ctx 42%" {
+			ended = append(ended, [2]string{push.Tokens[team.StageNowKey], push.Tokens[team.StageOldKey]})
+		}
+	}
+	require.GreaterOrEqual(t, len(ended), 2, "the polls that saw the turn's end")
+	assert.Equal(t, [2]string{"qa: reading", ""}, ended[0], "the first poll at rest: its Stop hook may still report")
+	assert.Equal(t, [2]string{"", "qa: reading · 2h"}, ended[1], "the second: the turn ended with no report")
 }
 
 // TestRunRestartRaisesNoFalseAlarm: a daemon restarted while a pane is
@@ -343,7 +384,7 @@ func TestRunRestartRaisesNoFalseAlarm(t *testing.T) {
 	polled(t, th.srv, 2)
 	assert.Equal(t, current, stagePushed(t, th), "a turn running")
 	th.layout(ws, stagedPane("idle", reported), agents)
-	polled(t, th.srv, 2)
+	polled(t, th.srv, 3)
 	assert.Equal(t, current, stagePushed(t, th), "reported in the turn that just ended")
 	got := stagedRow(served(t, sock, func(s snapshot.Snapshot) bool { return stagedRow(s).Status == snapshot.StatusIdle }))
 	assert.False(t, got.StageStale, "the snapshot agrees")
@@ -355,7 +396,7 @@ func TestRunRestartRaisesNoFalseAlarm(t *testing.T) {
 	polled(t, th.srv, 2)
 	clk.advance(10 * time.Second)
 	th.layout(ws, stagedPane("idle", reported), agents)
-	polled(t, th.srv, 2)
+	polled(t, th.srv, 3)
 	assert.Equal(t, [2]string{"", "qa: reading · 0m"}, stagePushed(t, th), "a whole turn with no report")
 	got = stagedRow(served(t, sock, func(s snapshot.Snapshot) bool { return stagedRow(s).StageStale }))
 	require.NotNil(t, got.StageAt)

@@ -139,11 +139,10 @@ herdr-agentisan report stage --item=NERD-5253 --stage=build_test
 
 It sets the pane's `item` and `stage` tokens, and `stage_at`, the report's
 time, source `agentisan`, with a 24 h TTL renewed by every report; they also
-leave with the pane. A value is at
-most 80 printable characters, and anything else is refused rather than cut
-short. Like `report statusline`, it prints nothing and exits 0 whether or not
-it reported; only a malformed command line (an unknown flag, an extra
-argument) fails.
+leave with the pane. A value is at most 80 printable characters, and anything
+else is refused rather than cut short. Like `report statusline`, it prints
+nothing and exits 0 whether or not it reported; only a malformed command line
+(an unknown flag, an extra argument) fails.
 
 Run by Codex (it carries `CODEX_THREAD_ID`), `report stage` reports only from
 the pane's own Codex started as `codex --no-daemon --sandbox danger-full-access`.
@@ -226,10 +225,11 @@ For Codex, paste the
 trust them once. `herdr-agentisan codex hooks` installs only the `ctx` hooks
 above. Each turn hook is a group of its own, so that command never finds one
 beside `report codex`. They need `codex --no-daemon`, as `report codex`
-does: a hook the shared app-server ran reports nothing. Codex runs hooks outside its sandbox, so they
-work under the default one, unlike `report stage` from a tool command. Both
-print nothing and always exit 0; `HERDR_AGENTISAN_LOG_LEVEL=debug` logs why
-nothing was reported. ADR-001 A42 has the details.
+does: a hook the shared app-server ran reports nothing. Codex runs hooks
+outside its sandbox, so they work under the default one, unlike `report stage`
+from a tool command. Both print nothing and always exit 0;
+`HERDR_AGENTISAN_LOG_LEVEL=debug` logs why nothing was reported. ADR-001 A42
+has the details.
 
 ## An old stage ages
 
@@ -243,7 +243,9 @@ stays current while the pane rests, so a `Stop` hook or a closing
 `report stage` keeps it so. It needs no hooks: it works on any agent pane a
 team places, from herdr's statuses and the `stage_at` every report writes.
 The daemon judges only a turn it saw begin and end, so after a restart a
-stage stays current until the agent's next turn.
+stage stays current until the agent's next turn. It calls a turn ended at
+the second poll that sees the pane at rest, about 3 s on, so a `Stop` hook's
+report that lands just after the turn ends is still in time.
 
 ## Search on prefix+/ and in the dashboard
 
