@@ -1,6 +1,7 @@
 package settings_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -128,6 +129,63 @@ func TestRoutingRefuses(t *testing.T) {
 	}
 }
 
+// TestRoutingRefusesACodexProfile: while routing is on, a codex command
+// choosing a profile, which can set the model and effort routing decides,
+// is refused in each form, the [agent] command's and a group's alike, by
+// its flag and never its profile. With routing off it resolves, and
+// claude's -p, its print mode, is never a profile.
+func TestRoutingRefusesACodexProfile(t *testing.T) {
+	t.Parallel()
+	forms := map[string]struct {
+		args []string
+		flag string
+	}{
+		"-p":                    {[]string{"-p", "mine"}, "-p"},
+		"-p attached":           {[]string{"-pmine"}, "-p"},
+		"-p joined":             {[]string{"-p=mine"}, "-p"},
+		"--profile":             {[]string{"--profile", "mine"}, "--profile"},
+		"--profile joined":      {[]string{"--profile=mine"}, "--profile"},
+		"-c profile":            {[]string{"-c", "profile=mine"}, "profile key"},
+		"--config profile":      {[]string{"--config=profile=mine"}, "profile key"},
+		"-c profile quoted":     {[]string{"-c", `"profile" = mine`}, "profile key"},
+		"-p after another flag": {[]string{"--search", "-p", "mine"}, "-p"},
+	}
+	for name, tc := range forms {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			command := `["codex", "` + strings.Join(escape(tc.args), `", "`) + `"]`
+			for where, file := range map[string]string{
+				"agent.command (shared, ":              "[agent]\ncommand = " + command + "\n",
+				"groups.coder.agent.command (shared, ": "[groups.coder]\nworkers = 0\nslots = 1\nagent = { command = " + command + " }\n",
+			} {
+				_, err := loadRouting(t, file+"[routing]\nenabled = true\n", "", nil, true)
+				require.ErrorIs(t, err, settings.ErrInvalid, where)
+				assert.Contains(t, err.Error(), where)
+				assert.Contains(t, err.Error(), "codex's "+tc.flag+" chooses a profile")
+				assert.NotContains(t, err.Error(), "mine", "the profile is never echoed")
+				_, err = loadRouting(t, file+"[routing]\nenabled = false\n", "", nil, true)
+				require.NoError(t, err, "%s with routing off", where)
+			}
+		})
+	}
+	_, err := loadRouting(t, "[agent]\ncommand = [\"/usr/local/bin/codex\", \"--profile=mine\"]\n[routing]\nenabled = true\n", "", nil, true)
+	require.ErrorIs(t, err, settings.ErrInvalid, "codex by its path is codex")
+	assert.Contains(t, err.Error(), "codex's --profile chooses a profile")
+	_, err = loadRouting(t, "[agent]\ncommand = [\"claude\", \"-p\"]\n[routing]\nenabled = true\n", "", nil, true)
+	require.NoError(t, err, "claude's -p is its print mode, not a profile")
+	_, err = loadRouting(t, "[agent]\ncommand = [\"codex\", \"-c\", \"profiles.mine.model=x\"]\n[routing]\nenabled = true\n", "", nil, true)
+	require.NoError(t, err, "a profile's own table chooses none")
+}
+
+// escape quotes a TOML basic string's body.
+func escape(args []string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		out[i] = strings.ReplaceAll(a, `"`, `\"`)
+	}
+	return out
+}
+
 // TestRoutingOffKeepsTheModelKeys: with routing off, as it is unless the
 // user turns it on, every model key resolves as before.
 func TestRoutingOffKeepsTheModelKeys(t *testing.T) {
@@ -166,4 +224,65 @@ func TestResolvedPolicy(t *testing.T) {
 	_, err = settings.Resolved{Values: map[string]any{"routing": map[string]any{"overrides": map[string]any{"boss": "claude_premium"}}}}.Policy()
 	require.ErrorIs(t, err, settings.ErrInvalid)
 	require.ErrorIs(t, err, routing.ErrOverrideRefused)
+	_, err = settings.Profile{Routing: routing.Deployment{Overrides: map[string]string{"boss": "claude_premium"}}}.Policy()
+	require.ErrorIs(t, err, settings.ErrInvalid)
+	require.ErrorIs(t, err, routing.ErrOverrideRefused)
+}
+
+// TestProfilePolicyIsTheResolvedOne: a project's spawns decide by the
+// policy config resolve --project names, version and all, for a [routing]
+// whose facts and overrides are in that version.
+func TestProfilePolicyIsTheResolvedOne(t *testing.T) {
+	t.Parallel()
+	res, err := loadRouting(t, "[routing]\nenabled = true\n[routing.bindings.claude_mid]\nmodel_id = \"claude-sonnet-5-6\"\nefforts = [\"high\", \"max\"]\n[routing.overrides]\nresearcher = \"claude_small\"\n", "", nil, true)
+	require.NoError(t, err)
+	resolved, err := res.Policy()
+	require.NoError(t, err)
+	spawns, err := res.Profile.Policy()
+	require.NoError(t, err)
+	assert.Equal(t, resolved.Version(), spawns.Version())
+	plain, err := routing.New(routing.V1(), routing.Deployment{Enabled: true})
+	require.NoError(t, err)
+	assert.NotEqual(t, plain.Version(), spawns.Version(), "the facts and the override are in the version")
+	assert.True(t, spawns.Enabled())
+}
+
+// TestCheckRoutingProviders: config resolve --project refuses a user
+// override a worker type with its role cannot run, naming the override,
+// the type and both providers, whether or not routing is on; a type whose
+// agent runs the binding's provider, a type with no role, one that only
+// describes and a role with no override pass, and Load alone never refuses.
+func TestCheckRoutingProviders(t *testing.T) {
+	t.Parallel()
+	qa := "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"codex\"] }\n"
+	precheck := "[groups.precheck]\nworkers = 0\nslots = 1\n"
+	override := "[routing.overrides]\npre_check = \"claude_mid\"\n"
+	for name, routingOn := range map[string]string{"routing off": "", "routing on": "[routing]\nenabled = true\n"} {
+		res, err := loadRouting(t, routingOn+precheck+qa+override, "", nil, true)
+		require.NoError(t, err, "%s: Load leaves the check to config resolve", name)
+		err = res.Profile.CheckRoutingProviders()
+		require.ErrorIs(t, err, settings.ErrInvalid, name)
+		require.ErrorIs(t, err, routing.ErrProviderMismatch, name)
+		assert.Equal(t, "routing.overrides.pre_check: invalid config: provider mismatch: claude_mid is a claude binding, and the worker type qa runs codex", err.Error(), name)
+	}
+	res, err := loadRouting(t, precheck+strings.Replace(qa, `["codex"]`, `["/usr/local/bin/codex"]`, 1)+override, "", nil, true)
+	require.NoError(t, err)
+	err = res.Profile.CheckRoutingProviders()
+	require.ErrorIs(t, err, routing.ErrProviderMismatch, "codex by its path runs codex")
+	assert.Contains(t, err.Error(), "and the worker type qa runs codex")
+	res, err = loadRouting(t, "[groups.precheck]\nworkers = 0\nslots = 1\nagent = { command = [\"/usr/local/bin/claude\"] }\n"+override, "", nil, true)
+	require.NoError(t, err)
+	require.NoError(t, res.Profile.CheckRoutingProviders(), "claude by its path runs claude")
+	for name, file := range map[string]string{
+		"a type running the binding's provider": precheck + override,
+		"no override":                           qa,
+		"another role's override":               qa + "[routing.overrides]\nresearcher = \"claude_small\"\n",
+		"a type with no role":                   "[groups.designer]\nworkers = 0\nslots = 1\nagent = { command = [\"codex\"] }\n" + override,
+		"a type that only describes":            "[agent]\ncommand = [\"codex\"]\n[groups.qa]\ndescription = \"verifies a handoff\"\n[groups.coder]\nworkers = 0\nslots = 1\nagent = { command = [\"claude\"] }\n" + override,
+		"the override's own provider":           qa + "[routing.overrides]\npre_check = \"codex_strong\"\n",
+	} {
+		res, err := loadRouting(t, file, "", nil, true)
+		require.NoError(t, err, name)
+		require.NoError(t, res.Profile.CheckRoutingProviders(), name)
+	}
 }

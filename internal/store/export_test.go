@@ -29,5 +29,10 @@ func (r Row) InUTC() Row {
 	if !r.RetiredAt.IsZero() {
 		r.RetiredAt = r.RetiredAt.UTC()
 	}
+	if r.Routing != nil {
+		rt := *r.Routing
+		rt.RoutedAt = rt.RoutedAt.UTC()
+		r.Routing = &rt
+	}
 	return r
 }

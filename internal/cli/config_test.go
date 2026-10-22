@@ -146,6 +146,32 @@ func TestConfigResolveShowsThePolicyVersion(t *testing.T) {
 	assert.Contains(t, out, "routing.enabled = true  # flag\nrouting policy: "+on.Version()+"\n")
 }
 
+// TestConfigResolveRefusesAnOverrideATypeCannotRun: with --project, config
+// resolve refuses a user override a worker type with its role cannot run,
+// whether or not routing is on, before it prints anything; with no project
+// it names no type, so it resolves (A50).
+func TestConfigResolveRefusesAnOverrideATypeCannotRun(t *testing.T) {
+	t.Parallel()
+	dir, _ := configFixture(t)
+	path := filepath.Join(dir, settings.FileName)
+	shared, err := os.ReadFile(path)
+	require.NoError(t, err)
+	mismatch := "\n[projects.app.groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"codex\"] }\n\n[routing.overrides]\npre_check = \"claude_mid\"\n"
+	require.NoError(t, os.WriteFile(path, append(shared, mismatch...), 0o600))
+
+	for _, extra := range [][]string{nil, {"--set", "routing.enabled=true"}, {"--json"}} {
+		args := append([]string{"config", "resolve", "--config-dir", dir, "--project", "app"}, extra...)
+		out, err := runCtx(configCtx(t, nil, nil), args...)
+		require.ErrorIs(t, err, settings.ErrInvalid, "%v", extra)
+		require.ErrorIs(t, err, routing.ErrProviderMismatch, "%v", extra)
+		assert.Contains(t, err.Error(), "routing.overrides.pre_check: invalid config: provider mismatch: claude_mid is a claude binding, and the worker type qa runs codex")
+		assert.NotContains(t, out, "routing policy", "nothing resolved is printed before the refusal")
+		assert.NotContains(t, out, `"values"`, "nothing resolved is printed before the refusal")
+	}
+	_, err = runCtx(configCtx(t, nil, nil), "config", "resolve", "--config-dir", dir)
+	require.NoError(t, err, "with no project there is no type to run it")
+}
+
 // TestConfigResolveSetKeepsCommas: --set is a string array, so a TOML list
 // with commas arrives whole rather than split into three flags.
 func TestConfigResolveSetKeepsCommas(t *testing.T) {

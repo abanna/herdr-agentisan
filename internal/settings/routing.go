@@ -3,6 +3,7 @@ package settings
 import (
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 
 	"github.com/abanna/herdr-agentisan/internal/routing"
@@ -47,7 +48,9 @@ var routingSchema = func() *node {
 
 // checkRouting checks [routing] against the rules, key by key, and refuses
 // a model key while routing decides the model: the boss's --model and the
-// user's overrides name bindings instead.
+// user's overrides name bindings instead. It also refuses a codex command
+// choosing a profile then, since a profile can set the model and effort
+// routing decides; the plugin never edits Codex's config (A43).
 func (m merged) checkRouting() error {
 	d := deploymentOf(m.values)
 	rules := routing.V1()
@@ -70,15 +73,22 @@ func (m merged) checkRouting() error {
 	if !d.Enabled {
 		return nil
 	}
-	paths := []string{"agent.model"}
+	agents := []string{agentKey}
 	v, _ := m.get("groups")
 	groups, _ := v.(map[string]any)
 	for _, name := range slices.Sorted(maps.Keys(groups)) {
-		paths = append(paths, "groups."+name+".agent.model")
+		agents = append(agents, "groups."+name+"."+agentKey)
 	}
-	for _, path := range paths {
-		if _, set := m.get(path); set {
-			return m.invalidf(path, "routing decides the model while %s is true: remove it, and name a binding with worker spawn --model or in [routing.overrides]", routingEnabledPath)
+	for _, agent := range agents {
+		if _, set := m.get(agent + ".model"); set {
+			return m.invalidf(agent+".model", "routing decides the model while %s is true: remove it, and name a binding with worker spawn --model or in [routing.overrides]", routingEnabledPath)
+		}
+	}
+	for _, agent := range agents {
+		raw, _ := m.get(agent + ".command")
+		argv, _ := raw.([]string)
+		if flag := codexProfileFlag(argv); flag != "" {
+			return m.invalidf(agent+".command", "codex's %s chooses a profile, which can set the model and effort routing decides while %s is true: remove it", flag, routingEnabledPath)
 		}
 	}
 	return nil
@@ -99,12 +109,47 @@ func (r Resolved) Routing() routing.Deployment { return deploymentOf(r.Values) }
 
 // Policy is the policy the resolved [routing] makes of the rules: what a
 // spawn decides by, named by its version.
-func (r Resolved) Policy() (routing.Policy, error) {
-	p, err := routing.New(routing.V1(), r.Routing())
+func (r Resolved) Policy() (routing.Policy, error) { return policyOf(r.Routing()) }
+
+// Policy is the policy the project's [routing] makes of the rules, the one
+// its spawns decide by: the same as Resolved.Policy, so a spawn's decision
+// carries the version config resolve prints.
+func (p Profile) Policy() (routing.Policy, error) { return policyOf(p.Routing) }
+
+func policyOf(d routing.Deployment) (routing.Policy, error) {
+	p, err := routing.New(routing.V1(), d)
 	if err != nil {
 		return routing.Policy{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	return p, nil
+}
+
+// CheckRoutingProviders refuses a user override that a worker type with its
+// role cannot run: a binding under another provider than the type's agent
+// command, which every spawn of the type would be refused for, since routing
+// never changes the provider (A50). config resolve --project runs it whether
+// or not routing is on. Load does not, so one type's override never stops
+// the project's other commands.
+func (p Profile) CheckRoutingProviders() error {
+	rules := routing.V1()
+	for _, typ := range slices.Sorted(maps.Keys(p.Groups)) {
+		if p.Groups[typ].DescribesOnly {
+			continue
+		}
+		role, err := routing.RoleFor(typ)
+		if err != nil {
+			continue
+		}
+		binding, ok := p.Routing.Overrides[role]
+		cmd := p.AgentFor(typ).Command
+		if !ok || len(cmd) == 0 {
+			continue
+		}
+		if provider, runs := rules.Provider(binding), filepath.Base(cmd[0]); provider != runs {
+			return fmt.Errorf("%s.%s: %w: %w: %s is a %s binding, and the worker type %s runs %s", routingOverridesPath, role, ErrInvalid, routing.ErrProviderMismatch, binding, provider, typ, runs)
+		}
+	}
+	return nil
 }
 
 // deploymentOf reads [routing] out of a resolved tree.

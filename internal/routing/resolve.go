@@ -40,8 +40,8 @@ type Task struct {
 	UserModelOverride *string `json:"user_model_override"`
 }
 
-// check checks a packet against the spawn it rides with. Its size is
-// bounded where it is decoded, with the spawn request.
+// check checks a packet against the spawn it rides with; CheckBounds checks
+// its size.
 func (t *Task) check(role, provider string) error {
 	switch t.LookupStatus {
 	case LookupFound, LookupNotFound, LookupUnavailable:
@@ -86,6 +86,16 @@ type Request struct {
 	Model string
 	// Effort is the boss's effort override; "" asks for none.
 	Effort string
+	// Type is the worker type asking, which a refusal names; "" names none.
+	Type string
+}
+
+// worker is how a refusal names the worker type asking.
+func (r Request) worker() string {
+	if r.Type == "" {
+		return "the worker type"
+	}
+	return "the worker type " + r.Type
 }
 
 // Override is an override a decision followed.
@@ -165,7 +175,7 @@ func (p Policy) Resolve(req Request, now time.Time) (Decision, error) {
 		return Decision{}, fmt.Errorf("%w: %q is not a role of the rules", ErrUnknownRole, req.Role)
 	}
 	if req.Provider != Claude && req.Provider != Codex {
-		return Decision{}, fmt.Errorf("%w: the worker type runs %q, which is neither claude nor codex", ErrProviderMismatch, req.Provider)
+		return Decision{}, fmt.Errorf("%w: %s runs %q, which is neither claude nor codex", ErrProviderMismatch, req.worker(), req.Provider)
 	}
 	d := Decision{Role: role.Name, Provider: req.Provider, PolicyVersion: p.version, TaskLookupStatus: LookupNotFound, Timestamp: now.UTC(), Selection: role.Selection, Applied: p.enabled, Unchecked: slices.Clone(Unchecked)}
 	if req.Task != nil {
@@ -227,7 +237,7 @@ func (p Policy) choose(role Role, req Request, d *Decision) (string, error) {
 		return p.defaultFor(role, req.Provider)
 	}
 	if b := p.bindings[name]; b.Provider != req.Provider {
-		return "", fmt.Errorf("%w: %s, which the %s chose for %s, is a %s binding, and the worker type runs %s", ErrProviderMismatch, name, whose(by), role.Name, b.Provider, req.Provider)
+		return "", fmt.Errorf("%w: %s, which the %s chose for %s, is a %s binding, and %s runs %s", ErrProviderMismatch, name, whose(by), role.Name, b.Provider, req.worker(), req.Provider)
 	}
 	d.Override = &Override{Binding: name, By: by}
 	return name, nil
@@ -250,7 +260,9 @@ func (p Policy) named(role Role, model string) (string, error) {
 }
 
 // defaultFor is the role's default for the provider: its default for that
-// provider, or its one default when that runs under the provider.
+// provider, or its one default when that runs under the provider. With
+// neither the role is blocked under the provider (the user, 2026-10-22: no
+// fallback), and the refusal names what the role allows.
 func (p Policy) defaultFor(role Role, provider string) (string, error) {
 	if name, ok := role.Defaults[provider]; ok {
 		return name, nil
@@ -258,7 +270,12 @@ func (p Policy) defaultFor(role Role, provider string) (string, error) {
 	if role.Default != "" && p.bindings[role.Default].Provider == provider {
 		return role.Default, nil
 	}
-	return "", fmt.Errorf("%w: %s has no default for %s, and routing never changes the provider", ErrBlocked, role.Name, provider)
+	under := slices.DeleteFunc(slices.Clone(role.Allowed), func(n string) bool { return p.bindings[n].Provider != provider })
+	allows := fmt.Sprintf("under %s it allows %s, as an override", provider, strings.Join(under, ", "))
+	if len(under) == 0 {
+		allows = fmt.Sprintf("it allows only %s, none under %s", strings.Join(role.Allowed, ", "), provider)
+	}
+	return "", fmt.Errorf("%w: %s has no default for %s, and routing never changes the provider; %s", ErrBlocked, role.Name, provider, allows)
 }
 
 // effortFor is the effort a binding runs at: the boss's, else the role's
