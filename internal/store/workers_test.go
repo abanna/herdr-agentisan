@@ -353,6 +353,45 @@ func TestBindWorkerReusesALostID(t *testing.T) {
 	assert.Equal(t, store.StatusRetired, row.Status)
 }
 
+// TestBindWorkerFailsAStaleHandoff: a handoff left pending on a row retired
+// by a path that did not end it fails when the id is bound again, in the same
+// transaction, so it neither holds the new generation's inbox nor blocks its
+// own handoff, and it never completes. A bind refused because the id is live
+// leaves its handoff pending (#29's QA N2, NERD-5261 B3).
+func TestBindWorkerFailsAStaleHandoff(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	seedWorker(t, s, "w", "w14:p1", 0)
+	done, err := s.BeginHandoff(ctx, "w", "w14:p2", terminal("w14:p2"), t1)
+	require.NoError(t, err)
+	require.NoError(t, s.CompleteHandoff(ctx, done, t1))
+	stale, err := s.BeginHandoff(ctx, "w", "w14:p7", terminal("w14:p7"), t1)
+	require.NoError(t, err)
+	retire(t, s, "w")
+
+	gen, err := s.BindWorker(ctx, store.Worker{LogicalID: "w", Project: "agentisan", Group: "coders", PaneID: "w14:p9", TerminalID: "term_new"}, t1.Add(time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), gen)
+	assert.Equal(t, "failed", handoffState(t, s, stale))
+	assert.Equal(t, "acknowledged", handoffState(t, s, done), "a handoff that completed stays completed")
+	assert.False(t, liveRow(t, s, "w").HandoffPending)
+	// Active, as spawn marks it once its agent is up: a starting inbox waits.
+	require.NoError(t, s.SetWorkerStatus(ctx, store.Worker{LogicalID: "w", Generation: gen}, store.StatusActive, t1.Add(time.Hour)))
+	send(t, s, worker("w"), boss, "for the new session")
+	assert.Equal(t, "for the new session", claim(t, s, worker("w")).Body, "the inbox is the new generation's")
+	_, err = s.BeginHandoff(ctx, "w", "w14:pA", "term_next", t1.Add(2*time.Hour))
+	require.NoError(t, err, "the new generation can hand off")
+	require.ErrorIs(t, s.CompleteHandoff(ctx, stale, t1.Add(2*time.Hour)), store.ErrNoHandoff)
+
+	seedWorker(t, s, "v", "w15:p2", 0)
+	held, err := s.BeginHandoff(ctx, "v", "w15:p7", terminal("w15:p7"), t1)
+	require.NoError(t, err)
+	_, err = s.BindWorker(ctx, store.Worker{LogicalID: "v", PaneID: "w15:p9", TerminalID: "term_other"}, t1.Add(time.Hour))
+	require.ErrorIs(t, err, store.ErrWorkerLive)
+	assert.Equal(t, "pending", handoffState(t, s, held), "a refused bind changes nothing")
+}
+
 // TestSetWorkerStatusEndings: failed and gone retire a row as retired does;
 // a retirement dated before the row's creation (a clock stepped back) is
 // recorded at the creation, which the schema's CHECK requires.

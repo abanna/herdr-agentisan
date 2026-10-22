@@ -86,7 +86,7 @@ func noticeRun(t *testing.T, th *teamHerdr, cfg string, logs *lockedLog) {
 	logger, err := logging.New(logs, "info", "json")
 	require.NoError(t, err)
 	o.Logger = logger
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 }
 
 // waitLine waits for a notice line holding want, and returns how many do.
@@ -206,7 +206,7 @@ func TestNoticesQueueNothing(t *testing.T) {
 	logger, err := logging.New(&logs, "info", "json")
 	require.NoError(t, err)
 	o.Logger = logger
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	waitLine(t, &logs, "the daemon started")
 	polled(t, th.srv, 2)
 	th.setAgents(turned("wN:p1", "pee01", 2))
