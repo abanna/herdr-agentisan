@@ -825,7 +825,7 @@ VALUES ('ha-coder-1', 'w14:p2', 'w14:p9', 0, 'term_w14:p9', 1, 1)`)
 		o := teamOpts(t, dir, th, workforceConfig(t))
 		o.Logger = zerolog.New(&logs)
 		o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 4242: 9}}).startTime
-		run(t, o)
+		serving(t, o, th.fakeHerdr)
 		polled(t, th.srv, 3)
 		assert.Equal(t, 1, strings.Count(logs.String(), unread), "logged once over three polls")
 		assert.Equal(t, workerRow{Pane: "w14:p2", Terminal: "term_w14:p2", Status: "active"}, row(t, dir, th, "ha-coder-1"), "still bound, with no shell")

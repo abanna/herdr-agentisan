@@ -708,7 +708,7 @@ func TestOneProcessInfoAskOnAReKeyPoll(t *testing.T) {
 	th.mu.Unlock()
 	o := teamOpts(t, dir, th, workforceConfig(t))
 	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 4242: 9, 1001: 1, 1002: 2}}).startTime
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 
 	eventually(t, dir, th, "ha-coder-1", workerRow{Pane: "w14:p2", Terminal: "renewed_w14:p2", Status: "active", ShellPID: 4242, ShellStart: 9})
