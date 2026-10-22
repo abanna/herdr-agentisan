@@ -538,19 +538,27 @@ func (th *teamHerdr) replace() {
 // dials the replacement, which the next daemon belongs to, and finds so once
 // connected, before it sends anything: nothing more is asked of the original,
 // nothing is pushed to either server, and the replacement is asked nothing at
-// all, by the poll or by focus, whose every dial checks the same way.
+// all, by the poll or by focus, whose every dial checks the same way. A swap
+// while the panes' models are asked caches no snapshot either.
 func TestTeamPushIgnoresAServerReplacedMidPoll(t *testing.T) {
 	t.Parallel()
 
 	// A tabs team, so the poll lists tabs too.
 	tabsTeam := "[projects.ha]\nrepo = \"/x\"\nshort = \"ha\"\nlayout = \"tabs\"\n"
-	for name, tc := range map[string]struct{ during, config string }{
+	for name, tc := range map[string]struct {
+		during, config string
+		models         bool
+	}{
 		"while the panes are listed":      {during: "pane.list"},
 		"while the workspaces are listed": {during: "workspace.list"},
 		"while the tabs are listed":       {during: "tab.list", config: tabsTeam},
 		"while the agents are listed":     {during: "agent.list"},
 		// Two rows with no shell: the second read dials the replacement.
 		"while a worker's shell is read": {during: "pane.process_info"},
+		// No rows, so only the model asks call it: the second agent pane's
+		// dials the replacement. The swap must finish inside the first ask's
+		// 1 s ModelBudget, not herdr's CallTimeout, or the second is not asked.
+		"while a pane's model is asked": {during: "pane.process_info", models: true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -566,7 +574,15 @@ func TestTeamPushIgnoresAServerReplacedMidPoll(t *testing.T) {
 				}
 			}
 			dir := shortDir(t)
-			if during == "pane.process_info" {
+			switch {
+			case tc.models:
+				th.mu.Lock()
+				th.procs = map[string][]map[string]any{
+					"wN:p1": {agentProc(1001, "claude", "--model", "opus")},
+					"wN:p2": {agentProc(1002, "claude", "--model", "sonnet")},
+				}
+				th.mu.Unlock()
+			case during == "pane.process_info":
 				bindWorker(t, dir, th, "coders-1", "wN:p1")
 				bindWorker(t, dir, th, "coders-2", "wN:p2")
 			}
@@ -591,6 +607,10 @@ func TestTeamPushIgnoresAServerReplacedMidPoll(t *testing.T) {
 			}
 			replacement.Settle(t)
 			assert.Empty(t, replacement.Requests(), "the replacement is never asked anything, above all no push")
+			if tc.models {
+				_, err := daemon.Snapshot(t.Context(), socketPath(t, dir, th.path))
+				require.ErrorIs(t, err, daemon.ErrNotReady, "no snapshot is cached from a poll the swap ended")
+			}
 			assert.True(t, r.alive(), "the poll stops; Run's own check ends the daemon")
 		})
 	}
