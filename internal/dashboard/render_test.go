@@ -1308,19 +1308,20 @@ func TestPlaceKeepsAZeroWidthClusterWithItsCell(t *testing.T) {
 		x    int
 		want string
 	}{
-		"inside a segment, after the cell left of the box":  {[]string{"ab\u200bcd"}, 2, "ab\u200bXY"},
-		"starting the segment at the box's left edge":       {[]string{"ab", "\u200bcd"}, 2, "ab\u200bXY"},
-		"a segment of its own at the box's left edge":       {[]string{"ab", "\u200b", "cd"}, 2, "ab\u200bXY"},
-		"after an empty segment at the box's left edge":     {[]string{"ab", "", "\u200bcd"}, 2, "ab\u200bXY"},
-		"ending the segment at the box's left edge":         {[]string{"ab\u200b", "cd"}, 2, "ab\u200bXY"},
-		"inside a segment, after the box's last cell":       {[]string{"abcd\u0301ef"}, 2, "abXYef"},
-		"starting the segment at the box's right edge":      {[]string{"abcd", "\u0301ef"}, 2, "abXYef"},
-		"a segment of its own at the box's right edge":      {[]string{"abcd", "\u0301", "ef"}, 2, "abXYef"},
-		"ending the segment at the box's right edge":        {[]string{"abcd\u0301", "ef"}, 2, "abXYef"},
-		"after the cell right of the box, starting its own": {[]string{"abcde", "\u0301f"}, 2, "abXYe\u0301f"},
-		"at the line's start, the box there":                {[]string{"\u200b", "ab"}, 0, "XY"},
-		"at the line's start, the box past it":              {[]string{"\u200b", "abcd"}, 1, "\u200baXYd"},
-		"a wide character cut at each edge":                 {[]string{"a漢", "字b"}, 2, "a XY b"},
+		"inside a segment, after the cell left of the box":     {[]string{"ab\u200bcd"}, 2, "ab\u200bXY"},
+		"starting the segment at the box's left edge":          {[]string{"ab", "\u200bcd"}, 2, "ab\u200bXY"},
+		"a segment of its own at the box's left edge":          {[]string{"ab", "\u200b", "cd"}, 2, "ab\u200bXY"},
+		"after an empty segment at the box's left edge":        {[]string{"ab", "", "\u200bcd"}, 2, "ab\u200bXY"},
+		"ending the segment at the box's left edge":            {[]string{"ab\u200b", "cd"}, 2, "ab\u200bXY"},
+		"inside a segment, after the box's last cell":          {[]string{"abcd\u0301ef"}, 2, "abXYef"},
+		"starting the segment at the box's right edge":         {[]string{"abcd", "\u0301ef"}, 2, "abXYef"},
+		"a segment of its own at the box's right edge":         {[]string{"abcd", "\u0301", "ef"}, 2, "abXYef"},
+		"ending the segment at the box's right edge":           {[]string{"abcd\u0301", "ef"}, 2, "abXYef"},
+		"after the cell right of the box, starting its own":    {[]string{"abcde", "\u0301f"}, 2, "abXYe\u0301f"},
+		"at the line's start, the box there":                   {[]string{"\u200b", "ab"}, 0, "XY"},
+		"at the line's start, the box past it":                 {[]string{"\u200b", "abcd"}, 1, "\u200baXYd"},
+		"at the line's start, in its segment, the box past it": {[]string{"\u200babcd"}, 1, "\u200baXYd"},
+		"a wide character cut at each edge":                    {[]string{"a漢", "字b"}, 2, "a XY b"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
