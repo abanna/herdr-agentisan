@@ -16,6 +16,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
 	"github.com/abanna/herdr-agentisan/internal/telemetry"
+	"github.com/abanna/herdr-agentisan/internal/testslots"
 )
 
 // TeamOptions turn on the team poll (D3, D4, D5): on start and every poll
@@ -37,8 +38,10 @@ type TeamOptions struct {
 	// the same file gives a github repo.
 	GitHub GitHubOptions
 	// procLocks and proc, when set, stand in for /proc/locks and /proc in
-	// counting the test slots (tests).
+	// counting the test slots, and readLocks for the reading of them
+	// (tests).
 	procLocks, proc string
+	readLocks       func(procLocks, proc string) (*testslots.Reading, error)
 }
 
 // teamConfig is what the poll reads of the configuration: the project the ◆
