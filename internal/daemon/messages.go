@@ -104,12 +104,14 @@ func (in *inbox) polled(m *team.Model) {
 }
 
 // queued is what send does with each message it queues (A30): it wakes the
-// dispatcher through in, and records the message's queued event. o runs
-// the team poll, since only then is there a send op.
+// dispatcher through in, and records the message's queued event, at the
+// time the message was queued: the commit comes first, so a pass may
+// deliver it before the event is emitted, and the trail sorts by time. o
+// runs the team poll, since only then is there a send op.
 func (o Options) queued(in *inbox) func(context.Context, workforce.SendResult) {
 	return func(ctx context.Context, r workforce.SendResult) {
 		in.Wake()
-		o.Team.Events.MessageQueued(ctx, telemetry.Message{ID: r.ID, FromKind: r.From.Kind, From: r.From.ID, ToKind: r.To.Kind, To: r.To.ID})
+		o.Team.Events.MessageQueued(ctx, telemetry.Message{ID: r.ID, FromKind: r.From.Kind, From: r.From.ID, ToKind: r.To.Kind, To: r.To.ID, At: r.Queued})
 	}
 }
 
@@ -499,12 +501,12 @@ func cleanText(text string) string {
 	}, strings.ReplaceAll(text, "\r\n", "\n"))
 }
 
-// messageEvent is m as a message event carries it, with reason. Never its
-// body.
+// messageEvent is m as a message event carries it, with reason as the row
+// keeps it. Never its body.
 func messageEvent(m store.Message, reason string) telemetry.Message {
 	return telemetry.Message{
 		ID: m.ID, FromKind: m.From.Kind, From: m.From.ID, ToKind: m.To.Kind, To: m.To.ID,
-		ReturnedFrom: m.ReturnedFrom, Attempts: m.Attempts, Reason: reason,
+		ReturnedFrom: m.ReturnedFrom, Attempts: m.Attempts, Reason: store.CleanReason(reason),
 	}
 }
 

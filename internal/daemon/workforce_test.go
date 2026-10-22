@@ -284,13 +284,16 @@ func TestDaemonStopEndsAHandoffWait(t *testing.T) {
 			case <-time.After(ready):
 				t.Fatal("the daemon's stop waited for the handoff")
 			}
+			// Either stop answers handoff_timeout, and the answer always
+			// lands: the wait polls an unreachable herdr again until the op's
+			// context ends, and the server's close waits for every handler,
+			// which writes its answer before it closes. An early stop answers
+			// a read's herdr_failed or store_failed instead.
 			select {
 			case err := <-done:
-				if re, ok := errors.AsType[*daemon.RequestError](err); ok {
-					assert.Equal(t, "handoff_timeout", re.Code)
-				} else {
-					require.ErrorIs(t, err, daemon.ErrUnavailable)
-				}
+				re, ok := errors.AsType[*daemon.RequestError](err)
+				require.True(t, ok, "the client got no answer: %v", err)
+				assert.Equal(t, "handoff_timeout", re.Code)
 			case <-time.After(ready):
 				t.Fatal("the client never heard back")
 			}
@@ -312,7 +315,10 @@ type frozenPoll struct {
 // returns once it is held. A push follows the poll's reconcile, which opens
 // the workforce ops, so they are open by then. Each held push holds the poll
 // until its call's timeout, and a poll pushes to every team and agent pane,
-// so it stays held for many seconds even unreleased.
+// so it stays held for many seconds even unreleased. When the hook lands on
+// a poll's last push, the poll goes on after one CallTimeout (5 s), and its
+// own pane.list and agent.list are recorded from then: a test whose other
+// caller takes longer than that to ask can read the poll's calls as its own.
 func freezePoll(t *testing.T, th *teamHerdr) *frozenPoll {
 	t.Helper()
 	held := make(chan struct{})
@@ -530,7 +536,7 @@ func TestWorkforceCodes(t *testing.T) {
 	}
 }
 
-// TestOpBudgets: team status, retire and send get 10 s, spawn 110 s, and retire
+// TestOpBudgets: team status, retire and send get 10 s, spawn 100 s, and retire
 // --after-handoff 1,500 s, both in the client's wait and in the budget the
 // daemon's op map enforces; any other op none of its own.
 func TestOpBudgets(t *testing.T) {
@@ -541,7 +547,7 @@ func TestOpBudgets(t *testing.T) {
 		want time.Duration
 	}{
 		{daemon.OpTeamStatus, ``, 10 * time.Second},
-		{daemon.OpWorkerSpawn, `{"group":"coder","count":1}`, 110 * time.Second},
+		{daemon.OpWorkerSpawn, `{"group":"coder","count":1}`, 100 * time.Second},
 		{daemon.OpWorkerRetire, `{"target":"x"}`, 10 * time.Second},
 		{daemon.OpWorkerRetire, `{"target":"x","after_handoff":true}`, 1500 * time.Second},
 		{daemon.OpWorkerRetire, `not json`, 10 * time.Second},
@@ -556,4 +562,23 @@ func TestOpBudgets(t *testing.T) {
 	for _, op := range daemon.WorkforceOpNames() {
 		assert.Positive(t, daemon.ServedBudget(op, nil), "%s has a budget in the table, not a nil one", op)
 	}
+}
+
+// TestAWorkforceCommandFitsTheWrapper: the longest a workforce command
+// waits, the not_ready window, its op's budget and an exchange (A52), is at
+// most 115 s, 5 s inside the skill wrapper's 120, for every op the daemon
+// serves, so an op added to the table is held to it too. A retire after a
+// handoff has the wrapper's 1,800 s instead, and the same 5 s to spare.
+func TestAWorkforceCommandFitsTheWrapper(t *testing.T) {
+	t.Parallel()
+	longest := func(op, args string) time.Duration {
+		return daemon.NotReadyWindow + daemon.OpBudget(op, json.RawMessage(args)) + daemon.IOTimeout
+	}
+	assert.Equal(t, 10*time.Second, daemon.NotReadyWindow)
+	assert.Equal(t, 5*time.Second, daemon.IOTimeout)
+	for _, op := range daemon.WorkforceOpNames() {
+		assert.LessOrEqual(t, longest(op, ""), 115*time.Second, "%s's window, budget and exchange", op)
+	}
+	assert.Equal(t, 115*time.Second, longest(daemon.OpWorkerSpawn, `{"group":"coder","count":1}`), "a spawn takes all of it")
+	assert.LessOrEqual(t, longest(daemon.OpWorkerRetire, `{"target":"x","after_handoff":true}`), 1795*time.Second, "a retire after a handoff")
 }

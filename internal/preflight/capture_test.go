@@ -1,6 +1,7 @@
 package preflight_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,6 +45,50 @@ func TestCaptureKeepsTheFirstBytes(t *testing.T) {
 			want := all[:min(len(all), capacity)]
 			require.Len(t, c.String(), len(want))
 			assert.Equal(t, string(want), c.String())
+		})
+	}
+}
+
+// TestCaptureSkipsLeadingBlanks: the blanks tdaddy prints before anything
+// else are not kept and never count toward MaxOutput, so a reason after any
+// number of them is kept. Blanks after the first byte kept are kept, and
+// everything kept still counts (NERD-5343, Draft 20).
+func TestCaptureSkipsLeadingBlanks(t *testing.T) {
+	t.Parallel()
+	const capacity = preflight.MaxOutput
+	blanks := func(n int) string {
+		b := make([]byte, n)
+		for i := range b {
+			b[i] = " \n\t\r\v\f"[i%6]
+		}
+		return string(b)
+	}
+	text := func(n int) string { return strings.Repeat("x", n) }
+	for name, tc := range map[string]struct {
+		writes []string
+		want   string
+	}{
+		"blanks a byte at a time, then text": {writes: append(strings.Split(blanks(capacity+10), ""), "the reason\n"), want: "the reason\n"},
+		"blanks and text in one write":       {writes: []string{blanks(capacity) + "the reason\n"}, want: "the reason\n"},
+		"blanks past the cap, then more text than it holds": {
+			writes: []string{blanks(2 * capacity), text(capacity + 1)}, want: text(capacity),
+		},
+		"blanks after the text are kept": {writes: []string{"\n\n", "a\n", "\n  \n", "b"}, want: "a\n\n  \nb"},
+		"a text write that starts with blanks keeps them": {
+			writes: []string{"a", "  \n b"}, want: "a  \n b",
+		},
+		"nothing but blanks":         {writes: []string{blanks(3 * capacity)}, want: ""},
+		"a Unicode space is not one": {writes: []string{"\u00a0reason"}, want: "\u00a0reason"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			c := preflight.NewCapture()
+			for i, w := range tc.writes {
+				took, err := c.Write([]byte(w))
+				require.NoError(t, err)
+				assert.Equal(t, len(w), took, "write %d takes all of p", i)
+			}
+			assert.Equal(t, tc.want, c.String())
 		})
 	}
 }

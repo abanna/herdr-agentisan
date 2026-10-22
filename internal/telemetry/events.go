@@ -206,6 +206,9 @@ type Message struct {
 	ReturnedFrom   string
 	Attempts       int
 	Reason         string
+	// At is when it happened, the record's time; zero is when it is
+	// emitted.
+	At time.Time
 }
 
 // MessageQueued emits m as an EventMessageQueued record.
@@ -232,9 +235,13 @@ func (e *Events) message(ctx context.Context, name, what string, m Message) {
 	if e == nil {
 		return
 	}
+	at := m.At
+	if at.IsZero() {
+		at = time.Now()
+	}
 	var r log.Record
 	r.SetEventName(name)
-	r.SetTimestamp(time.Now())
+	r.SetTimestamp(at)
 	r.SetSeverity(log.SeverityInfo)
 	r.SetSeverityText("INFO")
 	r.SetBody(attribute.StringValue(m.ID + " " + what + " " + m.To))

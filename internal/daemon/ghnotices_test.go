@@ -93,10 +93,11 @@ func newGHNotices(t *testing.T, notices string) *ghNotices {
 	return &ghNotices{th: newTeamHerdr(t), f: ghtest.New(t), ticks: make(chan time.Time), rounds: make(chan struct{}), dir: shortDir(t), cfg: cfg, logs: &lockedLog{}}
 }
 
-// start runs the next daemon and waits for its first collection: the PR
-// list, the count and lookups more calls. Each daemon is a new process,
-// started later than the last (restarted says why a daemon with its
-// predecessor's start may stop at once, NERD-5335).
+// start runs the next daemon, waits until it serves, then waits for its
+// first collection: the PR list, the count and lookups more calls. A slow
+// start is then never charged to the collection's wait (NERD-5354 F3). Each
+// daemon is a new process, started later than the last (restarted says why
+// a daemon with its predecessor's start may stop at once, NERD-5335).
 func (g *ghNotices) start(t *testing.T, lookups int) *running {
 	t.Helper()
 	o := ghOpts(t, g.dir, g.th, g.cfg, g.f, g.ticks)
@@ -106,7 +107,7 @@ func (g *ghNotices) start(t *testing.T, lookups int) *running {
 	o.Logger = logger
 	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77 + g.daemons}}).startTime
 	g.daemons++
-	g.r = run(t, o)
+	g.r = serving(t, o, g.th.fakeHerdr)
 	g.collected(t, lookups)
 	return g.r
 }
@@ -333,4 +334,73 @@ func TestGitHubLookupsAreCapped(t *testing.T) {
 	require.Len(t, src.Take(), 1)
 	src.Collected(t.Context(), gh, h, github.Open{PRs: []github.OpenPR{}})
 	assert.Len(t, f.Calls(t), 12, "the merge waiting at the poll is not looked up again")
+}
+
+// TestGitHubNoticesAckBetweenTheReads: an acknowledgement that lands after a
+// collection read what is held and before it read state.db is in one or the
+// other, so its event is not handed again; past the hold it was recorded,
+// and is still not.
+func TestGitHubNoticesAckBetweenTheReads(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	src := daemon.NewGitHubSource(daemon.Options{Logger: zerolog.Nop(), Now: func() time.Time { return now }, Team: &daemon.TeamOptions{}}, st)
+	h := settings.Header{Project: "app", GitHub: "acme/app"}
+	collect := func(ci snapshot.CIState) []notice.Notice {
+		pr := github.OpenPR{PR: snapshot.PR{Number: 5, CI: ci, Codex: snapshot.CodexPending, Merge: snapshot.MergeClean}, Head: headA, Checks: 1, Failed: 1}
+		src.Collected(t.Context(), github.Runner{}, h, github.Open{PRs: []github.OpenPR{pr}})
+		return src.Take()
+	}
+	require.Empty(t, collect(snapshot.CIPending), "the seed")
+	first := collect(snapshot.CIFailure)
+	require.Len(t, first, 1)
+
+	acked := false
+	src.BetweenReads(func() {
+		if !acked {
+			acked = true
+			first[0].Ack()
+		}
+	})
+	assert.Empty(t, collect(snapshot.CIFailure), "acknowledged between the reads: held, then recorded")
+	require.True(t, acked, "the acknowledgement landed between the reads")
+	now = now.Add(notice.DefaultGap + daemon.GitHubInterval)
+	assert.Empty(t, collect(snapshot.CIFailure), "past the hold: recorded, so never handed again")
+}
+
+// TestGitHubFailedLookupLoggedOnce: a lookup that fails the same way each
+// interval is logged once; a new failure is logged, and so is the same
+// failure again after a lookup that answered.
+func TestGitHubFailedLookupLoggedOnce(t *testing.T) {
+	t.Parallel()
+	st, err := store.Open(t.Context(), filepath.Join(t.TempDir(), "state.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	logs := &lockedLog{}
+	src := daemon.NewGitHubSource(daemon.Options{Logger: zerolog.New(logs), Now: time.Now, Team: &daemon.TeamOptions{}}, st)
+	f := ghtest.New(t)
+	gh := github.Runner{Bin: f.Bin, Env: f.Env()}
+	h := settings.Header{Project: "app", GitHub: "acme/app"}
+	pr := github.OpenPR{PR: snapshot.PR{Number: 50, CI: snapshot.CIPending, Codex: snapshot.CodexPending, Merge: snapshot.MergeClean}}
+	src.Collected(t.Context(), gh, h, github.Open{PRs: []github.OpenPR{pr}})
+	left := func() { src.Collected(t.Context(), gh, h, github.Open{PRs: []github.OpenPR{}}) }
+	warned := func() int { return strings.Count(logs.String(), "a PR that left the open list was not looked up") }
+
+	left() // 50 has no answer: the lookup fails
+	left()
+	assert.Equal(t, 1, warned(), "the same failure twice: logged once")
+	f.Fail(t, "HTTP 502: Bad Gateway")
+	left()
+	assert.Equal(t, 2, warned(), "a new failure: logged")
+	f.Mode(t, "")
+	f.View(t, 50, `{"mergeCommit":null,"state":"OPEN"}`)
+	left()
+	assert.Equal(t, 2, warned(), "a lookup that answered: nothing logged")
+	f.Mode(t, ghtest.ModeFail)
+	left()
+	assert.Equal(t, 3, warned(), "the same failure after an answer: logged again")
+	assert.Equal(t, strings.Fields("view view view view view"), f.Calls(t), "50 looked up at each collection")
+	assert.Empty(t, src.Take(), "nothing to tell")
 }

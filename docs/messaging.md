@@ -32,7 +32,16 @@ refusal exits 1:
 | `unknown_recipient` | No live worker has the id and no team's boss has the name, or `boss` came from a pane in no team |
 | `unknown_sender` | The command runs in no herdr pane it can confirm, and `HERDR_AGENTISAN_WORKER` names no live worker |
 | `too_large` | The body is over 8 KiB |
-| `bad_request` | No body, an empty one, or one with a NUL. Quote a body with spaces, put one starting with `-` after `--`, or pass `-` |
+| `bad_request` | No body, an empty one, one with a NUL, or one that is not UTF-8. Quote a body with spaces, put one starting with `-` after `--`, or pass `-` |
+| `config_invalid`, `bypasses_agentisan` | The daemon could not read the shared config, or it starts an agent that skips the Agentisan bundle. Nothing was queued: fix the config, then send again |
+| `herdr_failed` | A herdr call failed, finding the sender or reading the layout. Nothing was queued: send again |
+| `herdr_gone` | The daemon's herdr server is gone or was replaced. Nothing was queued: run the daemon-restart action, then send again |
+| `store_failed` | The daemon could not read or write `state.db`. Nothing was queued: send again, and tell the boss if it goes on |
+| `timeout` | The op ran past its 10 s budget while a call failed. Nothing was queued: send again |
+| `unknown_op` | The daemon is a build without `send`. Nothing was queued: run the daemon-restart action, or fall back to `herdr agent prompt`, which is not durable |
+| `unsupported_version` | The daemon is another build of the plugin. Nothing was queued: run the daemon-restart action, then send again |
+| `daemon_no_answer` | The daemon took the request and gave no answer: it was killed, or ran past the command's wait (A52). The message may be queued, and a queued message is delivered once the daemon runs again, so don't resend it with `herdr agent prompt`. If the daemon isn't running, run the daemon-restart action: a message still queued is delivered then, and one the daemon was typing when it stopped is failed at the next start, and its sender told |
+| `failed` | An answer no other code names, or one the command could not read. The message may be queued, as for `daemon_no_answer` |
 | `not_ready` | The daemon has just started; the command asks again for up to 10 s |
 | `daemon_unavailable` | No daemon answers under `--state-dir`, `HERDR_PLUGIN_STATE_DIR`, or else herdr's state directory for the plugin, from `XDG_STATE_HOME` or `HOME` (A51). Fall back to `herdr agent prompt`, which is not durable |
 
@@ -47,6 +56,10 @@ confirms it, and the daemon reads who that pane is from herdr and
 
 `HERDR_AGENTISAN_WORKER` counts only when the command's own pane can't be
 confirmed, and only for a worker with a live row.
+
+Any pane in the boss's place sends as the boss: a shell split in the
+`<short>-boss` tab, or a second tab of that name. The boss can also
+`send boss` to itself.
 
 There is no authentication, as with `herdr agent prompt`. The daemon takes
 the pane the command names, so any process of yours that reaches the

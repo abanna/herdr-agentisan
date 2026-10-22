@@ -48,8 +48,8 @@ func notReadyDaemon(t *testing.T, e daemonEnv, n int32) *atomic.Int32 {
 // TestTeamStatusWaitsOutNotReady: `team status` from a plain shell, with no
 // HERDR_PANE_ID, against a daemon still before its first reconcile (A35).
 // It asks again until the daemon answers. A daemon that never does gets one
-// not_ready refusal, within the op's budget and an exchange, and no ask
-// after it (QA #48, N2b).
+// not_ready refusal once the window ends, never before it and not on the
+// op's budget, and no ask after it (QA #48, N2b; A52).
 func TestTeamStatusWaitsOutNotReady(t *testing.T) {
 	t.Parallel()
 	t.Run("ready after 5 asks", func(t *testing.T) {
@@ -91,7 +91,8 @@ func TestTeamStatusWaitsOutNotReady(t *testing.T) {
 		assert.Equal(t, false, v["ok"])
 		require.IsType(t, map[string]any{}, v["error"])
 		assert.Equal(t, "not_ready", v["error"].(map[string]any)["code"])
-		assert.Less(t, r.took, wait+6*time.Second, "never past the budget and an exchange")
+		assert.GreaterOrEqual(t, r.took, daemon.NotReadyWindow, "asked for the whole window")
+		assert.Less(t, r.took, daemon.NotReadyWindow+5*time.Second, "refused at the window's end, not past it by an exchange")
 		n := asks.Load()
 		time.Sleep(300 * time.Millisecond)
 		assert.Equal(t, n, asks.Load(), "no ask after it gave up")
