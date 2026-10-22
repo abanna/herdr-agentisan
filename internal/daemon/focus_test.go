@@ -96,7 +96,7 @@ func TestRunRecordsFocusEvents(t *testing.T) {
 	h := newHerdr(t, 22)
 	h.focus("w1:p0")
 	dir := shortDir(t)
-	run(t, opts(t, dir, h))
+	serving(t, opts(t, dir, h), h)
 
 	s := h.nextStream(t)
 	focusIs(t, dir, h, "w1:p0")
@@ -138,7 +138,7 @@ func TestRunResyncsWhenTheSubscriptionEnds(t *testing.T) {
 			h := newHerdr(t, 22)
 			h.focus("w1:p0")
 			dir := shortDir(t)
-			r := run(t, opts(t, dir, h))
+			r := serving(t, opts(t, dir, h), h)
 
 			first := h.nextStream(t)
 			focusIs(t, dir, h, "w1:p0")
@@ -167,7 +167,7 @@ func TestRunFollowsFocusWhenTheSnapshotFails(t *testing.T) {
 	h.listErr = true
 	h.mu.Unlock()
 	dir := shortDir(t)
-	run(t, opts(t, dir, h))
+	serving(t, opts(t, dir, h), h)
 
 	s := h.nextStream(t)
 	s.lines <- herdrtest.PaneFocused("w1:p1", "w1")
@@ -186,7 +186,7 @@ func TestFocusFollowsOnlyItsOwnServer(t *testing.T) {
 		dir := shortDir(t)
 		o := opts(t, dir, h)
 		o.Poll = time.Hour // the poll never runs: only the collector can react
-		r := run(t, o)
+		r := serving(t, o, h)
 		h.nextStream(t)
 
 		h.restart()
@@ -198,7 +198,7 @@ func TestFocusFollowsOnlyItsOwnServer(t *testing.T) {
 		t.Parallel()
 		h := newHerdr(t, 22)
 		dir := shortDir(t)
-		r := run(t, opts(t, dir, h))
+		r := serving(t, opts(t, dir, h), h)
 		h.nextStream(t)
 
 		h.restart()
@@ -236,7 +236,7 @@ func TestFocusIgnoresAServerReplacedWhileSubscribing(t *testing.T) {
 	dir := shortDir(t)
 	o := opts(t, dir, h)
 	o.Poll = time.Hour // the poll never runs: only the collector can react
-	r := run(t, o)
+	r := serving(t, o, h)
 
 	select {
 	case <-swap:
@@ -292,7 +292,7 @@ func TestFocusIgnoresAPaneListAnsweredAcrossASwap(t *testing.T) {
 			dir := shortDir(t)
 			o := opts(t, dir, h)
 			o.Poll = time.Hour // the poll never runs: only the collector can react
-			r := run(t, o)
+			r := serving(t, o, h)
 
 			s := h.nextStream(t)
 			if tc.swapAt == 2 {
@@ -364,6 +364,9 @@ func TestFocusNeverDialsAReplacement(t *testing.T) {
 	replacement.h = replacement.serve(22)
 	replacement.srv = herdrtest.StartAt(t, replacement.path, replacement.h)
 	close(swapped)
+	// The swap held its start's ping; the rest of its start comes first, then
+	// the collector's stop, each within ready (QA #77, F-5).
+	r.healthy(t, dir, h)
 
 	// Only the stop for a replaced server (ErrHerdrGone) logs this: a refusal
 	// that lost its sentinel would stop the collector at its next identity
@@ -669,7 +672,7 @@ func TestRunClosesTheStoreOnEveryExit(t *testing.T) {
 			h := newHerdr(t, 22)
 			h.focus("w1:p0")
 			dir := shortDir(t)
-			r := run(t, opts(t, dir, h))
+			r := serving(t, opts(t, dir, h), h)
 			h.nextStream(t)
 			focusIs(t, dir, h, "w1:p0")
 			db := paths(t, dir, h).DB
@@ -708,9 +711,9 @@ func TestRunReturnsTheStoreCloseError(t *testing.T) {
 			h := newHerdr(t, 22)
 			h.focus("w1:p0")
 			dir := shortDir(t)
-			r := run(t, daemon.WithStoreClose(opts(t, dir, h), func(st *store.Store) error {
+			r := serving(t, daemon.WithStoreClose(opts(t, dir, h), func(st *store.Store) error {
 				return errors.Join(st.Close(), broken)
-			}))
+			}), h)
 			h.nextStream(t)
 			focusIs(t, dir, h, "w1:p0") // the store is open
 
@@ -735,7 +738,7 @@ func TestRunRetriesARefusedSubscription(t *testing.T) {
 	h.mu.Unlock()
 	h.focus("w1:p0")
 	dir := shortDir(t)
-	r := run(t, opts(t, dir, h))
+	r := serving(t, opts(t, dir, h), h)
 
 	s := h.nextStream(t)
 	focusIs(t, dir, h, "w1:p0")

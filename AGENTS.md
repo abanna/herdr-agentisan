@@ -26,7 +26,7 @@ everything.
 
 | Task | Command |
 |------|---------|
-| Lint | `go tool golangci-lint run ./...` |
+| Lint | `go tool golangci-lint run --allow-serial-runners ./...` |
 | Format check | `go tool golangci-lint fmt --diff ./...` |
 | Vet | `go vet ./...` |
 | Run tests with a coverage profile | `go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage.out -covermode=atomic ./...` |
@@ -103,6 +103,9 @@ exempts whatever is later added under that name.
 - `internal/plugin/` — the plugin's domain: the runtime environment herdr
   injects (`EnvFrom`), the manifest (`LoadManifest`, with its actions and
   panes) and the actions' logic, such as Back's toast when it went nowhere.
+  Also the state directory a command finds the daemon under: herdr's own
+  for the plugin, worked out as herdr 0.9.5 does, when herdr set none, as
+  in a pane shell (`StateDir`, ADR-001 A51).
 - `internal/report/` — an agent pushing its own state to its pane as herdr
   tokens (ADR-001 D4), and the token contract for the keys it writes.
   `report statusline` turns Claude's statusline JSON into `ctx`,
@@ -133,9 +136,10 @@ exempts whatever is later added under that name.
   herdr's panes (`bind.go`, A35), rebuilds the team model, pushes `$team`
   and every agent pane's ctx display (`team.go`, A28) and caches every team's
   snapshot, each row with its agent's launch model from the pane's processes
-  (`models.go`, A39) and the boss with its agent process's start, its
-  runtime (A47), with the workspaces each holds, which the `snapshot` op
-  serves by project or workspace, so the op never calls herdr (A18, A24,
+  (`models.go`, A39; one `pane.process_info` reply per pane per poll, shared
+  with the reconcile, `processinfo.go`) and the boss with its agent process's
+  start, its runtime (A47), with the workspaces each holds, which the `snapshot`
+  op serves by project or workspace, so the op never calls herdr (A18, A24,
   `snapshot.go`, with `SnapshotSource`, the dashboard's client), each group
   with its description, re-read when the shared file changes
   (`descriptions.go`, A36), and sends each status change since the last
@@ -175,10 +179,11 @@ exempts whatever is later added under that name.
   that delivers it. The daemon's sink writes daemon.log until the inbox
   delivers (NERD-5256). Pure: tests build models by hand.
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
-  `team status` and `worker retire` so far, and `send`'s sender and
-  recipient (A30): each group's counts and members
-  on a tabs team or the ◆ spaces, with idle times from the daemon's clock and
-  the rows no pane is bound to (A35), and closing the pane a worker's row is
+  `team status`, `worker spawn` and `worker retire` so far, and `send`'s
+  sender and recipient (A30): each group's counts and members on a tabs team
+  or the ◆ spaces, with idle times from the daemon's clock and the rows no
+  pane is bound to (A35); opening a tab per worker and waiting for its agent,
+  after `internal/preflight`'s check; and closing the pane a worker's row is
   bound to, after its handoff when asked, with the row retired. The daemon
   runs them; `internal/cli` only asks it.
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.

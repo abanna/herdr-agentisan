@@ -59,6 +59,10 @@ type Spawn struct {
 	// matches; "" starts the agent as soon as herdr sees a shell at the
 	// pane's foreground, which an interactive question the shell itself
 	// asks at startup (a framework's update prompt, say) does not change.
+	// herdr trims each line's trailing white space, so a pattern that needs
+	// it (`\$ $`) never matches, and the first line from the top that
+	// matches ends the wait, so a prompt drawn before a startup question (an
+	// instant prompt) ends it at once.
 	// herdr matches it with Rust's regex syntax. The check here compiles it
 	// with Go's regexp, a first check only: a construct Rust lacks (a
 	// literal {, \Q…\E, a nested [) passes here and fails the spawn.

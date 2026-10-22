@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
+	"os"
 	"slices"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -24,6 +26,30 @@ var Backoff = backoff
 
 // MaxSnapshot is the largest encoded snapshot the op serves.
 const MaxSnapshot = maxSnapshot
+
+// Held is the probe Start and Stop make of the lock at path.
+var Held = held
+
+// HeldKeepingACopy is Held, with a copy of the probe's open file kept past
+// the probe, as a child forked while the probe had the lock keeps one until
+// it execs. The copy is a dup, which shares the open file as a fork's does;
+// letGo closes it. A probe that finds the lock held makes no copy.
+func HeldKeepingACopy(path string) (isHeld bool, letGo func() error, err error) {
+	fd, dupErr := -1, error(nil)
+	isHeld, err = heldKeeping(path, func(f *os.File) {
+		fd, dupErr = syscall.Dup(int(f.Fd()))
+	})
+	letGo = func() error {
+		if fd < 0 {
+			return nil
+		}
+		return syscall.Close(fd)
+	}
+	if err == nil && dupErr != nil {
+		err = dupErr
+	}
+	return isHeld, letGo, err
+}
 
 // HealthOver is the health answer Run serves, base plus what it reads from
 // st under ctx.
@@ -246,6 +272,15 @@ func NewLaunchModels() LaunchModels { return LaunchModels{m: newLaunchModels()} 
 func (l LaunchModels) Refresh(ctx context.Context, c herdr.Client, panes []herdr.PaneInfo, startTime func(int) (uint64, error), now time.Time, log zerolog.Logger) (map[string]string, error) {
 	return l.m.refresh(ctx, c, paneProcesses{}, panes, startTime, now, log)
 }
+
+// RefreshHeld is Refresh with the replies pp already holds from earlier in
+// the poll, as the reconcile leaves them.
+func (l LaunchModels) RefreshHeld(ctx context.Context, c herdr.Client, pp PaneProcesses, panes []herdr.PaneInfo, startTime func(int) (uint64, error), now time.Time, log zerolog.Logger) (map[string]string, error) {
+	return l.m.refresh(ctx, c, pp.pp, panes, startTime, now, log)
+}
+
+// SetClock measures the budget by clock instead of time.Now.
+func (l LaunchModels) SetClock(clock func() time.Time) { l.m.clock = clock }
 
 // Started is when each pane's agent process started, on the wall clock
 // through wall, as the last Refresh left the entries (A47).

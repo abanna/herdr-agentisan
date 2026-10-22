@@ -296,6 +296,43 @@ func TestCallHonoursTheContext(t *testing.T) {
 	assert.Less(t, time.Since(start), 3*time.Second, "the call must stop at the deadline")
 }
 
+// edgeCtx has a deadline but never reports itself done: the window between a
+// deadline passing and its timer firing, held open.
+type edgeCtx struct {
+	context.Context
+	d time.Time
+}
+
+func (c edgeCtx) Deadline() (time.Time, bool) { return c.d, true }
+
+// TestADeadlineIsTheContextsBeforeItsTimer: a call its context's deadline
+// ends reports that deadline, not herdr unavailable, even before the
+// context's timer marks it done (QA #78, F1). A dial it ends sent nothing.
+func TestADeadlineIsTheContextsBeforeItsTimer(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		in      time.Duration
+		notSent bool
+	}{
+		"the read": {in: 300 * time.Millisecond},
+		"the dial": {in: -time.Millisecond, notSent: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
+				time.Sleep(2 * time.Second) // herdr holding a wait_for_output
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "timeout", Message: "timeout"}}
+			})
+			ctx := edgeCtx{Context: t.Context(), d: time.Now().Add(tc.in)}
+
+			_, err := herdr.Client{SocketPath: srv.Path}.WaitForOutput(ctx, "w1:p1", "x", time.Second)
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.NotErrorIs(t, err, herdr.ErrUnavailable)
+			assert.Equal(t, tc.notSent, errors.Is(err, herdr.ErrNotSent), "%v", err)
+		})
+	}
+}
+
 func TestAPIErrorMessageNamesTheMethodAndCode(t *testing.T) {
 	t.Parallel()
 

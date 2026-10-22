@@ -189,11 +189,19 @@ ON CONFLICT (logical_id) DO UPDATE SET
 WHERE workers.retired_at IS NOT NULL OR workers.status = 'lost'
 RETURNING generation`
 
+// failStaleHandoffs fails every handoff still pending for a logical id that
+// is being bound again: it belonged to an earlier generation, so it must not
+// hold the new one's inbox or block its own handoff.
+const failStaleHandoffs = `UPDATE handoffs SET state = 'failed', updated_at = max(?2, created_at)
+WHERE logical_id = ?1 AND state = 'pending'`
+
 // BindWorker binds w's logical id to its pane and terminal as a starting
 // worker and returns the row's generation: 0 for an id never seen, one more
 // than before for one reused after its retirement or once lost (I1, A35).
-// w.Generation is ignored. ErrWorkerLive means the id is bound, not retired
-// and not lost.
+// A handoff an earlier generation left pending fails in the same
+// transaction, whatever path left it (#29's QA N2). w.Generation is ignored.
+// ErrWorkerLive means the id is bound, not retired and not lost, and then
+// nothing changes.
 func (s *Store) BindWorker(ctx context.Context, w Worker, at time.Time) (int64, error) {
 	if err := errors.Join(checkID(KindWorker, w.LogicalID), checkID(KindPane, w.PaneID), checkTerminal(w.TerminalID)); err != nil {
 		return 0, err
@@ -202,12 +210,23 @@ func (s *Store) BindWorker(ctx context.Context, w Worker, at time.Time) (int64, 
 	if err != nil {
 		return 0, err
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("%w: bind worker %s: %w", ErrStore, w.LogicalID, err)
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op once committed
 	var gen int64
-	err = s.db.QueryRowContext(ctx, bindWorker, w.LogicalID, w.Project, w.Group, w.PaneID, w.TerminalID, ns).Scan(&gen)
+	err = tx.QueryRowContext(ctx, bindWorker, w.LogicalID, w.Project, w.Group, w.PaneID, w.TerminalID, ns).Scan(&gen)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("%w: %s", ErrWorkerLive, w.LogicalID)
 	}
 	if err != nil {
+		return 0, fmt.Errorf("%w: bind worker %s: %w", ErrStore, w.LogicalID, err)
+	}
+	if _, err := tx.ExecContext(ctx, failStaleHandoffs, w.LogicalID, ns); err != nil {
+		return 0, fmt.Errorf("%w: bind worker %s: %w", ErrStore, w.LogicalID, err)
+	}
+	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("%w: bind worker %s: %w", ErrStore, w.LogicalID, err)
 	}
 	return gen, nil
