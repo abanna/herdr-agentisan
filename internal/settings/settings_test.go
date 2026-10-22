@@ -665,9 +665,12 @@ func TestLoadErrors(t *testing.T) {
 			shared:  app + "[projects.app.groups.coders]\nworkers = 1\nslots = 1\nrotation = { thresholds = 50 }\n",
 			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.rotation.thresholds"},
 		},
+		// A count that is set, but wrong, is refused at its own key with
+		// its own reason, never as a missing one (NERD-5369, Draft 25).
 		"slots below workers": {
 			shared:  app + "[projects.app.groups.coders]\nworkers = 3\nslots = 2\n",
-			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.slots", settings.LayerProject},
+			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.slots", settings.LayerProject, "slots 2 is below workers 3"},
+			wantNotIn: []string{"every group needs"},
 		},
 		"slots one past the bound": {
 			shared:  app + "[projects.app.groups.coders]\nworkers = 1\nslots = 65\n",
@@ -679,7 +682,18 @@ func TestLoadErrors(t *testing.T) {
 		},
 		"negative workers": {
 			shared:  app + "[projects.app.groups.coders]\nworkers = -1\nslots = 2\n",
-			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.workers"},
+			wantErr: settings.ErrInvalid, wantIn: []string{"groups.coders.workers", "workers -1 is below 0"},
+			wantNotIn: []string{"every group needs"},
+		},
+		"workers of the wrong type, from the repo file": {
+			shared: app, repoFile: "schema_version = 1\n[groups.qa]\nworkers = \"two\"\nslots = 2\n",
+			wantErr: settings.ErrInvalid, wantIn: []string{"groups.qa.workers (repo, ", settings.RepoFileName, "want an integer"},
+			wantNotIn: []string{"every group needs"},
+		},
+		"slots of the wrong type, from the repo file": {
+			shared: app, repoFile: "schema_version = 1\n[groups.qa]\nworkers = 1\nslots = 1.5\n",
+			wantErr: settings.ErrInvalid, wantIn: []string{"groups.qa.slots (repo, ", settings.RepoFileName, "want an integer"},
+			wantNotIn: []string{"every group needs"},
 		},
 		"slots not set in any layer": {
 			shared:  app + "[projects.app.groups.coders]\nworkers = 1\n",
@@ -798,6 +812,9 @@ func TestLoadErrors(t *testing.T) {
 			require.ErrorIs(t, err, tc.wantErr)
 			for _, s := range tc.wantIn {
 				assert.Contains(t, err.Error(), s)
+			}
+			for _, s := range tc.wantNotIn {
+				assert.NotContains(t, err.Error(), s)
 			}
 			assert.NotContains(t, err.Error(), plainSecret, "an error must never echo a secret")
 		})

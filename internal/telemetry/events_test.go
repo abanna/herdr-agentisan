@@ -144,6 +144,24 @@ func TestMessageEventsEmitTheSchema(t *testing.T) {
 	}
 }
 
+// TestAMessageEventTakesItsTime: a message event's record carries the time
+// it is given, At, and when it is given none, the time it is emitted.
+func TestAMessageEventTakesItsTime(t *testing.T) {
+	t.Parallel()
+	events, rec := telemetrytest.NewEvents()
+	at := time.Date(2026, 10, 22, 5, 0, 0, 123456789, time.UTC)
+	events.MessageQueued(t.Context(), telemetry.Message{ID: "01JA", To: "ha-boss", At: at})
+	before := time.Now()
+	events.MessageDelivered(t.Context(), telemetry.Message{ID: "01JA", To: "ha-boss"})
+	after := time.Now()
+
+	records := rec.Records()
+	require.Len(t, records, 2)
+	assert.True(t, records[0].Timestamp().Equal(at), "the time it was given: %v", records[0].Timestamp())
+	assert.False(t, records[1].Timestamp().Before(before), "no earlier than its emit")
+	assert.False(t, records[1].Timestamp().After(after), "no later than its emit")
+}
+
 // TestNilEventsEmitNothing: the daemon holds a nil *Events when no endpoint
 // is configured, and every emit is then a silent no-op, never a panic.
 func TestNilEventsEmitNothing(t *testing.T) {

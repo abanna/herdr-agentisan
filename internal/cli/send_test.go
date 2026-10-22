@@ -1,8 +1,11 @@
 package cli_test
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
+	"net"
+	"os"
 	"strings"
 	"testing"
 
@@ -10,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/abanna/herdr-agentisan/internal/cli"
+	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/store"
 )
 
@@ -94,10 +98,11 @@ func TestSendAsksTheDaemon(t *testing.T) {
 	}
 }
 
-// TestSendRefusesBeforeAsking: a command line send cannot take, a body on
-// stdin over the cap, no daemon, and a herdr that fails finding the caller's
-// pane are refused in one JSON object, exit 1, and the daemon is never
-// asked.
+// TestSendRefusesBeforeAsking: a command line send cannot take, a body the
+// store would refuse (empty, over the cap, or not UTF-8, which the request's
+// encoding would otherwise replace), no daemon, and a herdr that fails
+// finding the caller's pane are refused in one JSON object, exit 1, and the
+// daemon is never asked.
 func TestSendRefusesBeforeAsking(t *testing.T) {
 	t.Parallel()
 	tests := map[string]struct {
@@ -113,6 +118,12 @@ func TestSendRefusesBeforeAsking(t *testing.T) {
 		"an unknown flag":          {args: []string{"send", "boss", "hi", "--project", "ha"}, daemon: true, code: "bad_request"},
 		"a body like a flag":       {args: []string{"send", "boss", "-5 degrees"}, daemon: true, code: "bad_request"},
 		"stdin over the cap":       {args: []string{"send", "boss", "-"}, stdin: strings.Repeat("x", store.MaxBody+1), daemon: true, code: "too_large"},
+		"an argument over the cap": {args: []string{"send", "boss", strings.Repeat("x", store.MaxBody+1)}, daemon: true, code: "too_large"},
+		"an empty body":            {args: []string{"send", "boss", ""}, daemon: true, code: "bad_request"},
+		"a body not UTF-8":         {args: []string{"send", "boss", "a\xffb"}, daemon: true, code: "bad_request"},
+		"stdin not UTF-8":          {args: []string{"send", "boss", "-"}, stdin: "a\xffb", daemon: true, code: "bad_request"},
+		"a truncated character":    {args: []string{"send", "boss", "a\xc3"}, daemon: true, code: "bad_request"},
+		"stdin with a NUL":         {args: []string{"send", "boss", "-"}, stdin: "a\x00b", daemon: true, code: "bad_request"},
 		"no daemon":                {args: []string{"send", "boss", "hi"}, code: "daemon_unavailable"},
 		"herdr failing":            {args: []string{"send", "boss", "hi"}, env: map[string]string{"HERDR_PANE_ID": "w14:p1"}, daemon: true, code: "herdr_failed"},
 		"no herdr socket":          {args: []string{"send", "boss", "hi"}, env: map[string]string{"HERDR_SOCKET_PATH": ""}, code: "daemon_unavailable"},
@@ -136,6 +147,56 @@ func TestSendRefusesBeforeAsking(t *testing.T) {
 			assert.Empty(t, asked, "the daemon is never asked")
 		})
 	}
+}
+
+// silentDaemon serves e's plugin socket as a daemon that reads each request
+// and closes without an answer, as one killed after its commit would, and
+// passes on each request it read.
+func silentDaemon(t *testing.T, e daemonEnv) <-chan string {
+	t.Helper()
+	p, err := daemon.PathsFor(e.stateDir, e.herdrSock)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(p.Dir, 0o700))
+	ln, err := net.Listen("unix", p.Socket)
+	require.NoError(t, err)
+	got := make(chan string, 8)
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		_ = ln.Close()
+		<-done
+	})
+	go func() {
+		defer close(done)
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			line, _ := bufio.NewReader(conn).ReadString('\n')
+			got <- line
+			_ = conn.Close()
+		}
+	}()
+	return got
+}
+
+// TestSendReportsNoAnswer: a daemon that took the request and gave no answer
+// may have queued the message, so send says daemon_no_answer, never
+// daemon_unavailable, whose advice is to fall back to herdr agent prompt and
+// would type it twice (A52, QA #75 N4).
+func TestSendReportsNoAnswer(t *testing.T) {
+	t.Parallel()
+	e := newDaemonEnv(t)
+	asked := silentDaemon(t, e)
+	out, err := runStdin(t, e.lookup(map[string]string{}), "", "send", "boss", "done: #75")
+	require.Error(t, err, "a refusal exits 1")
+	v := oneJSONObject(t, out)
+	assert.Equal(t, false, v["ok"])
+	errBody, _ := v["error"].(map[string]any)
+	assert.Equal(t, "daemon_no_answer", errBody["code"])
+	assert.Contains(t, errBody["message"], "may have done it")
+	require.Len(t, asked, 1, "asked once: a request the daemon took is never asked again")
+	assert.Contains(t, <-asked, `"body":"done: #75"`)
 }
 
 // TestSendHelp: --help names the command's shape and its one flag.

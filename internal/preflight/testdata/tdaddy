@@ -34,6 +34,18 @@ stdout)
 	echo "tdaddy: the reason, on stdout"
 	exit 1
 	;;
+blanks)
+	# $FAKE_TDADDY_BLANKS bytes of every ASCII blank in turn, then the reason.
+	awk -v n="${FAKE_TDADDY_BLANKS:?}" 'BEGIN { s = " \n\t\r\v\f"; for (i = 0; i < n; i++) printf "%s", substr(s, i % 6 + 1, 1) }' >&2
+	echo "the real reason" >&2
+	exit 1
+	;;
+pastcap)
+	# A 5,000-byte first line, past the 4 KiB kept, then the reason.
+	printf '%05000d\n' 0 >&2
+	echo "the real reason" >&2
+	exit 1
+	;;
 longutf8)
 	printf 'x' >&2
 	i=0

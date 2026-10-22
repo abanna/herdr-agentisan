@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -40,6 +41,14 @@ func newSendCmd() *cobra.Command {
 					return refuseWith(cmd, "too_large", fmt.Sprintf("the body on stdin is over %d bytes", store.MaxBody))
 				}
 				body = string(read)
+			}
+			// Before the request's encoding would replace each byte that is
+			// not UTF-8, and grow the body by two bytes for it.
+			if err := store.CheckBody(body); err != nil {
+				if errors.Is(err, store.ErrTooLarge) {
+					return refuseWith(cmd, "too_large", err.Error())
+				}
+				return badRequest(cmd, err)
 			}
 			return f.runOp(cmd, nil, daemon.OpSend, func() (any, error) {
 				ctx := cmd.Context()

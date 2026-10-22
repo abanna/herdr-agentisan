@@ -162,7 +162,8 @@ const (
 	StatusGone = "gone"
 )
 
-// ErrWorkerLive means a logical id is already bound and not retired.
+// ErrWorkerLive means a logical id is already bound and not retired, or is
+// another project's.
 var ErrWorkerLive = errors.New("worker is already bound")
 
 // ErrNoWorker means no row has the logical id.
@@ -177,16 +178,18 @@ type Row struct {
 }
 
 // bindWorker inserts a logical id never seen, or rebinds a retired or lost
-// one: the new pane and terminal, project and group, the next generation,
-// starting again, with the shell left for the team poll to read. Any other
-// row is left alone, and changes nothing.
+// one of the same project: the new pane and terminal and group, the next
+// generation, starting again, with the shell left for the team poll to read.
+// Any other row is left alone, and changes nothing: another project's id is
+// never taken over, since its queue and handoffs are that project's (QA #78
+// F4).
 const bindWorker = `INSERT INTO workers (logical_id, project, grp, pane_id, terminal_id, generation, status, created_at)
 VALUES (?1, ?2, ?3, ?4, ?5, 0, 'starting', ?6)
 ON CONFLICT (logical_id) DO UPDATE SET
-	project = excluded.project, grp = excluded.grp, pane_id = excluded.pane_id, terminal_id = excluded.terminal_id,
+	grp = excluded.grp, pane_id = excluded.pane_id, terminal_id = excluded.terminal_id,
 	shell_pid = NULL, shell_start = NULL,
 	generation = workers.generation + 1, status = 'starting', retired_at = NULL
-WHERE workers.retired_at IS NOT NULL OR workers.status = 'lost'
+WHERE (workers.retired_at IS NOT NULL OR workers.status = 'lost') AND workers.project = excluded.project
 RETURNING generation`
 
 // failStaleHandoffs fails every handoff still pending for a logical id that
@@ -200,8 +203,8 @@ WHERE logical_id = ?1 AND state = 'pending'`
 // than before for one reused after its retirement or once lost (I1, A35).
 // A handoff an earlier generation left pending fails in the same
 // transaction, whatever path left it (#29's QA N2). w.Generation is ignored.
-// ErrWorkerLive means the id is bound, not retired and not lost, and then
-// nothing changes.
+// ErrWorkerLive means the id is bound, not retired and not lost, or is
+// another project's, and then nothing changes.
 func (s *Store) BindWorker(ctx context.Context, w Worker, at time.Time) (int64, error) {
 	if err := errors.Join(checkID(KindWorker, w.LogicalID), checkID(KindPane, w.PaneID), checkTerminal(w.TerminalID)); err != nil {
 		return 0, err
@@ -218,7 +221,7 @@ func (s *Store) BindWorker(ctx context.Context, w Worker, at time.Time) (int64, 
 	var gen int64
 	err = tx.QueryRowContext(ctx, bindWorker, w.LogicalID, w.Project, w.Group, w.PaneID, w.TerminalID, ns).Scan(&gen)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, fmt.Errorf("%w: %s", ErrWorkerLive, w.LogicalID)
+		return 0, fmt.Errorf("%w: %s is live, or is another project's than %s", ErrWorkerLive, w.LogicalID, w.Project)
 	}
 	if err != nil {
 		return 0, fmt.Errorf("%w: bind worker %s: %w", ErrStore, w.LogicalID, err)
@@ -266,6 +269,30 @@ func (s *Store) SetWorkerStatus(ctx context.Context, w Worker, status string, at
 		return fmt.Errorf("%w: %s is not a live worker at generation %d", ErrNoWorker, w.LogicalID, w.Generation)
 	}
 	return nil
+}
+
+// OtherProjectsIDs returns the logical id of every row of a project other
+// than project, retired or not, in logical id order: ids a spawn into project
+// must not take, since one id has one row across every project and
+// BindWorker never takes another project's (QA #78 F4).
+func (s *Store) OtherProjectsIDs(ctx context.Context, project string) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT logical_id FROM workers WHERE project <> ? ORDER BY logical_id", project)
+	if err != nil {
+		return nil, fmt.Errorf("%w: read other projects' workers: %w", ErrStore, err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only; rows.Err reports what matters
+	out := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("%w: read other projects' workers: %w", ErrStore, err)
+		}
+		out = append(out, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: read other projects' workers: %w", ErrStore, err)
+	}
+	return out, nil
 }
 
 // WorkerRow returns the row for logicalID, retired or not. ErrNoWorker means

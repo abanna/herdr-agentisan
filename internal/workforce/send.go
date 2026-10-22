@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/settings"
@@ -57,6 +58,9 @@ type SendResult struct {
 	State string `json:"state"`
 	To    Party  `json:"to"`
 	From  Party  `json:"from"`
+	// Queued is when the message was queued, its row's created time: its
+	// queued event's time, not part of the answer.
+	Queued time.Time `json:"-"`
 }
 
 // Send queues req.Body from the caller to req.To, both read from one read of
@@ -99,7 +103,7 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendResult, error)
 	if err != nil {
 		return SendResult{}, fmt.Errorf("queue the message: %w", err)
 	}
-	return SendResult{ID: m.ID, State: m.State, To: Party(m.To), From: Party(m.From)}, nil
+	return SendResult{ID: m.ID, State: m.State, To: Party(m.To), From: Party(m.From), Queued: m.CreatedAt}, nil
 }
 
 // withSpaces is teams with the ◆ spaces, which belong to the unnamed project

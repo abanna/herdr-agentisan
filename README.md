@@ -40,7 +40,7 @@ and then says one of three things (ADR-001 A48):
 
 herdr gives a shell in one of its panes no `HERDR_PLUGIN_STATE_DIR`. From
 there the commands that ask a running daemon (`send`, `team status`,
-`worker retire`, `back`, `dashboard`, `status line`, `daemon health` and
+`team up`, `worker retire`, `back`, `dashboard`, `status line`, `daemon health` and
 `daemon stop`) find it under herdr's own state directory for the plugin,
 from `XDG_STATE_HOME` or `HOME` as herdr works it out (ADR-001 A51).
 `daemon start`, `run` and `restart` never guess: run them from herdr, or
@@ -150,7 +150,8 @@ Under the shared app-server daemon, with Codex's default sandbox (even for an
 approved escalation), or on an OS other than Linux and macOS, it reports
 nothing (ADR-001 A25, A26).
 
-Codex workers run under your own Codex sandbox setting, so by default their
+Codex workers run under your own Codex sandbox setting, the review type's
+built-in `--sandbox read-only` aside (ADR-001 A55), so by default their
 `report stage` commands report nothing: they show `ctx`, and an item or a
 stage only from the [turn hooks](#report-item-and-stage-from-every-turn),
 which run outside the sandbox. To have a group's Codex workers report each
@@ -415,6 +416,36 @@ the claude command that starts it read-only, its reads fenced to the repo
 and the daemon's directory; `worker spawn --group debugger`
 will launch it. See [`docs/debugger.md`](docs/debugger.md).
 
+## The Codex reviewer
+
+A `review` worker reviews one pull request at a time, read-only, by
+agentisan-skills' review guidelines, which `roles/review.md` vendors byte
+for byte (ADR-001 A55). The review type starts `codex --no-daemon --sandbox
+read-only` unless its group names a command. For each review, prepare a
+worktree at the PR's head, then send the role whole and the inputs alone,
+from the plugin's checkout. The daemon types `[msg <id> from <sender>]`
+before a message's first line, so the item goes on the second, where
+`report turn` reads it:
+
+```bash
+herdr-agentisan send ha-review-1 - < roles/review.md
+herdr-agentisan send ha-review-1 - <<'BODY'
+Review inputs:
+item: PR-104
+pr: 104
+head: <the head commit's full SHA>
+base: origin/main
+worktree: <the worktree's path>
+BODY
+```
+
+Send nothing else with a review: no scope, focus, evidence or severity hint,
+which the guidelines forbid in a reviewer's brief. The reviewer answers in
+its final message, which ends `BOSS: review #104 at <sha7>: no findings`,
+`BOSS: review #104 at <sha7>: <k> findings (P0 <a>, P1 <b>)` or
+`BOSS: blocked: review #104: <reason>`. It never edits a file or touches
+GitHub.
+
 ## Teams: one workspace, one tab per worker
 
 Every configured project but the `[spaces] project` is a team: one herdr
@@ -427,20 +458,21 @@ See ADR-001 A19.
 
 ## The workforce commands
 
-The boss reads its team, spawns workers and retires them with commands the
-daemon runs (ADR-001 D11, A23); the `herdr-workforce` skill drives them.
-`team up` follows in a later part of NERD-5254.
+The boss reads its team, fills it, spawns workers and retires them with
+commands the daemon runs (ADR-001 D11, A23); the `herdr-workforce` skill
+drives them.
 
 | Command | What it does |
 | --- | --- |
 | `team status [--project p]` | Every group's counts and open slots, and each worker's status, ctx, item, stage (and whether it is old) and idle time |
+| `team up [--project p]` | Fills each group up to its `workers` count, empty slots only, so a full team gets none; opens the team's dashboard above the boss when none is open |
 | `worker spawn --group g [--count n] [--model m]` | Adds workers, refused whole past the group's `slots` or when the repo fails the tdaddy preflight |
 | `worker retire <id> [--after-handoff]` | Closes a worker's pane, by logical id or pane id; with the flag, once its handoff is written |
 | `handoff ready [<id>] [--clear]` | Marks a worker ready to be replaced, once it has written its handoff: the daemon sets the `handoff` token on its agent pane, by logical id, tab label or pane id, or this pane with none; `--clear` takes it off (ADR-001 A33) |
 
 Each prints one JSON object and exits 1 when refused. Without `--project`
-status and spawn read the team whose workspace the command runs in, else the only
-tabs team.
+status, up and spawn read the team whose workspace the command runs in, else
+the only tabs team.
 A tabs team's worker is named by its logical id, `<short>-<type>-<n>`, its
 tab's label; a pane of the ◆ spaces by its pane id. Idle times start when
 the daemon does, and a team added to the configuration since gets them
@@ -508,6 +540,9 @@ description = "Agentisan: open the team dashboard"
 prefix+d is not one of herdr's default keys. Each press opens a new split,
 where `dashboard-tab.sh` jumped to the one it had made, so close a dashboard
 with `q`. Add `--direction down` to split below the focused pane instead.
+`team up` opens one for you, above the boss, labelled `<short>-dashboard`,
+when the team's workspace has none, and leaves one prefix+d opened there as
+it is.
 See [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml).
 
 `herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json`

@@ -9,11 +9,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/abanna/herdr-agentisan/internal/cli"
+	"github.com/abanna/herdr-agentisan/internal/codexhooks"
 	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
+	"github.com/abanna/herdr-agentisan/internal/plugin"
+	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
 // oneJSONObject decodes out as exactly one JSON object and nothing else.
@@ -49,6 +53,7 @@ func TestWorkforceHelpMeetsTheWrapper(t *testing.T) {
 	t.Parallel()
 	tests := map[string][]string{
 		"team status":   {"--project", "--state-dir"},
+		"team up":       {"--project", "--state-dir"},
 		"worker spawn":  {"--group", "--count", "--model", "--project", "--state-dir"},
 		"worker retire": {"--after-handoff", "--state-dir"},
 		"handoff ready": {"--clear", "--state-dir"},
@@ -95,6 +100,9 @@ func TestWorkforceCommandsAlwaysAnswerInJSON(t *testing.T) {
 		"an unknown flag":            {args: []string{"team", "status", "--bogus"}, code: "bad_request"},
 		"a flag with no value":       {args: []string{"team", "status", "--project"}, code: "bad_request"},
 		"an argument to team status": {args: []string{"team", "status", "now"}, code: "bad_request"},
+		"an argument to team up":     {args: []string{"team", "up", "now"}, code: "bad_request"},
+		"team up takes no group":     {args: []string{"team", "up", "--group", "coder"}, code: "bad_request"},
+		"up with no daemon":          {args: []string{"team", "up"}, code: "daemon_unavailable"},
 		"an unknown verb":            {args: []string{"team", "down"}, code: "bad_request"},
 		"a group alone":              {args: []string{"team"}, code: "bad_request"},
 		"retire with no id":          {args: []string{"worker", "retire"}, code: "bad_request"},
@@ -167,6 +175,14 @@ func TestWorkforceCommandsAskTheDaemon(t *testing.T) {
 			args: []string{"team", "status", "--project", "nope"}, reply: unknown, pane: "w14:p1",
 			sent: `{"v":1,"op":"team.status","args":{"project":"nope"}}`, want: unknown,
 		},
+		"team up, the caller's team": {
+			args: []string{"team", "up"}, reply: ok, pane: "w14:p1",
+			sent: `{"v":1,"op":"team.up","args":{"caller_pane":"w14:p1"}}`, want: ok,
+		},
+		"team up of a project": {
+			args: []string{"team", "up", "--project", "ha"}, reply: ok, pane: "w14:p1", herdr: failing,
+			sent: `{"v":1,"op":"team.up","args":{"project":"ha"}}`, want: ok,
+		},
 		"worker spawn, the caller's team": {
 			args: []string{"worker", "spawn", "--group", "coder", "--count", "2", "--model", "sonnet"}, reply: ok, pane: "w9:p9",
 			sent: `{"v":1,"op":"worker.spawn","args":{"caller_pane":"w14:p1","group":"coder","count":2,"model":"sonnet"}}`, want: ok,
@@ -224,4 +240,30 @@ func TestWorkforceCommandsAskTheDaemon(t *testing.T) {
 			assert.JSONEq(t, tc.sent, <-sent)
 		})
 	}
+}
+
+// TestDaemonRunNamesThePluginsDashboard: daemon run gives the workforce the
+// plugin's dashboard pane as the manifest declares it
+// (TestManifestDeclaresTheDashboardSplit), so team up opens it, and checks
+// Codex's hooks in the Codex home its own environment names.
+func TestDaemonRunNamesThePluginsDashboard(t *testing.T) {
+	t.Parallel()
+	e := newDaemonEnv(t)
+	home := t.TempDir()
+	var logs bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetContext(cli.WithLookupEnv(daemonCtx(t, e, nil, &logs), e.lookup(map[string]string{"HERDR_PLUGIN_CONFIG_DIR": "/config", "CODEX_HOME": home})))
+
+	o, err := cli.DaemonOptions(cmd, "", false)
+	require.NoError(t, err)
+	assert.Equal(t, workforce.DashboardPane{PluginID: plugin.ID, Entrypoint: plugin.DashboardPane, Title: plugin.DashboardTitle}, o.Team.Dashboard)
+	require.NotNil(t, o.Team.CodexHooks)
+	installed, err := o.Team.CodexHooks()
+	require.NoError(t, err)
+	assert.False(t, installed, "none in the home its environment names")
+	_, err = codexhooks.Install(home)
+	require.NoError(t, err)
+	installed, err = o.Team.CodexHooks()
+	require.NoError(t, err)
+	assert.True(t, installed)
 }

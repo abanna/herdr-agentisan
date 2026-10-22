@@ -216,6 +216,9 @@ func WorkforceOpNames() []string {
 	return slices.Sorted(maps.Keys(workforceOps(&workforce.Service{}, new(atomic.Bool), nil, nil)))
 }
 
+// IOTimeout is the exchange, which a client waits past an op's budget.
+const IOTimeout = ioTimeout
+
 // GroupDescriptions is the team poll's reader of the group descriptions
 // (A36), driven one poll at a time.
 type GroupDescriptions struct{ d *groupDescriptions }
@@ -366,3 +369,7 @@ func (s GitHubSource) Collected(ctx context.Context, gh github.Runner, h setting
 
 // Take is what the source has handed the poll since the last Take.
 func (s GitHubSource) Take() []notice.Notice { return s.g.n.github.take() }
+
+// BetweenReads runs f, from now on, in each collection between its read of
+// what is held and its read of state.db, where an acknowledgement may land.
+func (s GitHubSource) BetweenReads(f func()) { s.g.betweenReads = f }
