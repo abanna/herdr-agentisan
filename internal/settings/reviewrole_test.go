@@ -162,8 +162,9 @@ func TestReviewRoleFitsOneMessage(t *testing.T) {
 
 // TestReviewDispatchSetsTheItem: README's inputs message, typed as the
 // daemon types a worker's message (`[msg <id> from <sender>] <body>`, its
-// textOf), sets the reviewer's item, which an item on the body's first line
-// would not, and gives the four inputs the role names.
+// textOf), sets the reviewer's item, as an item on the body's first line,
+// behind the header, would too (A42), and gives the four inputs the role
+// names.
 func TestReviewDispatchSetsTheItem(t *testing.T) {
 	t.Parallel()
 	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
@@ -181,7 +182,7 @@ func TestReviewDispatchSetsTheItem(t *testing.T) {
 	assert.Equal(t, "PR-104", item)
 	first, _, _ := strings.Cut(body, "\n")
 	item, _ = report.Stated(report.EventPromptSubmit, "[msg 01M5JNK6368AKCMW7Q0D05BSGJ from ha-boss] "+strings.TrimPrefix(body, first+"\n"))
-	assert.Empty(t, item, "an item on the first line is typed behind the header and never read")
+	assert.Equal(t, "PR-104", item, "an item on the first line is read behind the header too")
 
 	role := readReviewRole(t)
 	for _, input := range []string{"pr", "head", "base", "worktree"} {

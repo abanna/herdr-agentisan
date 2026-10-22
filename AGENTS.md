@@ -222,8 +222,11 @@ exempts whatever is later added under that name.
   embedded byte for byte from `rules/jev-routing-v1.json` and decoded
   strictly, and the deployment facts from `[routing]` (`internal/settings`).
   `Policy.Resolve` maps a worker type's role and provider, the boss's task
-  packet and overrides onto a binding. It returns a `Decision` that is also
-  the audit record. No caller yet: `worker spawn` wires it in part 1b.
+  packet (`DecodeTask`, bounded) and overrides onto a binding. It returns a
+  `Decision` that is also the audit record. `worker spawn` asks it once per
+  spawn, and `team up` once per group it fills, before anything opens; each
+  records it on each worker's row and sends it as an
+  `agentisan.worker.routed` event.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
   embedded from `migrations/` and tracked by `user_version`. The daemon holds
@@ -232,11 +235,12 @@ exempts whatever is later added under that name.
   claimed one at a time, oldest first; the daemon's notices to a boss are
   added to the one still queued (`notify.go`, A44); and a pending handoff
   (`handoffs.go`) holds a worker's inbox until it completes, which rebinds
-  the worker in the same transaction. A `workers` row binds its pane by terminal, with the
-  shell the team poll read (migration 0003, A35), and the poll's writes are
-  compare-and-sets on the row as it read it. The GitHub notices' seen-set,
-  open PRs and seed marks (`github.go`, migration 0004, A45) make each
-  event told once across restarts. Tests open a fresh database in a temp
+  the worker in the same transaction. A `workers` row binds its pane by
+  terminal, with the shell the team poll read (migration 0003, A35), and the
+  routing decision it was launched with (migration 0005, A50); the poll's
+  writes are compare-and-sets on the row as it read it. The GitHub notices'
+  seen-set, open PRs and seed marks (`github.go`, migration 0004, A45) make
+  each event told once across restarts. Tests open a fresh database in a temp
   dir; the store is never mocked.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests

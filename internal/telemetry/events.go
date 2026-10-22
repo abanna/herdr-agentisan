@@ -10,6 +10,8 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/log"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
+
+	"github.com/abanna/herdr-agentisan/internal/routing"
 )
 
 // Workflow events (ADR-001 D10, A21) are OTLP log records carrying an event
@@ -41,6 +43,35 @@ const (
 	// of the poll the pane was not in the model.
 	AttrFrom = "agentisan.status.from"
 	AttrTo   = "agentisan.status.to"
+)
+
+// EventWorkerRouted is the routing decision a worker spawn launched a worker
+// on (A50): one record per worker, the decision applied or, while routing is
+// off, the one it would have applied.
+const EventWorkerRouted = "agentisan.worker.routed"
+
+// The attribute keys of EventWorkerRouted beside AttrWorkerID, AttrProject
+// and AttrGroup: the routing rules' audit fields, then the decision's own.
+const (
+	AttrRoutingTaskID           = "agentisan.routing.task_id"
+	AttrRoutingLookupStatus     = "agentisan.routing.task_lookup_status"
+	AttrRoutingAssignmentDigest = "agentisan.routing.assignment_digest"
+	AttrRoutingRole             = "agentisan.routing.role"
+	AttrRoutingProvider         = "agentisan.routing.provider"
+	AttrRoutingBinding          = "agentisan.routing.selected_binding"
+	AttrRoutingModelID          = "agentisan.routing.model_id"
+	AttrRoutingEffort           = "agentisan.routing.effort"
+	AttrRoutingPolicyVersion    = "agentisan.routing.policy_version"
+	AttrRoutingJevModel         = "agentisan.routing.jev_model_returned"
+	AttrRoutingAnswers          = "agentisan.routing.answers"
+	AttrRoutingFallbackReason   = "agentisan.routing.fallback_reason"
+	AttrRoutingOverrideBinding  = "agentisan.routing.override.binding"
+	AttrRoutingOverrideBy       = "agentisan.routing.override.by"
+	AttrRoutingOverrideEffort   = "agentisan.routing.override.effort"
+	AttrRoutingTimestamp        = "agentisan.routing.timestamp"
+	AttrRoutingSelection        = "agentisan.routing.selection"
+	AttrRoutingApplied          = "agentisan.routing.applied"
+	AttrRoutingUnchecked        = "agentisan.routing.unchecked"
 )
 
 // The values of AttrRole.
@@ -254,6 +285,59 @@ func (e *Events) message(ctx context.Context, name, what string, m Message) {
 		attribute.String(AttrMessageReturnedFrom, m.ReturnedFrom),
 		attribute.Int(AttrMessageAttempts, m.Attempts),
 		attribute.String(AttrMessageReason, m.Reason),
+	)
+	e.logger.Emit(ctx, r)
+}
+
+// WorkerRouted emits d as the EventWorkerRouted of one worker of a spawn.
+// Every audit field is present: "" for a task id, an override or Jev's
+// answers d has none of.
+func (e *Events) WorkerRouted(ctx context.Context, workerID, project, group string, d routing.Decision) {
+	if e == nil {
+		return
+	}
+	var (
+		taskID, answers string
+		o               routing.Override
+	)
+	if d.TaskID != nil {
+		taskID = *d.TaskID
+	}
+	if len(d.Answers) > 0 && string(d.Answers) != "null" {
+		answers = string(d.Answers)
+	}
+	if d.Override != nil {
+		o = *d.Override
+	}
+	var r log.Record
+	r.SetEventName(EventWorkerRouted)
+	r.SetTimestamp(d.Timestamp)
+	r.SetSeverity(log.SeverityInfo)
+	r.SetSeverityText("INFO")
+	r.SetBody(attribute.StringValue(workerID + " " + d.SelectedBinding + " " + d.Effort))
+	r.AddAttributes(
+		attribute.String(AttrWorkerID, workerID),
+		attribute.String(AttrProject, project),
+		attribute.String(AttrGroup, group),
+		attribute.String(AttrRoutingTaskID, taskID),
+		attribute.String(AttrRoutingLookupStatus, d.TaskLookupStatus),
+		attribute.String(AttrRoutingAssignmentDigest, d.AssignmentDigest),
+		attribute.String(AttrRoutingRole, d.Role),
+		attribute.String(AttrRoutingProvider, d.Provider),
+		attribute.String(AttrRoutingBinding, d.SelectedBinding),
+		attribute.String(AttrRoutingModelID, d.ModelID),
+		attribute.String(AttrRoutingEffort, d.Effort),
+		attribute.String(AttrRoutingPolicyVersion, d.PolicyVersion),
+		attribute.String(AttrRoutingJevModel, d.JevModelReturned),
+		attribute.String(AttrRoutingAnswers, answers),
+		attribute.String(AttrRoutingFallbackReason, string(d.FallbackReason)),
+		attribute.String(AttrRoutingOverrideBinding, o.Binding),
+		attribute.String(AttrRoutingOverrideBy, o.By),
+		attribute.String(AttrRoutingOverrideEffort, o.Effort),
+		attribute.String(AttrRoutingTimestamp, d.Timestamp.UTC().Format(time.RFC3339Nano)),
+		attribute.String(AttrRoutingSelection, string(d.Selection)),
+		attribute.Bool(AttrRoutingApplied, d.Applied),
+		attribute.StringSlice(AttrRoutingUnchecked, d.Unchecked),
 	)
 	e.logger.Emit(ctx, r)
 }

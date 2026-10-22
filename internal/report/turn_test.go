@@ -46,6 +46,9 @@ func TestStatedClasses(t *testing.T) {
 	t.Parallel()
 	const prompt, stop = report.EventPromptSubmit, report.EventStop
 	long := strings.Repeat("x", 78) + " " + strings.Repeat("y", 10)
+	// resend opens a resend notice as store.fail writes it (A30): the
+	// notice's own words come before the quoted body.
+	resend := "[agentisan] message 01J to ha-coder-1 may not have been delivered (timeout); resend if needed: "
 	tests := map[string]struct {
 		event, text, item, stage string
 	}{
@@ -57,6 +60,39 @@ func TestStatedClasses(t *testing.T) {
 		"item: behind a list marker":        {event: prompt, text: "- item: NERD-1"},
 		"a prompt states no stage":          {event: prompt, text: "BOSS: done"},
 		"Item: is not the prefix":           {event: prompt, text: "Item: NERD-1"},
+		"an item behind a message header":   {event: prompt, text: "[msg 01JB2X from ha-boss] item: NERD-1\nbuild it", item: "NERD-1"},
+		"behind a returned message header":  {event: prompt, text: "[msg 01J from term_w2:p1, originally to ha-coder-1] item: NERD-1", item: "NERD-1"},
+		"behind the daemon's own header":    {event: prompt, text: "[agentisan] originally to term_w2:p1: item: NERD-1", item: "NERD-1"},
+		"a bold item behind a header":       {event: prompt, text: "[msg 01J from ha-boss] **item:** NERD-1", item: "NERD-1"},
+		"a header, the item on line 2":      {event: prompt, text: "[msg 01J from ha-boss] build it\nitem: NERD-1", item: "NERD-1"},
+		"a header on a later line":          {event: prompt, text: "go\n[msg 01J from ha-boss] item: NERD-1"},
+		"another bracket before the item":   {event: prompt, text: "[note] item: NERD-1"},
+		"a daemon body's own bracket":       {event: prompt, text: "[agentisan] notices: item: NERD-1"},
+		"a header id holding a space":       {event: prompt, text: "[msg 01 J from ha-boss] item: NERD-1"},
+		"a header id holding a bracket":     {event: prompt, text: "[msg 01] from ha-boss] item: NERD-1"},
+		"a header with no id":               {event: prompt, text: "[msg  from ha-boss] item: NERD-1"},
+		"a header that never closes":        {event: prompt, text: "[msg 01J from ha-boss item: NERD-1"},
+		"the daemon's header, unclosed":     {event: prompt, text: "[agentisan] originally to ha-coder-1 item: NERD-1"},
+		"a sender holding a bracket":        {event: prompt, text: "[msg 01J from a] b] item: NERD-1"},
+		"a sender holding a bare bracket":   {event: prompt, text: "[msg 01J from a]b] item: NERD-1", item: "NERD-1"},
+		"a final message keeps its header":  {event: stop, text: "[msg 01J from ha-boss] item: NERD-1"},
+		"a resend notice's quoted item":     {event: prompt, text: resend + "item: NERD-1\nbuild it"},
+		"a returned resend notice's item":   {event: prompt, text: "[agentisan] originally to ha-coder-1: " + resend + "item: NERD-1"},
+		"a resend notice's later item line": {event: prompt, text: resend + "build it\nitem: NERD-1", item: "NERD-1"},
+		"a non-ASCII sender":                {event: prompt, text: "[msg 01J from rédacteur-1] item: NERD-1", item: "NERD-1"},
+		"a Latin-1 byte in the sender":      {event: prompt, text: "[msg 01J from caf\xe9] item: NERD-1", item: "NERD-1"},
+		"a cut multibyte sender":            {event: prompt, text: "[msg 01J from x\xe5\xaf] item: NERD-1", item: "NERD-1"},
+		"a NUL in the sender":               {event: prompt, text: "[msg 01J from a\x00b] item: NERD-1", item: "NERD-1"},
+		"a header in another case":          {event: prompt, text: "[Msg 01J from ha-boss] item: NERD-1"},
+		"a BOM before a header":             {event: prompt, text: "\ufeff[msg 01J from ha-boss] item: NERD-1"},
+		"a BOM behind a header":             {event: prompt, text: "[msg 01J from ha-boss] \ufeffitem: NERD-1", item: "NERD-1"},
+		"a header, then CRLF":               {event: prompt, text: "[msg 01J from ha-boss] item: NERD-1\r\nbuild it", item: "NERD-1"},
+		"an empty prompt":                   {event: prompt, text: ""},
+		"a header and no body":              {event: prompt, text: "[msg 01J from ha-boss] "},
+		"80 characters behind a header":     {event: prompt, text: "[msg 01J from ha-boss] item: " + strings.Repeat("é", 80), item: strings.Repeat("é", 80)},
+		"a header behind a header":          {event: prompt, text: "[msg 01J from ha-boss] [msg 01K from x] item: NERD-1"},
+		"a header, then Item:":              {event: prompt, text: "[msg 01J from ha-boss] Item: NERD-1"},
+		"a header, then a list marker":      {event: prompt, text: "[msg 01J from ha-boss] - item: NERD-1"},
 		"a worker's closing line":           {event: stop, text: "Done.\n\nBOSS: 1b updated c44380c, 554", stage: "1b updated c44380c, 554"},
 		"the boss's own line":               {event: stop, text: "STATUS: waiting on CI", stage: "waiting on CI"},
 		"a status in bold":                  {event: stop, text: "**BOSS:** blocked: 1Password agent", stage: "blocked: 1Password agent"},

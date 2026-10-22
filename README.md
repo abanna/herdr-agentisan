@@ -178,10 +178,11 @@ what the turn's text states, and sets the tokens `report stage` sets:
   sets `blocked: 1Password agent`. `BOSS:` is the line a worker ends each
   turn with; `STATUS:` is for a pane with no boss above it.
 - **The item** is an `item: <id>` line: the first one in a prompt, as a
-  dispatch carries it, or the last one in the final message's closing
-  paragraph, beside the status line. A new item stated with no stage clears
-  the old stage. An item alone never sets `stage_at`, so it never makes an
-  old stage look reported again.
+  dispatch carries it (behind the header a `send` message is typed with,
+  too), or the last one in the final message's closing paragraph, beside
+  the status line. A new item stated with no stage clears the old stage. An
+  item alone never sets `stage_at`, so it never makes an old stage look
+  reported again.
 
 Markdown bold and code ticks around a line are fine; a value over 80
 characters is cut to 79 and `…`. A turn that states neither reports nothing,
@@ -451,9 +452,9 @@ agentisan-skills' review guidelines, which `roles/review.md` vendors byte
 for byte (ADR-001 A55). The review type starts `codex --no-daemon --sandbox
 read-only` unless its group names a command. For each review, prepare a
 worktree at the PR's head, then send the role whole and the inputs alone,
-from the plugin's checkout. The daemon types `[msg <id> from <sender>]`
-before a message's first line, so the item goes on the second, where
-`report turn` reads it:
+from the plugin's checkout. `report turn` reads the inputs' `item:` line
+on any line: on the first, it reads behind the `[msg <id> from <sender>]`
+header the daemon types there:
 
 ```bash
 herdr-agentisan send ha-review-1 - < roles/review.md
@@ -523,12 +524,23 @@ The user's routing rules, built in byte for byte
 reasoning effort each worker starts with, by its type's role (ADR-001 A50).
 `[routing]` in the shared `herdr-agentisan.toml` holds what they leave to
 the deployment: `enabled` (off by default, and while it is on no
-`agent.model` key may be set), each binding's real `model_id`, efforts and
-`enabled`, and `[routing.overrides]`, the user's standing choice for a role
-and the only way to a premium binding. `config resolve` shows each key with
-its layer, then `routing policy:`, the version a decision records.
-`worker spawn` asks routing from NERD-5289 part 1b on; until then the keys
-resolve and nothing reads them.
+`agent.model` key nor codex `--profile` may be set), each binding's real
+`model_id`, efforts its client takes and `enabled`, and
+`[routing.overrides]`, the user's standing choice for a role and the only
+way to a premium binding. `config resolve` shows each key with its layer,
+then `routing policy:`, the version a decision records; with `--project` it
+also refuses an override a worker type with that role cannot run, such as a
+claude binding for a type on codex.
+
+`worker spawn` asks routing once per spawn, and `team up` once per group it
+fills, before it opens anything: while routing is on, a group it refuses
+stops the whole `team up`. While it is on, the decision is
+the launch: `--model` must then name a binding the role allows, by its name
+or model id, and `--effort` one it takes. While it is off, spawn launches as
+before and only records what routing would have chosen. `--task-file
+<path|->` hands routing the boss's task packet, the rules' `task_packet` as
+JSON, at most 64 KiB. Each worker's row keeps the decision it was launched
+with, and each is an `agentisan.worker.routed` event.
 
 ## Messaging
 

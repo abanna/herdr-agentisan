@@ -45,6 +45,23 @@ type Worker struct {
 	Status     string
 	// HandoffPending is true while a handoff holds the worker's inbox.
 	HandoffPending bool
+	// Routing is the routing decision the worker was launched with; nil
+	// when routing did not launch it. BindWorker writes it and WorkerRow
+	// reads it; Workers leaves it nil.
+	Routing *Routing
+}
+
+// Routing is the routing decision a worker was launched with (ADR-001 A50):
+// the role and provider it was made for, the binding, model id and effort it
+// chose, the override that chose them, and the assignment and policy it was
+// made by. Each field but RoutedAt is the decision's own, unchecked here.
+type Routing struct {
+	Role, Provider, Binding, ModelID, Effort string
+	// OverrideBinding, OverrideBy and OverrideEffort are the override's;
+	// empty for none.
+	OverrideBinding, OverrideBy, OverrideEffort string
+	AssignmentDigest, PolicyVersion             string
+	RoutedAt                                    time.Time
 }
 
 // Workers returns every worker not retired, ordered by logical id. Nothing in
@@ -178,17 +195,23 @@ type Row struct {
 }
 
 // bindWorker inserts a logical id never seen, or rebinds a retired or lost
-// one of the same project: the new pane and terminal and group, the next
-// generation, starting again, with the shell left for the team poll to read.
-// Any other row is left alone, and changes nothing: another project's id is
-// never taken over, since its queue and handoffs are that project's (QA #78
-// F4).
-const bindWorker = `INSERT INTO workers (logical_id, project, grp, pane_id, terminal_id, generation, status, created_at)
-VALUES (?1, ?2, ?3, ?4, ?5, 0, 'starting', ?6)
+// one of the same project: the new pane and terminal and group, the routing
+// it was spawned with, the next generation, starting again, with the shell
+// left for the team poll to read. Any other row is left alone, and changes
+// nothing: another project's id is never taken over, since its queue and
+// handoffs are that project's (QA #78 F4).
+const bindWorker = `INSERT INTO workers (logical_id, project, grp, pane_id, terminal_id, generation, status, created_at,
+	routed_at, routed_role, routed_provider, routed_binding, routed_model_id, routed_effort,
+	override_binding, override_by, override_effort, assignment_digest, policy_version)
+VALUES (?1, ?2, ?3, ?4, ?5, 0, 'starting', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
 ON CONFLICT (logical_id) DO UPDATE SET
 	grp = excluded.grp, pane_id = excluded.pane_id, terminal_id = excluded.terminal_id,
 	shell_pid = NULL, shell_start = NULL,
-	generation = workers.generation + 1, status = 'starting', retired_at = NULL
+	generation = workers.generation + 1, status = 'starting', retired_at = NULL,
+	routed_at = excluded.routed_at, routed_role = excluded.routed_role, routed_provider = excluded.routed_provider,
+	routed_binding = excluded.routed_binding, routed_model_id = excluded.routed_model_id, routed_effort = excluded.routed_effort,
+	override_binding = excluded.override_binding, override_by = excluded.override_by, override_effort = excluded.override_effort,
+	assignment_digest = excluded.assignment_digest, policy_version = excluded.policy_version
 WHERE (workers.retired_at IS NOT NULL OR workers.status = 'lost') AND workers.project = excluded.project
 RETURNING generation`
 
@@ -199,8 +222,9 @@ const failStaleHandoffs = `UPDATE handoffs SET state = 'failed', updated_at = ma
 WHERE logical_id = ?1 AND state = 'pending'`
 
 // BindWorker binds w's logical id to its pane and terminal as a starting
-// worker and returns the row's generation: 0 for an id never seen, one more
-// than before for one reused after its retirement or once lost (I1, A35).
+// worker, with w's routing (none when nil), and returns the row's
+// generation: 0 for an id never seen, one more than before for one reused
+// after its retirement or once lost (I1, A35).
 // A handoff an earlier generation left pending fails in the same
 // transaction, whatever path left it (#29's QA N2). w.Generation is ignored.
 // ErrWorkerLive means the id is bound, not retired and not lost, or is
@@ -218,8 +242,12 @@ func (s *Store) BindWorker(ctx context.Context, w Worker, at time.Time) (int64, 
 		return 0, fmt.Errorf("%w: bind worker %s: %w", ErrStore, w.LogicalID, err)
 	}
 	defer tx.Rollback() //nolint:errcheck // a no-op once committed
+	routed, err := routingArgs(w.Routing)
+	if err != nil {
+		return 0, err
+	}
 	var gen int64
-	err = tx.QueryRowContext(ctx, bindWorker, w.LogicalID, w.Project, w.Group, w.PaneID, w.TerminalID, ns).Scan(&gen)
+	err = tx.QueryRowContext(ctx, bindWorker, append([]any{w.LogicalID, w.Project, w.Group, w.PaneID, w.TerminalID, ns}, routed...)...).Scan(&gen)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("%w: %s is live, or is another project's than %s", ErrWorkerLive, w.LogicalID, w.Project)
 	}
@@ -233,6 +261,27 @@ func (s *Store) BindWorker(ctx context.Context, w Worker, at time.Time) (int64, 
 		return 0, fmt.Errorf("%w: bind worker %s: %w", ErrStore, w.LogicalID, err)
 	}
 	return gen, nil
+}
+
+// routingArgs are bindWorker's ?7 to ?17 for r: every one NULL for none.
+func routingArgs(r *Routing) ([]any, error) {
+	if r == nil {
+		return make([]any, 11), nil
+	}
+	at, err := nanos(r.RoutedAt)
+	if err != nil {
+		return nil, err
+	}
+	orNull := func(s string) any {
+		if s == "" {
+			return nil
+		}
+		return s
+	}
+	return []any{
+		at, r.Role, r.Provider, r.Binding, r.ModelID, r.Effort,
+		orNull(r.OverrideBinding), orNull(r.OverrideBy), orNull(r.OverrideEffort), r.AssignmentDigest, r.PolicyVersion,
+	}, nil
 }
 
 // endsWorker are the statuses that retire a row.
@@ -302,10 +351,19 @@ func (s *Store) WorkerRow(ctx context.Context, logicalID string) (Row, error) {
 		r         Row
 		created   int64
 		retiredAt sql.NullInt64
+		routedAt  sql.NullInt64
+		rt        Routing
+		override  [3]sql.NullString
 	)
 	err := s.db.QueryRowContext(ctx,
-		"SELECT logical_id, project, grp, pane_id, terminal_id, generation, status, created_at, retired_at FROM workers WHERE logical_id = ?",
-		logicalID).Scan(&r.LogicalID, &r.Project, &r.Group, &r.PaneID, &r.TerminalID, &r.Generation, &r.Status, &created, &retiredAt)
+		`SELECT logical_id, project, grp, pane_id, terminal_id, generation, status, created_at, retired_at,
+	routed_at, coalesce(routed_role, ''), coalesce(routed_provider, ''), coalesce(routed_binding, ''),
+	coalesce(routed_model_id, ''), coalesce(routed_effort, ''), override_binding, override_by, override_effort,
+	coalesce(assignment_digest, ''), coalesce(policy_version, '')
+FROM workers WHERE logical_id = ?`,
+		logicalID).Scan(&r.LogicalID, &r.Project, &r.Group, &r.PaneID, &r.TerminalID, &r.Generation, &r.Status, &created, &retiredAt,
+		&routedAt, &rt.Role, &rt.Provider, &rt.Binding, &rt.ModelID, &rt.Effort, &override[0], &override[1], &override[2],
+		&rt.AssignmentDigest, &rt.PolicyVersion)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Row{}, fmt.Errorf("%w: %s", ErrNoWorker, logicalID)
 	}
@@ -315,6 +373,11 @@ func (s *Store) WorkerRow(ctx context.Context, logicalID string) (Row, error) {
 	r.CreatedAt = time.Unix(0, created)
 	if retiredAt.Valid {
 		r.RetiredAt = time.Unix(0, retiredAt.Int64)
+	}
+	if routedAt.Valid {
+		rt.RoutedAt = time.Unix(0, routedAt.Int64)
+		rt.OverrideBinding, rt.OverrideBy, rt.OverrideEffort = override[0].String, override[1].String, override[2].String
+		r.Routing = &rt
 	}
 	return r, nil
 }
