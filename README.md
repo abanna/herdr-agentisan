@@ -365,7 +365,8 @@ ha-coder-1 is at 66% context (hard: 65%) · NERD-5261 · verify: rotate it now
 ```
 
 - **What is covered:** every agent pane in a team, the boss's included. The
-  boss is told about its own: `you are at 80% context …: hand off now`.
+  boss is told about its own: `you are at 80% context (ceiling: 75%): hand
+  off now; the user has been alerted`.
 - **Once per level:** each level is told once. It is told again only after the
   context has fallen to its threshold less 5, or below.
 - **Unknown context:** a `ctx` that is absent or expired is unknown, and tells
@@ -376,8 +377,8 @@ ha-coder-1 is at 66% context (hard: 65%) · NERD-5261 · verify: rotate it now
 The thresholds are `rotation.thresholds`, by default `[55, 65, 75]`, for the
 project and the boss. A role can set its own with
 `groups.<type>.rotation.thresholds`. The daemon reads both when it starts,
-from every layer, the repo file included. `skip` can name `ctx_soft` and
-`ctx_hard`, but never `ctx_ceiling`.
+from the shared file, the project's table and the repo file. `skip` can name
+`ctx_soft` and `ctx_hard`, but never `ctx_ceiling`.
 
 ## The debugger
 
@@ -425,8 +426,9 @@ Just after the daemon starts, the command waits for its first poll.
 Each command resolves the project's profile with its repo's committed
 `.herdr-agentisan.toml`. So that file sets only `color`, `github`, a
 group's `workers` and `slots`, models and the rotation thresholds, the
-project's and a group's (ADR-001 A46, A33). Agent commands, `[spawn]`, `verify`, `[integrations]` and every other
-key belong in `herdr-agentisan.toml` or `--set`. A repo file that sets one
+project's and a group's (ADR-001 A46, A33). Agent commands, `[spawn]`,
+`verify`, `[integrations]` and every other key belong in
+`herdr-agentisan.toml` or `--set`. A repo file that sets one
 is refused, and names the key. A model, from any layer, is a letter or
 digit, then letters, digits and `. _ - : / @ [ ]`, such as `opus[1m]`.
 

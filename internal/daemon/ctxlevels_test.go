@@ -134,8 +134,8 @@ func methodsOf(t *testing.T, th *teamHerdr) map[string]bool {
 }
 
 // TestCtxCeilingToastNotShown: a toast herdr does not show, a call that
-// fails, and one that takes past ToastBudget are each logged and never asked
-// again, and the boss's line says the user was not alerted.
+// fails, and one herdr answers past A33's one second are each logged and
+// never asked again, and the boss's line says the user was not alerted.
 func TestCtxCeilingToastNotShown(t *testing.T) {
 	t.Parallel()
 	for name, toast := range map[string]herdrtest.Handler{
@@ -145,8 +145,10 @@ func TestCtxCeilingToastNotShown(t *testing.T) {
 		"refused": func(herdrtest.Request) herdrtest.Reply {
 			return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "server_unavailable", Message: "busy"}}
 		},
-		"past its budget": func(herdrtest.Request) herdrtest.Reply {
-			time.Sleep(2 * daemon.ToastBudget)
+		// A fixed 1.3 s, not a multiple of ToastBudget, so the budget itself
+		// is held to A33's "within one second".
+		"past one second": func(herdrtest.Request) herdrtest.Reply {
+			time.Sleep(1300 * time.Millisecond)
 			return herdrtest.Reply{Result: map[string]any{"type": "notification_show", "shown": true, "reason": ""}}
 		},
 	} {

@@ -55,7 +55,7 @@ model = "opus"
 # alerts you with a toast. Three whole numbers from 1 to 100, ascending, each
 # crossed at its percentage or above. These are the project's, and the
 # boss's; a group can set its own (see librarian below). Read once when the
-# daemon starts, from every layer, the repo file included.
+# daemon starts, from this file, the project's table and the repo file.
 [rotation]
 thresholds = [55, 65, 75]
 

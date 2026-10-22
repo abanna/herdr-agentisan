@@ -21,8 +21,9 @@ const Rearm = 5
 // told and that is still armed: a rise past it is told once, at the highest
 // level newly crossed, and a level re-arms, with every level above it, once
 // a known ctx is at its threshold less Rearm or under. A ctx that is absent,
-// expired or not a percentage, or on a pane herdr detects no agent in, is
-// unknown: it tells nothing and re-arms nothing (D7). The memory is by
+// expired or not a percentage is unknown, and so is a pane's that herdr
+// detects no agent in, which the model blanks (A27): it tells nothing and
+// re-arms nothing (D7). The memory is by
 // terminal, which a reissued pane id does not carry over (A35), and is held
 // in memory only, so a restarted daemon tells each level crossed once more.
 type CtxWatch struct {
