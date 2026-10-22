@@ -52,10 +52,15 @@ func TestDaemonRunFindsGhOnItsPATH(t *testing.T) {
 			}
 			ctx = cli.WithLookupEnv(ctx, e.lookup(env))
 			done := make(chan error, 1)
+			ended := make(chan struct{})
 			go func() {
 				_, err := runCtx(ctx, "daemon", "run")
 				done <- err
+				close(ended)
 			}()
+			// Its start first, then its first collection, each within ready:
+			// a slow store.Open is not charged to the wait for gh (NERD-5366).
+			awaitDaemon(t, e, ended)
 			paths, err := daemon.PathsFor(e.stateDir, e.herdrSock)
 			require.NoError(t, err)
 			log := func() string {

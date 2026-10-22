@@ -22,6 +22,8 @@ const (
 	OpTeamStatus   = "team.status"
 	OpWorkerSpawn  = "worker.spawn"
 	OpWorkerRetire = "worker.retire"
+	// OpSend queues a message (A30).
+	OpSend = "send"
 )
 
 // The workforce ops' budgets. A spawn waits for agents to start, and the
@@ -32,6 +34,7 @@ const (
 	SpawnBudget   = 110 * time.Second
 	RetireBudget  = 10 * time.Second
 	HandoffBudget = 1500 * time.Second
+	SendBudget    = 10 * time.Second
 )
 
 // notReadyRetry is how long Workforce waits before asking again a daemon
@@ -44,6 +47,7 @@ var opBudgets = map[string]func(json.RawMessage) time.Duration{
 	OpTeamStatus:   fixed(StatusBudget),
 	OpWorkerSpawn:  fixed(SpawnBudget),
 	OpWorkerRetire: retireBudget,
+	OpSend:         fixed(SendBudget),
 }
 
 func fixed(d time.Duration) func(json.RawMessage) time.Duration {
@@ -71,6 +75,10 @@ var workforceCodes = []struct {
 	{workforce.ErrInvalidID, "invalid_id"},
 	{workforce.ErrPreflight, "preflight_failed"},
 	{workforce.ErrSpawnFailed, "spawn_failed"},
+	{workforce.ErrUnknownRecipient, "unknown_recipient"},
+	{workforce.ErrUnknownSender, "unknown_sender"},
+	{store.ErrTooLarge, "too_large"},
+	{store.ErrInvalid, codeBadRequest},
 	{ErrHerdrGone, "herdr_gone"},
 	{workforce.ErrHerdr, codeHerdrFailed},
 	{store.ErrStore, codeStoreFailed},
@@ -89,11 +97,12 @@ func workforceCode(err error) string {
 	return codeFailed
 }
 
-// workforceOps are the workforce ops on svc. Each refuses not_ready until
-// ready is set, once the team poll has reconciled the workers rows since the
-// daemon started (A35): before that, a worker a live handoff re-keyed reads
-// as a pane no row binds.
-func workforceOps(svc *workforce.Service, ready *atomic.Bool) map[string]op {
+// workforceOps are the workforce ops on svc, and send, which calls queued
+// with each message it queues. Each refuses not_ready until ready is set,
+// once the team poll has reconciled the workers rows since the daemon
+// started (A35): before that, a worker a live handoff re-keyed reads as a
+// pane no row binds, and would send as one.
+func workforceOps(svc *workforce.Service, ready *atomic.Bool, queued func(context.Context, workforce.SendResult)) map[string]op {
 	ops := map[string]op{
 		OpTeamStatus: {code: workforceCode, run: func(ctx context.Context, args json.RawMessage) (any, error) {
 			var req workforce.StatusRequest
@@ -115,6 +124,18 @@ func workforceOps(svc *workforce.Service, ready *atomic.Bool) map[string]op {
 				return nil, err
 			}
 			return svc.Retire(ctx, req)
+		}},
+		OpSend: {code: workforceCode, run: func(ctx context.Context, args json.RawMessage) (any, error) {
+			var req workforce.SendRequest
+			if err := decodeArgs(args, &req); err != nil {
+				return nil, err
+			}
+			res, err := svc.Send(ctx, req)
+			if err != nil {
+				return nil, err //nolint:wrapcheck // workforce wraps it, and workforceCode maps its sentinel
+			}
+			queued(ctx, res)
+			return res, nil
 		}},
 	}
 	for name, o := range ops {

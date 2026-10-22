@@ -86,11 +86,6 @@ const (
 	minAgentStartTimeout = 3*time.Second + time.Millisecond
 )
 
-// WorkerEnv is set in every worker tab's shell to the worker's logical id, so
-// a shell profile can tell a worker's shell from the user's and skip what
-// asks a question at startup.
-const WorkerEnv = "HERDR_AGENTISAN_WORKER"
-
 // Service runs the workforce ops. The daemon holds one; its lock serializes
 // every change to a team.
 type Service struct {

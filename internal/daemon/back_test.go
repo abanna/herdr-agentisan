@@ -171,7 +171,7 @@ func backDaemon(t *testing.T, o func(*daemon.Options), focused string, panes []s
 	if o != nil {
 		o(&op)
 	}
-	run(t, op)
+	serving(t, op, h)
 	h.nextStream(t)
 	require.Eventually(t, func() bool { return h.calls("pane.list") > 0 }, ready, 10*time.Millisecond)
 	want := slices.Clone(planted)

@@ -103,13 +103,12 @@ type teamPoll struct {
 // returns stops all four and waits for them, so once it returns nothing more
 // is pushed or typed, the view is cleared unless the server is gone, and no
 // gh is left running.
-func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, idle *team.IdleClock, views *viewSync, ready *atomic.Bool) (stop func()) {
+func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, idle *team.IdleClock, views *viewSync, ready *atomic.Bool, in *inbox) (stop func()) {
 	if o.Team == nil {
 		return func() {}
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	header := newHeaderCache(o.Team.GitHub)
-	in := newInbox()
 	var wg sync.WaitGroup
 	wg.Go(func() { o.collectGitHub(ctx, header) })
 	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header, idle, views, ready, in) })
@@ -307,21 +306,22 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 			o.Logger.Warn().Err(err).Str("workspace", t.Target.WorkspaceID).Msg("push $team")
 		}
 	}
-	if err := o.pushCtx(ctx, c, m, l); err != nil {
+	if err := o.pushCtx(ctx, c, m, l, tp.idle, now); err != nil {
 		return nil, "", err
 	}
 	focused, _ := focusedPane(panes)
 	return &m, focused.WorkspaceID, nil
 }
 
-// pushCtx pushes every agent pane in l its ctx display (A28) and, when a
-// team in m places it, its place in the team, which the agent view sorts by
-// (A28 addendum), with `$team`'s source and TTL. A refused push, such as to
+// pushCtx pushes every agent pane in l its ctx display (A28), its stage
+// display at now by the stretches idle saw (A42) and, when a team in m
+// places it, its place in the team, which the agent view sorts by (A28
+// addendum), with `$team`'s source and TTL. A refused push, such as to
 // a pane closed since the list, is logged and the others go on; it returns
 // ErrHerdrGone, and pushes nothing more, once a call finds the socket no
 // longer names the daemon's server.
-func (o Options) pushCtx(ctx context.Context, c herdr.Client, m team.Model, l team.Layout) error {
-	for _, pt := range team.SidebarTokens(m, l) {
+func (o Options) pushCtx(ctx context.Context, c herdr.Client, m team.Model, l team.Layout, idle *team.IdleClock, now time.Time) error {
+	for _, pt := range team.SidebarTokens(m, l, idle, now) {
 		// Once ctx ends, each push fails before it dials.
 		err := c.ReportPaneMetadata(ctx, herdr.PaneMetadata{
 			PaneID:    pt.PaneID,

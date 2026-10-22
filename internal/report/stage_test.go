@@ -26,15 +26,20 @@ type stageParams struct {
 	TTLMs  uint64            `json:"ttl_ms"`
 }
 
+// reportedAt is the clock the reports in these tests read: 900 ms into its
+// second, so a stage_at that rounds instead of truncating shows.
+func reportedAt() time.Time { return time.Unix(1_761_066_000, 900_000_000) }
+
 // TestStagePushesTheTokenContract is the token contract for item and stage
-// (ADR-001 A5): both keys in one report, source agentisan, herdr's maximum
+// (ADR-001 A5, A42): both keys and the stage's stage_at, in whole seconds
+// from the pane's clock, in one report, source agentisan, herdr's maximum
 // TTL of 86,400,000 ms, on the reporting pane only. The pane has no lineage,
 // as on an OS with no process table reader, so the report trusts
 // HERDR_PANE_ID and costs one call.
 func TestStagePushesTheTokenContract(t *testing.T) {
 	t.Parallel()
 	srv := herdrtest.Start(t, okReply)
-	pane := report.Pane{SocketPath: srv.Path, PaneID: "w14:p1"}
+	pane := report.Pane{SocketPath: srv.Path, PaneID: "w14:p1", Now: reportedAt}
 
 	got, err := report.Stage(t.Context(), herdr.Client{SocketPath: srv.Path}, pane, "NERD-5253", "build_test")
 	require.NoError(t, err)
@@ -43,8 +48,68 @@ func TestStagePushesTheTokenContract(t *testing.T) {
 	reqs := srv.Requests()
 	require.Len(t, reqs, 1)
 	assert.Equal(t, "pane.report_metadata", reqs[0].Method)
-	assert.JSONEq(t, `{"pane_id":"w14:p1","source":"agentisan","tokens":{"item":"NERD-5253","stage":"build_test"},"ttl_ms":86400000}`, string(reqs[0].Params))
+	assert.JSONEq(t, `{"pane_id":"w14:p1","source":"agentisan","tokens":{"item":"NERD-5253","stage":"build_test","stage_at":"1761066000"},"ttl_ms":86400000}`, string(reqs[0].Params))
 	assert.Equal(t, uint64(86_400_000), uint64(report.StageTTL/time.Millisecond), "herdr's maximum TTL")
+}
+
+// TestStageTimesEveryReport: each report carries its own stage_at, the same
+// stage reported again included, so a reader can tell a stage reported again
+// from one left over. A pane with no clock reads the real one.
+func TestStageTimesEveryReport(t *testing.T) {
+	t.Parallel()
+	srv := herdrtest.Start(t, okReply)
+	at := time.Unix(1_761_066_000, 0)
+	pane := report.Pane{SocketPath: srv.Path, PaneID: "w14:p1", Now: func() time.Time { return at }}
+
+	for _, step := range []time.Duration{0, time.Hour, 2 * time.Second} {
+		at = at.Add(step)
+		_, err := report.Stage(t.Context(), herdr.Client{SocketPath: srv.Path}, pane, "NERD-5253", "waiting: boss")
+		require.NoError(t, err)
+	}
+	before := time.Now().Truncate(time.Second)
+	pane.Now = nil
+	_, err := report.Stage(t.Context(), herdr.Client{SocketPath: srv.Path}, pane, "NERD-5253", "waiting: boss")
+	require.NoError(t, err)
+	after := time.Now()
+
+	var got []string
+	for _, r := range srv.Requests() {
+		var p stageParams
+		require.NoError(t, json.Unmarshal(r.Params, &p))
+		got = append(got, p.Tokens[report.StageAtKey])
+	}
+	require.Len(t, got, 4)
+	assert.Equal(t, []string{"1761066000", "1761069600", "1761069602"}, got[:3])
+	real, ok := report.ParseStageAt(got[3])
+	require.True(t, ok, "%q", got[3])
+	assert.False(t, real.Before(before) || real.After(after), "%v is the real clock's, between %v and %v", real, before, after)
+}
+
+// TestParseStageAtClasses: a stage_at is read only as FormatStageAt writes
+// it, so a hand-written or damaged value is no time at all, never a wrong
+// one.
+func TestParseStageAtClasses(t *testing.T) {
+	t.Parallel()
+	at := time.Unix(1_761_066_000, 999_999_999)
+	got, ok := report.ParseStageAt(report.FormatStageAt(at))
+	require.True(t, ok)
+	assert.Equal(t, time.Unix(1_761_066_000, 0), got, "whole seconds, truncated")
+	got, ok = report.ParseStageAt("1")
+	require.True(t, ok)
+	assert.Equal(t, time.Unix(1, 0), got)
+	got, ok = report.ParseStageAt("9223372036854775807")
+	require.True(t, ok, "the last second int64 holds; a reader's clock check refuses it as ahead")
+	assert.Equal(t, int64(9223372036854775807), got.Unix())
+
+	for _, v := range []string{
+		"", " ", "0", "-1", "+1761066000", "01761066000", " 1761066000", "1761066000 ",
+		"1761066000.5", "1.7e9", "0x68f7", "1_761_066_000", "١٧٦١٠٦٦٠٠٠", "9223372036854775808", "NERD-5334",
+		"1761066000\n", "1761066000\r\n", "\ufeff1761066000", "1761066000\x00", "\xff1761066000", "１７６１０６６０００",
+		"1761066000\xe2\x82", "\ufffd1761066000", "17610660٠٠",
+	} {
+		_, ok := report.ParseStageAt(v)
+		assert.False(t, ok, "%q", v)
+	}
 }
 
 // TestStageSetsTheTTLAgainOnEveryCall: every report carries the full 24 h, so

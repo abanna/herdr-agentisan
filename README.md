@@ -129,8 +129,9 @@ Agentisan runs `report stage` on every pipeline step transition once
 herdr-agentisan report stage --item=NERD-5253 --stage=build_test
 ```
 
-It sets the pane's `item` and `stage` tokens, source `agentisan`, with a 24 h
-TTL renewed by every report; they also leave with the pane. A value is at
+It sets the pane's `item` and `stage` tokens, and `stage_at`, the report's
+time, source `agentisan`, with a 24 h TTL renewed by every report; they also
+leave with the pane. A value is at
 most 80 printable characters, and anything else is refused rather than cut
 short. Like `report statusline`, it prints nothing and exits 0 whether or not
 it reported; only a malformed command line (an unknown flag, an extra
@@ -166,7 +167,8 @@ what the turn's text states, and sets the tokens `report stage` sets:
 - **The item** is an `item: <id>` line: the first one in a prompt, as a
   dispatch carries it, or the last one in the final message's closing
   paragraph, beside the status line. A new item stated with no stage clears
-  the old stage.
+  the old stage. An item alone never sets `stage_at`, so it never makes an
+  old stage look reported again.
 
 Markdown bold and code ticks around a line are fine; a value over 80
 characters is cut to 79 and `…`. A turn that states neither reports nothing,
@@ -221,6 +223,20 @@ work under the default one, unlike `report stage` from a tool command. Both
 print nothing and always exit 0; `HERDR_AGENTISAN_LOG_LEVEL=debug` logs why
 nothing was reported. ADR-001 A42 has the details.
 
+## An old stage ages
+
+A stage stays on its pane for up to a day, so the daemon marks one that no
+longer says what the agent is doing: once a turn of the agent's has ended
+with no report of it, or herdr no longer detects the agent (ADR-001 A42).
+The sidebar then shows it dimmed with its age (`build_test · 3h`), the
+dashboard draws it faint with "3h05m ago" in its time column, and
+`team status` gives `stage_stale`. A stage reported at the end of each turn
+stays current while the pane rests, so a `Stop` hook or a closing
+`report stage` keeps it so. It needs no hooks: it works on any agent pane a
+team places, from herdr's statuses and the `stage_at` every report writes.
+The daemon judges only a turn it saw begin and end, so after a restart a
+stage stays current until the agent's next turn.
+
 ## Search on prefix+/ and in the dashboard
 
 prefix+/ opens herdr's own Go To, which lists every workspace and pane: press
@@ -267,7 +283,9 @@ The daemon pushes each `◆ <group>` workspace, and each team's workspace, its
 handoff. It pushes every agent pane its context use as well, seven
 characters wide (`ctx  9%`, `ctx 56%`; `ctx  --` when the agent reports
 none), in one of three tokens by band: `$ctx_ok` up to 55%, `$ctx_warn` above
-55% and `$ctx_hot` above 65%. Both go with source `agentisan` and a 9 s TTL,
+55% and `$ctx_hot` above 65%, and its stage, in `$stage_now` while it is
+current and in `$stage_old`, with its age, once it is
+[old](#an-old-stage-ages). They go with source `agentisan` and a 9 s TTL,
 so they clear themselves within 9 s of the daemon stopping. `◆ boss` and
 `◆ herdr` get no `$team`. `[spaces] project` in `herdr-agentisan.toml` names
 the project the spaces belong to; with no config file they belong to one
@@ -333,7 +351,7 @@ daemon runs (ADR-001 D11, A23); the `herdr-workforce` skill drives them.
 
 | Command | What it does |
 | --- | --- |
-| `team status [--project p]` | Every group's counts and open slots, and each worker's status, ctx, item, stage and idle time |
+| `team status [--project p]` | Every group's counts and open slots, and each worker's status, ctx, item, stage (and whether it is old) and idle time |
 | `worker spawn --group g [--count n] [--model m]` | Adds workers, refused whole past the group's `slots` or when the repo fails the tdaddy preflight |
 | `worker retire <id> [--after-handoff]` | Closes a worker's pane, by logical id or pane id; with the flag, once its handoff is written |
 
@@ -368,6 +386,13 @@ and the only way to a premium binding. `config resolve` shows each key with
 its layer, then `routing policy:`, the version a decision records.
 `worker spawn` asks routing from NERD-5289 part 1b on; until then the keys
 resolve and nothing reads them.
+
+## Messaging
+
+`herdr-agentisan send <to> <body|->` queues a message in the daemon, which
+types it into the recipient's agent once, holds it through a worker's
+handoff, and tells the sender when a prompt may not have arrived (ADR-001
+A30). `boss` is your own team's boss. See [`docs/messaging.md`](docs/messaging.md).
 
 ## The dashboard
 
@@ -409,7 +434,10 @@ The dashboard keeps v12's cues (ADR-001 A38). A stage that says READY is
 bold green, RED or blocked bold red, and waiting or queued yellow, matched
 by whole word in any case. The footer says `data Ns old` once the snapshot
 drawn is more than 15 s old, so a stalled daemon never passes for a live
-one. A plain shell is drawn as `▸ shell`.
+one. A plain shell is drawn as `▸ shell`. An [old stage](#an-old-stage-ages)
+takes none of those colours: it is dim, faint and italic, and its time
+column says how long ago it was reported ("3h05m ago"), so it reads as old
+on a terminal that draws neither.
 
 ### Group descriptions
 

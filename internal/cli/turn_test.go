@@ -51,8 +51,8 @@ func TestReportTurnPushesItemAndStage(t *testing.T) {
 		tokens map[string]string
 		log    string
 	}{
-		"a Stop":             {stdin: `{"hook_event_name":"Stop","last_assistant_message":"Done.\n\nBOSS: PR #52 open"}`, tokens: map[string]string{"stage": "PR #52 open"}, log: `"stage":"PR #52 open"`},
-		"a UserPromptSubmit": {stdin: `{"hook_event_name":"UserPromptSubmit","prompt":"item: NERD-5334\nGo."}`, tokens: map[string]string{"item": "NERD-5334", "stage": ""}, log: `"cleared":true`},
+		"a Stop":             {stdin: `{"hook_event_name":"Stop","last_assistant_message":"Done.\n\nBOSS: PR #52 open"}`, tokens: map[string]string{"stage": "PR #52 open", "stage_at": stageAtNow}, log: `"stage":"PR #52 open"`},
+		"a UserPromptSubmit": {stdin: `{"hook_event_name":"UserPromptSubmit","prompt":"item: NERD-5334\nGo."}`, tokens: map[string]string{"item": "NERD-5334", "stage": "", "stage_at": ""}, log: `"cleared":true`},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -201,7 +201,7 @@ func TestCodexTurnHookSnippetRunsReportTurn(t *testing.T) {
 func TestReportTurnTakesCodexsPayload(t *testing.T) {
 	t.Parallel()
 	for message, tokens := range map[string][]map[string]string{
-		strconv.Quote("item: NERD-5334\nSTATUS: waiting on QA"): {{"item": "NERD-5334", "stage": "waiting on QA"}},
+		strconv.Quote("item: NERD-5334\nSTATUS: waiting on QA"): {{"item": "NERD-5334", "stage": "waiting on QA", "stage_at": stageAtNow}},
 		"null": nil,
 	} {
 		srv := herdrtest.Start(t, paneHerdr("w15:p4"))

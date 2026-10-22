@@ -121,7 +121,7 @@ func TestRunSetsTheFocusedTeamsView(t *testing.T) {
 func TestRunClearsTheViewOutsideEveryTeam(t *testing.T) {
 	t.Parallel()
 	th, cfg := viewTeams(t)
-	run(t, teamOpts(t, shortDir(t), th, cfg))
+	serving(t, teamOpts(t, shortDir(t), th, cfg), th.fakeHerdr)
 	s := th.nextStream(t)
 
 	s.lines <- herdrtest.PaneFocused("w2:p1", "w2")
