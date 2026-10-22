@@ -36,7 +36,7 @@ func TestUpgradeFromTheFirstSchema(t *testing.T) {
 
 	s := open(t, path)
 	assert.Equal(t, store.SchemaVersion(), s.UserVersion())
-	assert.Equal(t, 3, s.UserVersion())
+	assert.Equal(t, 4, s.UserVersion())
 	ws, err := s.Workers(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, []store.Worker{{LogicalID: "w", Project: "agentisan", Group: "coders", PaneID: "w14:p2", Generation: 2, Status: "active", HandoffPending: true}}, ws)

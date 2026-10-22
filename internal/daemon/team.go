@@ -114,9 +114,10 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	header := newHeaderCache(o.Team.GitHub)
+	n := o.newNotices()
 	var wg sync.WaitGroup
-	wg.Go(func() { o.collectGitHub(ctx, header) })
-	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header, idle, views, ready, in) })
+	wg.Go(func() { o.collectGitHub(ctx, header, o.newGitHubNotices(st, n)) })
+	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header, idle, views, ready, in, n) })
 	wg.Go(func() { o.syncView(ctx, views, ident) })
 	wg.Go(func() { o.newDispatcher(st, in).run(ctx) })
 	return func() {
@@ -147,7 +148,7 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 //
 // Each poll gives in its model, or none when it built none, and so wakes the
 // dispatcher.
-func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, header *headerCache, idle *team.IdleClock, views *viewSync, ready *atomic.Bool, in *inbox) {
+func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, header *headerCache, idle *team.IdleClock, views *viewSync, ready *atomic.Bool, in *inbox, n *notices) {
 	teams, err := settings.Teams(o.Team.ConfigDir)
 	if err != nil {
 		o.Logger.Error().Err(err).Msg("herdr-agentisan.toml does not resolve; the ◆ spaces belong to the unnamed project, and no tabs team is found, until it is fixed and the daemon restarts")
@@ -164,7 +165,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 		cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, idle: idle, cache: cache, header: header,
 		models: newLaunchModels(), descriptions: newGroupDescriptions(o.Team.ConfigDir),
 		slots: o.newSlotCounter(), bind: &binder{ready: ready},
-		notices: o.newNotices(),
+		notices: n,
 	}
 	onServer := o.onServer(ident)
 	c := herdr.Client{SocketPath: o.HerdrSocket, Dialed: onServer}

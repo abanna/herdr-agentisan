@@ -12,6 +12,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/abanna/herdr-agentisan/internal/github"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/settings"
@@ -136,6 +137,14 @@ func (t *TeamCache) Load(sel Selector) (json.RawMessage, error) { return t.c.loa
 // ticker, so a test says when each round after the first runs.
 func WithGitHubTicks(g GitHubOptions, ticks <-chan time.Time) GitHubOptions {
 	g.ticks = ticks
+	return g
+}
+
+// WithGitHubRounds returns g sending on rounds at each round's end, once
+// every repo's calls and notices are done, so a test waits for the round
+// itself rather than for its gh calls.
+func WithGitHubRounds(g GitHubOptions, rounds chan<- struct{}) GitHubOptions {
+	g.rounds = rounds
 	return g
 }
 
@@ -334,3 +343,19 @@ func (s ViewSync) Next() (clear bool, sent func(), ok bool) {
 	want, forgets, ok := s.v.next()
 	return want.clear, func() { s.v.sentAt(want, forgets) }, ok
 }
+
+// GitHubSource is the GitHub collector's notice source (A45) on its own.
+type GitHubSource struct{ g *githubNotices }
+
+// NewGitHubSource is o's source on st, with o's notices settings.
+func NewGitHubSource(o Options, st *store.Store) GitHubSource {
+	return GitHubSource{o.newGitHubNotices(st, o.newNotices())}
+}
+
+// Collected diffs h's list, open, as the collector does after a list.
+func (s GitHubSource) Collected(ctx context.Context, gh github.Runner, h settings.Header, open github.Open) {
+	s.g.collected(ctx, gh, h, open)
+}
+
+// Take is what the source has handed the poll since the last Take.
+func (s GitHubSource) Take() []notice.Notice { return s.g.n.github.take() }

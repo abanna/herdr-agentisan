@@ -55,3 +55,30 @@ func TestRunPrunesFinishedMessages(t *testing.T) {
 		return assert.ObjectsAreEqual([]string{"queued", "recent"}, query(t, p.DB, "SELECT recipient FROM messages ORDER BY recipient"))
 	}, ready, 10*time.Millisecond, "the prune at start removes the finished messages past retention")
 }
+
+// TestRunPrunesGitHubNoticeRows: the prune at start also removes the GitHub
+// notices' rows the collector has not observed for 30 days (A45).
+func TestRunPrunesGitHubNoticeRows(t *testing.T) {
+	t.Parallel()
+	t0 := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	h := newHerdr(t, 22)
+	dir := shortDir(t)
+	p := paths(t, dir, h)
+	require.NoError(t, os.MkdirAll(p.Dir, 0o700))
+	st, err := store.Open(t.Context(), p.DB)
+	require.NoError(t, err)
+	for project, at := range map[string]time.Time{"old": t0.Add(-store.GitHubRetention - time.Second), "recent": t0.Add(-store.GitHubRetention + time.Second)} {
+		require.NoError(t, st.UpdateGitHub(t.Context(), store.GitHubUpdate{
+			Project: project, Repo: "acme/app", Collected: true, Open: []int{1},
+			Seen: []store.GitHubEvent{{PR: 1, Kind: "approved"}},
+		}, at))
+	}
+	require.NoError(t, st.Close())
+
+	o := opts(t, dir, h)
+	o.Now = func() time.Time { return t0 }
+	run(t, o)
+	require.Eventually(t, func() bool {
+		return assert.ObjectsAreEqual([]string{"recent", "recent", "recent"}, query(t, p.DB, "SELECT project FROM github_seen UNION ALL SELECT project FROM github_open UNION ALL SELECT project FROM github_seeded"))
+	}, ready, 10*time.Millisecond)
+}
