@@ -1364,15 +1364,19 @@ func TestSpawnMarksTheWorkersUpActiveFirst(t *testing.T) {
 // closes the tab or workspace it just opened, on a settle context of its own:
 // on the op's, the close would fail at once and leave a pane no row binds,
 // whose label takes the id. Both of open's cleanups: the new workspace's tab
-// label refused, and the row's write on the ended context (NERD-5350).
+// label refused, and the row's write on the ended context, for a first worker
+// and for a later one, whose pane is closed with the worker opened before it
+// (NERD-5350).
 func TestSpawnClosesWhatItOpenedWhenCancelled(t *testing.T) {
 	t.Parallel()
 	const assay = "\n[projects.assay]\nrepo = \"REPO\"\nshort = \"as\"\n[projects.assay.groups.qa]\nworkers = 1\nslots = 2\n"
 	tests := map[string]struct {
 		req workforce.SpawnRequest
 		id  string
-		// opens is the call that opened the worker's pane.
-		opens string
+		// opens is the call that opened the worker's pane; opens2, that it
+		// opened two, the first worker's and the failed one's.
+		opens  string
+		opens2 bool
 		// cut ends the op's context where the test wants it to fail.
 		cut func(f *fixture, cancel context.CancelFunc) *herdrtest.Server
 	}{
@@ -1390,25 +1394,11 @@ func TestSpawnClosesWhatItOpenedWhenCancelled(t *testing.T) {
 		},
 		"the row, after the tab opened": {
 			req: workforce.SpawnRequest{Selector: workforce.Selector{Project: "herdr-agentisan"}, Group: "coder", Count: 1}, id: "ha-coder-1", opens: "tab.create",
-			cut: func(f *fixture, cancel context.CancelFunc) *herdrtest.Server {
-				var created atomic.Bool
-				srv := wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
-					reply := next()
-					if r.Method == "tab.create" {
-						created.Store(true)
-					}
-					return reply
-				})
-				// The row's stamp is read right before its write, after the
-				// tab is open: the context ends there.
-				f.svc.Now = func() time.Time {
-					if created.Load() {
-						cancel()
-					}
-					return time.Now()
-				}
-				return srv
-			},
+			cut: func(f *fixture, cancel context.CancelFunc) *herdrtest.Server { return cutAtRow(t, f, cancel, 1) },
+		},
+		"a later worker's row": {
+			req: workforce.SpawnRequest{Selector: workforce.Selector{Project: "herdr-agentisan"}, Group: "coder", Count: 2}, id: "ha-coder-2", opens: "tab.create", opens2: true,
+			cut: func(f *fixture, cancel context.CancelFunc) *herdrtest.Server { return cutAtRow(t, f, cancel, 2) },
 		},
 	}
 	for name, tc := range tests {
@@ -1421,7 +1411,11 @@ func TestSpawnClosesWhatItOpenedWhenCancelled(t *testing.T) {
 
 			_, err := f.svc.Spawn(ctx, tc.req)
 			require.Error(t, err)
-			require.Equal(t, 1, countCalls(srv, tc.opens), "the worker's pane was opened, then its open failed: %v", err)
+			opened := 1
+			if tc.opens2 {
+				opened = 2
+			}
+			require.Equal(t, opened, countCalls(srv, tc.opens), "the worker's pane was opened, then its open failed: %v", err)
 			assert.Nil(t, f.h.tabByLabel(tc.id), "no tab of %s is left open", tc.id)
 			assert.False(t, f.h.hasWorkspace("assay"), "nor a workspace opened for it")
 			assert.Equal(t, []string{f.boss}, f.h.paneIDs(), "only the boss's pane is left")
@@ -1429,6 +1423,27 @@ func TestSpawnClosesWhatItOpenedWhenCancelled(t *testing.T) {
 			assert.ErrorIs(t, err, store.ErrNoWorker, "and no row binds anything")
 		})
 	}
+}
+
+// cutAtRow ends the op's context right before the nth tab.create's worker's
+// row is written, after that tab is open: the row's stamp is read just then.
+func cutAtRow(t *testing.T, f *fixture, cancel context.CancelFunc, n int32) *herdrtest.Server {
+	t.Helper()
+	var tabs atomic.Int32
+	srv := wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+		reply := next()
+		if r.Method == "tab.create" {
+			tabs.Add(1)
+		}
+		return reply
+	})
+	f.svc.Now = func() time.Time {
+		if tabs.Load() == n {
+			cancel()
+		}
+		return time.Now()
+	}
+	return srv
 }
 
 // TestSpawnCleansUpAFailedOpenOnOneBudget: when a later worker's open fails,
