@@ -93,8 +93,10 @@ daemon's directory, an `.mcp.json` it cannot read, or a path a tool rule
 cannot carry. `team up` fills a group whose `workers` is above 0 with the
 same launch, and one it cannot build refuses the whole team up only when a
 debugger is to open. Its model is `--model`, else its group's, else `[agent]`'s
-when `[agent]`'s command is claude. A debugger reports no `ctx` and writes
-no handoff, so retire it with a plain `worker retire <id>`:
+when `[agent]`'s command is claude; while `[routing] enabled` is on, routing's
+`alex_debugger` role chooses its model and effort (ADR-001 A50). A debugger
+reports no `ctx` and writes no handoff, so retire it with a plain
+`worker retire <id>`:
 `--after-handoff` is refused for one bound to a pane (an unbound one is
 retired with nothing closed, as any is).
 

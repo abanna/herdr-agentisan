@@ -121,6 +121,35 @@ func TestSpawnTheDebuggerWithAModel(t *testing.T) {
 // never opens it.
 const debuggerEnvFile = "\n[debugger]\nenv_file = \"/nonexistent/elastic.env\"\n"
 
+// TestSpawnRoutesTheDebugger: with routing on, the debugger starts on what
+// its role, alex_debugger, chose (A50), after its own launch's arguments,
+// and its row records the decision.
+func TestSpawnRoutesTheDebugger(t *testing.T) {
+	t.Parallel()
+	f, rec := routedFixture(t, strings.Replace(routingOn, opsGroup, "\n[projects.herdr-agentisan.groups.debugger]\nworkers = 0\nslots = 1\n", 1)+debuggerEnvFile)
+	f.svc.Debugger = pluginLaunch(t)
+
+	_, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: settings.DebuggerType, Count: 1})
+	require.NoError(t, err)
+	l := f.svc.Debugger
+	l.Repo, l.ConfigDir, l.KeyFiles = f.repo, f.config, []string{"/nonexistent/elastic.env"}
+	want, err := l.Command()
+	require.NoError(t, err)
+	args := make([]any, 0, len(want.Args)+6)
+	for _, a := range append(slices.Clone(want.Args), "--model", "claude-opus-5-5", "--effort", "high", "--name", "ha-debugger-1") {
+		args = append(args, a)
+	}
+	starts := f.h.params("agent.start")
+	require.Len(t, starts, 1)
+	assert.Equal(t, "claude", starts[0]["kind"])
+	assert.Equal(t, args, starts[0]["args"])
+	require.Len(t, rec.all(), 1)
+	r := routingOf(t, f, "ha-debugger-1")
+	require.NotNil(t, r)
+	assert.Equal(t, "alex_debugger", r.Role)
+	assert.Equal(t, "claude_strong", r.Binding)
+}
+
 // TestSpawnRefusesADebuggerItCannotLaunch: a launch that cannot be built is
 // refused whole as a configuration error, before the preflight, a tab or a
 // row: no env file named, a daemon given no checkout, a checkout with no
