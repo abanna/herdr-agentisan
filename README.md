@@ -554,8 +554,9 @@ does not resolve keeps the last ones, and `daemon.log` says why.
 
 Each row shows the model its agent reports it runs (ADR-001 A56): Claude's
 statusline `model.id`, or the model a Codex hook names. A `/model` switch
-therefore shows at the agent's next report: within a minute for Claude, and
-after Codex's next tool use or turn end.
+therefore shows at the agent's next report. For Claude that is within a
+minute when the statusline sets `refreshInterval: 60`, else at its next
+message. For Codex it is after the next tool use or turn end.
 
 Until an agent has reported, or when its report is older than the agent's
 process, as a model left by an earlier agent in the pane is, the row shows

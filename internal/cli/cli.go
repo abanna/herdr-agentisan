@@ -191,9 +191,10 @@ func newReportCmd() *cobra.Command {
 func newReportStatuslineCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "statusline",
-		Short: "Push ctx from Claude's statusline JSON on stdin",
+		Short: "Push ctx and the model from Claude's statusline JSON on stdin",
 		Long: "Reads Claude Code's statusline JSON on stdin and sets this pane's ctx\n" +
-			"token. Add one line to the statusline script:\n\n" +
+			"token, and the model token, its model.id, with model_at (ADR-001 A56).\n" +
+			"Add one line to the statusline script:\n\n" +
 			"  herdr-agentisan report statusline <<<\"$input\" >/dev/null 2>&1 &\n\n" +
 			"It prints nothing and always exits 0; why it reported nothing goes to\n" +
 			"the debug log (HERDR_AGENTISAN_LOG_LEVEL=debug).",
@@ -224,10 +225,11 @@ func newReportStatuslineCmd() *cobra.Command {
 func newReportCodexCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "codex",
-		Short: "Push ctx from a Codex hook's payload on stdin",
+		Short: "Push ctx and the model from a Codex hook's payload on stdin",
 		Long: "Reads the JSON a Codex hook passes on stdin and sets this pane's ctx\n" +
 			"token to what Codex shows as \"Context N% used\", from the latest token\n" +
-			"count in the session's transcript, for 24 h. Run it as an async PostToolUse,\n" +
+			"count in the session's transcript, and the model token to the hook's\n" +
+			"model, with model_at (ADR-001 A56), for 24 h. Run it as an async PostToolUse,\n" +
 			"Stop and PostCompact hook (docs/config/codex-hooks.example.toml), and start\n" +
 			"Codex with --no-daemon: a hook run by the shared app-server daemon cannot\n" +
 			"tell which pane it belongs to, and reports nothing.\n\n" +
