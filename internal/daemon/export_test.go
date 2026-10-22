@@ -60,6 +60,12 @@ func HealthOver(ctx context.Context, st *store.Store, base HealthInfo) HealthInf
 	return Options{Logger: zerolog.Nop()}.health(ctx, st, base)()
 }
 
+// ClaimOver is the dispatcher's claim of to's next message on st, under
+// ctx, as serve makes it.
+func ClaimOver(ctx context.Context, st *store.Store, to store.Address) (store.Message, bool, error) {
+	return (&dispatcher{st: st, now: time.Now}).claim(ctx, to)
+}
+
 // BackCode is the refusal code the back op answers err with.
 var BackCode = backCode
 

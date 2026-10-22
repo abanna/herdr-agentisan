@@ -237,6 +237,8 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 // daemon's server.
 // Each row carries its pane's launch model, which herdr is asked for only
 // when the pane changed (A39), and the boss its agent process's start (A47).
+// Each boss is told its team's status changes (A44) and the context levels
+// its panes crossed, a ceiling with a toast for the user first (A33).
 // The model it returns is nil when a pane, workspace or tab list failed and
 // no model was built; agent names change neither which panes it holds nor
 // their statuses, so a failed agent list still gives the status events their
@@ -289,6 +291,7 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	// stop the idle clock, nor the notices of a status change.
 	tp.idle.Observe(m, now)
 	tp.notices.observe(m, agents, agentsErr == nil, now)
+	o.observeCtx(ctx, c, tp.notices, m, now)
 	if agentsErr == nil {
 		tp.stages.Observe(m, now)
 		models, err := tp.models.refresh(ctx, c, pp, agentPanes(m, panes), o.Hooks.StartTime, now, o.Logger)
