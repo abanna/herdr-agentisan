@@ -26,7 +26,7 @@ everything.
 
 | Task | Command |
 |------|---------|
-| Lint | `go tool golangci-lint run ./...` |
+| Lint | `go tool golangci-lint run --allow-serial-runners ./...` |
 | Format check | `go tool golangci-lint fmt --diff ./...` |
 | Vet | `go vet ./...` |
 | Run tests with a coverage profile | `go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage.out -covermode=atomic ./...` |
