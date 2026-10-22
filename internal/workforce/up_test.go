@@ -323,8 +323,8 @@ func TestUpOpensTheDashboardAboveTheBossAgent(t *testing.T) {
 
 // TestUpDashboardIsBestEffort: whatever the dashboard lacks is reported
 // beside a team up that still succeeds; a dashboard opened stays reported.
-// A call herdr refuses within the dashboard's 5 s is a herdr failure; one
-// those 5 s end is out of time.
+// A split, label, swap or focus herdr refuses within the dashboard's 5 s is a
+// herdr failure; one those 5 s end is out of time.
 func TestUpDashboardIsBestEffort(t *testing.T) {
 	t.Parallel()
 	tests := map[string]struct {
