@@ -119,6 +119,7 @@ model = "opus"
 workers = 1
 slots = 2
 agent = { model = "sonnet" }
+rotation = { thresholds = [40, 50, 60] }
 [rotation]
 thresholds = [50, 60, 70]
 [spawn]
@@ -132,14 +133,15 @@ slots = 1
 	got, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
 	require.NoError(t, err)
 	for path, w := range map[string]want{
-		"color":                 {"#123456", settings.LayerRepo},
-		"github":                {"acme/app", settings.LayerRepo},
-		"agent.model":           {"opus", settings.LayerRepo},
-		"groups.qa.workers":     {1, settings.LayerRepo},
-		"groups.qa.slots":       {2, settings.LayerRepo},
-		"groups.qa.agent.model": {"sonnet", settings.LayerRepo},
-		"rotation.thresholds":   {[]int{50, 60, 70}, settings.LayerRepo},
-		"agent.command":         {[]string{"claude"}, settings.LayerDefault},
+		"color":                         {"#123456", settings.LayerRepo},
+		"github":                        {"acme/app", settings.LayerRepo},
+		"agent.model":                   {"opus", settings.LayerRepo},
+		"groups.qa.workers":             {1, settings.LayerRepo},
+		"groups.qa.slots":               {2, settings.LayerRepo},
+		"groups.qa.agent.model":         {"sonnet", settings.LayerRepo},
+		"rotation.thresholds":           {[]int{50, 60, 70}, settings.LayerRepo},
+		"groups.qa.rotation.thresholds": {[]int{40, 50, 60}, settings.LayerRepo},
+		"agent.command":                 {[]string{"claude"}, settings.LayerDefault},
 	} {
 		l, ok := leaf(t, got, path)
 		require.Truef(t, ok, "no leaf %s in %v", path, got.Sources)
@@ -147,6 +149,8 @@ slots = 1
 		assert.Equalf(t, w.layer, l.Layer, "layer of %s", path)
 	}
 	assert.Equal(t, "sonnet", got.Profile.AgentFor("qa").Model)
+	assert.Equal(t, []int{40, 50, 60}, got.Profile.Groups["qa"].Rotation.Thresholds)
+	assert.Nil(t, got.Profile.Groups["coder"].Rotation.Thresholds, "a group that sets none has none of its own")
 	assert.Empty(t, got.Profile.Spawn.ShellReadyKeys)
 	assert.Empty(t, got.Profile.Verify)
 }
@@ -224,7 +228,7 @@ func TestRepoFileNamesCannotSplitAPath(t *testing.T) {
 // kind, so the allowlist alone decides.
 func TestEveryProfileKeyIsClassified(t *testing.T) {
 	t.Parallel()
-	repoSettable := []string{"agent.model", "color", "github", "groups.*.agent.model", "groups.*.slots", "groups.*.workers", "rotation.thresholds"}
+	repoSettable := []string{"agent.model", "color", "github", "groups.*.agent.model", "groups.*.rotation.thresholds", "groups.*.slots", "groups.*.workers", "rotation.thresholds"}
 	usersOnly := []string{
 		"agent.command", "groups.*.agent.command", "groups.*.description",
 		"integrations.*.token", "integrations.*.url", "repo",

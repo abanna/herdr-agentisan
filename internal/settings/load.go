@@ -25,8 +25,8 @@ var bareKey = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 // defaults is layer 1: the built-in values every profile starts from.
 func defaults() *source {
 	return &source{layer: LayerDefault, origin: "built-in", values: map[string]any{
-		"agent":    map[string]any{"command": []string{"claude"}},
-		"rotation": map[string]any{"thresholds": []int{55, 65, 75}},
+		"agent":     map[string]any{"command": []string{"claude"}},
+		rotationKey: map[string]any{"thresholds": []int{55, 65, 75}},
 		// One message to a boss every 30 s at most, and a repeat dropped for
 		// 5 min (A44).
 		"notices": map[string]any{"gap": 30, "repeat": 300},
@@ -287,6 +287,7 @@ var repoFileKeys = []string{
 	"color",
 	"github",
 	"groups.*.agent.model",
+	"groups.*.rotation.thresholds",
 	"groups.*.slots",
 	"groups.*.workers",
 	"rotation.thresholds",

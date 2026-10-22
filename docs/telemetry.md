@@ -220,8 +220,32 @@ FROM logs-agentisan.otel-*
 | KEEP @timestamp, event_name, attributes.agentisan.message.to.id, attributes.agentisan.message.reason
 ```
 
+### `agentisan.worker.ctx_level`
+
+A pane's context crossed one of its rotation thresholds (ADR-001 A33), and the
+daemon told its project's boss: soft, hard or the ceiling, a level being
+crossed at its threshold or above. A rise past several levels at once is one
+event, at the highest. A level is crossed again only after the context fell
+to its threshold less 5, or under; a restarted daemon starts with none
+crossed. The body reads `<worker id> at <n>% crossed <level> (<threshold>%)`.
+
+| Attribute | Type | Value |
+| --- | --- | --- |
+| `agentisan.worker.id` | string | As for `status_changed`: the logical worker id, or the pane id while no row binds it |
+| `agentisan.worker.bound` | bool | Whether a `workers` row binds the pane |
+| `agentisan.project` | string | The pane's project; `""` is the unnamed project |
+| `agentisan.group` | string | The group; `""` for the boss |
+| `agentisan.role` | string | `boss` or `worker` |
+| `agentisan.agent` | string | The agent herdr detected, such as `claude` or `codex` |
+| `herdr.pane.id` | string | The pane, such as `wN:p1` |
+| `agentisan.ctx.level` | string | `soft`, `hard` or `ceiling` |
+| `agentisan.ctx.percent` | int | The context used, 0 to 100 |
+| `agentisan.ctx.threshold` | int | The level's threshold |
+| `agentisan.ctx.alerted` | bool | Whether the user was alerted with a toast: only at the ceiling |
+| `agentisan.ctx.shown` | bool | Whether herdr showed that toast |
+
 ## Coming
 
 The same helper carries these when their items land: stage changes (fast
-follow on item 3), context threshold crossings (item 5b), and handoff steps
-and rotations (items 5b and 6). Each adds a section here first.
+follow on item 3), and handoff steps and rotations (items 5b and 6). Each
+adds a section here first.

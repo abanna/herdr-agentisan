@@ -97,6 +97,13 @@ func TestSampleConfigResolves(t *testing.T) {
 			assert.Equal(t, "sonnet", p.AgentFor("precheck").Model)
 			assert.Equal(t, []string{"codex", "--no-daemon"}, p.AgentFor("review").Command)
 			assert.Equal(t, settings.Spawn{ShellPrompt: `❯\s*$`, ShellReadyAfter: settings.DefaultShellReadyAfter}, p.Spawn)
+			// The rotation thresholds (A33): the project's, and one role's.
+			assert.Equal(t, []int{55, 65, 75}, p.Rotation.Thresholds)
+			assert.Equal(t, []int{45, 55, 65}, p.Groups["librarian"].Rotation.Thresholds)
 		})
 	}
+	rs, err := settings.Rotations(opts)
+	require.NoError(t, err)
+	assert.Equal(t, []int{45, 55, 65}, rs.For("assay").For("librarian"), "the daemon reads the sample's role thresholds")
+	assert.Equal(t, []int{55, 65, 75}, rs.For("assay").For(""))
 }

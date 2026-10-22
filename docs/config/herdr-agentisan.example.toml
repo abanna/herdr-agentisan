@@ -50,6 +50,12 @@ schema_version = 1
 command = ["claude"]
 model = "opus"
 
+# The context percentages at which the daemon tells a team's boss a pane is
+# due to rotate (ADR-001 D7, A33): soft, hard and the ceiling, which also
+# alerts you with a toast. Three whole numbers from 1 to 100, ascending, each
+# crossed at its percentage or above. These are the project's, and the
+# boss's; a group can set its own (see librarian below). Read once when the
+# daemon starts, from every layer, the repo file included.
 [rotation]
 thresholds = [55, 65, 75]
 
@@ -94,6 +100,8 @@ agent = { model = "sonnet" }
 [groups.librarian]
 workers = 1
 slots = 1
+# A librarian reads a lot, so it is rotated sooner.
+rotation = { thresholds = [45, 55, 65] }
 
 [groups.debugger]
 workers = 0

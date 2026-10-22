@@ -24,6 +24,8 @@ const (
 	thresholdCount = 3
 	minThreshold   = 1
 	maxThreshold   = 100
+	// rotationPath is where a profile, or a group of one, sets them.
+	rotationPath = "rotation.thresholds"
 )
 
 // merged is the outcome of merging sources, lowest first.
@@ -248,10 +250,29 @@ func (m merged) checkVerify() error {
 	return nil
 }
 
+// checkRotation checks the project's thresholds, which the defaults always
+// set, and each group's own, where one sets them (A33).
 func (m merged) checkRotation() error {
-	v, _ := m.get("rotation.thresholds")
+	if err := m.checkThresholds(rotationPath); err != nil {
+		return err
+	}
+	v, _ := m.get("groups")
+	groups, _ := v.(map[string]any)
+	for _, name := range slices.Sorted(maps.Keys(groups)) {
+		path := "groups." + name + "." + rotationPath
+		if _, ok := m.get(path); ok {
+			if err := m.checkThresholds(path); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkThresholds checks the thresholds at path.
+func (m merged) checkThresholds(path string) error {
+	v, _ := m.get(path)
 	ts, _ := v.([]int)
-	const path = "rotation.thresholds"
 	if len(ts) != thresholdCount {
 		return m.invalidf(path, "want exactly %d thresholds, got %d", thresholdCount, len(ts))
 	}
@@ -322,7 +343,7 @@ func buildProfile(name string, values map[string]any) *Profile {
 	if v, ok := lookup(values, "verify"); ok {
 		p.Verify, _ = v.([][]string)
 	}
-	if v, ok := lookup(values, "rotation.thresholds"); ok {
+	if v, ok := lookup(values, rotationPath); ok {
 		p.Rotation.Thresholds, _ = v.([]int)
 	}
 	p.Spawn = buildSpawn(values)
@@ -334,7 +355,9 @@ func buildProfile(name string, values map[string]any) *Profile {
 			workers, _ := g["workers"].(int)
 			slots, _ := g["slots"].(int)
 			description, _ := g["description"].(string)
-			p.Groups[n] = Group{Workers: workers, Slots: slots, Agent: groupAgent(g), Description: description, DescribesOnly: describesOnly(g)}
+			rotation, _ := lookup(g, rotationPath)
+			thresholds, _ := rotation.([]int)
+			p.Groups[n] = Group{Workers: workers, Slots: slots, Agent: groupAgent(g), Description: description, DescribesOnly: describesOnly(g), Rotation: Rotation{Thresholds: thresholds}}
 		}
 	}
 	if v, ok := lookup(values, "integrations"); ok {
