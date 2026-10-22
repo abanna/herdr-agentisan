@@ -235,7 +235,7 @@ func TestSpawnRefusals(t *testing.T) {
 	two := teamConfig + "\n[projects.assay]\nrepo = \"REPO\"\nshort = \"as\"\n"
 	spaces := "schema_version = 1\n[spaces]\nproject = \"agentisan\"\n[projects.agentisan]\nrepo = \"REPO\"\n" + strings.TrimPrefix(teamConfig, "schema_version = 1\n")
 	long := strings.Replace(teamConfig, "groups.review]", "groups.reviewer-of-absolutely-everything]", 1)
-	x40 := strings.Repeat("x", 40) // a group name a repo file may create, too long for an id
+	x40 := strings.Repeat("x", 40) // a group name a repo file may create, past the 20 a name may have (A53)
 	tests := map[string]struct {
 		config string
 		setup  func(*testing.T, *fixture)
@@ -258,7 +258,7 @@ func TestSpawnRefusals(t *testing.T) {
 		"an unknown project":          {req: workforce.SpawnRequest{Selector: workforce.Selector{Project: "nope"}, Group: "coder", Count: 1}, want: workforce.ErrUnknownProject, says: "configured: herdr-agentisan"},
 		"the spaces project":          {config: spaces, req: workforce.SpawnRequest{Selector: workforce.Selector{Project: "agentisan"}, Group: "coder", Count: 1}, want: workforce.ErrNoTarget, says: "staffed by hand"},
 		"no way to pick":              {config: two, req: workforce.SpawnRequest{Group: "coder", Count: 1}, want: workforce.ErrBadRequest, says: "assay, herdr-agentisan"},
-		"an id past 32 chars":         {config: long, req: workforce.SpawnRequest{Group: "reviewer-of-absolutely-everything", Count: 1}, want: workforce.ErrInvalidID, says: "ha-reviewer-of-absolutely-everything-1"},
+		"a group name past 20 chars":  {config: long, req: workforce.SpawnRequest{Group: "reviewer-of-absolutely-everything", Count: 1}, want: settings.ErrInvalid, says: "groups.reviewer-of-absolutely-everything (project, "},
 		"a config that breaks":        {config: "schema_version = 1\n[projects.herdr-agentisan]\nrepo = \"REPO\"\nlayout = \"grid\"\n", req: workforce.SpawnRequest{Group: "coder", Count: 1}, want: workforce.ErrConfig},
 		"a model that is a flag":      {req: workforce.SpawnRequest{Group: "coder", Count: 1, Model: "--dangerously-skip-permissions"}, want: workforce.ErrBadRequest, says: "--model: ", hides: "--dangerously"},
 		"a model a shell would split": {req: workforce.SpawnRequest{Group: "coder", Count: 1, Model: "opus'; touch pwned; '"}, want: settings.ErrInvalid, says: "--model: ", hides: "pwned"},
@@ -268,7 +268,7 @@ func TestSpawnRefusals(t *testing.T) {
 			},
 			req: workforce.SpawnRequest{Group: "coder", Count: 1}, want: settings.ErrInvalid, says: "groups.coder.agent.model (repo, ", hides: "pwned",
 		},
-		"a long group from the repo file (A46)":                  {setup: func(t *testing.T, f *fixture) { f.repoFile(t, "[groups."+x40+"]\nworkers = 1\nslots = 1\n") }, req: workforce.SpawnRequest{Group: x40, Count: 1}, want: workforce.ErrInvalidID},
+		"a long group from the repo file (A46)":                  {setup: func(t *testing.T, f *fixture) { f.repoFile(t, "[groups."+x40+"]\nworkers = 1\nslots = 1\n") }, req: workforce.SpawnRequest{Group: x40, Count: 1}, want: workforce.ErrConfig, says: "groups." + x40 + " (repo, "},
 		"a model from the shared file a shell would split (A46)": {config: strings.Replace(teamConfig, "[projects.herdr-agentisan.groups.qa]\n", "[projects.herdr-agentisan.groups.qa]\nagent = { model = \"opus $(touch pwned)\" }\n", 1), req: workforce.SpawnRequest{Group: "qa", Count: 1}, want: workforce.ErrConfig, says: "groups.qa.agent.model", hides: "pwned"},
 		"a hand-started agent takes a slot": {
 			setup: func(_ *testing.T, f *fixture) {
@@ -376,18 +376,29 @@ func TestConcurrentSpawnsShareTheCap(t *testing.T) {
 }
 
 // TestSpawnIDsFitHerdrsAgentNames: an id is a herdr agent name, at most 32
-// characters: a type that makes the id 32 long spawns, and one a character
-// longer is refused whole, before anything opens.
+// characters, and spawn checks each whole one before anything opens. A
+// group's name is at most 20 (A53), so with a short code of 8 an id fits up
+// to n = 99. herdr's names are global, so agents of those names in another
+// workspace push n on: the id that makes 32 spawns, and the one past it is
+// refused whole.
 func TestSpawnIDsFitHerdrsAgentNames(t *testing.T) {
 	t.Parallel()
-	fits, over := strings.Repeat("a", 27), strings.Repeat("a", 28)
-	f := newFixture(t, teamConfig+"\n[projects.herdr-agentisan.groups."+fits+"]\nworkers = 0\nslots = 1\n[projects.herdr-agentisan.groups."+over+"]\nworkers = 0\nslots = 1\n")
+	const short = "hahahaha"
+	group := strings.Repeat("a", 20)
+	f := newFixture(t, strings.Replace(teamConfig, `short = "ha"`, `short = "`+short+`"`, 1)+
+		"\n[projects.herdr-agentisan.groups."+group+"]\nworkers = 0\nslots = 2\n")
+	elsewhere := f.h.addWorkspace("elsewhere")
+	for n := 1; n <= 98; n++ {
+		f.h.addTab(elsewhere, workforce.LogicalID(short, group, n), "claude", "idle")
+	}
 
-	res, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: fits, Count: 1})
+	res, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: group, Count: 1})
 	require.NoError(t, err)
+	assert.Equal(t, workforce.LogicalID(short, group, 99), res.Workers[0].ID)
 	assert.Len(t, res.Workers[0].ID, 32)
-	_, err = f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: over, Count: 1})
+	_, err = f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: group, Count: 1})
 	require.ErrorIs(t, err, workforce.ErrInvalidID)
+	assert.Contains(t, err.Error(), workforce.LogicalID(short, group, 100))
 	assert.Len(t, f.h.params("tab.create"), 1, "the refused one opened nothing")
 }
 

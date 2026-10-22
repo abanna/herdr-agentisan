@@ -8,6 +8,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -146,9 +147,28 @@ func TestCommandRejectsTheProjectsMCPServers(t *testing.T) {
 		path := filepath.Join(parent, ".mcp.json")
 		require.NoError(t, os.RemoveAll(path))
 		require.NoError(t, create(path), name)
-		_, err = l.Command()
+		err = commandWithin(t, l, 30*time.Second)
 		require.ErrorIs(t, err, debugger.ErrInvalid, "%s is refused, and a FIFO is never opened", name)
 		assert.Contains(t, err.Error(), "not a regular file", name)
+	}
+}
+
+// commandWithin is l.Command()'s error, and fails the test when it has not
+// returned within d: opening a FIFO with no writer blocks for good, so a
+// launch that opened one would otherwise hang the suite to its timeout.
+func commandWithin(t *testing.T, l debugger.Launch, d time.Duration) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() {
+		_, err := l.Command()
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(d):
+		t.Fatalf("the launch did not return within %s: it opened a file it should only have stat'd", d)
+		return nil
 	}
 }
 
@@ -169,6 +189,9 @@ func rejectedServers(t *testing.T, args []string) []string {
 // TestCommandWithoutTheServerDir: a launch that does not know the daemon's
 // directory still starts, says so in its facts, and allows and fences
 // reading the repo alone: no allow rule and no working directory for it.
+// The allow list is exactly the repo's read, `events` and Linear's reads,
+// never the rule an empty server dir would make, Read(//**), which allows
+// reading the whole filesystem.
 func TestCommandWithoutTheServerDir(t *testing.T) {
 	t.Parallel()
 	l := launch
@@ -178,11 +201,24 @@ func TestCommandWithoutTheServerDir(t *testing.T) {
 	assertFenced(t, got.Args)
 	assert.NotContains(t, got.Args, "--add-dir", "the repo, the directory it starts in, is its only working directory")
 	assert.Equal(t, l.Repo, got.Dir)
-	assert.Contains(t, got.Args, "Read(//home/u/src/assay/**)")
+	assert.Equal(t, []string{
+		"Read(//home/u/src/assay/**)",
+		"Bash(/opt/herdr/plugins/agentisan/bin/herdr-agentisan events:*)",
+		"mcp__claude_ai_Linear__get_issue", "mcp__claude_ai_Linear__list_issues", "mcp__claude_ai_Linear__list_comments",
+	}, between(t, got.Args, "--allowedTools", "--disallowedTools"))
 	assert.False(t, slices.ContainsFunc(got.Args, func(a string) bool { return strings.Contains(a, "srv-") }))
 	assert.True(t, slices.ContainsFunc(got.Args, func(a string) bool {
 		return strings.HasSuffix(a, "daemon.log was not given to this session.")
 	}))
+}
+
+// between is the arguments after from and before to, the first of each.
+func between(t *testing.T, args []string, from, to string) []string {
+	t.Helper()
+	i, j := slices.Index(args, from), slices.Index(args, to)
+	require.GreaterOrEqual(t, i, 0, "the launch passes %s", from)
+	require.Greater(t, j, i, "the launch passes %s after %s", to, from)
+	return args[i+1 : j]
 }
 
 // TestCommandRefusesUnusablePaths: every path is absolute and clean, and

@@ -13,6 +13,7 @@ import (
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/report"
+	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/team"
 	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
@@ -302,6 +303,23 @@ func TestStatusPicksTheTeam(t *testing.T) {
 	broken := newFixture(t, "schema_version = 1\n[projects.herdr-agentisan]\nrepo = \"REPO\"\nlayout = \"grid\"\n")
 	_, err = broken.svc.Status(t.Context(), workforce.StatusRequest{})
 	require.ErrorIs(t, err, workforce.ErrConfig)
+}
+
+// TestStatusRefusesAUserOnlyKeyFromTheRepoFile: team status reads the
+// project's committed repo file, so one that sets a key only the user's own
+// layers may set is refused (ADR-001 A46): ErrConfig with settings' own
+// ErrInvalid, naming the key, its layer and file, and never the value.
+func TestStatusRefusesAUserOnlyKeyFromTheRepoFile(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	f.repoFile(t, "[spawn]\nshell_ready_keys = [\"from-the-repo\"]\n")
+
+	_, err := f.svc.Status(t.Context(), workforce.StatusRequest{})
+	require.ErrorIs(t, err, workforce.ErrConfig)
+	require.ErrorIs(t, err, settings.ErrInvalid)
+	assert.Contains(t, err.Error(), "spawn.shell_ready_keys (repo, ")
+	assert.Contains(t, err.Error(), settings.RepoFileName)
+	assert.NotContains(t, err.Error(), "from-the-repo", "never the value")
 }
 
 // paneFinder is a herdr whose panes answer pane.process_info by any id in

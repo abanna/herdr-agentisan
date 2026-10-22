@@ -35,7 +35,8 @@ var Held = held
 // HeldKeepingACopy is Held, with a copy of the probe's open file kept past
 // the probe, as a child forked while the probe had the lock keeps one until
 // it execs. The copy is a dup, which shares the open file as a fork's does;
-// letGo closes it. A probe that finds the lock held makes no copy.
+// letGo closes it. A probe that finds the lock held makes no copy. It is
+// Held's own probe: only the kept it passes differs from Held's.
 func HeldKeepingACopy(path string) (isHeld bool, letGo func() error, err error) {
 	fd, dupErr := -1, error(nil)
 	isHeld, err = heldKeeping(path, func(f *os.File) {

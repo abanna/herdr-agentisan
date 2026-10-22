@@ -91,6 +91,35 @@ agent = { command = ["codex", "--search"] }
 	assert.Equal(t, settings.Agent{Command: []string{"claude"}}, p.AgentFor("coder"))
 }
 
+// TestLoadedProfileSharesNoSlice: the profile's shell_ready_keys and a
+// group's command are its own copies, so a caller that changes them leaves
+// the resolved tree, which config resolve prints, as it was.
+func TestLoadedProfileSharesNoSlice(t *testing.T) {
+	t.Parallel()
+	repo, dir := newRepo(t), t.TempDir()
+	writeFile(t, dir, settings.FileName, `schema_version = 1
+[spawn]
+shell_ready_keys = ["enter"]
+[projects.app]
+repo = "REPO"
+[projects.app.groups.research]
+workers = 0
+slots = 1
+agent = { command = ["codex", "--search"] }
+`, repo)
+	got, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
+	require.NoError(t, err)
+
+	got.Profile.Spawn.ShellReadyKeys[0] = "mutated"
+	got.Profile.Groups["research"].Agent.Command[0] = "mutated"
+	keys, ok := leaf(t, got, "spawn.shell_ready_keys")
+	require.True(t, ok)
+	assert.Equal(t, []string{"enter"}, keys.Value, "[spawn]'s keys are not shared")
+	command, ok := leaf(t, got, "groups.research.agent.command")
+	require.True(t, ok)
+	assert.Equal(t, []string{"codex", "--search"}, command.Value, "a group's command is not shared")
+}
+
 // earlierGroups sort before qa: coder with its own command, which passes,
 // then librarian with a model and no command.
 const earlierGroups = "[groups.coder]\nworkers = 1\nslots = 1\nagent = { command = [\"claude\"] }\n" +
@@ -173,19 +202,27 @@ func TestLoadRefusesWorkforceKeys(t *testing.T) {
 func TestLoadAcceptsTheWorkforceEdges(t *testing.T) {
 	t.Parallel()
 	for name, body := range map[string]string{
-		"no wait at all":              "[spawn]\nshell_ready_after_s = 0\n",
-		"slots at the bound":          "[groups.qa]\nworkers = 64\nslots = 64\n",
-		"a minute's wait":             "[spawn]\nshell_ready_after_s = 60\n",
-		"no keys":                     "[spawn]\nshell_ready_keys = []\n",
-		"a non-ASCII prompt":          "[spawn]\nshell_prompt = '➜\\s+\\S+'\n",
-		"a look-alike of a flag":      "[agent]\ncommand = [\"claude\", \"--models\", \"--model-x\", \"-x\", \"-é\", \"-\"]\n",
+		"no wait at all":         "[spawn]\nshell_ready_after_s = 0\n",
+		"slots at the bound":     "[groups.qa]\nworkers = 64\nslots = 64\n",
+		"a minute's wait":        "[spawn]\nshell_ready_after_s = 60\n",
+		"no keys":                "[spawn]\nshell_ready_keys = []\n",
+		"a non-ASCII prompt":     "[spawn]\nshell_prompt = '➜\\s+\\S+'\n",
+		"a look-alike of a flag": "[agent]\ncommand = [\"claude\", \"--models\", \"--model-x\", \"-x\", \"-é\", \"-\"]\n",
+		// Neither agent reads an abbreviated long flag as the whole one:
+		// claude's parser matches long names exactly, and codex refuses
+		// --mod as an unexpected argument (A53).
+		"an abbreviation of --model":  "[agent]\ncommand = [\"claude\", \"--mod\", \"o3\"]\n",
 		"a look-alike of --effort":    "[agent]\ncommand = [\"claude\", \"--efforts\", \"--effort-x\"]\n",
 		"another of codex's settings": "[agent]\ncommand = [\"codex\", \"-c\", \"model_provider=oss\", \"--config=profiles.x.model=y\", \"-cmodel_verbosity=low\"]\n",
 		"codex's -c with no value":    "[agent]\ncommand = [\"codex\", \"-c\"]\n",
 		// claude's -c is --continue, which takes no value.
-		"claude's own -c":              "[agent]\ncommand = [\"claude\", \"-c\", \"model=x\"]\n",
+		"claude's own -c": "[agent]\ncommand = [\"claude\", \"-c\", \"model=x\"]\n",
+		// A command named by a path resolves, and spawn refuses it before it
+		// opens anything, since herdr runs its own executable from the
+		// shell's PATH (A23).
 		"codex as a group's own agent": "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"/opt/bin/codex\"] }\n",
-		// argv[0] is the program, which D12 checks by its base name.
+		// argv[0] is the program, which D12 checks by its base name; spawn
+		// refuses it as a path too.
 		"a program path that starts like a flag": "[agent]\ncommand = [\"-m/claude\"]\n",
 	} {
 		t.Run(name, func(t *testing.T) {
