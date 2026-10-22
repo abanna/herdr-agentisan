@@ -88,7 +88,7 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendResult, error)
 	if err != nil {
 		return SendResult{}, fmt.Errorf("read workers: %w", err)
 	}
-	from, home, err := sender(req, teamsIn(teams, l, rows, s.Dashboard.Title), l, rows)
+	from, home, err := sender(req, teamsIn(teams, l, rows), l, rows)
 	if err != nil {
 		return SendResult{}, err
 	}
@@ -122,13 +122,12 @@ type placed struct {
 	pr team.Project
 }
 
-// teamsIn places every team in l, title being the dashboard pane's label
-// when prefix+d opened it (resolverOf).
-func teamsIn(teams []settings.Team, l layout, rows []store.Worker, title string) []placed {
+// teamsIn places every team in l.
+func teamsIn(teams []settings.Team, l layout, rows []store.Worker) []placed {
 	out := make([]placed, 0, len(teams))
 	for _, t := range teams {
 		p := placed{Team: t}
-		m := team.Build(l.Layout, resolverOf(t, title), rows)
+		m := team.Build(l.Layout, resolverOf(t, l.dashboardTitle), rows)
 		if i := slices.IndexFunc(m.Projects, func(pr team.Project) bool { return pr.Name == t.Project }); i >= 0 {
 			p.pr = m.Projects[i]
 		}
