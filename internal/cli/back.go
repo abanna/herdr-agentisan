@@ -23,14 +23,12 @@ func newBackCmd() *cobra.Command {
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
-			env, err := plugin.EnvFrom(lookupEnvFrom(ctx))
+			lookup := lookupEnvFrom(ctx)
+			env, err := plugin.EnvFrom(lookup)
 			if err != nil {
 				return fmt.Errorf("read plugin environment: %w", err)
 			}
-			dir := stateDir
-			if dir == "" {
-				dir = env.StateDir
-			}
+			dir, _ := plugin.StateDir(stateDir, lookup)
 			paths, err := daemon.PathsFor(dir, env.SocketPath)
 			if err != nil {
 				return fmt.Errorf("back: %w", noHerdr(err))
@@ -48,7 +46,7 @@ func newBackCmd() *cobra.Command {
 			})
 		},
 	}
-	c.Flags().StringVar(&stateDir, "state-dir", "", "plugin state directory (default: HERDR_PLUGIN_STATE_DIR)")
+	c.Flags().StringVar(&stateDir, "state-dir", "", "plugin state directory (default: HERDR_PLUGIN_STATE_DIR, else herdr's state directory for this plugin)")
 	addJSONFlag(c, &asJSON)
 	return c
 }

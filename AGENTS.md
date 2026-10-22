@@ -103,6 +103,9 @@ exempts whatever is later added under that name.
 - `internal/plugin/` — the plugin's domain: the runtime environment herdr
   injects (`EnvFrom`), the manifest (`LoadManifest`, with its actions and
   panes) and the actions' logic, such as Back's toast when it went nowhere.
+  Also the state directory a command finds the daemon under: herdr's own
+  for the plugin, worked out as herdr 0.9.5 does, when herdr set none, as
+  in a pane shell (`StateDir`, ADR-001 A51).
 - `internal/report/` — an agent pushing its own state to its pane as herdr
   tokens (ADR-001 D4), and the token contract for the keys it writes.
   `report statusline` turns Claude's statusline JSON into `ctx`,
