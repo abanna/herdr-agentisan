@@ -464,7 +464,7 @@ func TestAPollReadsTheHeldLocksOnceForEveryTeam(t *testing.T) {
 	dir := shortDir(t)
 	o := teamOpts(t, dir, th, configDir(t, everyTeamConfig+fmt.Sprintf("[tests]\nlocks = [%q, %q]\n", gate0, gate1)))
 	o.Team = new(daemon.WithLockReads(daemon.WithProc(*o.Team, t.TempDir()), read))
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	t.Cleanup(func() { close(release) }) // before run's own cleanup stops the daemon
 	sock := socketPath(t, dir, th.path)
 
