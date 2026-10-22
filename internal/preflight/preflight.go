@@ -89,8 +89,8 @@ func Host() System {
 }
 
 // Check is a spawn precondition for the repo at repo, the absolute path of a
-// project's repo. `worker spawn` and `team up` (NERD-5254 parts 4 and 5) are
-// to run one before they open a pane.
+// project's repo. `worker spawn` and `team up` (NERD-5254 parts 4 and 5) run
+// one before they open a pane.
 type Check func(ctx context.Context, repo string) error
 
 var _ Check = HostCheck

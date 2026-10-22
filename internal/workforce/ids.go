@@ -27,8 +27,10 @@ func checkID(id string) error {
 }
 
 // taken is every name a new worker's id must not be: the labels of the
-// team's tabs, every agent name on the server (herdr's names are global), and
-// every live row's logical id but a lost one's, which spawn may reuse (A35).
+// team's tabs, every agent name on the server (herdr's names are global),
+// every live row's logical id but a lost one's, which spawn may reuse (A35),
+// and every other project's id, retired or lost too, which BindWorker never
+// takes over (QA #78 F4).
 func (st state) taken() map[string]bool {
 	out := map[string]bool{}
 	for _, t := range st.layout.Tabs {
@@ -45,6 +47,9 @@ func (st state) taken() map[string]bool {
 		if r.Status != store.StatusLost {
 			out[r.LogicalID] = true
 		}
+	}
+	for _, id := range st.foreign {
+		out[id] = true
 	}
 	return out
 }
