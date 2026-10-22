@@ -177,6 +177,93 @@ func TestSpawnRefusesADebuggerItCannotLaunch(t *testing.T) {
 	assert.NotErrorIs(t, err, debugger.ErrInvalid)
 }
 
+// TestSpawnADescriptionOnlyDebugger: a debugger group that only describes
+// is no worker type, so a spawn is an unknown group and its launch is never
+// built: with no env file named, a build would be a configuration error.
+func TestSpawnADescriptionOnlyDebugger(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig+"\n[projects.herdr-agentisan.groups.debugger]\ndescription = \"reads the trail\"\n")
+	f.svc.Debugger = pluginLaunch(t)
+	_, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: settings.DebuggerType, Count: 1})
+	require.ErrorIs(t, err, workforce.ErrUnknownGroup)
+	assert.NotErrorIs(t, err, debugger.ErrInvalid)
+	assert.Empty(t, f.h.params("tab.create"))
+}
+
+// upDebuggerTeam is debuggerTeam whose debugger group fills to one worker.
+func upDebuggerTeam(envLine string) string {
+	return strings.Replace(debuggerTeam(envLine, ""), "groups.debugger]\nworkers = 0\n", "groups.debugger]\nworkers = 1\n", 1)
+}
+
+// debuggerFill is team up's fill of the debugger group.
+func debuggerFill(t *testing.T, res workforce.UpResult) workforce.GroupFill {
+	t.Helper()
+	i := slices.IndexFunc(res.Groups, func(g workforce.GroupFill) bool { return g.Name == settings.DebuggerType })
+	require.GreaterOrEqual(t, i, 0, "the debugger group is filled")
+	return res.Groups[i]
+}
+
+// TestUpOpensTheDebugger: team up fills a debugger group like any other,
+// with the launch Spawn gives it (A32): its tab in the repo with the config
+// dir in its environment, and the launch's argv, then --model and --name.
+// Once it is up, a launch that can no longer be built refuses nothing,
+// since no debugger is to open.
+func TestUpOpensTheDebugger(t *testing.T) {
+	t.Parallel()
+	envFile := filepath.Join(t.TempDir(), "elastic.env")
+	f := upFixture(t, upDebuggerTeam("[debugger]\nenv_file = \""+envFile+"\"\n"))
+	f.svc.Debugger = pluginLaunch(t)
+
+	res, err := f.svc.Up(t.Context(), workforce.UpRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, workforce.GroupFill{Name: settings.DebuggerType, Workers: 1, Spawned: 1}, debuggerFill(t, res))
+	l := f.svc.Debugger
+	l.Repo, l.ConfigDir, l.KeyFiles = f.repo, f.config, []string{envFile}
+	want, err := l.Command()
+	require.NoError(t, err)
+	i := slices.IndexFunc(f.h.params("tab.create"), func(m map[string]any) bool { return m["label"] == "ha-debugger-1" })
+	require.GreaterOrEqual(t, i, 0, "the debugger's tab opens")
+	tab := f.h.params("tab.create")[i]
+	assert.Equal(t, want.Dir, tab["cwd"])
+	assert.Equal(t, map[string]any{workforce.WorkerEnv: "ha-debugger-1", trail.ConfigDirEnv: f.config}, tab["env"])
+	args := make([]any, 0, len(want.Args)+4)
+	for _, a := range append(slices.Clone(want.Args), "--model", "opus", "--name", "ha-debugger-1") {
+		args = append(args, a)
+	}
+	j := slices.IndexFunc(f.h.params("agent.start"), func(m map[string]any) bool { return m["name"] == "ha-debugger-1" })
+	require.GreaterOrEqual(t, j, 0, "the debugger's agent starts")
+	start := f.h.params("agent.start")[j]
+	assert.Equal(t, "claude", start["kind"])
+	assert.Equal(t, args, start["args"])
+	assert.Equal(t, store.StatusActive, f.row(t, "ha-debugger-1").Status)
+	assert.Equal(t, settings.DebuggerType, f.row(t, "ha-debugger-1").Group)
+
+	f.svc.Debugger = debugger.Launch{}
+	again, err := f.svc.Up(t.Context(), workforce.UpRequest{})
+	require.NoError(t, err, "the debugger is up: its launch is not needed")
+	assert.Equal(t, workforce.GroupFill{Name: settings.DebuggerType, Workers: 1, Occupied: 1}, debuggerFill(t, again))
+	assert.Empty(t, again.Workers)
+}
+
+// TestUpRefusesADebuggerItCannotLaunch: a debugger team up is to open but
+// cannot launch refuses the whole team as a configuration error, as Spawn
+// does: no tab, agent or row for any group.
+func TestUpRefusesADebuggerItCannotLaunch(t *testing.T) {
+	t.Parallel()
+	f := upFixture(t, upDebuggerTeam(""))
+	f.svc.Debugger = pluginLaunch(t)
+
+	_, err := f.svc.Up(t.Context(), workforce.UpRequest{})
+	require.ErrorIs(t, err, workforce.ErrConfig)
+	require.ErrorIs(t, err, debugger.ErrInvalid)
+	assert.Contains(t, err.Error(), "set [debugger] env_file")
+	assert.Empty(t, f.h.params("tab.create"))
+	assert.Empty(t, f.h.params("agent.start"))
+	rows, err := f.st.Workers(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, rows)
+}
+
 // TestPlanNeedsTheDebuggersLaunch: planning a debugger without its launch
 // is a configuration error, never a bare claude.
 func TestPlanNeedsTheDebuggersLaunch(t *testing.T) {

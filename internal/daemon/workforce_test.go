@@ -527,6 +527,37 @@ func TestTheWorkforceGetsTheDebuggerLaunch(t *testing.T) {
 	assert.Equal(t, debugger.Launch{Root: "/plugin", Bin: "/plugin/bin/herdr-agentisan", ServerDir: paths.Dir}, daemon.WorkforceOf(o, daemon.Identity{}).Debugger)
 }
 
+// TestRunGivesTheDebuggerItsServerDir: a running daemon's workforce gives a
+// debugger the daemon's own directory for its herdr server, never the whole
+// state dir, which holds state.db, nor none (A32). Its env file is put in
+// that directory, which the launch refuses to fence, so the refusal names the
+// directory the workforce was given.
+func TestRunGivesTheDebuggerItsServerDir(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	withTeam(th)
+	stateDir := shortDir(t)
+	paths, err := daemon.PathsFor(stateDir, th.path)
+	require.NoError(t, err)
+	envFile := filepath.Join(paths.Dir, "elastic.env")
+	repo := t.TempDir()
+	marker := filepath.Join(repo, filepath.FromSlash(settings.BundleMarker))
+	require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0o750))
+	require.NoError(t, os.WriteFile(marker, []byte("1\n"), 0o600))
+	cfg := configDir(t, fmt.Sprintf("[debugger]\nenv_file = %q\n[projects.ha]\nrepo = %q\nshort = \"ha\"\nlayout = \"tabs\"\n[projects.ha.groups.debugger]\nworkers = 0\nslots = 1\n", envFile, repo))
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "roles"), 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(root, debugger.RoleFile), []byte("# debugger\n"), 0o600))
+	o := teamOpts(t, stateDir, th, cfg)
+	o.Team.PluginRoot, o.Team.Binary = root, filepath.Join(root, "bin", "herdr-agentisan")
+	run(t, o)
+	healthy(t, stateDir, th.fakeHerdr)
+	sock := socketPath(t, stateDir, th.path)
+
+	_, err = daemon.Workforce(t.Context(), sock, daemon.OpWorkerSpawn, workforce.SpawnRequest{Group: settings.DebuggerType, Count: 1})
+	require.ErrorContains(t, err, "the server dir "+paths.Dir+" holds the trail's env file")
+}
+
 // TestWorkforceCodes: every workforce refusal has a code of its own, and
 // D12 is told apart from any other config error.
 func TestWorkforceCodes(t *testing.T) {

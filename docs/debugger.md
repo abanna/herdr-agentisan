@@ -90,7 +90,9 @@ permission mode, would lift its fence. A launch spawn cannot build is
 refused whole, with `config_invalid`, before any tab opens: no `env_file`,
 no role (a regular file) under the checkout, the env file in the repo or the
 daemon's directory, an `.mcp.json` it cannot read, or a path a tool rule
-cannot carry. Its model is `--model`, else its group's, else `[agent]`'s
+cannot carry. `team up` fills a group whose `workers` is above 0 with the
+same launch, and one it cannot build refuses the whole team up only when a
+debugger is to open. Its model is `--model`, else its group's, else `[agent]`'s
 when `[agent]`'s command is claude. A debugger reports no `ctx` and writes
 no handoff, so retire it with a plain `worker retire <id>`:
 `--after-handoff` is refused for one bound to a pane (an unbound one is
