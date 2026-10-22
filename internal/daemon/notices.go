@@ -131,6 +131,16 @@ func (o Options) alert(ctx context.Context, c herdr.Client, cr notice.Crossing) 
 	return res.Shown
 }
 
+// endPoll ends a poll: it queues the poll's notices, then gives the
+// dispatcher the poll's model, which wakes it. In that order, so a boss in
+// its place is typed a notice in the pass the poll that queued it wakes
+// (A44); the other way round, that pass could read the inbox first and leave
+// the notice for the next poll's.
+func (o Options) endPoll(ctx context.Context, n *notices, in *inbox, built *team.Model) {
+	o.flushNotices(ctx, n)
+	in.polled(built)
+}
+
 // flush sends every boss whose gap has passed its waiting notices. A
 // message the sink refuses is logged and dropped, unacknowledged.
 func (o Options) flushNotices(ctx context.Context, n *notices) {
@@ -183,7 +193,7 @@ func (s inboxSink) Send(ctx context.Context, m notice.Message) error {
 	}
 	e.Str("inbox", queued.ID).Bool("appended", appended).Msg(noticeMsg)
 	if !appended {
-		s.events.MessageQueued(ctx, telemetry.Message{ID: queued.ID, FromKind: store.Daemon.Kind, From: store.Daemon.ID, ToKind: to.Kind, To: to.ID})
+		s.events.MessageQueued(ctx, telemetry.Message{ID: queued.ID, FromKind: store.Daemon.Kind, From: store.Daemon.ID, ToKind: to.Kind, To: to.ID, At: queued.CreatedAt})
 	}
 	return nil
 }

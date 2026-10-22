@@ -204,8 +204,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 			last = built
 			views.polled(*built, focused, seen)
 		}
-		o.flushNotices(ctx, tp.notices)
-		in.polled(built)
+		o.endPoll(ctx, tp.notices, in, built)
 		select {
 		case <-ctx.Done():
 			return

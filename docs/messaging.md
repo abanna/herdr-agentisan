@@ -74,7 +74,9 @@ too.
   `[agentisan] notices:`, then a line each, is what your team's workers and
   GitHub did (ADR-001 A44): a boss that is away gets one such notice, which
   grows until it is typed, and past 8 KiB its first line counts the oldest
-  lines cut, `[agentisan] notices (3 earlier dropped):`.
+  lines cut, `[agentisan] notices (3 earlier dropped):`. It keeps its place
+  in your inbox as it grows, so a line in it can be newer than a message
+  typed after it.
   `[agentisan] message <ulid> to <recipient> may not have been delivered
   (<reason>); resend if needed: <body>` means its prompt timed out, failed
   after the text may have been typed, or the daemon stopped mid-prompt. Such

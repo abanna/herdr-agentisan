@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -57,10 +58,31 @@ func noticeLog(t *testing.T, logs *lockedLog) []map[string]any {
 	return out
 }
 
-// TestANoticeIsTypedInThePollThatQueuedIt is M7 (A44): the poll flushes its
-// notices before it gives the dispatcher its model, which wakes it, so a
-// notice is typed into a boss that is in its place in that same pass. The
-// poll runs once an hour here, so only the first poll's wake can type it.
+// TestEndPollQueuesBeforeItWakes pins M7 (A44): a poll queues its notices
+// before it gives the dispatcher its model, which wakes it, so the pass that
+// wake starts finds them.
+func TestEndPollQueuesBeforeItWakes(t *testing.T) {
+	t.Parallel()
+	now := time.Unix(0, 0)
+	o := daemon.Options{Logger: zerolog.Nop(), Now: func() time.Time { return now }}
+	b := notice.NewBatcher(notice.Configs{})
+	b.Add(now, []notice.Notice{{Project: "ha", Kind: notice.Blocked, Text: "c1 is blocked"}, {Project: "sk", Kind: notice.Blocked, Text: "c2 is blocked"}})
+	sent := 0
+	woken, after := daemon.EndPoll(o, b, sinkFunc(func(notice.Message) error { sent++; return nil }))
+	assert.Equal(t, 2, sent)
+	assert.Equal(t, []bool{false, false}, woken, "each message is queued before the wake")
+	assert.True(t, after, "then the poll wakes the dispatcher")
+
+	woken, after = daemon.EndPoll(o, notice.NewBatcher(notice.Configs{}), failingSink{})
+	assert.Empty(t, woken)
+	assert.True(t, after, "a poll with nothing to tell still wakes it")
+}
+
+// TestANoticeIsTypedInThePollThatQueuedIt is M7 end to end: a boss in its
+// place is typed the first poll's notice, and the poll runs once an hour
+// here, so only that poll's wake can have typed it. The order within the
+// poll is TestEndPollQueuesBeforeItWakes's: this one cannot tell it, since
+// the pass a wake starts too early may still read the inbox after the write.
 func TestANoticeIsTypedInThePollThatQueuedIt(t *testing.T) {
 	t.Parallel()
 	th, p, dir := haTeam(t)
@@ -68,8 +90,10 @@ func TestANoticeIsTypedInThePollThatQueuedIt(t *testing.T) {
 	o.Poll = time.Hour
 	serving(t, o, th.fakeHerdr)
 	got := p.next(t)
-	assert.Equal(t, typed{Target: "ha-boss", Pane: "w14:p1",
-		Text: "[agentisan] notices:\nagentisan: the daemon started; turns that ended while it was down are not reported"}, got)
+	assert.Equal(t, typed{
+		Target: "ha-boss", Pane: "w14:p1",
+		Text: "[agentisan] notices:\nagentisan: the daemon started; turns that ended while it was down are not reported",
+	}, got)
 	assert.Equal(t, 1, lists(th.srv), "typed after the first poll, the only one")
 }
 
@@ -119,6 +143,9 @@ func TestInboxNoticeLine(t *testing.T) {
 	}, subset(queued[0].Attrs, "agentisan.message.id", "agentisan.message.from.kind", "agentisan.message.from.id", "agentisan.message.to.kind", "agentisan.message.to.id"))
 	for _, r := range rec.Records() {
 		assert.NotContains(t, r.Body().AsString(), "notices:", "the event carries no body")
+		if r.EventName() == telemetry.EventMessageQueued && r.Body().AsString() == first+" queued for ha-boss" {
+			assert.True(t, m.CreatedAt.Equal(r.Timestamp()), "the event's time is the notice's queued time (A52): %v, %v", r.Timestamp(), m.CreatedAt)
+		}
 	}
 }
 

@@ -60,7 +60,7 @@ func (o Options) noticeOps(in *inbox, mutes *notice.Mutes) map[string]op {
 			if m == nil {
 				return nil, fmt.Errorf("%w: the team poll has no model to find %q in", ErrNotReady, req.Worker)
 			}
-			return mutes.Mute(*m, req.Worker, req.For, o.Now()) //nolint:wrapcheck // notice wraps it, and noticeCode maps its sentinel
+			return mutes.Mute(*m, req.Worker, req.For, o.Now())
 		}},
 		OpNoticesUnmute: {run: func(_ context.Context, args json.RawMessage) (any, error) {
 			var req UnmuteRequest

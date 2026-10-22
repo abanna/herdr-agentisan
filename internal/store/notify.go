@@ -59,7 +59,7 @@ func notify(ctx context.Context, tx *sql.Tx, to Address, at time.Time, ns int64,
 	switch {
 	case err == nil:
 		if b, ok := body(q.Body); ok {
-			if err := checkBody(b); err != nil {
+			if err := CheckBody(b); err != nil {
 				return Message{}, false, err
 			}
 			m, err := scanMessage(tx.QueryRowContext(ctx, appendNotice, q.ID, b, ns))
@@ -72,7 +72,7 @@ func notify(ctx context.Context, tx *sql.Tx, to Address, at time.Time, ns int64,
 		return Message{}, false, fmt.Errorf("%w: notify: %w", ErrStore, err)
 	}
 	b, _ := body("")
-	if err := checkBody(b); err != nil {
+	if err := CheckBody(b); err != nil {
 		return Message{}, false, err
 	}
 	id, err := newULID(at, entropy)

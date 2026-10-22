@@ -196,9 +196,9 @@ whose pane is gone or took nothing within an hour), or returned it to its
 project's boss once the binding it was sent to ended. A message failed by
 the daemon starting after a crash gives `.failed` then. A notice of a failed
 delivery gives no `.queued`; a boss's notices (A44) give one when they start
-a new message, from `agentisan`, and none when added to one still queued. The body reads `<message id> queued for
-<recipient>` (or `delivered to`, `failed to`, `returned to`) and never
-carries the message's body. A `.queued` record's time is the message's
+a new message, from `agentisan`, and none when added to one still queued.
+The body reads `<message id> queued for <recipient>` (or `delivered to`,
+`failed to`, `returned to`) and never carries the message's body. A `.queued` record's time is the message's
 own queued time, so a trail sorted by `@timestamp` puts it first, even
 when the dispatcher delivers the message before `send` emits its event.
 

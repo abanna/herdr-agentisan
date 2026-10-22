@@ -20,6 +20,27 @@ func InboxNotice(o Options, st *store.Store, bosses map[string]string, m notice.
 	return inboxSink{st: st, in: in, log: o.Logger, events: o.Team.Events, now: o.Now}.Send(context.Background(), m)
 }
 
+// EndPoll ends a poll as pollTeam does, with b's notices for s, and
+// reports, for each message s got, whether the dispatcher had been woken by
+// then, and whether it was woken once the poll ended.
+func EndPoll(o Options, b *notice.Batcher, s notice.Sink) (wokenAtSend []bool, wokenAfter bool) {
+	in := newInbox()
+	n := &notices{batch: b, sink: wakeSpy{s: s, in: in, woken: &wokenAtSend}}
+	o.endPoll(context.Background(), n, in, &team.Model{})
+	return wokenAtSend, len(in.wake) == 1
+}
+
+type wakeSpy struct {
+	s     notice.Sink
+	in    *inbox
+	woken *[]bool
+}
+
+func (w wakeSpy) Send(ctx context.Context, m notice.Message) error {
+	*w.woken = append(*w.woken, len(w.in.wake) == 1)
+	return w.s.Send(ctx, m) //nolint:wrapcheck // a test's pass-through
+}
+
 // NoticeOpNames is every op the daemon's notices op map serves.
 func NoticeOpNames() []string {
 	return slices.Sorted(maps.Keys(Options{}.noticeOps(newInbox(), nil)))

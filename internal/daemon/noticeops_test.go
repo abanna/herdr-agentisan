@@ -16,7 +16,8 @@ import (
 
 // opsTeam is "ha" with its boss and one coder, bound as ha-coder-1.
 func opsTeam() *team.Model {
-	return &team.Model{Projects: []team.Project{{Name: "ha",
+	return &team.Model{Projects: []team.Project{{
+		Name:   "ha",
 		Boss:   []team.Worker{{ID: "w14:p1", Pane: team.Pane{ID: "w14:p1", Name: "ha-boss", Agent: "claude"}}},
 		Groups: []team.Group{{Name: "coder", Workers: []team.Worker{{ID: "ha-coder-1", Bound: true, Pane: team.Pane{ID: "w14:p2", Name: "ha-coder-1", Agent: "claude"}}}}},
 	}}}
@@ -106,6 +107,10 @@ func TestNoticeOpBudgets(t *testing.T) {
 		assert.Equal(t, 5*time.Second, daemon.ServedNoticeBudget(op), "the budget the daemon enforces: %s", op)
 	}
 	assert.Equal(t, 5*time.Second, daemon.NoticesBudget)
+	for _, op := range daemon.NoticeOpNames() {
+		assert.Equal(t, 20*time.Second, daemon.NotReadyWindow+daemon.OpBudget(op, nil)+daemon.IOTimeout,
+			"%s: the window, its budget and an exchange, well within the wrapper's 115 s (A52)", op)
+	}
 }
 
 // TestMuteOverTheSocket is A44's mute end to end: a muted worker's notices
