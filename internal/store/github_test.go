@@ -22,8 +22,8 @@ func github(t *testing.T, s *store.Store, project string) store.GitHubState {
 
 // TestGitHubState: a repo is unseeded until a collection is recorded; then
 // it holds its open PRs and the events told, keyed by project as well as
-// repo, so two projects on one repo are each told. A resolved PR leaves the
-// open set and keeps its events.
+// repo, so two projects on one repo are each told. A resolved PR leaves its
+// project's open set, and only its project's, and keeps its events.
 func TestGitHubState(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
@@ -36,6 +36,7 @@ func TestGitHubState(t *testing.T) {
 	}, t1))
 	assert.Equal(t, store.GitHubState{Seeded: true, Open: []int{3, 5}, Seen: map[store.GitHubEvent]bool{passed: true, approved: true}}, github(t, s, "app"))
 	assert.False(t, github(t, s, "web").Seeded, "another project on the same repo")
+	require.NoError(t, s.UpdateGitHub(t.Context(), store.GitHubUpdate{Project: "web", Repo: ghRepo, Collected: true, Open: []int{3}}, t1))
 
 	merged := store.GitHubEvent{PR: 3, Kind: "merged", Key: "e5f63b8"}
 	require.NoError(t, s.UpdateGitHub(t.Context(), store.GitHubUpdate{Project: "app", Repo: ghRepo, Seen: []store.GitHubEvent{merged}, Resolved: []int{3}}, t1))
@@ -43,6 +44,8 @@ func TestGitHubState(t *testing.T) {
 	got := github(t, s, "app")
 	assert.Equal(t, []int{5}, got.Open)
 	assert.Equal(t, map[store.GitHubEvent]bool{passed: true, approved: true, merged: true}, got.Seen)
+	assert.Equal(t, store.GitHubState{Seeded: true, Open: []int{3}, Seen: map[store.GitHubEvent]bool{}}, github(t, s, "web"),
+		"app's merge leaves web's PR open until web looks it up itself")
 }
 
 // TestUpdateGitHubIsOneTransaction: an update that fails part way writes

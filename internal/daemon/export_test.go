@@ -113,6 +113,14 @@ func WithGitHubTicks(g GitHubOptions, ticks <-chan time.Time) GitHubOptions {
 	return g
 }
 
+// WithGitHubRounds returns g sending on rounds at each round's end, once
+// every repo's calls and notices are done, so a test waits for the round
+// itself rather than for its gh calls.
+func WithGitHubRounds(g GitHubOptions, rounds chan<- struct{}) GitHubOptions {
+	g.rounds = rounds
+	return g
+}
+
 // WithStoreClose returns o with closeStore standing in for closing the state
 // database when Run exits.
 func WithStoreClose(o Options, closeStore func(*store.Store) error) Options {

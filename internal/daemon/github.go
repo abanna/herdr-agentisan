@@ -33,6 +33,9 @@ type GitHubOptions struct {
 	Interval time.Duration
 	// ticks, when set, stands in for the interval's ticker (tests).
 	ticks <-chan time.Time
+	// rounds, when set, is sent each round's end, once every repo's calls
+	// and notices are done (tests).
+	rounds chan<- struct{}
 }
 
 func (g GitHubOptions) interval() time.Duration {
@@ -162,6 +165,13 @@ func (o Options) collectGitHub(ctx context.Context, c *headerCache, notices *git
 			}
 			if listed {
 				notices.collected(ctx, gh, h, open)
+			}
+		}
+		if g.rounds != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case g.rounds <- struct{}{}:
 			}
 		}
 		select {

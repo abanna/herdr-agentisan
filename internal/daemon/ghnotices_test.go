@@ -3,7 +3,6 @@ package daemon_test
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -70,16 +69,20 @@ const noIssues = `{"data":{"repository":{"issues":{"totalCount":0}}}}`
 
 // ghNotices is a daemon whose ◆ spaces' project, agentisan, is on
 // abanna/herdr-agentisan, its notices sent as they come, collecting with f
-// on ticks, its log in logs. It runs in dir, so a second one in the same
-// dir reopens the first's state.db.
+// on ticks and saying each round's end on rounds, its log in logs. It runs
+// in dir, so a second one in the same dir reopens the first's state.db.
 type ghNotices struct {
-	th    *teamHerdr
-	f     *ghtest.Fake
-	ticks chan time.Time
-	dir   string
-	cfg   string
-	logs  *lockedLog
-	calls int
+	th     *teamHerdr
+	f      *ghtest.Fake
+	ticks  chan time.Time
+	rounds chan struct{}
+	dir    string
+	cfg    string
+	logs   *lockedLog
+	calls  int
+	// r is the daemon running, and daemons how many were started.
+	r       *running
+	daemons uint64
 }
 
 func newGHNotices(t *testing.T, notices string) *ghNotices {
@@ -87,32 +90,49 @@ func newGHNotices(t *testing.T, notices string) *ghNotices {
 	cfg := t.TempDir()
 	body := "schema_version = 1\n[spaces]\nproject = \"agentisan\"\n[projects.agentisan]\nrepo = \"/x\"\ngithub = \"abanna/herdr-agentisan\"\n[notices]\ngap = 0\n" + notices
 	require.NoError(t, os.WriteFile(filepath.Join(cfg, settings.FileName), []byte(body), 0o600))
-	return &ghNotices{th: newTeamHerdr(t), f: ghtest.New(t), ticks: make(chan time.Time), dir: shortDir(t), cfg: cfg, logs: &lockedLog{}}
+	return &ghNotices{th: newTeamHerdr(t), f: ghtest.New(t), ticks: make(chan time.Time), rounds: make(chan struct{}), dir: shortDir(t), cfg: cfg, logs: &lockedLog{}}
 }
 
-// start runs a daemon (the next one, restarted, after the first) and waits
-// for its first collection: the PR list, the count and lookups more calls.
-func (g *ghNotices) start(t *testing.T, lookups int, next bool) *running {
+// start runs the next daemon and waits for its first collection: the PR
+// list, the count and lookups more calls. Each daemon is a new process,
+// started later than the last (restarted says why a daemon with its
+// predecessor's start may stop at once, NERD-5335).
+func (g *ghNotices) start(t *testing.T, lookups int) *running {
 	t.Helper()
 	o := ghOpts(t, g.dir, g.th, g.cfg, g.f, g.ticks)
+	o.Team.GitHub = daemon.WithGitHubRounds(o.Team.GitHub, g.rounds)
 	logger, err := logging.New(g.logs, "info", "json")
 	require.NoError(t, err)
 	o.Logger = logger
-	if next {
-		o = restarted(o)
-	}
-	r := run(t, o)
+	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77 + g.daemons}}).startTime
+	g.daemons++
+	g.r = run(t, o)
 	g.collected(t, lookups)
-	return r
+	return g.r
 }
 
-// collected waits for one more collection, of lookups lookups, and two polls
-// after it, so what it handed over has been flushed.
+// collected waits for the collector to end one more round, which called gh
+// for the list, the count and lookups lookups, exactly, and then for two
+// polls, so the poll has flushed what the round handed over and run its
+// acknowledgements.
 func (g *ghNotices) collected(t *testing.T, lookups int) {
 	t.Helper()
+	select {
+	case <-g.rounds:
+	case <-g.r.exited:
+		t.Fatalf("the daemon stopped before its round ended: %v", g.r.wait(t, ready))
+	case <-time.After(ready):
+		t.Fatal("the collector did not end its round")
+	}
 	g.calls += 2 + lookups
-	calls(t, g.f, g.calls)
+	require.Len(t, g.f.Calls(t), g.calls, "the list, the count and %d lookups", lookups)
 	polled(t, g.th.srv, 2)
+}
+
+// seen is state.db's seen-set: each row's PR, kind and short key.
+func (g *ghNotices) seen(t *testing.T) []string {
+	t.Helper()
+	return query(t, paths(t, g.dir, g.th.fakeHerdr).DB, "SELECT pr || ' ' || kind || ' ' || substr(key, 1, 7) FROM github_seen ORDER BY 1")
 }
 
 // tick runs the next collection.
@@ -147,7 +167,7 @@ func TestGitHubNoticesReachTheLog(t *testing.T) {
 	t.Parallel()
 	g := newGHNotices(t, "")
 	g.f.Answer(t, ghList(t, ghOpen{50, headA, "CLEAN", 0, []string{"FAILURE"}}, ghOpen{51, headA, "CLEAN", 1, nil}), noIssues)
-	g.start(t, 0, false)
+	g.start(t, 0)
 	assert.Empty(t, g.told(), "what is true at the seed is not told")
 	g.tick(t, 0)
 	assert.Empty(t, g.told(), "nor at the next collection: the seed recorded it")
@@ -155,7 +175,6 @@ func TestGitHubNoticesReachTheLog(t *testing.T) {
 	g.f.Answer(t, ghList(t, ghOpen{50, headB, "DIRTY", 0, []string{"FAILURE", "SUCCESS"}}, ghOpen{52, headA, "CLEAN", 2, []string{"SUCCESS", "SKIPPED"}}), noIssues)
 	g.f.View(t, 51, merged(mergeOid))
 	g.tick(t, 1)
-	require.Eventually(t, func() bool { return len(g.told()) == 5 }, ready, 5*time.Millisecond, "told %v", g.told())
 	assert.Equal(t, []string{
 		"#50 CI failed at 38926d5 (1 of 2 checks)",
 		"#50 has a merge conflict at 38926d5",
@@ -180,23 +199,24 @@ func TestGitHubNoticesAcrossARestart(t *testing.T) {
 	t.Parallel()
 	g := newGHNotices(t, `skip = ["ci_passed"]`+"\n")
 	g.f.Answer(t, ghList(t, ghOpen{50, headA, "CLEAN", 0, nil}, ghOpen{51, headA, "CLEAN", 0, nil}), noIssues)
-	r := g.start(t, 0, false)
+	r := g.start(t, 0)
 	g.f.Answer(t, ghList(t, ghOpen{50, headA, "CLEAN", 0, []string{"SUCCESS"}}, ghOpen{51, headA, "CLEAN", 0, nil}), noIssues)
 	g.tick(t, 0)
 	assert.Empty(t, g.told(), "ci_passed is skipped")
+	assert.Equal(t, []string{"50 ci_passed 1e0fb1b"}, g.seen(t), "and recorded before the daemon stops")
 	stop(t, r)
 
 	g.f.Answer(t, ghList(t, ghOpen{50, headA, "CLEAN", 0, []string{"SUCCESS"}}, ghOpen{52, headB, "CLEAN", 0, []string{"TIMED_OUT"}}), noIssues)
 	g.f.View(t, 51, merged(mergeOid))
 	require.NoError(t, os.WriteFile(filepath.Join(g.cfg, settings.FileName), []byte(strings.Replace(read(t, filepath.Join(g.cfg, settings.FileName)), `skip = ["ci_passed"]`, "skip = []", 1)), 0o600))
-	r = g.start(t, 1, true)
-	require.Eventually(t, func() bool { return len(g.told()) == 2 }, ready, 5*time.Millisecond, "told %v", g.told())
-	assert.Equal(t, []string{"#52 CI failed at 38926d5 (1 of 1 checks)", "herdr-agentisan #51 merged as e5f63b8"}, g.told(),
-		"the merge and the failure while it was down; not #50's skipped pass")
+	r = g.start(t, 1)
+	want := []string{"#52 CI failed at 38926d5 (1 of 1 checks)", "herdr-agentisan #51 merged as e5f63b8"}
+	assert.Equal(t, want, g.told(), "the merge and the failure while it was down; not #50's skipped pass")
+	assert.Equal(t, []string{"50 ci_passed 1e0fb1b", "51 merged e5f63b8", "52 ci_failed 38926d5"}, g.seen(t))
 	stop(t, r)
 
-	g.start(t, 0, true)
-	assert.Len(t, g.told(), 2, "a third daemon on the same state tells nothing")
+	g.start(t, 0)
+	assert.Equal(t, want, g.told(), "a third daemon on the same state tells nothing")
 }
 
 // TestGitHubNoticesLookups: a lookup that fails is retried each interval
@@ -208,7 +228,7 @@ func TestGitHubNoticesLookups(t *testing.T) {
 	g := newGHNotices(t, "")
 	all := []ghOpen{{50, headA, "CLEAN", 0, nil}, {51, headA, "CLEAN", 0, nil}, {52, headA, "CLEAN", 0, nil}, {53, headA, "CLEAN", 0, nil}}
 	g.f.Answer(t, ghList(t, all...), noIssues)
-	g.start(t, 0, false)
+	g.start(t, 0)
 
 	g.f.Answer(t, ghList(t, all[3]), noIssues)
 	g.f.View(t, 51, `{"mergeCommit":null,"state":"CLOSED"}`)
@@ -217,21 +237,20 @@ func TestGitHubNoticesLookups(t *testing.T) {
 	assert.Contains(t, g.logs.String(), "was not looked up")
 	g.f.View(t, 50, merged(mergeOid))
 	g.tick(t, 2) // 50 again, and 52, still open; 51 was dropped
-	require.Eventually(t, func() bool { return len(g.told()) == 1 }, ready, 5*time.Millisecond)
 	assert.Equal(t, []string{"herdr-agentisan #50 merged as e5f63b8"}, g.told())
 
 	g.f.CallMode(t, "pr", ghtest.ModeFail)
 	g.tick(t, 0)
 	g.f.CallMode(t, "pr", "")
 	g.f.Answer(t, ghList(t, slices.Repeat([]ghOpen{all[3]}, 100)...), noIssues)
-	g.tick(t, 0)
+	g.tick(t, 0) // 52, still open, is not looked up
 	assert.Contains(t, g.logs.String(), "the open list is at its limit")
 	g.f.View(t, 52, merged(mergeOid))
 	g.f.Answer(t, ghList(t, all[3]), noIssues)
 	g.tick(t, 1)
-	require.Eventually(t, func() bool { return len(g.told()) == 2 }, ready, 5*time.Millisecond)
-	assert.Equal(t, "herdr-agentisan #52 merged as e5f63b8", g.told()[1])
-	assert.Equal(t, fmt.Sprint([]string{"pr", "api", "pr", "api", "view", "view", "view"}), fmt.Sprint(g.f.Calls(t)[:7]))
+	assert.Equal(t, []string{"herdr-agentisan #50 merged as e5f63b8", "herdr-agentisan #52 merged as e5f63b8"}, g.told())
+	assert.Equal(t, strings.Fields("pr api  pr api view view view  pr api view view  pr api  pr api  pr api view"), g.f.Calls(t),
+		"each collection's list and count, then its lookups")
 }
 
 func read(t *testing.T, path string) string {
