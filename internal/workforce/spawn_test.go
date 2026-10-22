@@ -1431,6 +1431,52 @@ func TestSpawnClosesWhatItOpenedWhenCancelled(t *testing.T) {
 	}
 }
 
+// TestSpawnCleansUpAFailedOpenOnOneBudget: when a later worker's open fails,
+// the pane it opened and the workers opened before it are cleaned up at once
+// on one settle budget, so a herdr that holds every close past it keeps the
+// workforce lock, and a daemon's stop, waiting that budget once, not once per
+// cleanup (#96's review of NERD-5350). The worker opened before is failed,
+// and the failed open's pane binds no row.
+func TestSpawnCleansUpAFailedOpenOnOneBudget(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	release := make(chan struct{})
+	var tabs atomic.Int32
+	wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+		if r.Method == "pane.get" {
+			<-release // every cleanup's pane.get, past the settle budget
+		}
+		reply := next()
+		if r.Method == "tab.create" {
+			tabs.Add(1)
+		}
+		return reply
+	})
+	// After wrapHerdr's own: cleanups run last first, so the held calls are
+	// released before the server closes.
+	t.Cleanup(func() { close(release) })
+	var cut time.Time
+	// The second worker's row is stamped right before its write, after its
+	// tab opened: the op's context ends there.
+	f.svc.Now = func() time.Time {
+		if tabs.Load() == 2 && cut.IsZero() {
+			cut = time.Now()
+			cancel()
+		}
+		return time.Now()
+	}
+
+	_, err := f.svc.Spawn(ctx, workforce.SpawnRequest{Selector: workforce.Selector{Project: "herdr-agentisan"}, Group: "coder", Count: 2})
+	require.Error(t, err)
+	require.False(t, cut.IsZero(), "the second open failed on the cut: %v", err)
+	assert.Less(t, time.Since(cut), 6*time.Second, "one 4 s settle budget for every cleanup, not one each")
+	assert.Equal(t, store.StatusFailed, f.row(t, "ha-coder-1").Status)
+	_, err = f.st.WorkerRow(t.Context(), "ha-coder-2")
+	assert.ErrorIs(t, err, store.ErrNoWorker)
+}
+
 // TestSpawnsEndOnTheirCancel: a shutdown cancels the daemon's in-flight ops
 // (ADR-001 A23, NERD-5350 item 2). A spawn held inside the workforce lock on a
 // herdr call, and one queued behind that lock, both end at the cancel: the
@@ -1465,8 +1511,18 @@ func TestSpawnsEndOnTheirCancel(t *testing.T) {
 		_, err := f.svc.Spawn(ctx, workforce.SpawnRequest{Selector: workforce.Selector{Project: "assay"}, Group: "qa", Count: 1})
 		first <- err
 	}()
-	<-checked
-	<-held // the first spawn holds the lock, its tab.rename unanswered
+	wait := func(what string, ch <-chan struct{}) {
+		t.Helper()
+		select {
+		case <-ch:
+		case err := <-first:
+			t.Fatalf("the first spawn ended before %s: %v", what, err)
+		case <-time.After(10 * time.Second):
+			t.Fatalf("the first spawn never reached %s", what)
+		}
+	}
+	wait("its preflight", checked)
+	wait("its tab.rename, inside the lock", held) // it holds the lock now
 	go func() {
 		_, err := f.svc.Spawn(ctx, workforce.SpawnRequest{Selector: workforce.Selector{Project: "herdr-agentisan"}, Group: "coder", Count: 1})
 		queued <- err
@@ -1475,6 +1531,8 @@ func TestSpawnsEndOnTheirCancel(t *testing.T) {
 	case <-checked:
 	case err := <-queued:
 		t.Fatalf("the second spawn ended before its preflight: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the second spawn never reached its preflight")
 	}
 	// Past its preflight, a spawn's next herdr read is inside the lock.
 	lists := countCalls(srv, "pane.list")

@@ -184,7 +184,6 @@ func (f *fakeHerdr) pane(id string) *fakePane {
 	return nil
 }
 
-// tabByLabel is the tab labelled label, or nil.
 // hasWorkspace reports whether a workspace labelled label is open.
 func (f *fakeHerdr) hasWorkspace(label string) bool {
 	f.mu.Lock()
@@ -203,6 +202,7 @@ func (f *fakeHerdr) paneIDs() []string {
 	return out
 }
 
+// tabByLabel is the tab labelled label, or nil.
 func (f *fakeHerdr) tabByLabel(label string) *fakeTab {
 	f.mu.Lock()
 	defer f.mu.Unlock()
