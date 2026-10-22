@@ -49,6 +49,7 @@ func TestWorkforceHelpMeetsTheWrapper(t *testing.T) {
 	t.Parallel()
 	tests := map[string][]string{
 		"team status":   {"--project", "--state-dir"},
+		"worker spawn":  {"--group", "--count", "--model", "--project", "--state-dir"},
 		"worker retire": {"--after-handoff", "--state-dir"},
 	}
 	e := newDaemonEnv(t)
@@ -98,7 +99,8 @@ func TestWorkforceCommandsAlwaysAnswerInJSON(t *testing.T) {
 		"retire with no id":          {args: []string{"worker", "retire"}, code: "bad_request"},
 		"retire with two ids":        {args: []string{"worker", "retire", "a", "b"}, code: "bad_request"},
 		"retire takes no project":    {args: []string{"worker", "retire", "ha-coder-1", "--project", "ha"}, code: "bad_request"},
-		"an unknown worker verb":     {args: []string{"worker", "spawn"}, code: "bad_request"},
+		"an unknown worker verb":     {args: []string{"worker", "adopt"}, code: "bad_request"},
+		"spawn with no daemon":       {args: []string{"worker", "spawn", "--group", "coder"}, code: "daemon_unavailable"},
 		"retire with no daemon":      {args: []string{"worker", "retire", "ha-coder-1"}, code: "daemon_unavailable"},
 		"no daemon":                  {args: []string{"team", "status"}, code: "daemon_unavailable"},
 		"no state dir":               {args: []string{"team", "status"}, env: map[string]string{"HERDR_PLUGIN_STATE_DIR": ""}, code: "daemon_unavailable"},
@@ -163,6 +165,14 @@ func TestWorkforceCommandsAskTheDaemon(t *testing.T) {
 		"a refusal is printed with its code": {
 			args: []string{"team", "status", "--project", "nope"}, reply: unknown, pane: "w14:p1",
 			sent: `{"v":1,"op":"team.status","args":{"project":"nope"}}`, want: unknown,
+		},
+		"worker spawn, the caller's team": {
+			args: []string{"worker", "spawn", "--group", "coder", "--count", "2", "--model", "sonnet"}, reply: ok, pane: "w9:p9",
+			sent: `{"v":1,"op":"worker.spawn","args":{"caller_pane":"w14:p1","group":"coder","count":2,"model":"sonnet"}}`, want: ok,
+		},
+		"worker spawn's count defaults to 1": {
+			args: []string{"worker", "spawn", "--group", "qa", "--project", "ha"}, reply: ok, pane: "w14:p1",
+			sent: `{"v":1,"op":"worker.spawn","args":{"project":"ha","group":"qa","count":1}}`, want: ok,
 		},
 		"worker retire after its handoff, herdr unasked": {
 			args: []string{"worker", "retire", "ha-coder-2", "--after-handoff"}, reply: ok, pane: "w14:p1", herdr: failing,

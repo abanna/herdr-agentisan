@@ -296,7 +296,7 @@ func TestDispatcherDeliversByName(t *testing.T) {
 	toCoder := sent(t, st, coder, haBoss, "build it")
 	toBoss := sent(t, st, haBoss, coder, "done")
 	digest := sent(t, st, haBoss, store.Daemon, "[agentisan] 2 turns ended")
-	run(t, teamOpts(t, dir, th, workforceConfig(t)))
+	serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
 
 	for _, m := range []store.Message{toCoder, toBoss, digest} {
 		got := eventuallyState(t, st, m.ID, store.MessageDelivered)
@@ -325,7 +325,7 @@ func TestDispatcherServesARecipientUntilItsQueueIsEmpty(t *testing.T) {
 	}
 	o := teamOpts(t, dir, th, workforceConfig(t))
 	o.Poll = time.Hour // one poll, so one pass after it
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 
 	require.Eventually(t, func() bool { return len(p.all()) == len(want) }, ready, 10*time.Millisecond, "not all delivered after one poll: %v", p.all)
 	assert.Equal(t, want, p.all())
@@ -352,7 +352,7 @@ func TestDispatcherIsExactlyOnceAcrossAHandoff(t *testing.T) {
 	for i := range 3 {
 		ids = append(ids, sent(t, st, coder, haBoss, fmt.Sprintf("queued in the handoff, %d", i)).ID)
 	}
-	run(t, teamOpts(t, dir, th, workforceConfig(t)))
+	serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
 
 	polled(t, th.srv, 3)
 	assert.Empty(t, p.all(), "the pending handoff holds the inbox")
@@ -413,7 +413,7 @@ func TestDispatcherFailsWhatMayHaveBeenTyped(t *testing.T) {
 			m := sent(t, st, coder, haBoss, "the body")
 			o := teamOpts(t, dir, th, workforceConfig(t))
 			setup(t, p, &o)
-			run(t, o)
+			serving(t, o, th.fakeHerdr)
 
 			got := eventuallyState(t, st, m.ID, store.MessageFailed)
 			assert.Equal(t, 1, got.Attempts)
@@ -449,7 +449,7 @@ func TestDispatcherRetriesARefusal(t *testing.T) {
 			var logs lockedLog
 			o := teamOpts(t, dir, th, workforceConfig(t))
 			o.Logger = zerolog.New(&logs)
-			run(t, o)
+			serving(t, o, th.fakeHerdr)
 
 			// Between two tries it is queued; a read can also find it
 			// claimed for the next one.
@@ -538,7 +538,7 @@ func TestDispatcherHoldsAnUnprovenTarget(t *testing.T) {
 			st := stateStore(t, dir, th)
 			tc.setup(t, th, dir)
 			m := sent(t, st, tc.to, aPane, "wait")
-			run(t, teamOpts(t, dir, th, workforceConfig(t)))
+			serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
 
 			polled(t, th.srv, 3)
 			assert.Empty(t, p.all(), "nothing typed")
@@ -557,7 +557,7 @@ func TestDispatcherDeliversToAPaneByItsTerminal(t *testing.T) {
 	t.Parallel()
 	th, p, dir := haTeam(t)
 	st := stateStore(t, dir, th)
-	run(t, teamOpts(t, dir, th, workforceConfig(t)))
+	serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
 
 	first := sent(t, st, notes, store.Daemon, "[agentisan] first")
 	eventuallyState(t, st, first.ID, store.MessageDelivered)
@@ -617,7 +617,7 @@ func TestDispatcherFailsAPaneMessageItCannotType(t *testing.T) {
 			o := teamOpts(t, dir, th, workforceConfig(t))
 			o.Team.Events = events
 			o.Now = func() time.Time { return now } // the age is exact
-			run(t, o)
+			serving(t, o, th.fakeHerdr)
 
 			if tc.failed {
 				got := eventuallyState(t, st, m.ID, store.MessageFailed)
@@ -656,7 +656,7 @@ func TestDispatcherNeverAgesOutAWorkersMessage(t *testing.T) {
 	require.NoError(t, err)
 	o := teamOpts(t, dir, th, workforceConfig(t))
 	o.Now = func() time.Time { return now } // the age is exact
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 
 	eventuallyState(t, st, m.ID, store.MessageDelivered)
 	assert.Equal(t, typed{Target: "ha-coder-1", Pane: "w14:p2", Text: "[msg " + m.ID + " from ha-boss] held two hours"}, p.next(t))
@@ -677,7 +677,7 @@ func TestDispatcherHoldsWhenAListFailsLater(t *testing.T) {
 			t.Parallel()
 			th, p, dir := haTeam(t)
 			st := stateStore(t, dir, th)
-			run(t, teamOpts(t, dir, th, workforceConfig(t)))
+			serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
 			polled(t, th.srv, 2)
 
 			fail(th, true)
@@ -776,7 +776,7 @@ func TestDispatcherLogsAWaitOnce(t *testing.T) {
 	var logs lockedLog
 	o := teamOpts(t, dir, th, workforceConfig(t))
 	o.Logger = zerolog.New(&logs)
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 
 	polled(t, th.srv, 3)
 	assert.Equal(t, 1, warnings(logs.String(), held), "once over three polls")
@@ -822,7 +822,7 @@ func TestDispatcherReturnsAnEndedQueueToItsBoss(t *testing.T) {
 			st := stateStore(t, dir, th)
 			m := sent(t, st, coder, aPane, "for the coder")
 			end(t, st)
-			run(t, teamOpts(t, dir, th, workforceConfig(t)))
+			serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
 
 			got := eventuallyState(t, st, m.ID, store.MessageDelivered)
 			assert.Equal(t, haBoss, got.To)
@@ -842,7 +842,7 @@ VALUES ('zz-coder-1', 'zz', 'coder', 'w2:p1', 0, 'active', 0, 'term_w2:p1')`)
 		var logs lockedLog
 		o := teamOpts(t, dir, th, workforceConfig(t))
 		o.Logger = zerolog.New(&logs)
-		run(t, o)
+		serving(t, o, th.fakeHerdr)
 
 		polled(t, th.srv, 3)
 		got := stateOf(t, st, m.ID)
@@ -863,7 +863,7 @@ func TestDispatcherTypesCleanText(t *testing.T) {
 	st := stateStore(t, dir, th)
 	body := "a\r\nb\rc\x1b[201~d\x07e\u0085f\u009bg\x7fh\ti\nj 👩\u200d💻"
 	m := sent(t, st, coder, haBoss, body)
-	run(t, teamOpts(t, dir, th, workforceConfig(t)))
+	serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
 
 	eventuallyState(t, st, m.ID, store.MessageDelivered)
 	assert.Equal(t, []typed{{Target: "ha-coder-1", Pane: "w14:p2", Text: "[msg " + m.ID + " from ha-boss] a\nb\nc[201~defgh\ti\nj 👩\u200d💻"}}, p.all())
@@ -879,7 +879,7 @@ func TestDispatcherStopFinishesThePromptInFlight(t *testing.T) {
 	st := stateStore(t, dir, th)
 	release := p.hold(t, "ha-coder-1")
 	m := sent(t, st, coder, haBoss, "in flight")
-	r := run(t, teamOpts(t, dir, th, workforceConfig(t)))
+	r := serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
 	p.next(t)
 
 	r.cancel()
@@ -904,7 +904,7 @@ func TestDispatcherEmitsMessageEvents(t *testing.T) {
 	events, rec := telemetrytest.NewEvents()
 	o := teamOpts(t, dir, th, workforceConfig(t))
 	o.Team.Events = events
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 
 	eventuallyState(t, st, returned.ID, store.MessageDelivered)
 	notice := noticeOf(t, st, messageIDs(t, dir, th), failed.ID)
@@ -1028,6 +1028,9 @@ func TestACrashMidDispatchFailsTheMessage(t *testing.T) {
 		<-exited
 		exited <- nil
 	})
+	// Its start first, then its first dispatch, each within ready (QA #77,
+	// F-5).
+	healthy(t, dir, th.fakeHerdr)
 
 	got := p.next(t)
 	require.Equal(t, typed{Target: "ha-coder-1", Pane: "w14:p2", Text: "[msg " + m.ID + " from ha-boss] cut off by a crash"}, got)
@@ -1043,7 +1046,7 @@ func TestACrashMidDispatchFailsTheMessage(t *testing.T) {
 	release()
 	require.Equal(t, store.MessageDispatching, stateOf(t, st, m.ID).State, "the crash cut the dispatch off")
 
-	run(t, restarted(teamOpts(t, dir, th, cfg)))
+	serving(t, restarted(teamOpts(t, dir, th, cfg)), th.fakeHerdr)
 	failed := eventuallyState(t, st, m.ID, store.MessageFailed)
 	assert.Equal(t, daemon.RecoveredReason, failed.Reason)
 	notice := noticeOf(t, st, messageIDs(t, dir, th), m.ID)

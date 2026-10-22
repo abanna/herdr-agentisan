@@ -72,7 +72,7 @@ func TestSnapshotCarriesTheTestSlots(t *testing.T) {
 	dir := shortDir(t)
 	o := teamOpts(t, dir, th, slotsConfig(t, gate0, gate1))
 	o.Now = func() time.Time { return t0 }
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 
 	taken := served(t, sock, slotsAre(1, 2))
@@ -113,7 +113,7 @@ func TestTestSlotsNotCounted(t *testing.T) {
 			dir := shortDir(t)
 			o := teamOpts(t, dir, th, tc.config(t))
 			o.Logger = zerolog.New(&logs)
-			run(t, o)
+			serving(t, o, th.fakeHerdr)
 
 			served(t, socketPath(t, dir, th.path), anySnapshot)
 			polled(t, th.srv, 3)
@@ -138,7 +138,7 @@ func TestTestSlotsNotCounted(t *testing.T) {
 		o := teamOpts(t, dir, th, slotsConfig(t, filepath.Join(locks, "gate.0.lock"), filepath.Join(locks, "gate.1.lock")))
 		o.Team = new(daemon.WithProcLocks(*o.Team, standIn))
 		o.Logger = zerolog.New(&logs)
-		run(t, o)
+		serving(t, o, th.fakeHerdr)
 		sock := socketPath(t, dir, th.path)
 
 		served(t, sock, anySnapshot)
@@ -169,7 +169,7 @@ func TestTestSlotsLogABadListOnce(t *testing.T) {
 	o := teamOpts(t, dir, th, slotsConfig(t, filepath.Join(locks, "gate.0.lock")))
 	o.Team = new(daemon.WithProcLocks(*o.Team, standIn))
 	o.Logger = zerolog.New(&logs)
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 
 	served(t, sock, anySnapshot)
@@ -223,7 +223,7 @@ func TestSnapshotBossRuntime(t *testing.T) {
 	o := teamOpts(t, dir, th, "")
 	o.Hooks.StartTime = pt.startTime
 	o.Now = c.Now
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 	// ticks is when a process ticksSinceBoot places at n ticks started.
 	ticks := func(n int) time.Time { return boot.Add(time.Duration(n) * 10 * time.Millisecond) }
@@ -279,7 +279,7 @@ func TestBossRuntimeSurvivesADaemonRestart(t *testing.T) {
 	o := teamOpts(t, dir, th, "")
 	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 1001: 4200}}).startTime
 	o.Now = c.Now
-	first := run(t, o)
+	first := serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 	before := served(t, sock, func(s snapshot.Snapshot) bool { return s.Boss != nil && s.Boss.StartedAt != nil })
 	assert.Equal(t, started, *before.Boss.StartedAt)
@@ -291,7 +291,7 @@ func TestBossRuntimeSurvivesADaemonRestart(t *testing.T) {
 	// daemon runs as; the boss's agent is the same process.
 	next := o
 	next.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 78, 1001: 4200}}).startTime
-	run(t, next)
+	serving(t, next, th.fakeHerdr)
 	after := served(t, sock, func(s snapshot.Snapshot) bool {
 		return s.At.Equal(t0.Add(time.Hour)) && s.Boss != nil && s.Boss.StartedAt != nil
 	})
@@ -383,7 +383,7 @@ func TestEveryTeamCarriesTheSlotsAndItsOwnBoss(t *testing.T) {
 	o.Team = new(daemon.WithProc(daemon.WithProcLocks(*o.Team, standIn), t.TempDir()))
 	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 1001: 4200, 1010: 9000}}).startTime
 	o.Now = c.Now
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 	at := func(ts time.Time) func(snapshot.Snapshot) bool {
 		return func(s snapshot.Snapshot) bool { return s.At.Equal(ts) }
@@ -484,7 +484,7 @@ func TestEachTeamCountsItsOwnLocks(t *testing.T) {
 			o := teamOpts(t, dir, th, configDir(t, config))
 			o.Team = new(daemon.WithProc(daemon.WithProcLocks(*o.Team, standIn), proc))
 			o.Logger = zerolog.New(&logs)
-			run(t, o)
+			serving(t, o, th.fakeHerdr)
 			sock := socketPath(t, dir, th.path)
 
 			spaces := servedTeam(t, sock, "agentisan", slotsAre(1, 1))
@@ -535,7 +535,7 @@ func TestAProjectsLockFileRecovers(t *testing.T) {
 	o := teamOpts(t, dir, th, configDir(t, everyTeamConfig+fmt.Sprintf("[projects.alpha.tests]\nlocks = [%q]\n", slot)))
 	o.Team = new(daemon.WithProc(daemon.WithProcLocks(*o.Team, standIn), t.TempDir()))
 	o.Logger = zerolog.New(&logs)
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 
 	servedTeam(t, sock, "alpha", anySnapshot)

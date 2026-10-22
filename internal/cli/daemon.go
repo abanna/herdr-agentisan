@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -43,27 +44,32 @@ func newDaemonCmd() *cobra.Command {
 		},
 	}
 	c.PersistentFlags().StringVar(&stateDir, "state-dir", "",
-		"plugin state directory (default: HERDR_PLUGIN_STATE_DIR)")
-	opts := func(cmd *cobra.Command) (daemon.Options, error) { return daemonOptions(cmd, stateDir) }
+		"plugin state directory (default: HERDR_PLUGIN_STATE_DIR; for health and stop, else herdr's state directory for this plugin)")
+	// Only health and stop, which read or signal a running daemon, take
+	// herdr's directory when neither is set (ADR-001 A51): a daemon started
+	// under a wrong guess would be a second one for this herdr server.
+	opts := func(cmd *cobra.Command) (daemon.Options, error) { return daemonOptions(cmd, stateDir, false) }
+	clientOpts := func(cmd *cobra.Command) (daemon.Options, error) { return daemonOptions(cmd, stateDir, true) }
 	c.AddCommand(
-		newDaemonStartCmd(opts), newDaemonRunCmd(opts), newDaemonStopCmd(opts),
-		newDaemonRestartCmd(opts), newDaemonHealthCmd(opts),
+		newDaemonStartCmd(opts), newDaemonRunCmd(opts), newDaemonStopCmd(clientOpts),
+		newDaemonRestartCmd(opts), newDaemonHealthCmd(clientOpts),
 	)
 	return c
 }
 
 // daemonOptions assembles the daemon's options from the herdr plugin
-// environment, the loaded configuration and the --state-dir flag.
-func daemonOptions(cmd *cobra.Command, stateDirFlag string) (daemon.Options, error) {
+// environment, the loaded configuration and the --state-dir flag. A client's
+// state directory falls back to herdr's own for this plugin.
+func daemonOptions(cmd *cobra.Command, stateDirFlag string, client bool) (daemon.Options, error) {
 	ctx := cmd.Context()
 	lookup := lookupEnvFrom(ctx)
 	env, err := plugin.EnvFrom(lookup)
 	if err != nil {
 		return daemon.Options{}, fmt.Errorf("read plugin environment: %w", err)
 	}
-	stateDir := stateDirFlag
-	if stateDir == "" {
-		stateDir = env.StateDir
+	stateDir := cmp.Or(stateDirFlag, env.StateDir)
+	if client {
+		stateDir, _ = plugin.StateDir(stateDirFlag, lookup)
 	}
 	if stateDir == "" {
 		return daemon.Options{}, fmt.Errorf("HERDR_PLUGIN_STATE_DIR is not set; run this from herdr or pass --state-dir: %w", daemon.ErrNoStateDir)

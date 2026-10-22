@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"maps"
+	"os"
 	"slices"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -24,6 +26,30 @@ var Backoff = backoff
 
 // MaxSnapshot is the largest encoded snapshot the op serves.
 const MaxSnapshot = maxSnapshot
+
+// Held is the probe Start and Stop make of the lock at path.
+var Held = held
+
+// HeldKeepingACopy is Held, with a copy of the probe's open file kept past
+// the probe, as a child forked while the probe had the lock keeps one until
+// it execs. The copy is a dup, which shares the open file as a fork's does;
+// letGo closes it. A probe that finds the lock held makes no copy.
+func HeldKeepingACopy(path string) (isHeld bool, letGo func() error, err error) {
+	fd, dupErr := -1, error(nil)
+	isHeld, err = heldKeeping(path, func(f *os.File) {
+		fd, dupErr = syscall.Dup(int(f.Fd()))
+	})
+	letGo = func() error {
+		if fd < 0 {
+			return nil
+		}
+		return syscall.Close(fd)
+	}
+	if err == nil && dupErr != nil {
+		err = dupErr
+	}
+	return isHeld, letGo, err
+}
 
 // HealthOver is the health answer Run serves, base plus what it reads from
 // st under ctx.
