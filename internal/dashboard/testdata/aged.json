@@ -1,0 +1,20 @@
+{
+  "v": 1,
+  "at": "2026-10-09T17:19:00Z",
+  "team": "aged",
+  "boss": {"name": "boss", "pane_id": "w1:p1", "status": "idle", "model": "claude-fable-5-1", "ctx": 30, "item": "#900", "stage": "waiting: QA",
+           "stage_at": "2026-10-09T14:00:00Z", "stage_stale": true, "started_at": "2026-10-09T09:00:00Z"},
+  "groups": [
+    {"name": "coders", "agents": [
+      {"name": "pee01", "pane_id": "w2:p1", "status": "idle", "model": "opus", "ctx": 41, "item": "NERD-5320", "stage": "waiting: boss",
+       "stage_started_at": "2026-10-09T17:15:00Z", "stage_at": "2026-10-09T17:15:00Z", "idle_since": "2026-10-09T17:15:00Z"},
+      {"name": "pee02", "pane_id": "w2:p2", "status": "idle", "model": "opus", "ctx": 52, "item": "NERD-5334", "stage": "build_test",
+       "stage_started_at": "2026-10-09T16:00:00Z", "stage_at": "2026-10-09T14:14:00Z", "stage_stale": true, "idle_since": "2026-10-09T16:30:00Z"},
+      {"name": "pee03", "pane_id": "w2:p3", "status": "done", "model": "opus", "ctx": 12, "item": "NERD-5260", "stage": "blocked: 1Password agent",
+       "stage_at": "2026-10-08T17:00:00Z", "stage_stale": true, "idle_since": "2026-10-09T10:00:00Z"},
+      {"name": "pee04", "unnamed": true, "pane_id": "w2:p4", "status": "unknown", "item": "NERD-5321", "stage": "review", "stage_stale": true},
+      {"name": "pee05", "pane_id": "w2:p5", "status": "working", "model": "opus", "ctx": 61, "item": "NERD-5255", "stage": "go-review",
+       "stage_started_at": "2026-10-09T17:10:00Z", "stage_at": "2026-10-09T17:10:00Z"}
+    ]}
+  ]
+}

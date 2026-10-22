@@ -61,6 +61,9 @@ func TestGroupViewGolden(t *testing.T) {
 		"empty_group_80x24":           {frame: view("group", "research", first), w: 80, h: 24},
 		// No description: the boxes start under the title.
 		"qa_80x24": {frame: view("group", "qa", dashboard.Selection{Group: 1}), w: 80, h: 24},
+		// Stale stages (A42): "reported 3h05m ago", or "stage stale" when
+		// no report gave a time, where a current one is "in stage 4m".
+		"aged_coders_120x40": {frame: view("aged", "coders", first), w: 120, h: 40},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

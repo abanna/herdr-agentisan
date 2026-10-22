@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/fang"
 	"github.com/stretchr/testify/assert"
@@ -32,7 +33,21 @@ func runStage(ctx context.Context, args ...string) (stdout, stderr string, err e
 	return out.String(), errOut.String(), err
 }
 
-// stageTokens returns the tokens of every pane.report_metadata request.
+// stageAtNow stands for a stage_at the command wrote from the real clock:
+// nowStageAt puts it in place of one that reads within a minute of the
+// test's clock, and leaves any other value as it is, so a wrong one fails.
+const stageAtNow = "(now)"
+
+// nowStageAt replaces tokens' stage_at with stageAtNow when it is the real
+// clock's.
+func nowStageAt(tokens map[string]string) {
+	if at, ok := report.ParseStageAt(tokens[report.StageAtKey]); ok && time.Since(at).Abs() < time.Minute {
+		tokens[report.StageAtKey] = stageAtNow
+	}
+}
+
+// stageTokens returns the tokens of every pane.report_metadata request, each
+// stage_at as nowStageAt leaves it.
 func stageTokens(t *testing.T, reqs []herdrtest.Request) []map[string]string {
 	t.Helper()
 	var out []map[string]string
@@ -44,9 +59,27 @@ func stageTokens(t *testing.T, reqs []herdrtest.Request) []map[string]string {
 			Tokens map[string]string `json:"tokens"`
 		}
 		require.NoError(t, json.Unmarshal(r.Params, &p))
+		nowStageAt(p.Tokens)
 		out = append(out, p.Tokens)
 	}
 	return out
+}
+
+// reportParams is one pane.report_metadata request's params as JSON, its
+// stage_at as nowStageAt leaves it.
+func reportParams(t *testing.T, raw []byte) string {
+	t.Helper()
+	var p struct {
+		PaneID string            `json:"pane_id"`
+		Source string            `json:"source"`
+		Tokens map[string]string `json:"tokens"`
+		TTLMs  uint64            `json:"ttl_ms"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &p))
+	nowStageAt(p.Tokens)
+	out, err := json.Marshal(p)
+	require.NoError(t, err)
+	return string(out)
 }
 
 // TestReportStagePushesItemAndStage is the caller contract of
@@ -67,7 +100,7 @@ func TestReportStagePushesItemAndStage(t *testing.T) {
 	require.Len(t, reqs, 2, "check the pane runs this process, then report")
 	assert.Equal(t, "pane.process_info", reqs[0].Method)
 	assert.Equal(t, "pane.report_metadata", reqs[1].Method)
-	assert.JSONEq(t, `{"pane_id":"w14:p1","source":"agentisan","tokens":{"item":"NERD-5253","stage":"build_test"},"ttl_ms":86400000}`, string(reqs[1].Params))
+	assert.JSONEq(t, `{"pane_id":"w14:p1","source":"agentisan","tokens":{"item":"NERD-5253","stage":"build_test","stage_at":"(now)"},"ttl_ms":86400000}`, reportParams(t, reqs[1].Params))
 	assert.Contains(t, logs.String(), `"reported_to":"w14:p1"`)
 	assert.Contains(t, logs.String(), `"item":"NERD-5253"`)
 	assert.Contains(t, logs.String(), `"stage":"build_test"`)
@@ -104,7 +137,7 @@ func TestReportStageValuesThatLookLikeFlags(t *testing.T) {
 			stdout, _, err := runStage(reportCtx(t, srv.Path, "w14:p1", &logs), tc.args...)
 			require.NoError(t, err)
 			assert.Empty(t, stdout, "no help, no version, nothing")
-			assert.Equal(t, []map[string]string{{"item": tc.item, "stage": tc.stage}}, stageTokens(t, srv.Requests()))
+			assert.Equal(t, []map[string]string{{"item": tc.item, "stage": tc.stage, "stage_at": stageAtNow}}, stageTokens(t, srv.Requests()))
 		})
 	}
 }
@@ -131,7 +164,7 @@ func TestReportStageSendsValuesAsGiven(t *testing.T) {
 
 			_, _, err := runStage(reportCtx(t, srv.Path, "w14:p1", &logs), "--item="+v, "--stage="+v)
 			require.NoError(t, err)
-			assert.Equal(t, []map[string]string{{"item": v, "stage": v}}, stageTokens(t, srv.Requests()))
+			assert.Equal(t, []map[string]string{{"item": v, "stage": v, "stage_at": stageAtNow}}, stageTokens(t, srv.Requests()))
 		})
 	}
 }
@@ -394,7 +427,7 @@ func TestReportStageSurvivesACd(t *testing.T) {
 		if r.Method != "pane.report_metadata" {
 			continue
 		}
-		params = append(params, string(r.Params))
+		params = append(params, reportParams(t, r.Params))
 		var p map[string]json.RawMessage
 		require.NoError(t, json.Unmarshal(r.Params, &p))
 		keys := make([]string, 0, len(p))
@@ -405,7 +438,7 @@ func TestReportStageSurvivesACd(t *testing.T) {
 		assert.Equal(t, []string{"pane_id", "source", "tokens", "ttl_ms"}, keys, "nothing but the pane keys the tokens")
 	}
 	require.Len(t, params, 2)
-	assert.JSONEq(t, `{"pane_id":"w14:p1","source":"agentisan","tokens":{"item":"NERD-5253","stage":"review"},"ttl_ms":86400000}`, params[0])
+	assert.JSONEq(t, `{"pane_id":"w14:p1","source":"agentisan","tokens":{"item":"NERD-5253","stage":"review","stage_at":"(now)"},"ttl_ms":86400000}`, params[0])
 	assert.Equal(t, params[0], params[1], "the report made after the cd is the same report")
 }
 
