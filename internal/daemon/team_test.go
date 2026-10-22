@@ -26,8 +26,8 @@ import (
 // teamHerdr is a fakeHerdr that also answers what the team poll asks: a
 // layout of workspaces, tabs, panes and agents, workspace.report_metadata and
 // pane.report_metadata, which it refuses for the workspaces and panes in
-// refuse; and the agent view's set, which it refuses with viewErr's code
-// when that is set, and clear.
+// refuse; pane.get, from the layout; and the agent view's set, which it
+// refuses with viewErr's code when that is set, and clear.
 type teamHerdr struct {
 	*fakeHerdr
 	mu         sync.Mutex
@@ -129,6 +129,18 @@ func (th *teamHerdr) serveTeam(normal herdrtest.Handler) herdrtest.Handler {
 				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "pane_not_found", Message: "pane " + params.PaneID + " not found"}}
 			}
 			return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
+		case "pane.get":
+			var params struct {
+				PaneID string `json:"pane_id"`
+			}
+			_ = json.Unmarshal(r.Params, &params)
+			th.mu.Lock()
+			defer th.mu.Unlock()
+			i := slices.IndexFunc(th.panes, func(p map[string]any) bool { return p["pane_id"] == params.PaneID })
+			if i < 0 {
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "pane_not_found", Message: "pane " + params.PaneID + " not found"}}
+			}
+			return herdrtest.Reply{Result: map[string]any{"type": "pane_info", "pane": maps.Clone(th.panes[i])}}
 		case "workspace.report_metadata":
 			var params struct {
 				WorkspaceID string `json:"workspace_id"`

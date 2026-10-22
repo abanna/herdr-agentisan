@@ -50,6 +50,7 @@ func TestWorkforceHelpMeetsTheWrapper(t *testing.T) {
 	tests := map[string][]string{
 		"team status":   {"--project", "--state-dir"},
 		"worker retire": {"--after-handoff", "--state-dir"},
+		"handoff ready": {"--clear", "--state-dir"},
 	}
 	e := newDaemonEnv(t)
 	for cmd, flags := range tests {

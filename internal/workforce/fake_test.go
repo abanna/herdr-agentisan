@@ -23,9 +23,10 @@ import (
 )
 
 // fakeHerdr is a herdr server with state: workspaces, tabs, panes and the
-// agents named in them, answering the lists the workforce reads and closing
-// panes the way herdr 0.9.3 does. Knobs make a method fail, or a stale pane
-// id resolve.
+// agents named in them, answering the lists the workforce reads, and closing
+// panes and setting their tokens the way herdr 0.9.3 does: one value per
+// key, whichever source wrote it, and an empty value clears the key. Knobs
+// make a method fail, or a stale pane id resolve.
 type fakeHerdr struct {
 	t   *testing.T
 	srv *herdrtest.Server
@@ -239,6 +240,23 @@ func (f *fakeHerdr) handle(r herdrtest.Request) herdrtest.Reply {
 			return errReply("pane_not_found")
 		}
 		return herdrtest.Reply{Result: map[string]any{"type": "pane_info", "pane": f.paneInfo(pane)}}
+	case "pane.report_metadata":
+		pane := f.pane(str("pane_id"))
+		if pane == nil {
+			return errReply("pane_not_found")
+		}
+		tokens, _ := p["tokens"].(map[string]any)
+		for k, v := range tokens {
+			if pane.tokens == nil {
+				pane.tokens = map[string]string{}
+			}
+			if s, _ := v.(string); s != "" {
+				pane.tokens[k] = s
+			} else {
+				delete(pane.tokens, k)
+			}
+		}
+		return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
 	case "pane.process_info":
 		pane := f.pane(str("pane_id"))
 		if real, ok := f.alias[str("pane_id")]; ok {

@@ -79,6 +79,19 @@ const (
 	AttrMessageReason = "agentisan.message.reason"
 )
 
+// EventHandoff is a step of a worker's handoff (A33): so far its handoff
+// token set (HandoffReady) or cleared (HandoffCleared).
+const EventHandoff = "agentisan.worker.handoff"
+
+// AttrHandoffStep is the key of EventHandoff's step, beside the worker's.
+const AttrHandoffStep = "agentisan.handoff.step"
+
+// The values of AttrHandoffStep.
+const (
+	HandoffReady   = "ready"
+	HandoffCleared = "cleared"
+)
+
 // scope names the instrumentation the events come from.
 const scope = "github.com/abanna/herdr-agentisan/internal/telemetry"
 
@@ -126,6 +139,39 @@ func (e *Events) StatusChanged(ctx context.Context, c StatusChange) {
 		attribute.String(AttrPaneID, c.PaneID),
 		attribute.String(AttrFrom, c.From),
 		attribute.String(AttrTo, c.To),
+	)
+	e.logger.Emit(ctx, r)
+}
+
+// Handoff is one EventHandoff.
+type Handoff struct {
+	WorkerID string
+	Bound    bool
+	Project  string
+	Group    string
+	PaneID   string
+	// Step is HandoffReady or HandoffCleared.
+	Step string
+}
+
+// HandoffStep emits h as an EventHandoff record.
+func (e *Events) HandoffStep(ctx context.Context, h Handoff) {
+	if e == nil {
+		return
+	}
+	var r log.Record
+	r.SetEventName(EventHandoff)
+	r.SetTimestamp(time.Now())
+	r.SetSeverity(log.SeverityInfo)
+	r.SetSeverityText("INFO")
+	r.SetBody(attribute.StringValue(h.WorkerID + " handoff " + h.Step))
+	r.AddAttributes(
+		attribute.String(AttrWorkerID, h.WorkerID),
+		attribute.Bool(AttrWorkerBound, h.Bound),
+		attribute.String(AttrProject, h.Project),
+		attribute.String(AttrGroup, h.Group),
+		attribute.String(AttrPaneID, h.PaneID),
+		attribute.String(AttrHandoffStep, h.Step),
 	)
 	e.logger.Emit(ctx, r)
 }

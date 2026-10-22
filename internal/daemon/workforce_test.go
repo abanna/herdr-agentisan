@@ -19,6 +19,8 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
+	"github.com/abanna/herdr-agentisan/internal/telemetry"
+	"github.com/abanna/herdr-agentisan/internal/telemetry/telemetrytest"
 	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
@@ -104,6 +106,95 @@ func TestWorkforceOpsOverTheSocket(t *testing.T) {
 			assert.NotEmpty(t, re.Message)
 		})
 	}
+	assert.True(t, r.alive())
+}
+
+// TestHandoffReadyOverTheSocket: handoff ready marks a worker's agent pane
+// over the daemon socket, and each mark it changes, set or cleared, is the
+// worker's handoff event; a mark that changes nothing is written again and
+// is no event. Its refusals answer with their codes.
+func TestHandoffReadyOverTheSocket(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	withTeam(th)
+	events, rec := telemetrytest.NewEvents()
+	o := teamOpts(t, shortDir(t), th, workforceConfig(t))
+	o.Team.Events = events
+	r := run(t, o)
+	healthy(t, o.StateDir, th.fakeHerdr)
+	sock := socketPath(t, o.StateDir, th.path)
+	mark := func(req workforce.HandoffReadyRequest) workforce.HandoffReadyResult {
+		t.Helper()
+		data, err := daemon.Workforce(t.Context(), sock, daemon.OpHandoffReady, req)
+		require.NoError(t, err)
+		var res workforce.HandoffReadyResult
+		require.NoError(t, json.Unmarshal(data, &res))
+		return res
+	}
+
+	coder := workforce.HandoffReadyResult{ID: "w14:p2", Project: "ha", Group: "coder", PaneID: "w14:p2", Ready: true, Changed: true}
+	assert.Equal(t, coder, mark(workforce.HandoffReadyRequest{Target: "ha-coder-1"}))
+	th.mu.Lock()
+	for _, p := range th.panes {
+		if p["pane_id"] == "w14:p2" {
+			p["tokens"] = map[string]string{"ctx": "31", "handoff": "⟳ READY TO RESTART"}
+		}
+	}
+	th.mu.Unlock()
+	coder.Changed = false
+	assert.Equal(t, coder, mark(workforce.HandoffReadyRequest{Target: "w14:p2"}), "the pane shows the mark already")
+	coder.Ready, coder.Changed = false, true
+	assert.Equal(t, coder, mark(workforce.HandoffReadyRequest{Target: "w14:p2", Clear: true}))
+
+	handoffs := func() []telemetrytest.Event {
+		var out []telemetrytest.Event
+		for _, e := range rec.Events() {
+			if e.Name == telemetry.EventHandoff {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+	attrs := func(step string) map[string]any {
+		return map[string]any{
+			"agentisan.worker.id": "w14:p2", "agentisan.worker.bound": false, "agentisan.project": "ha",
+			"agentisan.group": "coder", "herdr.pane.id": "w14:p2", "agentisan.handoff.step": step,
+		}
+	}
+	assert.Equal(t, []telemetrytest.Event{
+		{Name: telemetry.EventHandoff, Attrs: attrs("ready")},
+		{Name: telemetry.EventHandoff, Attrs: attrs("cleared")},
+	}, handoffs(), "one event per changed mark, none for the repeat")
+	var marks []string
+	for _, req := range th.srv.Requests() {
+		var p struct {
+			PaneID string            `json:"pane_id"`
+			Tokens map[string]string `json:"tokens"`
+		}
+		require.NoError(t, json.Unmarshal(req.Params, &p))
+		if v, ok := p.Tokens["handoff"]; req.Method == "pane.report_metadata" && ok {
+			marks = append(marks, p.PaneID+"="+v)
+		}
+	}
+	assert.Equal(t, []string{"w14:p2=⟳ READY TO RESTART", "w14:p2=⟳ READY TO RESTART", "w14:p2="}, marks)
+
+	for name, tc := range map[string]struct {
+		args any
+		code string
+	}{
+		"the boss":                {map[string]any{"target": "w14:p1"}, "not_a_worker"},
+		"nobody":                  {map[string]any{"target": "ha-coder-9"}, "unknown_worker"},
+		"no target and no pane":   {map[string]any{}, "bad_request"},
+		"a target not a string":   {map[string]any{"target": 7}, "bad_request"},
+		"an arg it does not know": {map[string]any{"target": "ha-coder-1", "project": "ha"}, "bad_request"},
+	} {
+		_, err := daemon.Workforce(t.Context(), sock, daemon.OpHandoffReady, tc.args)
+		var re *daemon.RequestError
+		require.ErrorAs(t, err, &re, name)
+		assert.Equal(t, tc.code, re.Code, name)
+		assert.NotEmpty(t, re.Message, name)
+	}
+	assert.Len(t, handoffs(), 2, "refusals add no event")
 	assert.True(t, r.alive())
 }
 
@@ -437,7 +528,7 @@ func TestWorkforceCodes(t *testing.T) {
 	}
 }
 
-// TestOpBudgets: team status, retire and send get 10 s, and retire
+// TestOpBudgets: team status, retire, send and handoff ready get 10 s, and retire
 // --after-handoff 1,500 s, both in the client's wait and in the budget the
 // daemon's op map enforces; any other op none of its own.
 func TestOpBudgets(t *testing.T) {
@@ -452,13 +543,14 @@ func TestOpBudgets(t *testing.T) {
 		{daemon.OpWorkerRetire, `{"target":"x","after_handoff":true}`, 1500 * time.Second},
 		{daemon.OpWorkerRetire, `not json`, 10 * time.Second},
 		{daemon.OpSend, `{"to":"boss","body":"hi"}`, 10 * time.Second},
+		{daemon.OpHandoffReady, `{"target":"x"}`, 10 * time.Second},
 	} {
 		args := json.RawMessage(tc.args)
 		assert.Equal(t, tc.want, daemon.OpBudget(tc.op, args), "the client's wait: %s %s", tc.op, tc.args)
 		assert.Equal(t, tc.want, daemon.ServedBudget(tc.op, args), "the budget the daemon enforces: %s %s", tc.op, tc.args)
 	}
 	assert.Zero(t, daemon.OpBudget("health", nil))
-	assert.Equal(t, []string{daemon.OpSend, daemon.OpTeamStatus, daemon.OpWorkerRetire}, daemon.WorkforceOpNames())
+	assert.Equal(t, []string{daemon.OpHandoffReady, daemon.OpSend, daemon.OpTeamStatus, daemon.OpWorkerRetire}, daemon.WorkforceOpNames())
 	for _, op := range daemon.WorkforceOpNames() {
 		assert.Positive(t, daemon.ServedBudget(op, nil), "%s has a budget in the table, not a nil one", op)
 	}

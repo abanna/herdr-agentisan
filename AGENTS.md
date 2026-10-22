@@ -180,8 +180,10 @@ exempts whatever is later added under that name.
   recipient (A30): each group's counts and members
   on a tabs team or the ◆ spaces, with idle times from the daemon's clock and
   the rows no pane is bound to (A35), and closing the pane a worker's row is
-  bound to, after its handoff when asked, with the row retired. The daemon
-  runs them; `internal/cli` only asks it.
+  bound to, after its handoff when asked, with the row retired; and
+  `handoff ready` (`handoff.go`, A33), the daemon writing the `handoff` token
+  on a worker's agent pane once `pane.get` proves its terminal, with no row
+  changed. The daemon runs them; `internal/cli` only asks it.
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret

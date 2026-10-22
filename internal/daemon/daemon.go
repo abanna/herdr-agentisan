@@ -297,7 +297,7 @@ func Run(ctx context.Context, o Options) (err error) {
 	in := newInbox()          // shared: the poll feeds the dispatcher, and send wakes it
 	var ops map[string]op
 	if svc := o.newWorkforce(st, ident, idle); svc != nil {
-		ops = workforceOps(svc, ready, o.queued(in))
+		ops = workforceOps(svc, ready, o.queued(in), o.marked)
 	}
 	opsCtx, stopOps := context.WithCancel(ctx)
 	srv, err := listen(opsCtx, paths.Socket, o.health(ctx, st, HealthInfo{

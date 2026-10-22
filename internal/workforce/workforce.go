@@ -38,13 +38,15 @@ var (
 	ErrUnknownProject = errors.New("no such project")
 	// ErrConfig means herdr-agentisan.toml does not resolve for the project.
 	ErrConfig = errors.New("the configuration does not resolve")
-	// ErrUnknownWorker means retire's target names no worker or pane.
+	// ErrUnknownWorker means retire's or handoff ready's target names no
+	// worker or pane.
 	ErrUnknownWorker = errors.New("no such worker")
-	// ErrNotAWorker means retire's target is the boss's, not a worker's.
+	// ErrNotAWorker means retire's target is the boss's, not a worker's, or
+	// handoff ready's is no agent pane in a team's group.
 	ErrNotAWorker = errors.New("not a worker")
 	// ErrPaneChanged means retire's pane no longer shows the terminal it
-	// read, which herdr lists elsewhere: nothing was closed, and a retry
-	// reads the panes afresh.
+	// read, which herdr lists elsewhere, or handoff ready's no longer does:
+	// nothing was closed or written, and a retry reads the panes afresh.
 	ErrPaneChanged = errors.New("the pane changed since it was read")
 	// ErrHandoffPending means retire would end a row whose handoff is still
 	// pending, which would strand the handoff and hold the worker's inbox.
