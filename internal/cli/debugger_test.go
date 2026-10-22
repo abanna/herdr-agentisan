@@ -145,12 +145,20 @@ func TestDebuggerArgsNeedsItsInputs(t *testing.T) {
 
 	// With neither, the root is the checkout the binary sits in,
 	// <root>/bin/herdr-agentisan, two levels up from the binary and not its
-	// own directory: the test binary's has no role.
+	// own directory: the test binary's has no role, as an installed copy's
+	// has none, and the error says so.
 	exe, err := os.Executable()
 	require.NoError(t, err)
 	_, err = runIn(envCtx(t, map[string]string{"HERDR_PLUGIN_CONFIG_DIR": config}), "debugger", "args", "--repo", repo)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), fmt.Sprintf("under %q; pass --root", filepath.Dir(filepath.Dir(exe))))
+	assert.Contains(t, err.Error(), fmt.Sprintf("under %q", filepath.Dir(filepath.Dir(exe))))
+	assert.Contains(t, err.Error(), "it is the checkout around this binary, "+exe+", and an installed copy (task install, go install) sits in none: pass --root")
+	assert.Contains(t, err.Error(), "or set HERDR_PLUGIN_ROOT")
+
+	// A HERDR_PLUGIN_ROOT with no role is named as the source.
+	_, err = runIn(envCtx(t, map[string]string{"HERDR_PLUGIN_CONFIG_DIR": config, "HERDR_PLUGIN_ROOT": t.TempDir()}), "debugger", "args", "--repo", repo)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "it is HERDR_PLUGIN_ROOT's; pass --root")
 }
 
 // TestDebuggerArgsOddPathsRunTheLaunch: the printed line quotes every path

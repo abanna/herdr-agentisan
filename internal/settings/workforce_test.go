@@ -22,8 +22,10 @@ func TestAgentFor(t *testing.T) {
 	top := settings.Agent{Command: []string{"claude", "--setting-sources", "user,project"}, Model: "opus"}
 	tests := map[string]struct {
 		groups map[string]settings.Group
-		typ    string
-		want   settings.Agent
+		// top replaces the top-level agent.
+		top  *settings.Agent
+		typ  string
+		want settings.Agent
 	}{
 		"a type with no group of its own":            {typ: "coder", want: top},
 		"a group without an agent":                   {groups: map[string]settings.Group{"coder": {Workers: 1, Slots: 1}}, typ: "coder", want: top},
@@ -36,6 +38,9 @@ func TestAgentFor(t *testing.T) {
 		"the match on review is exact":               {typ: "Review", want: top},
 		"the debugger is claude, with the top model": {typ: "debugger", want: settings.Agent{Command: []string{"claude"}, Model: "opus"}},
 		"the debugger keeps its group's model":       {groups: map[string]settings.Group{"debugger": {Agent: settings.Agent{Model: "sonnet"}}}, typ: "debugger", want: settings.Agent{Command: []string{"claude"}, Model: "sonnet"}},
+		"a codex top level's model is not claude's":  {top: &settings.Agent{Command: []string{"codex"}, Model: "gpt-5"}, typ: "debugger", want: settings.Agent{Command: []string{"claude"}}},
+		"claude by path at the top level":            {top: &settings.Agent{Command: []string{"/usr/local/bin/claude"}, Model: "opus"}, typ: "debugger", want: settings.Agent{Command: []string{"claude"}, Model: "opus"}},
+		"no top-level command":                       {top: &settings.Agent{Model: "opus"}, typ: "debugger", want: settings.Agent{Command: []string{"claude"}}},
 		"a debugger group's command never applies":   {groups: map[string]settings.Group{"debugger": {Agent: settings.Agent{Command: []string{"codex"}}}}, typ: "debugger", want: settings.Agent{Command: []string{"claude"}, Model: "opus"}},
 		"the match on debugger is exact":             {typ: "Debugger", want: top},
 	}
@@ -43,6 +48,9 @@ func TestAgentFor(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			p := settings.Profile{Agent: top, Groups: tc.groups}
+			if tc.top != nil {
+				p.Agent = *tc.top
+			}
 			got := p.AgentFor(tc.typ)
 			assert.Equal(t, tc.want, got)
 

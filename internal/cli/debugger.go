@@ -50,11 +50,12 @@ func newDebuggerArgsCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("debugger args: the plugin binary: %w", err)
 			}
-			if root == "" {
+			given := root != ""
+			if !given {
 				root = debugger.Root(lookup, bin)
 			}
 			if err := debugger.CheckRoot(root); err != nil {
-				return fmt.Errorf("debugger args: %w; pass --root", err)
+				return fmt.Errorf("debugger args: %w; %s", err, rootHint(given, lookup, bin))
 			}
 			// claude's --add-dir refuses a server dir that is not a
 			// directory; say so before printing a launch that cannot start.
@@ -103,6 +104,19 @@ func newDebuggerArgsCmd() *cobra.Command {
 	c.Flags().StringVar(&configDir, "config-dir", "", "the plugin's config dir (default: $"+trail.ConfigDirEnv+")")
 	addJSONFlag(c, &asJSON)
 	return c
+}
+
+// rootHint says where an unusable root came from, and what to pass
+// instead: an installed copy of the binary, in GOBIN say, sits in no
+// checkout, so the default from its own path finds no role.
+func rootHint(given bool, lookup func(string) (string, bool), bin string) string {
+	if given {
+		return "pass --root, the plugin's checkout"
+	}
+	if r, _ := lookup(debugger.RootEnv); r != "" {
+		return "it is " + debugger.RootEnv + "'s; pass --root, the plugin's checkout"
+	}
+	return "it is the checkout around this binary, " + bin + ", and an installed copy (task install, go install) sits in none: pass --root, the plugin's checkout, or set " + debugger.RootEnv
 }
 
 var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_./:=@%+-]+$`)

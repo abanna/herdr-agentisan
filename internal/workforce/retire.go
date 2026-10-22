@@ -59,12 +59,12 @@ type target struct {
 // names its agent pane only for an id no live row has. Whichever names the
 // pane, the row bound to its terminal is the one retired, and a pane in a
 // team's <short>-boss tab is refused (ErrNotAWorker), as is AfterHandoff
-// for a debugger's row, which can write no handoff (ErrBadRequest). With
-// AfterHandoff it first waits, without the workforce lock, until the pane
-// with the target's terminal carries a non-empty handoff token, polling
-// every HandoffPoll; a terminal herdr stops listing while it waits is the
-// worker gone, and ctx ending first is ErrHandoffTimeout, with the pane
-// left open. The pane is closed only once pane.get shows it still has that
+// for a debugger's row bound to a pane, which can write no handoff
+// (ErrBadRequest). With AfterHandoff it first waits, without the workforce
+// lock, until the pane with the target's terminal carries a non-empty
+// handoff token, polling every HandoffPoll; a terminal herdr stops listing
+// while it waits is the worker gone, and ctx ending first is
+// ErrHandoffTimeout, with the pane left open. The pane is closed only once pane.get shows it still has that
 // terminal. Retiring what is retired already answers Changed false.
 func (s *Service) Retire(ctx context.Context, req RetireRequest) (RetireResult, error) {
 	if strings.TrimSpace(req.Target) == "" {

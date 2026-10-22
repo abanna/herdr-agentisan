@@ -1,7 +1,6 @@
 package settings
 
 import (
-	"cmp"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -31,7 +30,9 @@ var reviewCommand = []string{"codex", "--no-daemon"}
 // plugin (ADR-001 A32): claude with the plugin's read-only launch, which
 // the workforce builds. Its group may set a model, never a command, and the
 // top-level command never applies to it: a flag there, such as a
-// permission mode, would lift the launch's fence.
+// permission mode, would lift the launch's fence. The top-level model
+// applies only when the top-level command is claude's: a codex model is no
+// claude one.
 const DebuggerType = "debugger"
 
 // debuggerCommand is the debugger type's executable; the workforce adds the
@@ -87,8 +88,9 @@ type Spawn struct {
 }
 
 // AgentFor is the agent a worker of type typ launches: for the debugger
-// type, claude, whose arguments the workforce builds, with the group's model
-// or the top-level one; else its group's own command and model when its
+// type, claude, whose arguments the workforce builds, with the group's model,
+// else the top-level one when the top-level command is claude's; else its
+// group's own command and model when its
 // group sets a command, without the top-level model, which belongs to the
 // top-level command; else codex for the review type; else the top-level
 // command, with the group's model or the top-level one.
@@ -96,7 +98,11 @@ func (p Profile) AgentFor(typ string) Agent {
 	g := p.Groups[typ]
 	switch {
 	case typ == DebuggerType:
-		return Agent{Command: slices.Clone(debuggerCommand), Model: cmp.Or(g.Agent.Model, p.Agent.Model)}
+		model := g.Agent.Model
+		if model == "" && len(p.Agent.Command) > 0 && filepath.Base(p.Agent.Command[0]) == routing.Claude {
+			model = p.Agent.Model
+		}
+		return Agent{Command: slices.Clone(debuggerCommand), Model: model}
 	case len(g.Agent.Command) > 0:
 		return Agent{Command: slices.Clone(g.Agent.Command), Model: g.Agent.Model}
 	case typ == ReviewType:
