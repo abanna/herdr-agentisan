@@ -39,8 +39,9 @@ type DashboardOutcome struct {
 func DashboardLabel(short string) string { return short + "-dashboard" }
 
 // dashboardBudget bounds the dashboard's herdr calls, which run before the
-// agents start. A call it ends is out of time, as a spawn's are, never a
-// herdr failure.
+// agents start. The split, label, swap or focus it ends is out of time, as a
+// spawn's calls are; the layout's read before them, which every op shares,
+// stays a herdr failure.
 const dashboardBudget = 5 * time.Second
 
 // ensureDashboard finds project's dashboard, a pane in its workspace labelled
