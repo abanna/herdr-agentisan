@@ -335,7 +335,7 @@ v12's last value there clears itself when its 30 s TTL runs out.
 
 The daemon tells each team's boss what its team poll sees (ADR-001 A44):
 - a worker finished a turn: herdr's `completion_seq` for its terminal changed;
-- it turned blocked;
+- it turned blocked, and when it is no longer blocked;
 - it turned unknown and still is at the next poll;
 - it left the team: its pane closed or moved away, or its agent exited and
   left a shell.
@@ -367,8 +367,18 @@ worker and kind again within `repeat` seconds is dropped. `[notices]` in
 `herdr-agentisan.toml`, or `[projects.<p>.notices]`, sets these and `skip`,
 the kinds not told; see the sample. The daemon reads them when it starts.
 
-Until notices go through the inbox (NERD-5256), each message is one line in
-`daemon.log`. Follow it with:
+Each message reaches the boss through the inbox (`docs/messaging.md`):
+
+```
+[agentisan] notices:
+ha-coder-2 finished a turn · ctx 44% · NERD-5322 · verify
+ha-coder-3 is blocked · ctx 61%
+```
+
+A boss that is away gets one: while it is still queued, each message is
+added to it, and past 8 KiB the oldest lines go, counted in the first line,
+`[agentisan] notices (3 earlier dropped):`. Each message is also one line in
+`daemon.log`, which you can follow:
 
 ```bash
 tail -F "$STATE_DIR/daemon.log" | grep --line-buffered '"message":"notice"'
@@ -376,6 +386,19 @@ tail -F "$STATE_DIR/daemon.log" | grep --line-buffered '"message":"notice"'
 
 `$STATE_DIR` is the plugin's state directory, which herdr passes the daemon
 as `HERDR_PLUGIN_STATE_DIR`.
+
+The boss can mute a worker it does not need to hear from:
+
+```bash
+herdr-agentisan notices mute ha-coder-2 --for 30m   # an hour by default, at most 24h
+herdr-agentisan notices list
+herdr-agentisan notices unmute ha-coder-2
+```
+
+A mute drops every notice about the worker, named as its notices name it,
+except its context ceiling. The daemon holds mutes in memory, so a restart
+ends them. Each command prints one JSON object and exits 1 when refused,
+such as `unknown_worker` for a name no team's worker has.
 
 ### Rotation notices
 

@@ -117,7 +117,7 @@ func TestKindRules(t *testing.T) {
 	for _, k := range notice.Kinds {
 		assert.Equal(t, k != notice.CtxCeiling, k.Skippable(), "%s skippable", k)
 	}
-	repeats := map[notice.Kind]bool{notice.Blocked: true, notice.Unknown: true, notice.Gone: true, "a_new_source": true}
+	repeats := map[notice.Kind]bool{notice.Blocked: true, notice.Unblocked: true, notice.Unknown: true, notice.Gone: true, "a_new_source": true}
 	for _, k := range append(notice.Kinds, "a_new_source") {
 		assert.Equal(t, repeats[k], k.Repeats(), "%s repeats", k)
 	}
@@ -264,4 +264,30 @@ func TestBatcherBodyNeverOverTheCap(t *testing.T) {
 		require.Len(t, got, 1)
 		assert.LessOrEqual(t, len(got[0].Body()), notice.MaxBody, "lines of %d bytes", n)
 	}
+}
+
+// TestBatcherDropsAMutedWorker (A44): a notice about a muted worker is
+// dropped and acknowledged at once, as a skipped one is, and never counts
+// as let through for the repeat window, so once the mute ends the same
+// notice is told; the ceiling goes all the same.
+func TestBatcherDropsAMutedWorker(t *testing.T) {
+	t.Parallel()
+	mutes := notice.NewMutes()
+	_, err := mutes.Mute(muteTeam(), "c2", time.Minute, t0)
+	require.NoError(t, err)
+	b := notice.NewBatcher(notice.Configs{Default: notice.DefaultConfig()})
+	b.Mutes = mutes
+	acked := 0
+	n := about("c2", notice.Blocked)
+	n.Ack = func() { acked++ }
+	ceiling := about("c2", notice.CtxCeiling)
+	other := about("ha-coder-1", notice.Blocked)
+	b.Add(t0, []notice.Notice{n, ceiling, other})
+	assert.Equal(t, 1, acked, "the muted notice is settled")
+	assert.Equal(t, map[string][]string{"ha": {"c2 ctx_ceiling", "ha-coder-1 blocked"}}, lines(b.Flush(t0)))
+
+	b.Add(t0.Add(time.Minute), []notice.Notice{n})
+	assert.Equal(t, map[string][]string{"ha": {"c2 blocked"}}, lines(b.Flush(t0.Add(time.Minute))),
+		"the mute ended, and the muted notice was never let through, so it is no repeat")
+	assert.Equal(t, 1, acked, "not settled again until its message is")
 }

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"maps"
 	"slices"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/settings"
+	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
 	"github.com/abanna/herdr-agentisan/internal/telemetry"
 )
@@ -24,8 +26,9 @@ const ToastBudget = time.Second
 const noticeMsg = "notice"
 
 // notices tells each team's boss what the team poll sees (A44): the poll's
-// Watch makes the notices, a Batcher paces them per boss, and a sink
-// delivers them. Only the poll's goroutine uses it.
+// Watch makes the notices, a Batcher paces them per boss, dropping those
+// about a worker the boss muted, and a sink delivers them through the
+// inbox. Only the poll's goroutine uses it.
 type notices struct {
 	watch *notice.Watch
 	// ctx tells the context levels each pane crosses (A33).
@@ -40,8 +43,10 @@ type notices struct {
 // newNotices reads every team's notices settings from the configuration,
 // once, as the poll reads its teams (A19). A configuration that does not
 // resolve is logged, and every team gets the defaults: notices must not
-// stop because of a typo, any more than $team does.
-func (o Options) newNotices() *notices {
+// stop because of a typo, any more than $team does. Its messages go to each
+// team's boss through st's inbox, by the bosses the poll gives in, and the
+// workers mutes silences are dropped.
+func (o Options) newNotices(st *store.Store, in *inbox, mutes *notice.Mutes) *notices {
 	ns, err := settings.Notices(o.Team.ConfigDir)
 	if err != nil {
 		o.Logger.Error().Err(err).Msg("herdr-agentisan.toml does not resolve; every boss gets the default notices until it is fixed and the daemon restarts")
@@ -51,7 +56,10 @@ func (o Options) newNotices() *notices {
 	for name, c := range ns.Projects {
 		cfgs.Projects[name] = noticeConfig(c)
 	}
-	return &notices{watch: notice.NewWatch(), ctx: o.newCtxWatch(), batch: notice.NewBatcher(cfgs), configs: cfgs, sink: logSink{o.Logger}}
+	batch := notice.NewBatcher(cfgs)
+	batch.Mutes = mutes
+	sink := inboxSink{st: st, in: in, log: o.Logger, events: o.Team.Events, now: o.Now}
+	return &notices{watch: notice.NewWatch(), ctx: o.newCtxWatch(), batch: batch, configs: cfgs, sink: sink}
 }
 
 // newCtxWatch reads every team's rotation thresholds from the configuration
@@ -136,17 +144,46 @@ func (o Options) flushNotices(ctx context.Context, n *notices) {
 	}
 }
 
-// logSink writes each message to daemon.log, one line, which a boss
-// follows until notices go through the inbox (A44).
-type logSink struct {
-	logger zerolog.Logger
+// inboxSink delivers each message to its team's boss through the inbox
+// (A44): appended to the boss's notice still queued, else a new one, which
+// the dispatcher types into the boss once it is in its place. It writes each
+// message to daemon.log as well, one line, as part 1 did, with the inbox
+// message it went into: a boss can follow the log, and it is the record of
+// a message to a project no team's boss is configured for, which goes
+// nowhere else.
+type inboxSink struct {
+	st     *store.Store
+	in     *inbox
+	log    zerolog.Logger
+	events *telemetry.Events
+	now    func() time.Time
 }
 
-func (s logSink) Send(_ context.Context, m notice.Message) error {
-	e := s.logger.Info().Str("project", m.Project).Strs("notices", m.Lines)
+// Send queues m for its boss and logs it. A project with no boss is only
+// logged, and settled: told again, it would still have nowhere to go,
+// since the daemon reads its teams once. A failed write is logged too, and
+// returned, so m is not settled.
+func (s inboxSink) Send(ctx context.Context, m notice.Message) error {
+	_, bosses := s.in.view()
+	e := s.log.Info().Str("project", m.Project).Strs("notices", m.Lines)
 	if m.Dropped > 0 {
 		e = e.Int("dropped", m.Dropped)
 	}
-	e.Msg(noticeMsg)
+	boss, ok := bosses[m.Project]
+	if !ok {
+		e.Str("boss", "").Msg(noticeMsg)
+		return nil
+	}
+	to := store.Address{Kind: store.KindBoss, ID: boss}
+	queued, appended, err := s.st.Notify(ctx, to, s.now(), m.AppendTo)
+	e = e.Str("boss", boss)
+	if err != nil {
+		e.Msg(noticeMsg)
+		return fmt.Errorf("queue the notice for %s: %w", boss, err)
+	}
+	e.Str("inbox", queued.ID).Bool("appended", appended).Msg(noticeMsg)
+	if !appended {
+		s.events.MessageQueued(ctx, telemetry.Message{ID: queued.ID, FromKind: store.Daemon.Kind, From: store.Daemon.ID, ToKind: to.Kind, To: to.ID})
+	}
 	return nil
 }

@@ -1,6 +1,8 @@
 package notice
 
 import (
+	"slices"
+
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/team"
 )
@@ -37,9 +39,9 @@ func NewWatch() *Watch {
 // Observe is what changed from the last model observed to m, as notices:
 //   - the first call only takes m as its baseline, and is one Started
 //     notice per team in m;
-//   - a worker that turned blocked, or left the team, at once: its pane
-//     closed or moved away, or, when agents answered (named), its agent
-//     exited and left a shell;
+//   - a worker that turned blocked, or from blocked to working, idle or
+//     done, or left the team, at once: its pane closed or moved away, or,
+//     when agents answered (named), its agent exited and left a shell;
 //   - a worker that turned unknown, when it still is at the next call;
 //   - a worker whose terminal's completion_seq changed to a new value,
 //     when agents is agent.list's answer for this poll (named). A terminal
@@ -112,11 +114,13 @@ func (w *Watch) statuses(prev, m team.Model, now []placed, named bool) []Notice 
 		if tr.Boss || !ok {
 			continue
 		}
-		switch tr.To {
-		case string(team.StatusBlocked):
-			out = append(out, Notice{Project: tr.Project, Subject: worker.Pane.ID, Kind: Blocked, Text: blockedText(worker)})
-		case string(team.StatusUnknown):
+		switch {
+		case tr.To == string(team.StatusBlocked):
+			out = append(out, Notice{Project: tr.Project, Subject: worker.Pane.ID, Worker: WorkerName(worker), Kind: Blocked, Text: blockedText(worker)})
+		case tr.To == string(team.StatusUnknown):
 			w.unknown[worker.Pane.ID] = true
+		case tr.From == string(team.StatusBlocked) && slices.Contains(answered, team.Status(tr.To)):
+			out = append(out, Notice{Project: tr.Project, Subject: worker.Pane.ID, Worker: WorkerName(worker), Kind: Unblocked, Text: unblockedText(worker)})
 		}
 	}
 	// shell is every pane m places, and whether it is a group pane that
@@ -135,17 +139,17 @@ func (w *Watch) statuses(prev, m team.Model, now []placed, named bool) []Notice 
 		isShell, there := shell[id]
 		switch {
 		case !there:
-			out = append(out, Notice{Project: a.project, Subject: id, Kind: Gone, Text: goneText(a.worker)})
+			out = append(out, Notice{Project: a.project, Subject: id, Worker: WorkerName(a.worker), Kind: Gone, Text: goneText(a.worker)})
 		case isShell && named:
 			// An agent that exits leaves its pane a shell: the worker has
 			// left the team as surely as if the pane had closed, whether or
 			// not the status changed with it.
-			out = append(out, Notice{Project: a.project, Subject: id, Kind: Gone, Text: exitedText(a.worker)})
+			out = append(out, Notice{Project: a.project, Subject: id, Worker: WorkerName(a.worker), Kind: Gone, Text: exitedText(a.worker)})
 		}
 	}
 	for _, a := range now {
 		if held[a.worker.Pane.ID] && a.worker.Pane.Status == team.StatusUnknown {
-			out = append(out, Notice{Project: a.project, Subject: a.worker.Pane.ID, Kind: Unknown, Text: unknownText(a.worker)})
+			out = append(out, Notice{Project: a.project, Subject: a.worker.Pane.ID, Worker: WorkerName(a.worker), Kind: Unknown, Text: unknownText(a.worker)})
 		}
 	}
 	return out
@@ -173,11 +177,16 @@ func (w *Watch) turnsOf(m team.Model, agents []herdr.AgentInfo, first bool) []No
 		if first || !seen || a.CompletionSeq == nil || (last != nil && *last == *a.CompletionSeq) {
 			continue
 		}
-		out = append(out, Notice{Project: g.project, Subject: g.worker.Pane.ID, Kind: TurnEnded, Text: turnText(g.worker)})
+		out = append(out, Notice{Project: g.project, Subject: g.worker.Pane.ID, Worker: WorkerName(g.worker), Kind: TurnEnded, Text: turnText(g.worker)})
 	}
 	w.turns = turns
 	return out
 }
+
+// answered are the statuses a blocked worker turns to once its prompt is
+// answered: told as Unblocked. One that turns unknown is told as unknown,
+// and one that left as gone.
+var answered = []team.Status{team.StatusWorking, team.StatusIdle, team.StatusDone}
 
 // placed is a worker in a team's group.
 type placed struct {

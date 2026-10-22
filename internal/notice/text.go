@@ -28,6 +28,20 @@ func who(w team.Worker) string {
 	}
 }
 
+// WorkerName is the name a notice about w carries, and a mute takes: its
+// logical id when a row binds it, else the name herdr knows its agent by,
+// else its pane id. It is who's, as herdr reports it.
+func WorkerName(w team.Worker) string {
+	switch {
+	case w.Bound:
+		return w.ID
+	case w.Pane.Name != "":
+		return w.Pane.Name
+	default:
+		return w.Pane.ID
+	}
+}
+
 // details is " · ctx 44% · NERD-5322 · verify": the worker's reported ctx,
 // item and stage, each only when it has one (D4: what it reported, never
 // what a screen shows).
@@ -52,6 +66,12 @@ func turnText(w team.Worker) string {
 
 func blockedText(w team.Worker) string {
 	return who(w) + " is blocked" + details(w.Pane)
+}
+
+// unblockedText is the line for a blocked worker that turned working, idle
+// or done.
+func unblockedText(w team.Worker) string {
+	return who(w) + " is no longer blocked" + details(w.Pane)
 }
 
 func unknownText(w team.Worker) string {
