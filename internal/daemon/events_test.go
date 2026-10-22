@@ -87,7 +87,7 @@ func TestTeamPollEmitsStatusTransitions(t *testing.T) {
 	dir := shortDir(t)
 	bindWorker(t, dir, th, "coders-1", "wN:p1")
 	events, rec := telemetrytest.NewEvents()
-	o := teamOpts(t, dir, th, "")
+	o := teamOpts(t, dir, th, quietConfig(t))
 	o.Team.Events = events
 	serving(t, o, th.fakeHerdr)
 
@@ -132,7 +132,7 @@ func TestTeamPollKeepsItsBaselineAcrossAFailedList(t *testing.T) {
 	th := newTeamHerdr(t)
 	events, rec := telemetrytest.NewEvents()
 	var logs lockedLog
-	o := teamOpts(t, shortDir(t), th, "")
+	o := teamOpts(t, shortDir(t), th, quietConfig(t))
 	o.Team.Events = events
 	o.Logger = zerolog.New(&logs)
 	serving(t, o, th.fakeHerdr)
@@ -171,7 +171,7 @@ func TestTeamPollEventsSurviveAFailedAgentList(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
 	events, rec := telemetrytest.NewEvents()
-	o := teamOpts(t, shortDir(t), th, "")
+	o := teamOpts(t, shortDir(t), th, quietConfig(t))
 	o.Team.Events = events
 	serving(t, o, th.fakeHerdr)
 	polled(t, th.srv, 1)
@@ -252,7 +252,7 @@ func TestTeamPollIsNotHeldUpByAHungCollector(t *testing.T) {
 	}
 	th.mu.Unlock()
 	dir := shortDir(t)
-	o := teamOpts(t, dir, th, "")
+	o := teamOpts(t, dir, th, quietConfig(t))
 	o.Team.Events = events
 	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)

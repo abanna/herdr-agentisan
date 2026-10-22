@@ -394,3 +394,109 @@ func TestWatchAcrossAFailedAgentList(t *testing.T) {
 		})
 	}
 }
+
+// TestWatchUnblocked (A44, Q4): a blocked worker that turns working, idle or
+// done is told at once, as no longer blocked; one that turns unknown or
+// leaves is told as that instead, and the boss's own never.
+func TestWatchUnblocked(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct {
+		to   team.Status
+		want []string
+	}{
+		"to working": {team.StatusWorking, []string{"w1:p1 unblocked"}},
+		"to idle":    {team.StatusIdle, []string{"w1:p1 unblocked"}},
+		"to done":    {team.StatusDone, []string{"w1:p1 unblocked"}},
+		"to unknown": {team.StatusUnknown, []string{}},
+		"to blocked": {team.StatusBlocked, []string{}},
+		// A status herdr does not name here is no answer it knows of.
+		"to a status herdr does not name": {team.Status("asleep"), []string{}},
+		"to no status":                    {team.Status(""), []string{}},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			w := notice.NewWatch()
+			w.Observe(teamOf(nil, agentPane("w1:p1", "c1", team.StatusWorking)), nil, false)
+			w.Observe(teamOf(nil, agentPane("w1:p1", "c1", team.StatusBlocked)), nil, false)
+			got := w.Observe(teamOf(nil, agentPane("w1:p1", "c1", tc.to)), nil, false)
+			assert.Equal(t, tc.want, kinds(got))
+			if len(got) == 1 {
+				assert.Equal(t, "c1 is no longer blocked", got[0].Text)
+				assert.Equal(t, "ha", got[0].Project)
+			}
+		})
+	}
+
+	w := notice.NewWatch()
+	w.Observe(teamOf(nil, agentPane("w1:p1", "c1", team.StatusWorking)), nil, false)
+	assert.Empty(t, w.Observe(teamOf(nil, agentPane("w1:p1", "c1", team.StatusIdle)), nil, false), "working to idle is no unblock")
+
+	boss := notice.NewWatch()
+	boss.Observe(teamOf([]team.Worker{agentPane("w1:pB", "boss", team.StatusBlocked)}), nil, false)
+	assert.Empty(t, boss.Observe(teamOf([]team.Worker{agentPane("w1:pB", "boss", team.StatusWorking)}), nil, false), "the boss's own panes are never told")
+
+	gone := notice.NewWatch()
+	gone.Observe(teamOf(nil, agentPane("w1:p1", "c1", team.StatusBlocked)), nil, false)
+	assert.Equal(t, []string{"w1:p1 gone"}, kinds(gone.Observe(teamOf(nil), nil, false)), "a blocked worker that leaves is gone")
+}
+
+// TestWatchNamesTheWorker: every notice about a worker carries the name a
+// mute takes (WorkerName): its logical id when bound, else its agent's
+// name, else its pane id; the started line carries none.
+func TestWatchNamesTheWorker(t *testing.T) {
+	t.Parallel()
+	bound := team.Worker{ID: "ha-coder-2", Bound: true, Pane: team.Pane{ID: "w1:p1", Name: "other", Agent: "claude", Status: team.StatusWorking}}
+	named := team.Worker{ID: "w1:p2", Pane: team.Pane{ID: "w1:p2", Name: "c2", Agent: "claude", Status: team.StatusWorking}}
+	unnamed := team.Worker{ID: "w1:p3", Pane: team.Pane{ID: "w1:p3", Agent: "codex", Status: team.StatusWorking}}
+	with := func(s team.Status, ws ...team.Worker) []team.Worker {
+		out := make([]team.Worker, len(ws))
+		for i, w := range ws {
+			w.Pane.Status = s
+			out[i] = w
+		}
+		return out
+	}
+	workers := func(ns []notice.Notice) []string {
+		out := []string{}
+		for _, n := range ns {
+			out = append(out, n.Subject+" "+string(n.Kind)+" "+n.Worker)
+		}
+		return out
+	}
+	agents := func(seq uint64) []herdr.AgentInfo {
+		return []herdr.AgentInfo{agent("w1:p1", "t1", new(seq)), agent("w1:p2", "t2", new(seq)), agent("w1:p3", "t3", new(seq))}
+	}
+	w := notice.NewWatch()
+	started := w.Observe(teamOf(nil, bound, named, unnamed), agents(1), true)
+	assert.Equal(t, []string{"ha started "}, workers(started), "the started line is about no worker")
+
+	assert.Equal(t, []string{
+		"w1:p1 turn_ended ha-coder-2", "w1:p2 turn_ended c2", "w1:p3 turn_ended w1:p3",
+	}, workers(w.Observe(teamOf(nil, bound, named, unnamed), agents(2), true)))
+	assert.Equal(t, []string{
+		"w1:p1 blocked ha-coder-2", "w1:p2 blocked c2", "w1:p3 blocked w1:p3",
+	}, workers(w.Observe(teamOf(nil, with(team.StatusBlocked, bound, named, unnamed)...), agents(2), true)))
+	assert.Equal(t, []string{
+		"w1:p1 unblocked ha-coder-2", "w1:p2 unblocked c2", "w1:p3 unblocked w1:p3",
+	}, workers(w.Observe(teamOf(nil, with(team.StatusWorking, bound, named, unnamed)...), agents(2), true)))
+	w.Observe(teamOf(nil, with(team.StatusUnknown, bound, named, unnamed)...), agents(2), true)
+	assert.Equal(t, []string{
+		"w1:p1 unknown ha-coder-2", "w1:p2 unknown c2", "w1:p3 unknown w1:p3",
+	}, workers(w.Observe(teamOf(nil, with(team.StatusUnknown, bound, named, unnamed)...), agents(2), true)))
+
+	shell := named
+	shell.Pane.Agent, shell.Pane.Name = "", ""
+	assert.Equal(t, []string{"w1:p2 gone c2", "w1:p3 gone w1:p3"},
+		workers(w.Observe(teamOf(nil, with(team.StatusUnknown, bound, shell)...), agents(2)[:1], true)),
+		"an exit and a close each name the worker as the last poll did")
+}
+
+// TestWorkerName: the name a notice carries and a mute takes, as herdr
+// reports it, never cleaned for a line.
+func TestWorkerName(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "ha-coder-2", notice.WorkerName(team.Worker{ID: "ha-coder-2", Bound: true, Pane: team.Pane{ID: "w1:p1", Name: "other"}}))
+	assert.Equal(t, "c\n1", notice.WorkerName(team.Worker{ID: "w1:p1", Pane: team.Pane{ID: "w1:p1", Name: "c\n1"}}))
+	assert.Equal(t, "w1:p1", notice.WorkerName(team.Worker{ID: "w1:p1", Pane: team.Pane{ID: "w1:p1"}}))
+}

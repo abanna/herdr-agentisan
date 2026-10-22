@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
@@ -111,18 +112,19 @@ type teamPoll struct {
 // startTeam starts the team poll when o.Team is set, and beside it the
 // header's GitHub collection, the agent view's sync (A28 addendum) and the
 // message dispatcher (A30); the poll caches each snapshot in cache, times
-// each pane's rest in idle, gives views and the dispatcher each model, and
+// each pane's rest in idle, gives views and the dispatcher each model,
+// queues its notices for each boss, less those mutes silences (A44), and
 // sets ready once it has reconciled the workers rows (A35). The function it
 // returns stops all four and waits for them, so once it returns nothing more
 // is pushed or typed, the view is cleared unless the server is gone, and no
 // gh is left running.
-func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, idle *team.IdleClock, views *viewSync, ready *atomic.Bool, in *inbox) (stop func()) {
+func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, idle *team.IdleClock, views *viewSync, ready *atomic.Bool, in *inbox, mutes *notice.Mutes) (stop func()) {
 	if o.Team == nil {
 		return func() {}
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	header := newHeaderCache(o.Team.GitHub)
-	n := o.newNotices()
+	n := o.newNotices(st, in, mutes)
 	var wg sync.WaitGroup
 	wg.Go(func() { o.collectGitHub(ctx, header, o.newGitHubNotices(st, n)) })
 	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header, idle, views, ready, in, n) })
@@ -211,8 +213,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 			last = built
 			views.polled(*built, focused, seen)
 		}
-		o.flushNotices(ctx, tp.notices)
-		in.polled(built)
+		o.endPoll(ctx, tp.notices, in, built)
 		select {
 		case <-ctx.Done():
 			return

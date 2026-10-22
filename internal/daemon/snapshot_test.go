@@ -321,7 +321,7 @@ func TestRunGivesTheStopHookAPoll(t *testing.T) {
 	th.layout(ws, pane("idle", "40"), agents)
 	o := teamOpts(t, shortDir(t), th, projectConfig(t))
 	o.Now = func() time.Time { return t0 }
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 	polled(t, th.srv, 2)
 	th.layout(ws, pane("working", "41"), agents)
 	polled(t, th.srv, 2)

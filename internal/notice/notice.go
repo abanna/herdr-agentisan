@@ -23,6 +23,9 @@ const (
 	// Blocked is a worker turning blocked, which is how herdr shows an
 	// agent waiting on a prompt.
 	Blocked Kind = "blocked"
+	// Unblocked is a blocked worker turning working, idle or done: the
+	// prompt it waited on was answered.
+	Unblocked Kind = "unblocked"
 	// Unknown is a worker whose status herdr cannot tell, for two polls in
 	// a row.
 	Unknown Kind = "unknown"
@@ -54,7 +57,7 @@ const (
 )
 
 // Kinds are every kind, in the order the configuration documents them.
-var Kinds = []Kind{TurnEnded, Blocked, Unknown, Gone, Started, CtxSoft, CtxHard, CtxCeiling, Merged, CIFailed, CIPassed, Dirty, Approved}
+var Kinds = []Kind{TurnEnded, Blocked, Unblocked, Unknown, Gone, Started, CtxSoft, CtxHard, CtxCeiling, Merged, CIFailed, CIPassed, Dirty, Approved}
 
 // Skippable reports whether a team's configuration can skip k: every kind
 // but the context ceiling, which always reaches the boss (D7).
@@ -77,12 +80,16 @@ type Notice struct {
 	// Subject is what it is about, such as a pane id: a repeat is the same
 	// subject and kind again (Config.Repeat).
 	Subject string
-	Kind    Kind
+	// Worker is the worker it is about, by the name a mute takes
+	// (WorkerName); "" for a notice about no worker, which no mute silences.
+	Worker string
+	Kind   Kind
 	// Text is the line itself.
 	Text string
 	// Ack, when set, runs once the notice is settled: sent in a message the
-	// sink accepted, or dropped as configured or as a repeat. A notice cut
-	// for size, or in a message the sink refused, is not acknowledged.
+	// sink accepted, or dropped as configured, muted or as a repeat. A
+	// notice cut for size, or in a message the sink refused, is not
+	// acknowledged.
 	Ack func()
 }
 

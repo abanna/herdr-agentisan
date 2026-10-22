@@ -145,9 +145,10 @@ exempts whatever is later added under that name.
   with its description, re-read when the shared file changes
   (`descriptions.go`, A36), and sends each status change since the last
   poll as a workflow event (`events.go`), and tells each team's boss what
-  the poll sees, through `internal/notice` (`notices.go`, A44), with the
-  context levels each agent pane crosses and, at the ceiling, a toast for
-  the user (A33). It keeps
+  the poll sees, through `internal/notice` and the inbox (`notices.go`,
+  A44), with the context levels each agent pane crosses and, at the
+  ceiling, a toast for the user (A33), less the workers the boss muted
+  with the `notices.*` ops (`noticeops.go`). It keeps
   herdr's agent view on the focused team, which focus events and the poll
   feed it, and clears it outside every team and on a clean stop (`view.go`,
   the A28 addendum, A49).
@@ -175,16 +176,18 @@ exempts whatever is later added under that name.
   current one (`stage.go`, A42: `StageOf`, and the sidebar's `stage_now` and
   `stage_old`).
 - `internal/notice/` — boss notices (ADR-001 A44): the team poll's source
-  (`Watch`: a turn's end from `agent.list`'s `completion_seq`, blocked,
-  unknown for two polls, gone (a pane closed or moved, or its agent exited),
-  and the daemon's start), the context levels' source (`CtxWatch`: each
+  (`Watch`: a turn's end from `agent.list`'s `completion_seq`, blocked and
+  its end, unknown for two polls, gone (a pane closed or moved, or its agent
+  exited), and the daemon's start), the context levels' source (`CtxWatch`: each
   agent pane's ctx crossing its rotation thresholds, the boss's included,
   remembered by terminal and re-armed 5 under, A33), GitHub's events
   (`github.go`, A45: merged, CI failed or passed, a conflict, a 👍, each
   with its seen-set key), the per-boss pacing (`Batcher`: coalesced, at most
-  one message per gap, repeats dropped, 8 KiB a message) and the `Sink` that
-  delivers it. The daemon's sink writes daemon.log until the inbox delivers
-  (NERD-5256). Pure: tests build models by hand.
+  one message per gap, repeats and muted workers dropped, 8 KiB a message),
+  the boss's mutes (`Mutes`) and the `Sink` that delivers it: the daemon's
+  appends each message to the boss's notice still queued in the inbox
+  (`AppendTo`, `store.Notify`), and logs it to daemon.log. Pure: tests
+  build models by hand.
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
   `team status`, `team up`, `worker spawn` and `worker retire`, and `send`'s
   sender and recipient (A30): each group's counts and members on a tabs team
@@ -225,14 +228,15 @@ exempts whatever is later added under that name.
   embedded from `migrations/` and tracked by `user_version`. The daemon holds
   the only write connection. `state.db` also holds messaging's inbox
   (`messages.go`, migration 0002, D8 and I3): a recipient's messages are
-  claimed one at a time, oldest first, and a pending handoff (`handoffs.go`)
-  holds a worker's inbox until it completes, which rebinds the worker in the
-  same transaction. A `workers` row binds its pane by terminal, with the
-  shell the team poll read (migration 0003, A35), and the routing decision
-  it was launched with (migration 0005, A50); the poll's writes are
-  compare-and-sets on the row as it read it. The GitHub notices' seen-set,
-  open PRs and seed marks (`github.go`, migration 0004, A45) make each
-  event told once across restarts. Tests open a fresh database in a temp
+  claimed one at a time, oldest first; the daemon's notices to a boss are
+  added to the one still queued (`notify.go`, A44); and a pending handoff
+  (`handoffs.go`) holds a worker's inbox until it completes, which rebinds
+  the worker in the same transaction. A `workers` row binds its pane by
+  terminal, with the shell the team poll read (migration 0003, A35), and the
+  routing decision it was launched with (migration 0005, A50); the poll's
+  writes are compare-and-sets on the row as it read it. The GitHub notices'
+  seen-set, open PRs and seed marks (`github.go`, migration 0004, A45) make
+  each event told once across restarts. Tests open a fresh database in a temp
   dir; the store is never mocked.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
