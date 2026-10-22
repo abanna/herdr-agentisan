@@ -254,8 +254,8 @@ func TestGroupDescriptionErrors(t *testing.T) {
 			wantIn: []string{"groups.qa.description (repo, ", settings.RepoFileName, "set it in " + settings.FileName}, value: "from the repo",
 		},
 		// A count no layer sets has no source to name, so the refusal names
-		// the group's table and the file that added it first (NERD-5369,
-		// Drafts 22 and 25), however the table was written.
+		// first the group's table and the layer that added it, its file or
+		// --set (NERD-5369, Drafts 22 and 25), however the table was written.
 		"an empty group table from a repo file": {
 			file: app, repoFile: "[groups.qa]\n", inRepo: true,
 			prefix: "groups.qa (repo, ", wantIn: []string{settings.RepoFileName, "every group needs workers", "groups.qa.workers (not set in any layer)"},
