@@ -213,16 +213,7 @@ func (r Runner) Run(ctx context.Context, dir, bin string, args ...string) error 
 	cmd.Stdout, cmd.Stderr = out, out
 	cmd.WaitDelay = waitDelay
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		if err != nil {
-			return fmt.Errorf("kill %s's process group: %w", bin, err)
-		}
-		return nil
-	}
+	cmd.Cancel = func() error { return killGroup(syscall.Kill, cmd.Process.Pid, bin) }
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start %s: %w", bin, err)
 	}
@@ -237,6 +228,23 @@ func (r Runner) Run(ctx context.Context, dir, bin string, args ...string) error 
 			return fmt.Errorf("%w: %s", err, reason)
 		}
 		return fmt.Errorf("%s: %w", bin, err)
+	}
+	return nil
+}
+
+// killGroup sends SIGKILL, through kill (syscall.Kill), to the process group
+// that pid leads, and is what Run's Cancel does. A group already gone is
+// os.ErrProcessDone, which exec takes as done. Any other failure, such as
+// EPERM for a member the daemon may not signal, goes back to exec, which
+// then kills only the leader once WaitDelay passes; Run still reports the
+// cancel or the timeout.
+func killGroup(kill func(pid int, sig syscall.Signal) error, pid int, what string) error {
+	err := kill(-pid, syscall.SIGKILL)
+	if errors.Is(err, syscall.ESRCH) {
+		return os.ErrProcessDone
+	}
+	if err != nil {
+		return fmt.Errorf("kill %s's process group: %w", what, err)
 	}
 	return nil
 }
