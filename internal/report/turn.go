@@ -156,8 +156,8 @@ func lineValue(line, prefix string) string {
 // `[agentisan] originally to <worker>: ` for one of the daemon's own. A line
 // with neither is returned as it is. The id holds no space or `]`, as a ULID
 // never does; a sender or worker may hold any printable character, so the
-// header ends at its first `] ` or `: `, and a sender id holding `] ` hides
-// the item as before.
+// header ends at its first `] ` or `: `, and a sender or worker id holding
+// its header's separator cuts it short and hides the item, as before.
 func afterHeader(line string) string {
 	if rest, isMsg := strings.CutPrefix(line, "[msg "); isMsg {
 		id, sender, found := strings.Cut(rest, " from ")

@@ -76,12 +76,16 @@ too.
   after the text may have been typed, or the daemon stopped mid-prompt. Such
   a message is never retried: resend it if it still matters.
 - A retired worker's queue goes to its boss, as
-  `[msg <ulid> from <sender>, originally to <worker>] <body>`.
+  `[msg <ulid> from <sender>, originally to <worker>] <body>`, and a
+  message the daemon sent it as `[agentisan] originally to <worker>: <body>`.
 - The body is typed with CR and CRLF as LF, and with every other control
   character but LF and TAB left out.
-- The header doesn't hide an `item:` line that opens the body: `report
-  turn` reads it behind each of these headers, so a dispatch can send its
-  item first (A42).
+- The header in front of a body, `[msg <ulid> from <sender>]` with or
+  without `, originally to <worker>`, or `[agentisan] originally to
+  <worker>:`, doesn't hide an `item:` line that opens the body: `report
+  turn` reads it there, so a dispatch can send its item first (A42). One
+  that opens a resend notice's quoted body is not: the notice's own words
+  come first on that line.
 
 ## Pane senders
 
