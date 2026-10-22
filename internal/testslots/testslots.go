@@ -96,20 +96,6 @@ func parse(content []byte) (lockList, error) {
 	return l, nil
 }
 
-// Held reads the content of /proc/locks into the files some process holds a
-// lock on, as parse reads it.
-func Held(content []byte) (map[File]bool, error) {
-	l, err := parse(content)
-	if err != nil {
-		return nil, err
-	}
-	held := make(map[File]bool, len(l.holders))
-	for f := range l.holders {
-		held[f] = true
-	}
-	return held, nil
-}
-
 // entry is one line of /proc/locks.
 type entry struct {
 	// lock is a flock(2), POSIX or open-file-description lock.

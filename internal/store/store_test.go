@@ -156,9 +156,9 @@ func TestOpenMigratesAndIsIdempotent(t *testing.T) {
 
 	s, err := store.Open(t.Context(), path)
 	require.NoError(t, err)
-	assert.Equal(t, 4, store.SchemaVersion(), "0001, 0002, messaging's inbox, 0003, the workers' identity, and 0004, their routing")
+	assert.Equal(t, 5, store.SchemaVersion(), "0001, 0002, messaging's inbox, 0003, the workers' identity, 0004, the GitHub notices' state, and 0005, the workers' routing")
 	assert.Equal(t, store.SchemaVersion(), s.UserVersion())
-	assert.Equal(t, []string{"table:focus", "table:handoffs", "table:messages", "table:workers", "trigger:focus_cap"}, objects(t, store.DB(s)))
+	assert.Equal(t, []string{"table:focus", "table:github_open", "table:github_seeded", "table:github_seen", "table:handoffs", "table:messages", "table:workers", "trigger:focus_cap"}, objects(t, store.DB(s)))
 	at := time.Date(2026, 10, 9, 12, 0, 0, 123456789, time.UTC)
 	require.NoError(t, s.RecordFocus(t.Context(), "w1:p1", at))
 	require.NoError(t, s.Close())

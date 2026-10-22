@@ -1,4 +1,4 @@
--- 0004: the routing decision a worker was launched with (ADR-001 A50,
+-- 0005: the routing decision a worker was launched with (ADR-001 A50,
 -- NERD-5289): the role and provider it was decided for, the binding, model
 -- id and effort chosen, the override that chose them, and the assignment and
 -- policy it was made by. All NULL for a worker routing did not launch:

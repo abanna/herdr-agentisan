@@ -8,6 +8,20 @@ func ReadingOf(proc string, contents ...[]byte) (*Reading, error) {
 	return reading(proc, contents...)
 }
 
+// Held reads the content of /proc/locks into the files some process holds a
+// lock on, as parse reads it.
+func Held(content []byte) (map[File]bool, error) {
+	l, err := parse(content)
+	if err != nil {
+		return nil, err
+	}
+	held := make(map[File]bool, len(l.holders))
+	for f := range l.holders {
+		held[f] = true
+	}
+	return held, nil
+}
+
 // ReadStaggered and ReadWhole let the tests read a lock list served as the
 // kernel serves /proc/locks, a page at a time.
 var (

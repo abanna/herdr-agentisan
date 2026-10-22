@@ -19,8 +19,9 @@ import (
 )
 
 // TestHoldArgv: a hold is flock(1) holding its lock while sleep runs, in
-// any of the forms flock reads (ADR-001 A40). Anything else is no hold, and
-// its slot counts as used.
+// any of the forms flock reads (ADR-001 A40). A -c string counts by its first
+// word alone, so `sleep 1; make test` is a hold, as #58 noted. Anything else
+// is no hold, and its slot counts as used.
 func TestHoldArgv(t *testing.T) {
 	t.Parallel()
 	const lock = "/tmp/agentisan-suite-1000.slot3.lock"
@@ -41,6 +42,7 @@ func TestHoldArgv(t *testing.T) {
 		"--":                             {argv: []string{"flock", "--", lock, "sleep"}, want: true},
 		"-c":                             {argv: []string{"flock", lock, "-c", "sleep 86400"}, want: true},
 		"--command, with a path":         {argv: []string{"flock", lock, "--command", "/bin/sleep 1"}, want: true},
+		"-c, its first word sleep":       {argv: []string{"flock", lock, "-c", "sleep 1; make test"}, want: true},
 		"no argv":                        {},
 		"a shell running flock":          {argv: []string{"sh", "-c", "flock " + lock + " sleep 1"}},
 		"not flock":                      {argv: []string{"flockx", lock, "sleep"}},
