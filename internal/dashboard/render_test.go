@@ -1296,9 +1296,10 @@ func TestHelpOverWideCharacters(t *testing.T) {
 }
 
 // TestPlaceKeepsAZeroWidthClusterWithItsCell: place draws a box over a
-// line and keeps a zero-width cluster with the cell before it, wherever the
-// line's segments break: one after a cell the box covers is not drawn, and
-// one after a cell beside the box is, once. The box is "XY", over [x, x+2).
+// line and keeps a zero-width cluster with the cell before it, and one at
+// the line's start with the first cell, wherever the line's segments break:
+// one with a cell the box covers is not drawn, and one with a cell beside
+// the box is, once. The box is "XY", over [x, x+2), or empty.
 func TestPlaceKeepsAZeroWidthClusterWithItsCell(t *testing.T) {
 	t.Parallel()
 
@@ -1317,7 +1318,7 @@ func TestPlaceKeepsAZeroWidthClusterWithItsCell(t *testing.T) {
 		"a segment of its own at the box's right edge":      {[]string{"abcd", "\u0301", "ef"}, 2, "abXYef"},
 		"ending the segment at the box's right edge":        {[]string{"abcd\u0301", "ef"}, 2, "abXYef"},
 		"after the cell right of the box, starting its own": {[]string{"abcde", "\u0301f"}, 2, "abXYe\u0301f"},
-		"at the line's start, the box there":                {[]string{"\u200b", "ab"}, 0, "\u200bXY"},
+		"at the line's start, the box there":                {[]string{"\u200b", "ab"}, 0, "XY"},
 		"at the line's start, the box past it":              {[]string{"\u200b", "abcd"}, 1, "\u200baXYd"},
 		"a wide character cut at each edge":                 {[]string{"a漢", "字b"}, 2, "a XY b"},
 	}
@@ -1327,13 +1328,21 @@ func TestPlaceKeepsAZeroWidthClusterWithItsCell(t *testing.T) {
 			assert.Equal(t, tc.want, dashboard.PlaceText(tc.base, tc.x, "XY"))
 		})
 	}
+	t.Run("an empty box at the line's start", func(t *testing.T) {
+		t.Parallel()
+		for _, base := range [][]string{{"\u200bab"}, {"\u200b", "ab"}} {
+			assert.Equal(t, "\u200bab", dashboard.PlaceText(base, 0, ""), "%q: drawn once, by the cut that takes the first cell", base)
+		}
+	})
 }
 
 // TestPlaceCutsAsTheUnsplitText: where a line's segments break changes
 // nothing place draws. Every split of a text at its grapheme clusters' edges
 // draws, with the box at every column, what the text as one segment draws:
 // its zero-width clusters (a ZWSP, a lone combining mark and a BOM) at
-// either edge of the box, and its VS16 and ZWJ emoji cut by it.
+// either edge of the box, and its VS16 and ZWJ emoji cut by it. An empty box
+// at a cluster's edge draws the text unchanged: every zero-width cluster
+// once.
 func TestPlaceCutsAsTheUnsplitText(t *testing.T) {
 	t.Parallel()
 
@@ -1350,6 +1359,13 @@ func TestPlaceCutsAsTheUnsplitText(t *testing.T) {
 	}
 	require.Len(t, clusters, 10, "%q", clusters)
 	require.Equal(t, 4, zeroWidth, "%q", clusters)
+	edges := map[int]bool{}
+	for col, i := 0, 0; i <= len(clusters); i++ {
+		edges[col] = true
+		if i < len(clusters) {
+			col += ansi.StringWidth(clusters[i])
+		}
+	}
 	for split := range 1 << (len(clusters) - 1) {
 		segs := []string{clusters[0]}
 		for i, c := range clusters[1:] {
@@ -1361,6 +1377,9 @@ func TestPlaceCutsAsTheUnsplitText(t *testing.T) {
 		}
 		for x := range ansi.StringWidth(text) + 1 {
 			require.Equal(t, dashboard.PlaceText([]string{text}, x, "XY"), dashboard.PlaceText(segs, x, "XY"), "%q, the box at %d", segs, x)
+			if edges[x] {
+				require.Equal(t, text, dashboard.PlaceText(segs, x, ""), "%q, an empty box at %d", segs, x)
+			}
 		}
 	}
 }

@@ -1261,9 +1261,10 @@ func (l line) cut(from, to int) line {
 // cutCells returns the cells [from, to) of s, which is text without escape
 // sequences that starts at column at: a cluster partly inside is a space
 // for each of its cells inside. A zero-width cluster goes with the cell
-// before it, as ansi.Cut keeps it: after from, or anywhere when from is the
-// line's start, and up to to. The columns are the line's, not s's, so where
-// the line's segments break changes nothing.
+// before it, and one at the line's start with the line's first cell, as
+// ansi.Cut keeps them: after from and up to to, or at the line's start when
+// the cut takes the first cell. The columns are the line's, not s's, so
+// where the line's segments break changes nothing.
 func cutCells(s string, at, from, to int) string {
 	var b strings.Builder
 	col := at
@@ -1271,7 +1272,7 @@ func cutCells(s string, at, from, to int) string {
 		c, w := ansi.FirstGraphemeCluster(s, ansi.GraphemeWidth)
 		s = s[len(c):]
 		if w == 0 {
-			if (col > from || from == 0) && col <= to {
+			if (col > from && col <= to) || (col == 0 && from == 0 && to > 0) {
 				b.WriteString(c)
 			}
 			continue
