@@ -516,7 +516,7 @@ func TestDispatcherWaitsOutAnAmbiguousWorkerName(t *testing.T) {
 	var logs lockedLog
 	o := teamOpts(t, dir, th, workforceConfig(t))
 	o.Logger = zerolog.New(&logs)
-	run(t, o)
+	serving(t, o, th.fakeHerdr)
 
 	require.Eventually(t, func() bool {
 		got := stateOf(t, st, m.ID)
@@ -545,7 +545,7 @@ func TestDispatcherWaitsOutAnAmbiguousBossName(t *testing.T) {
 	th.setAgents(named("w14:p1", "ha-boss"), named("w14:p2", "ha-coder-1"), named("wJ:p1", "ha-boss"))
 	st := stateStore(t, dir, th)
 	m := sent(t, st, haBoss, coder, "boss twice")
-	run(t, teamOpts(t, dir, th, workforceConfig(t)))
+	serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
 
 	require.Eventually(t, func() bool {
 		got := stateOf(t, st, m.ID)
@@ -977,7 +977,7 @@ func TestDispatcherStopsBeforeTheNextClaim(t *testing.T) {
 	release := p.hold(t, "ha-coder-1")
 	first := sent(t, st, coder, haBoss, "first")
 	second := sent(t, st, coder, haBoss, "second")
-	r := run(t, teamOpts(t, dir, th, workforceConfig(t)))
+	r := serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
 	p.next(t)
 
 	r.cancel()
