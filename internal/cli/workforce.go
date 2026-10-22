@@ -17,8 +17,8 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
-// The workforce commands (ADR-001 D11, A23): team status and worker retire
-// here; worker spawn and team up follow. The daemon runs each; the command
+// The workforce commands (ADR-001 D11, A23): team status, worker spawn and
+// worker retire here; team up follows. The daemon runs each; the command
 // parses, asks and prints. On every path, a flag it does not know included, stdout is exactly
 // one JSON object, the contract the herdr-workforce skill's wrapper reads:
 // {"ok":true,"data":…} or {"ok":false,"error":{"code","message"}}. It exits 0
@@ -89,7 +89,7 @@ func newTeamCmd() *cobra.Command {
 }
 
 func newWorkerCmd() *cobra.Command {
-	return workforceGroup("worker", "Remove the team's workers (the herdr-workforce skill)", newWorkerRetireCmd())
+	return workforceGroup("worker", "Add and remove the team's workers (the herdr-workforce skill)", newWorkerSpawnCmd(), newWorkerRetireCmd())
 }
 
 // opFlags are the flags every workforce command takes.
@@ -164,6 +164,34 @@ func newTeamStatusCmd() *cobra.Command {
 		},
 	}
 	f.add(c, true)
+	return c
+}
+
+func newWorkerSpawnCmd() *cobra.Command {
+	var (
+		f            opFlags
+		group, model string
+		count        int
+	)
+	c := &cobra.Command{
+		Use:   "spawn",
+		Short: "Add workers to a group, each in a tab of its own under Agentisan",
+		Long: "Adds --count workers of the type --group, refused whole when they would\n" +
+			"pass the group's slots or the repo fails the preflight (tdaddy in a Go\n" +
+			"repo). Each gets the lowest free logical id, <short>-<type>-<n>, as its\n" +
+			"tab label and agent name.",
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return f.runOp(cmd, args, daemon.OpWorkerSpawn, func() (any, error) {
+				sel, err := f.selector(cmd.Context())
+				return workforce.SpawnRequest{Selector: sel, Group: group, Count: count, Model: model}, err
+			})
+		},
+	}
+	f.add(c, true)
+	c.Flags().StringVar(&group, "group", "", "the worker type, a group of the project's configuration (required)")
+	c.Flags().IntVar(&count, "count", 1, "how many workers to add")
+	c.Flags().StringVar(&model, "model", "", "the model, instead of the group's")
 	return c
 }
 

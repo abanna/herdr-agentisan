@@ -176,10 +176,11 @@ exempts whatever is later added under that name.
   that delivers it. The daemon's sink writes daemon.log until the inbox
   delivers (NERD-5256). Pure: tests build models by hand.
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
-  `team status` and `worker retire` so far, and `send`'s sender and
-  recipient (A30): each group's counts and members
-  on a tabs team or the ◆ spaces, with idle times from the daemon's clock and
-  the rows no pane is bound to (A35), and closing the pane a worker's row is
+  `team status`, `worker spawn` and `worker retire` so far, and `send`'s
+  sender and recipient (A30): each group's counts and members on a tabs team
+  or the ◆ spaces, with idle times from the daemon's clock and the rows no
+  pane is bound to (A35); opening a tab per worker and waiting for its agent,
+  after `internal/preflight`'s check; and closing the pane a worker's row is
   bound to, after its handoff when asked, with the row retired. The daemon
   runs them; `internal/cli` only asks it.
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.

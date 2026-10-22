@@ -378,17 +378,18 @@ See ADR-001 A19.
 
 ## The workforce commands
 
-The boss reads its team and retires workers with commands the daemon runs
-(ADR-001 D11, A23); the `herdr-workforce` skill drives them. `worker spawn`
-and `team up` follow in later parts of NERD-5254.
+The boss reads its team, spawns workers and retires them with commands the
+daemon runs (ADR-001 D11, A23); the `herdr-workforce` skill drives them.
+`team up` follows in a later part of NERD-5254.
 
 | Command | What it does |
 | --- | --- |
 | `team status [--project p]` | Every group's counts and open slots, and each worker's status, ctx, item, stage (and whether it is old) and idle time |
+| `worker spawn --group g [--count n] [--model m]` | Adds workers, refused whole past the group's `slots` or when the repo fails the tdaddy preflight |
 | `worker retire <id> [--after-handoff]` | Closes a worker's pane, by logical id or pane id; with the flag, once its handoff is written |
 
 Each prints one JSON object and exits 1 when refused. Without `--project`
-status reads the team whose workspace the command runs in, else the only
+status and spawn read the team whose workspace the command runs in, else the only
 tabs team.
 A tabs team's worker is named by its logical id, `<short>-<type>-<n>`, its
 tab's label; a pane of the ◆ spaces by its pane id. Idle times start when

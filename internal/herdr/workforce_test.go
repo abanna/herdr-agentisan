@@ -77,6 +77,22 @@ func TestWorkforceCallsSendTheSchemaShape(t *testing.T) {
 			params: `{"cwd":"/repo","label":"assay","focus":false}`,
 			want:   herdr.Created{WorkspaceID: "w20", TabID: "w20:t1", RootPane: herdr.PaneInfo{PaneID: "w20:p1", TerminalID: "term-w20:p1", WorkspaceID: "w20", TabID: "w20:t1", AgentStatus: "unknown"}},
 		},
+		"tab.create, nothing optional": {
+			result: map[string]any{"type": "tab_created", "tab": map[string]any{"tab_id": "w14:t2", "workspace_id": "w14"}, "root_pane": rootPaneOf("w14:p7", "w14")},
+			call: func(c herdr.Client) (any, error) {
+				return c.CreateTab(t.Context(), herdr.TabCreate{WorkspaceID: "w14"})
+			},
+			method: "tab.create",
+			params: `{"workspace_id":"w14","focus":false}`,
+			want:   herdr.Created{WorkspaceID: "w14", TabID: "w14:t2", RootPane: herdr.PaneInfo{PaneID: "w14:p7", TerminalID: "term-w14:p7", WorkspaceID: "w14", TabID: "w14:t2", AgentStatus: "unknown"}},
+		},
+		"workspace.create, nothing optional": {
+			result: map[string]any{"type": "workspace_created", "workspace": map[string]any{"workspace_id": "w14"}, "tab": map[string]any{"tab_id": "w14:t2", "workspace_id": "w14"}, "root_pane": rootPaneOf("w14:p7", "w14")},
+			call:   func(c herdr.Client) (any, error) { return c.CreateWorkspace(t.Context(), herdr.WorkspaceCreate{}) },
+			method: "workspace.create",
+			params: `{"focus":false}`,
+			want:   herdr.Created{WorkspaceID: "w14", TabID: "w14:t2", RootPane: herdr.PaneInfo{PaneID: "w14:p7", TerminalID: "term-w14:p7", WorkspaceID: "w14", TabID: "w14:t2", AgentStatus: "unknown"}},
+		},
 		"tab.rename": {
 			result: map[string]any{"type": "tab_info", "tab": map[string]any{"tab_id": "w20:t1", "workspace_id": "w20"}},
 			call:   func(c herdr.Client) (any, error) { return nil, c.RenameTab(t.Context(), "w20:t1", "as-coder-1") },
