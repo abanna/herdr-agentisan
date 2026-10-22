@@ -1,5 +1,6 @@
 # Codex hooks that report each Codex agent's context use to its herdr pane as
-# the `ctx` token (ADR-001 A22, A27, A43). `herdr-agentisan codex hooks`
+# the `ctx` token, and the model it runs as `model` (ADR-001 A22, A27, A43,
+# A56). `herdr-agentisan codex hooks`
 # installs them in ~/.codex/hooks.json ($CODEX_HOME/hooks.json), after any
 # hooks already there. Or paste them at the end of ~/.codex/config.toml; the
 # command then leaves hooks.json alone. A project's .codex/config.toml works

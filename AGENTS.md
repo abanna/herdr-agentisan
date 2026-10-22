@@ -108,7 +108,8 @@ exempts whatever is later added under that name.
   in a pane shell (`StateDir`, ADR-001 A51).
 - `internal/report/` — an agent pushing its own state to its pane as herdr
   tokens (ADR-001 D4), and the token contract for the keys it writes.
-  `report statusline` turns Claude's statusline JSON into `ctx`,
+  `report statusline` turns Claude's statusline JSON into `ctx` and the
+  `model` it runs, with its `model_at` (A56),
   `report codex` does the same from a Codex hook and its session's rollout
   (A22, hooks sampled in `docs/config/codex-hooks.example.toml`), with a
   24 h TTL (A27), and
@@ -136,7 +137,9 @@ exempts whatever is later added under that name.
   10 s (A52). Every poll it also reconciles `state.db`'s `workers` rows with
   herdr's panes (`bind.go`, A35), rebuilds the team model, pushes `$team`
   and every agent pane's ctx display (`team.go`, A28) and caches every team's
-  snapshot, each row with its agent's launch model from the pane's processes
+  snapshot, each row with the model its agent reports, while the report is
+  the current agent's (`team.CurrentModels`, A56), else its launch model from
+  the pane's processes
   (`models.go`, A39; one `pane.process_info` reply per pane per poll, shared
   with the reconcile, `processinfo.go`) and the boss with its agent process's
   start, its runtime (A47), with the workspaces each holds, which the `snapshot`
