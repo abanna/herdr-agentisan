@@ -94,10 +94,11 @@ func readInfo(path string) LockInfo {
 // flock belongs to the open file, and a child another goroutine forks
 // meanwhile holds that open file until it execs, so a close alone can leave
 // the lock held after held has reported it free.
-func held(path string) (bool, error) { return heldKeeping(path, nil) }
+func held(path string) (bool, error) { return heldKeeping(path, func(*os.File) {}) }
 
-// heldKeeping is held, calling kept, when set, with the probe's file once it
-// has the free lock, as a fork would copy it then.
+// heldKeeping is held, calling kept with the probe's file once it has the
+// free lock, as a fork would copy it then. held's kept does nothing. kept is
+// never nil, so a test's kept runs every statement held runs.
 func heldKeeping(path string, kept func(*os.File)) (bool, error) {
 	f, err := openLock(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -113,9 +114,7 @@ func heldKeeping(path string, kept func(*os.File)) (bool, error) {
 	case err != nil:
 		return false, err
 	}
-	if kept != nil {
-		kept(f)
-	}
+	kept(f)
 	return false, unlock(f)
 }
 
