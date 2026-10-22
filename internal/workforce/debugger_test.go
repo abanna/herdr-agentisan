@@ -117,6 +117,10 @@ func TestSpawnTheDebuggerWithAModel(t *testing.T) {
 	}
 }
 
+// debuggerEnvFile names the debugger's env file, outside any repo; a launch
+// never opens it.
+const debuggerEnvFile = "\n[debugger]\nenv_file = \"/nonexistent/elastic.env\"\n"
+
 // TestSpawnRefusesADebuggerItCannotLaunch: a launch that cannot be built is
 // refused whole as a configuration error, before the preflight, a tab or a
 // row: no env file named, a daemon given no checkout, a checkout with no

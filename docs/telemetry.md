@@ -223,6 +223,42 @@ FROM logs-agentisan.otel-*
 | KEEP @timestamp, event_name, attributes.agentisan.message.to.id, attributes.agentisan.message.reason
 ```
 
+### `agentisan.worker.routed`
+
+The model and effort `worker spawn` or `team up` launched a worker with
+(ADR-001 A50): one event per worker, all of a spawn's, or of a group team up
+fills, sharing one decision. While `[routing] enabled` is false it is the
+decision routing would have made, with `agentisan.routing.applied` false; one
+routing would refuse then emits nothing, and `daemon.log` says why. The record's time is the decision's. The
+body reads `<worker id> <binding> <effort>`.
+
+Every audit field is present, `""` where the decision has none.
+
+| Attribute | Type | Value |
+| --- | --- | --- |
+| `agentisan.worker.id` | string | The worker's logical id |
+| `agentisan.project` | string | The team's project |
+| `agentisan.group` | string | The worker's type, such as `coder` |
+| `agentisan.routing.task_id` | string | The packet's `task_id`, such as a Linear key |
+| `agentisan.routing.task_lookup_status` | string | `found`, `not_found` or `unavailable`; `not_found` with no packet |
+| `agentisan.routing.assignment_digest` | string | `sha256:` of the assignment, requirements and acceptance criteria; never their text |
+| `agentisan.routing.role` | string | The rules' role, such as `pre_check` for `qa` |
+| `agentisan.routing.provider` | string | `claude` or `codex`, the type's agent command |
+| `agentisan.routing.selected_binding` | string | The binding, such as `claude_mid` |
+| `agentisan.routing.model_id` | string | Its model id |
+| `agentisan.routing.effort` | string | The effort, such as `high` |
+| `agentisan.routing.policy_version` | string | The rules' schema version and a digest of the rules and `[routing]` |
+| `agentisan.routing.jev_model_returned` | string | Jev's model; `""` until NERD-5289 part 2 |
+| `agentisan.routing.answers` | string | Jev's answers as JSON; `""` until part 2 |
+| `agentisan.routing.fallback_reason` | string | Why a coder took its default: `task_not_found`, `lookup_unavailable`, `insufficient_assignment`, `jev_disabled`; `""` for none |
+| `agentisan.routing.override.binding` | string | The binding an override named |
+| `agentisan.routing.override.by` | string | `user` (`[routing.overrides]`) or `boss` (`--model`) |
+| `agentisan.routing.override.effort` | string | The boss's `--effort` |
+| `agentisan.routing.timestamp` | string | When it was decided, RFC 3339 in UTC |
+| `agentisan.routing.selection` | string | The role's selection: `fixed`, `explicit` or `jev_complexity` |
+| `agentisan.routing.applied` | bool | Whether the worker was launched with it |
+| `agentisan.routing.unchecked` | string array | The rules' filters with no data yet |
+
 ### `agentisan.worker.ctx_level`
 
 A pane's context crossed one of its rotation thresholds (ADR-001 A33): soft,

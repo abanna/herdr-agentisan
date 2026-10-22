@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -21,8 +22,10 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/debugger"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/preflight"
+	"github.com/abanna/herdr-agentisan/internal/routing"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
+	"github.com/abanna/herdr-agentisan/internal/telemetry/telemetrytest"
 	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
@@ -99,6 +102,9 @@ func TestWorkforceOpsOverTheSocket(t *testing.T) {
 		"a count past int64":          {op: daemon.OpWorkerSpawn, args: json.RawMessage(`{"group":"coder","count":99999999999999999999}`), code: "bad_request"},
 		"past the slot cap":           {op: daemon.OpWorkerSpawn, args: map[string]any{"group": "coder", "count": 2}, code: "slot_cap"},
 		"an unknown group":            {op: daemon.OpWorkerSpawn, args: map[string]any{"group": "qa", "count": 1}, code: "unknown_group"},
+		"spawn takes no --set":        {op: daemon.OpWorkerSpawn, args: map[string]any{"group": "coder", "count": 1, "set": []string{"routing.bindings.claude_mid.model_id=claude-fable-5-1"}}, code: "bad_request"},
+		"spawn args not UTF-8":        {op: daemon.OpWorkerSpawn, args: json.RawMessage("{\"group\":\"coder\",\"count\":1,\"task\":{\"task_lookup_status\":\"found\",\"worker_assignment\":\"\xff\"}}"), code: "bad_request"},
+		"spawn args with a surrogate": {op: daemon.OpWorkerSpawn, args: json.RawMessage("{\"group\":\"coder\",\"count\":1,\"task\":{\"task_lookup_status\":\"found\",\"worker_assignment\":\"\xed\xa0\x80\"}}"), code: "bad_request"},
 		"team up, an unknown project": {op: daemon.OpTeamUp, args: map[string]any{"project": "nope"}, code: "unknown_project"},
 		"team up, an unknown arg":     {op: daemon.OpTeamUp, args: map[string]any{"group": "coder"}, code: "bad_request"},
 		"retire with no name":         {op: daemon.OpWorkerRetire, args: map[string]any{}, code: "bad_request"},
@@ -558,6 +564,48 @@ func TestRunGivesTheDebuggerItsServerDir(t *testing.T) {
 	require.ErrorContains(t, err, "the server dir "+paths.Dir+" holds the trail's env file")
 }
 
+// TestTheWorkforceRecordsItsRouting: the daemon's service hands each routing
+// decision, a spawn's or a team up group's, to the workflow events, one per
+// worker, and to daemon.log whole, named for its op; a refusal while routing
+// is off goes to daemon.log alone (A50).
+func TestTheWorkforceRecordsItsRouting(t *testing.T) {
+	t.Parallel()
+	events, rec := telemetrytest.NewEvents()
+	var logs strings.Builder
+	o := daemon.Options{Team: &daemon.TeamOptions{Events: events}, Logger: zerolog.New(&logs)}
+	svc := daemon.WorkforceOf(o, daemon.Identity{})
+	require.NotNil(t, svc.Routed)
+	d := routing.Decision{Role: "coder", Provider: "claude", SelectedBinding: "claude_mid", ModelID: "claude-sonnet-5-5", Effort: "high", Applied: true}
+
+	svc.Routed(t.Context(), workforce.Routed{Op: "worker spawn", Project: "ha", Group: "coder", IDs: []string{"ha-coder-1", "ha-coder-2"}, Decision: &d})
+	got := rec.Events()
+	require.Len(t, got, 2)
+	for i, id := range []string{"ha-coder-1", "ha-coder-2"} {
+		assert.Equal(t, "agentisan.worker.routed", got[i].Name)
+		assert.Equal(t, id, got[i].Attrs["agentisan.worker.id"])
+		assert.Equal(t, "claude_mid", got[i].Attrs["agentisan.routing.selected_binding"])
+	}
+	var line map[string]any
+	require.NoError(t, json.Unmarshal([]byte(logs.String()), &line))
+	assert.Equal(t, "worker spawn routed", line["message"])
+	assert.Equal(t, []any{"ha-coder-1", "ha-coder-2"}, line["workers"])
+	routed, _ := line["routing"].(map[string]any)
+	assert.Equal(t, "claude-sonnet-5-5", routed["model_id"])
+	assert.Equal(t, true, routed["applied"])
+
+	logs.Reset()
+	svc.Routed(t.Context(), workforce.Routed{Op: "team up", Project: "ha", Group: "qa", IDs: []string{"ha-qa-1"}, Decision: &d})
+	require.Len(t, rec.Events(), 3)
+	require.NoError(t, json.Unmarshal([]byte(logs.String()), &line))
+	assert.Equal(t, "team up routed", line["message"])
+
+	logs.Reset()
+	svc.Routed(t.Context(), workforce.Routed{Op: "worker spawn", Project: "ha", Group: "ops", IDs: []string{"ha-ops-1"}, Refused: routing.ErrUnknownRole})
+	assert.Len(t, rec.Events(), 3, "no event without a decision")
+	assert.Contains(t, logs.String(), "worker spawn: routing is off; when on, it would refuse this")
+	assert.Contains(t, logs.String(), routing.ErrUnknownRole.Error())
+}
+
 // TestWorkforceCodes: every workforce refusal has a code of its own, and
 // D12 is told apart from any other config error.
 func TestWorkforceCodes(t *testing.T) {
@@ -575,6 +623,11 @@ func TestWorkforceCodes(t *testing.T) {
 		workforce.ErrHandoffTimeout:                                              "handoff_timeout",
 		workforce.ErrNoTarget:                                                    "no_target",
 		workforce.ErrUnknownGroup:                                                "unknown_group",
+		routing.ErrUnknownRole:                                                   "unknown_role",
+		routing.ErrProviderMismatch:                                              "provider_mismatch",
+		routing.ErrOverrideRefused:                                               "override_refused",
+		routing.ErrBlocked:                                                       "routing_blocked",
+		fmt.Errorf("%w: %w", workforce.ErrBadRequest, routing.ErrInvalid):        "bad_request",
 		workforce.ErrSlotCap:                                                     "slot_cap",
 		workforce.ErrInvalidID:                                                   "invalid_id",
 		fmt.Errorf("%w: %w", workforce.ErrPreflight, preflight.ErrTdaddyMissing): "preflight_failed",

@@ -198,10 +198,12 @@ locks = ["/run/user/1000/agentisan/gate.0.lock"]
 # Model routing (ADR-001 A50): the built-in routing rules
 # (internal/routing/rules/jev-routing-v1.json) choose each worker's model and
 # effort by its type's role; this table holds what they leave to you. Shared
-# file and --set only. `worker spawn` asks routing from NERD-5289 part 1b on.
+# file and --set only. `worker spawn` asks routing once per spawn.
 #   enabled  false (the default) launches as configured above; true lets
-#            routing decide, and then no agent.model key may be set.
-#   [routing.bindings.<binding>]  model_id ("" is unresolved), efforts and
+#            routing decide, and then no agent.model key, nor a codex
+#            command's -p/--profile, may be set.
+#   [routing.bindings.<binding>]  model_id ("" is unresolved), efforts its
+#            client takes (claude: low to max, codex: minimal to xhigh) and
 #            enabled, e.g. [routing.bindings.claude_mid] model_id = "…".
 #   [routing.overrides]  <role> = "<binding>": your standing choice, and the
 #            only way to a premium binding (Fable, Astra). This file only.

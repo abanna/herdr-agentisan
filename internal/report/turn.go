@@ -83,8 +83,10 @@ func ParseTurnHook(r io.Reader) (TurnHook, error) {
 // states none, cleaned into a value CheckValue accepts.
 //
 // A prompt (EventPromptSubmit) states an item only: its first `item:` line,
-// as a dispatch carries it. A final message (EventStop) states the stage in
-// the last line of its closing paragraph, or the last before that
+// as a dispatch carries it, where the first line counts from after the
+// header the daemon types a message behind (afterHeader), so a dispatch sent
+// with `send` can state its item first. A final message (EventStop) states
+// the stage in the last line of its closing paragraph, or the last before that
 // paragraph's trailing `item:` lines, when it opens with one of
 // StatusPrefixes; and the item in the paragraph's last `item:` line. A line counts once
 // its Markdown emphasis and code ticks are dropped, so `**BOSS:** done` is a
@@ -92,6 +94,7 @@ func ParseTurnHook(r io.Reader) (TurnHook, error) {
 func Stated(event, text string) (item, stage string) {
 	lines := strings.Split(text, "\n")
 	if event == EventPromptSubmit {
+		lines[0] = afterHeader(lines[0])
 		for _, l := range lines {
 			if v := lineValue(l, ItemPrefix); v != "" {
 				return v, ""
@@ -145,6 +148,33 @@ func lineValue(line, prefix string) string {
 		v = strings.TrimRight(string([]rune(v)[:MaxValueChars-1]), " ") + "…"
 	}
 	return v
+}
+
+// afterHeader is a prompt's first line less the header the daemon types a
+// message behind (ADR-001 A30): `[msg <id> from <sender>] `, which holds
+// `, originally to <worker>` when the message was returned to the boss, and
+// `[agentisan] originally to <worker>: ` for one of the daemon's own. A line
+// with neither is returned as it is. The id holds no space or `]`, as a ULID
+// never does; a sender or worker may hold any printable character, so the
+// header ends at its first `] ` or `: `, and a sender or worker id holding
+// its header's separator cuts it short and hides the item, as before.
+func afterHeader(line string) string {
+	if rest, isMsg := strings.CutPrefix(line, "[msg "); isMsg {
+		id, sender, found := strings.Cut(rest, " from ")
+		if !found || id == "" || strings.ContainsAny(id, " ]") {
+			return line
+		}
+		if _, body, closed := strings.Cut(sender, "] "); closed {
+			return body
+		}
+		return line
+	}
+	if rest, returned := strings.CutPrefix(line, "[agentisan] originally to "); returned {
+		if _, body, closed := strings.Cut(rest, ": "); closed {
+			return body
+		}
+	}
+	return line
 }
 
 // clean drops Markdown emphasis and code ticks (`*` and the backtick) and

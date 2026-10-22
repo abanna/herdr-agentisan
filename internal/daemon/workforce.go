@@ -8,9 +8,11 @@ import (
 	"fmt"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/abanna/herdr-agentisan/internal/debugger"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/routing"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
@@ -86,6 +88,10 @@ var workforceCodes = []struct {
 	{workforce.ErrHandoffTimeout, "handoff_timeout"},
 	{workforce.ErrNoTarget, "no_target"},
 	{workforce.ErrUnknownGroup, "unknown_group"},
+	{routing.ErrUnknownRole, "unknown_role"},
+	{routing.ErrProviderMismatch, "provider_mismatch"},
+	{routing.ErrOverrideRefused, "override_refused"},
+	{routing.ErrBlocked, "routing_blocked"},
 	{workforce.ErrSlotCap, "slot_cap"},
 	{workforce.ErrInvalidID, "invalid_id"},
 	{workforce.ErrPreflight, "preflight_failed"},
@@ -134,6 +140,11 @@ func workforceOps(svc *workforce.Service, ready *atomic.Bool, queued func(contex
 			return svc.Up(ctx, req)
 		}},
 		OpWorkerSpawn: {code: workforceCode, run: func(ctx context.Context, args json.RawMessage) (any, error) {
+			// JSON would fold bytes that are not UTF-8 into U+FFFD, and a
+			// task packet's assignment is hashed as its bytes (A50).
+			if !utf8.Valid(args) {
+				return nil, fmt.Errorf("%w: args are not UTF-8", workforce.ErrBadRequest)
+			}
 			var req workforce.SpawnRequest
 			if err := decodeArgs(args, &req); err != nil {
 				return nil, err
@@ -226,6 +237,23 @@ func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleCl
 		CodexHooks: o.Team.CodexHooks,
 		Dashboard:  o.Team.Dashboard,
 		Debugger:   debugger.Launch{Root: o.Team.PluginRoot, Bin: o.Team.Binary, ServerDir: serverDir},
+		Routed:     o.routed,
+	}
+}
+
+// routed records a routing decision of a spawn or of one group team up
+// fills (A50): one workflow event per worker and a daemon.log line, named for
+// the op, with the whole decision, which holds no assignment text. A refusal
+// while routing is off is logged only.
+func (o Options) routed(ctx context.Context, r workforce.Routed) {
+	log := o.Logger.Info().Str("project", r.Project).Str("group", r.Group).Strs("workers", r.IDs)
+	if r.Decision == nil {
+		log.AnErr("refused", r.Refused).Msg(r.Op + ": routing is off; when on, it would refuse this")
+		return
+	}
+	log.Interface("routing", r.Decision).Msg(r.Op + " routed")
+	for _, id := range r.IDs {
+		o.Team.Events.WorkerRouted(ctx, id, r.Project, r.Group, *r.Decision)
 	}
 }
 

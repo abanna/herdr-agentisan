@@ -225,6 +225,29 @@ func codexConfigKey(argv []string, i int) string {
 	return strings.Trim(strings.TrimSpace(key), `"'`)
 }
 
+// codexProfileFlag is how a codex command chooses a profile: -p or
+// --profile in any form (-p x, -px, -p=x, --profile x, --profile=x), or a -c
+// or --config setting profile, as older Codex reads it; "" when it chooses
+// none or is not codex. It names the flag or key, never the profile.
+func codexProfileFlag(argv []string) string {
+	if len(argv) == 0 || filepath.Base(argv[0]) != routing.Codex {
+		return ""
+	}
+	for i := 1; i < len(argv); i++ {
+		name, _, _ := strings.Cut(argv[i], "=")
+		if !strings.HasPrefix(name, "--") && len(name) > 2 {
+			name = name[:2]
+		}
+		if name == "-p" || name == "--profile" {
+			return name
+		}
+		if codexConfigKey(argv, i) == "profile" {
+			return "profile key"
+		}
+	}
+	return ""
+}
+
 // checkGroupAgents runs D12 and the launch-flag check on every group's own
 // command, and refuses one for the debugger type, whose launch is the
 // plugin's.

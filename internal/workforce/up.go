@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/abanna/herdr-agentisan/internal/debugger"
+	"github.com/abanna/herdr-agentisan/internal/routing"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/team"
 )
@@ -43,6 +44,9 @@ type UpResult struct {
 // Groups fill in the team model's order; every worker's tab opens first, then
 // the dashboard, then all the agents start at once. A worker that does not
 // come up fails the op with ErrSpawnFailed, as in Spawn; the others stay.
+// Routing decides each group's launch as it does a spawn's (A50), once per
+// group it fills, under the lock and before any tab opens, so a group it
+// refuses refuses the whole up.
 func (s *Service) Up(ctx context.Context, req UpRequest) (UpResult, error) {
 	_, p, _, err := s.resolve(ctx, req.Selector)
 	if err != nil {
@@ -64,13 +68,14 @@ func (s *Service) Up(ctx context.Context, req UpRequest) (UpResult, error) {
 		return UpResult{}, err
 	}
 	var fills []GroupFill
+	var routes []Routed
 	pending, st, err := s.planAndOpen(ctx, req.Selector, func(st state) ([]planned, error) {
 		if st.profile.Repo != p.Repo {
 			return nil, fmt.Errorf("%w: the repo changed from %s to %s during the preflight; run team up again", ErrPreflight, p.Repo, st.profile.Repo)
 		}
 		taken := st.taken()
 		var all []planned
-		fills = []GroupFill{}
+		fills, routes = []GroupFill{}, nil
 		for _, name := range groupOrder(configured(st.profile), team.TypeOrder()) {
 			g := st.profile.Groups[name]
 			fill := GroupFill{Name: name, Workers: g.Workers, Occupied: st.occupied(name)}
@@ -82,10 +87,15 @@ func (s *Service) Up(ctx context.Context, req UpRequest) (UpResult, error) {
 				if err != nil {
 					return nil, err
 				}
-				ps, err := plan(st.profile, name, choice{model: st.profile.AgentFor(name).Model}, ids, dbg)
+				d, refused, err := s.route(st.profile, SpawnRequest{Group: name})
 				if err != nil {
 					return nil, err
 				}
+				ps, err := planRouted(st.profile, name, choice{model: st.profile.AgentFor(name).Model}, d, ids, dbg)
+				if err != nil {
+					return nil, err
+				}
+				routes = append(routes, Routed{Op: "team up", Project: st.team.Project, Group: name, Decision: d, Refused: refused})
 				all = append(all, ps...)
 				fill.Spawned = want
 			}
@@ -96,8 +106,16 @@ func (s *Service) Up(ctx context.Context, req UpRequest) (UpResult, error) {
 	if err != nil {
 		return UpResult{}, err
 	}
+	decided := map[string]*routing.Decision{}
+	for _, r := range routes {
+		s.tellRouted(ctx, r, pending)
+		decided[r.Group] = r.Decision
+	}
 	res := UpResult{Project: st.team.Project, Groups: fills, Warnings: s.codexWarnings(pending)}
 	res.DashboardOutcome = s.ensureDashboard(ctx, st.team.Project)
 	res.Workers, err = s.bringUp(ctx, st.profile.Spawn, pending)
+	for i := range res.Workers {
+		routedResult(&res.Workers[i], decided[res.Workers[i].Group])
+	}
 	return res, err
 }

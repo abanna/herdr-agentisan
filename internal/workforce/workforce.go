@@ -115,6 +115,10 @@ type Service struct {
 	// plugin's checkout and binary, and the daemon's directory. Without a
 	// checkout and a binary, a debugger spawn is refused.
 	Debugger debugger.Launch
+	// Routed records each routing decision a spawn opens workers on,
+	// applied or not (A50); nil records nothing. The daemon sends it as a
+	// workflow event and logs it.
+	Routed func(context.Context, Routed)
 	// Dashboard is the plugin pane team up opens as a team's dashboard; zero
 	// opens none (A18, A23).
 	Dashboard DashboardPane
