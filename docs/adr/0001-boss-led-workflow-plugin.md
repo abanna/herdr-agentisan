@@ -14,7 +14,7 @@ herdr-agentisan is a Go CLI and daemon, packaged as a Herdr plugin, that execute
 | Build project | P-NERD-16 |
 | Baseline | Phase 1 merged: NERD-5240 to 5243, PRs #4 to #7, main at fc5cf7a |
 | Supersedes | DR 001 draft, 2026-10-09 |
-| Herdr version | Pinned per D2; facts verified against herdr src at v0.9.3 |
+| Herdr version | Pinned per D2; facts verified against herdr src at v0.9.3 and re-checked at v0.9.5 |
 
 Each decision carries an ID (D1 to D12). A later ADR may supersede a single decision, for example "supersedes ADR-001 D7", without reopening the rest.
 
@@ -58,7 +58,7 @@ The pieces that hold it together:
 
 ## Verified constraints
 
-Every decision below is shaped by these Herdr facts, verified against the herdr source at v0.9.3. Herdr is pre-1.0, so D2 pins the version and the daemon refuses to run against a protocol it has not been verified on.
+Every decision below is shaped by these Herdr facts, verified against the herdr source at v0.9.3 and re-checked at v0.9.5. Herdr is pre-1.0, so D2 pins the version and the daemon refuses to run against a protocol it has not been verified on.
 
 | Constraint | Detail | Consequence |
 | --- | --- | --- |
