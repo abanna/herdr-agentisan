@@ -424,9 +424,9 @@ agentisan-skills' review guidelines, which `roles/review.md` vendors byte
 for byte (ADR-001 A55). The review type starts `codex --no-daemon --sandbox
 read-only` unless its group names a command. For each review, prepare a
 worktree at the PR's head, then send the role whole and the inputs alone,
-from the plugin's checkout. The daemon types `[msg <id> from <sender>]`
-before a message's first line, so the item goes on the second, where
-`report turn` reads it:
+from the plugin's checkout. `report turn` reads the inputs' `item:` line
+on any line: on the first, it reads behind the `[msg <id> from <sender>]`
+header the daemon types there:
 
 ```bash
 herdr-agentisan send ha-review-1 - < roles/review.md
