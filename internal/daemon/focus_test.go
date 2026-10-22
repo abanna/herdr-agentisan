@@ -632,7 +632,7 @@ func TestRunPrunesFinishedHandoffs(t *testing.T) {
 	clk := &clock{now: t0}
 	o := opts(t, dir, h)
 	o.Now = clk.Now
-	run(t, o)
+	serving(t, o, h)
 	handoffs := func() []string { return query(t, p.DB, "SELECT old_pane FROM handoffs ORDER BY old_pane") }
 	require.Eventually(t, func() bool { return assert.ObjectsAreEqual([]string{"pending", "soon"}, handoffs()) },
 		ready, 10*time.Millisecond, "the prune at start removes the handoff past retention")
