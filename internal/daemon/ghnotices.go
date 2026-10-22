@@ -60,6 +60,9 @@ type githubNotices struct {
 	// came back at the limit, and each lookup's last logged failure.
 	full    map[string]bool
 	failing map[string]string
+	// betweenReads, when set, runs between collected's read of what is held
+	// and its read of state.db: a test's acknowledgement landing there.
+	betweenReads func()
 }
 
 // githubKey is one event of one project's repo.
@@ -82,6 +85,9 @@ func (g *githubNotices) collected(ctx context.Context, gh github.Runner, h setti
 	// then in one or the other, never told twice. Only this goroutine adds
 	// to pending, so nothing held is missing from it.
 	held := g.held()
+	if g.betweenReads != nil {
+		g.betweenReads()
+	}
 	state, err := g.st.GitHub(ctx, h.Project, h.GitHub)
 	if err != nil {
 		log.Warn().Err(err).Msg("github: notices: state.db not read; nothing is told this interval")

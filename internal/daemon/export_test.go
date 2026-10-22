@@ -360,3 +360,7 @@ func (s GitHubSource) Collected(ctx context.Context, gh github.Runner, h setting
 
 // Take is what the source has handed the poll since the last Take.
 func (s GitHubSource) Take() []notice.Notice { return s.g.n.github.take() }
+
+// BetweenReads runs f, from now on, in each collection between its read of
+// what is held and its read of state.db, where an acknowledgement may land.
+func (s GitHubSource) BetweenReads(f func()) { s.g.betweenReads = f }
