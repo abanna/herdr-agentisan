@@ -102,7 +102,10 @@ repeat = 300
 # still name a model: the --model the workforce passes outranks both, by each
 # CLI's own precedence, and with no model set the command's configuration
 # decides (A53). An abbreviation such as --mod is no --model to either:
-# claude matches long flags whole, and codex refuses it.
+# claude matches long flags whole, and codex refuses it. A claude command
+# with a --settings of its own starts without the turn hooks spawn passes
+# every other Claude worker, since Claude Code applies only one --settings;
+# spawn warns of it (A42).
 [groups.precheck]
 workers = 1
 slots = 1

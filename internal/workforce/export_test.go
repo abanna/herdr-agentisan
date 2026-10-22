@@ -29,3 +29,6 @@ func PlanRouted(p *settings.Profile, typ, model, effort, provider string) (kind 
 	}
 	return ps[0].launch.kind, ps[0].launch.args, nil
 }
+
+// TurnHooks is the --settings a Claude worker starts with (A42).
+const TurnHooks = turnHooks

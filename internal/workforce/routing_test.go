@@ -90,11 +90,15 @@ func TestSpawnLaunchesWhatRoutingChose(t *testing.T) {
 	}{
 		"a coder, on Claude": {
 			group: "coder", count: 2, kind: "claude", role: "coder", binding: "claude_mid", model: "claude-sonnet-5-5", reason: routing.ReasonTaskNotFound,
-			args: func(id string) []any { return []any{"--model", "claude-sonnet-5-5", "--effort", "high", "--name", id} },
+			args: func(id string) []any {
+				return withHooksAny("--model", "claude-sonnet-5-5", "--effort", "high", "--name", id)
+			},
 		},
 		"qa takes pre_check's binding": {
 			group: "qa", count: 1, kind: "claude", role: "pre_check", binding: "claude_mid", model: "claude-sonnet-5-5",
-			args: func(id string) []any { return []any{"--model", "claude-sonnet-5-5", "--effort", "high", "--name", id} },
+			args: func(id string) []any {
+				return withHooksAny("--model", "claude-sonnet-5-5", "--effort", "high", "--name", id)
+			},
 		},
 		"review, on Codex": {
 			group: "review", count: 1, kind: "codex", role: "code_review", binding: "codex_strong", model: "gpt-6.1-sol",
@@ -174,7 +178,7 @@ func TestSpawnTakesTheBossOverride(t *testing.T) {
 
 			res, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1, Model: model, Effort: "xhigh"})
 			require.NoError(t, err)
-			assert.Equal(t, []any{"--model", "claude-opus-5-5", "--effort", "xhigh", "--name", "ha-coder-1"}, f.h.params("agent.start")[0]["args"])
+			assert.Equal(t, withHooksAny("--model", "claude-opus-5-5", "--effort", "xhigh", "--name", "ha-coder-1"), f.h.params("agent.start")[0]["args"])
 			assert.Equal(t, routing.ReasonNone, res.Workers[0].FallbackReason, "an override is no fallback")
 			assert.Equal(t, &store.Routing{
 				Role: "coder", Provider: "claude", Binding: "claude_strong", ModelID: "claude-opus-5-5", Effort: "xhigh",
@@ -283,7 +287,7 @@ func TestSpawnWhileRoutingIsOff(t *testing.T) {
 
 		res, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1, Model: "sonnet", Effort: "xhigh"})
 		require.NoError(t, err)
-		assert.Equal(t, []any{"--model", "sonnet", "--effort", "xhigh", "--name", "ha-coder-1"}, f.h.params("agent.start")[0]["args"])
+		assert.Equal(t, withHooksAny("--model", "sonnet", "--effort", "xhigh", "--name", "ha-coder-1"), f.h.params("agent.start")[0]["args"])
 		assert.Equal(t, workforce.Spawned{ID: "ha-coder-1", Group: "coder", PaneID: res.Workers[0].PaneID, Agent: "claude"}, res.Workers[0])
 		assert.Nil(t, routingOf(t, f, "ha-coder-1"))
 		routed := rec.all()
@@ -340,7 +344,7 @@ func TestPlanRefusesAChangedAgent(t *testing.T) {
 	kind, args, err := workforce.PlanRouted(p, "coder", "claude-sonnet-5-5", "high", "claude")
 	require.NoError(t, err)
 	assert.Equal(t, "claude", kind)
-	assert.Equal(t, []string{"--model", "claude-sonnet-5-5", "--effort", "high", "--name", "ha-coder-1"}, args)
+	assert.Equal(t, withHooks("--model", "claude-sonnet-5-5", "--effort", "high", "--name", "ha-coder-1"), args)
 }
 
 // TestSpawnRefusesAnAgentChangedAfterRouting: the type's agent changes after
@@ -372,7 +376,7 @@ func (u upRouting) upArgs(id string) []any {
 	if u.kind == "codex" {
 		return []any{"--no-daemon", "--sandbox", "read-only", "--model", u.model, "-c", `model_reasoning_effort="high"`}
 	}
-	return []any{"--model", u.model, "--effort", "high", "--name", id}
+	return withHooksAny("--model", u.model, "--effort", "high", "--name", id)
 }
 
 // TestUpLaunchesWhatRoutingChose: with routing on, team up decides each
@@ -438,7 +442,7 @@ func TestUpWhileRoutingIsOff(t *testing.T) {
 		assert.Nil(t, routingOf(t, f, w.ID))
 	}
 	for _, s := range f.h.params("agent.start") {
-		assert.Equal(t, []any{"--name", s["name"]}, s["args"])
+		assert.Equal(t, withHooksAny("--name", s["name"]), s["args"])
 	}
 	told := map[string]workforce.Routed{}
 	for _, r := range rec.all() {
@@ -498,7 +502,7 @@ func TestUpRoutesOnTheConfigurationItLocked(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, res.Workers, 3)
 	for _, s := range f.h.params("agent.start") {
-		assert.Equal(t, []any{"--model", "claude-sonnet-5-5", "--effort", "high", "--name", s["name"]}, s["args"])
+		assert.Equal(t, withHooksAny("--model", "claude-sonnet-5-5", "--effort", "high", "--name", s["name"]), s["args"])
 	}
 	for _, r := range rec.all() {
 		require.NotNil(t, r.Decision)

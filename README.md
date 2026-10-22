@@ -226,12 +226,20 @@ For Claude, add the hooks to `.claude/settings.json` or
 }
 ```
 
-For Codex, paste the
-[Codex turn hooks](docs/config/codex-turn-hooks.example.toml) at the end of
-`~/.codex/config.toml`, or of a trusted project's `.codex/config.toml`, and
-trust them once. `herdr-agentisan codex hooks` installs only the `ctx` hooks
-above. Each turn hook is a group of its own, so that command never finds one
-beside `report codex`. They need `codex --no-daemon`, as `report codex`
+`worker spawn` and `team up` pass these two hooks to each Claude worker they
+start, as `--settings`, so you need them installed only for the panes you
+start yourself, such as the boss's; Claude Code runs a handler installed
+twice only once. A group whose agent command passes its own `--settings`
+gets none, since Claude Code applies only one, and spawn warns of it.
+
+For Codex, run `herdr-agentisan codex hooks --turn`. It installs the
+[Codex turn hooks](docs/config/codex-turn-hooks.example.toml) with the `ctx`
+hooks above, in `~/.codex/hooks.json`, each in a group of its own, and
+`--check --turn` says where all five are; then trust them once. Or paste
+them at the end of `~/.codex/config.toml`, or of a trusted project's
+`.codex/config.toml`: `--turn` then refuses to add a second copy, and plain
+`codex hooks` installs only the `ctx` hooks. A Codex worker spawned without
+them is warned of. They need `codex --no-daemon`, as `report codex`
 does: a hook the shared app-server ran reports nothing. Codex runs hooks
 outside its sandbox, so they work under the default one, unlike `report stage`
 from a tool command. Both print nothing and always exit 0;

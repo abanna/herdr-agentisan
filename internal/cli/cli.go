@@ -281,7 +281,9 @@ func newReportTurnCmd() *cobra.Command {
 			"\"BOSS: <status>\" or \"STATUS: <status>\" line. A new item stated with no\n" +
 			"stage clears the stage. Run it as an async hook, as in\n" +
 			"docs/config/claude-hooks.example.json and\n" +
-			"docs/config/codex-turn-hooks.example.toml.\n\n" +
+			"docs/config/codex-turn-hooks.example.toml. worker spawn and team up pass\n" +
+			"the Claude ones to each Claude worker they start, and\n" +
+			"`codex hooks --turn` installs the Codex ones.\n\n" +
 			"It prints nothing and always exits 0; why it reported nothing goes to\n" +
 			"the debug log (HERDR_AGENTISAN_LOG_LEVEL=debug).",
 		Args: cobra.NoArgs,

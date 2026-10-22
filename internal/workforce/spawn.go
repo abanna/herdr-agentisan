@@ -136,7 +136,7 @@ func (s *Service) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 	for i := range workers {
 		routedResult(&workers[i], d)
 	}
-	return SpawnResult{Project: st.team.Project, Workers: workers, Warnings: s.codexWarnings(pending)}, err
+	return SpawnResult{Project: st.team.Project, Workers: workers, Warnings: s.warnings(pending)}, err
 }
 
 // route asks routing for the spawn's model and effort (A50), on the profile
@@ -230,19 +230,53 @@ func kindOf(a settings.Agent) string {
 	return filepath.Base(a.Command[0])
 }
 
+// warnings are what the boss should fix about the workers in ws that did
+// not stop them: a Claude group that starts without the turn hooks, and
+// Codex's hooks.
+func (s *Service) warnings(ws []opened) []string {
+	return append(settingsWarnings(ws), s.codexWarnings(ws)...)
+}
+
+// settingsWarnings warns once for each group whose Claude workers start
+// without the turn hooks, since their command passes a --settings of its own
+// (A42): the worker runs, but reports its item and stage only through hooks
+// the user installed.
+func settingsWarnings(ws []opened) []string {
+	var groups, out []string
+	for _, w := range ws {
+		if w.launch.ownSettings && !slices.Contains(groups, w.group) {
+			groups = append(groups, w.group)
+			out = append(out, fmt.Sprintf("%s's agent command passes a --settings of its own, and Claude Code applies only one, so its workers start without the turn hooks: each reports its item and stage only through hooks you installed", w.group))
+		}
+	}
+	return out
+}
+
 // codexWarnings warns when a Codex worker was planned and Codex's ctx hooks
-// are not installed (A22, A43): the worker runs, but reports no ctx.
+// are not installed (A22, A43), or its turn hooks (A42): the worker runs, but
+// reports no ctx, or no item or stage.
 func (s *Service) codexWarnings(ws []opened) []string {
-	if s.CodexHooks == nil || !slices.ContainsFunc(ws, func(w opened) bool { return w.launch.kind == codexKind }) {
+	if !slices.ContainsFunc(ws, func(w opened) bool { return w.launch.kind == codexKind }) {
 		return nil
 	}
-	switch installed, err := s.CodexHooks(); {
-	case err != nil:
-		return []string{fmt.Sprintf("could not check Codex's ctx hooks: %v", err)}
-	case !installed:
-		return []string{"Codex's ctx hooks are not installed, so a Codex worker reports no ctx: run `herdr-agentisan codex hooks`, then trust them once in Codex"}
+	var out []string
+	if s.CodexHooks != nil {
+		switch installed, err := s.CodexHooks(); {
+		case err != nil:
+			out = append(out, fmt.Sprintf("could not check Codex's ctx hooks: %v", err))
+		case !installed:
+			out = append(out, "Codex's ctx hooks are not installed, so a Codex worker reports no ctx: run `herdr-agentisan codex hooks`, then trust them once in Codex")
+		}
 	}
-	return nil
+	if s.CodexTurnHooks != nil {
+		switch installed, err := s.CodexTurnHooks(); {
+		case err != nil:
+			out = append(out, fmt.Sprintf("could not check Codex's turn hooks: %v", err))
+		case !installed:
+			out = append(out, "Codex's turn hooks are not installed, so a Codex worker reports no item or stage: run `herdr-agentisan codex hooks --turn`, then trust them once in Codex")
+		}
+	}
+	return out
 }
 
 // planned is one worker about to be opened.
@@ -409,10 +443,37 @@ const codexKind = "codex"
 const noDaemon = "--no-daemon"
 
 // launch is how one worker's agent is started: herdr's kind, which picks its
-// executable, and the arguments after it.
+// executable, and the arguments after it. ownSettings reports a Claude
+// command that passes a --settings of its own, so the launch has no turn
+// hooks.
 type launch struct {
-	kind string
-	args []string
+	kind        string
+	args        []string
+	ownSettings bool
+}
+
+// settingsFlag is Claude Code's --settings. It applies only the last one it
+// is given, whole: a launch with two would drop one (Claude Code 2.1.309).
+const settingsFlag = "--settings"
+
+// turnHooks is the --settings a Claude worker starts with: A42's two turn
+// hooks, each handler as the sample has it
+// (docs/config/claude-hooks.example.json). Claude Code adds them to the hooks
+// every settings file installs, and runs a handler the user installed too
+// only once (Claude Code 2.1.308). herdr single-quotes it in the pane's shell
+// (A46), and it holds neither a single quote nor a backslash, which fish
+// reads as an escape inside them.
+const turnHooks = `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"herdr-agentisan report turn","timeout":10,"async":true}]}],"Stop":[{"hooks":[{"type":"command","command":"herdr-agentisan report turn","timeout":10,"async":true}]}]}}`
+
+// passesSettings reports whether a Claude command's arguments pass
+// --settings, as --settings x or --settings=x; Claude matches a long flag
+// whole (A53). Any argument that reads as one counts, a flag's value or a
+// prompt included: a launch then goes without the turn hooks, and never has
+// two.
+func passesSettings(args []string) bool {
+	return slices.ContainsFunc(args, func(a string) bool {
+		return a == settingsFlag || strings.HasPrefix(a, settingsFlag+"=")
+	})
 }
 
 // choice is the model and effort ("" for none) a spawn's agents start with,
@@ -429,7 +490,8 @@ var effortPattern = regexp.MustCompile(`^[a-z]{1,16}$`)
 // plan builds each id's launch: the kind is the command's bare executable,
 // which herdr runs from the shell's PATH, and the arguments the command's own,
 // --no-daemon for Codex if absent, c's model and effort and, for Claude only,
-// --name with the id (herdr names a Codex).
+// --name with the id (herdr names a Codex), then the turn hooks as
+// --settings, unless the command passes its own.
 func plan(p *settings.Profile, typ string, c choice, ids []string) ([]planned, error) {
 	agent := p.AgentFor(typ)
 	if err := settings.CheckAgentCommand(agent.Command); err != nil {
@@ -453,6 +515,7 @@ func plan(p *settings.Profile, typ string, c choice, ids []string) ([]planned, e
 	if c.provider != "" && kind != c.provider {
 		return nil, fmt.Errorf("%w: %s's agent changed from %s to %s while routing chose its model; spawn again", ErrConfig, typ, c.provider, kind)
 	}
+	own := kind == "claude" && passesSettings(agent.Command[1:])
 	out := make([]planned, 0, len(ids))
 	for _, id := range ids {
 		args := slices.Clone(agent.Command[1:])
@@ -471,8 +534,11 @@ func plan(p *settings.Profile, typ string, c choice, ids []string) ([]planned, e
 		}
 		if kind == "claude" {
 			args = append(args, "--name", id)
+			if !own {
+				args = append(args, settingsFlag, turnHooks)
+			}
 		}
-		out = append(out, planned{id: id, group: typ, launch: launch{kind: kind, args: args}})
+		out = append(out, planned{id: id, group: typ, launch: launch{kind: kind, args: args, ownSettings: own}})
 	}
 	return out, nil
 }

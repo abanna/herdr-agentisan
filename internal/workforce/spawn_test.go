@@ -47,7 +47,7 @@ func TestSpawnOpensOneTabPerWorker(t *testing.T) {
 	for _, s := range starts {
 		id := s["name"].(string)
 		assert.Equal(t, "claude", s["kind"])
-		assert.Equal(t, []any{"--model", "sonnet", "--name", id}, s["args"])
+		assert.Equal(t, withHooksAny("--model", "sonnet", "--name", id), s["args"])
 		assert.InDelta(t, 90000, s["timeout_ms"], 1)
 	}
 	require.Len(t, res.Workers, 2)
@@ -92,11 +92,11 @@ func TestSpawnTakesAModelFromTheRepoFile(t *testing.T) {
 	starts := f.h.params("agent.start")
 	require.Len(t, starts, 1)
 	assert.Equal(t, "claude", starts[0]["kind"])
-	assert.Equal(t, []any{"--model", "sonnet", "--name", "ha-coder-1"}, starts[0]["args"])
+	assert.Equal(t, withHooksAny("--model", "sonnet", "--name", "ha-coder-1"), starts[0]["args"])
 
 	_, err = f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1, Model: "opus"})
 	require.NoError(t, err)
-	assert.Equal(t, []any{"--model", "opus", "--name", "ha-coder-2"}, f.h.params("agent.start")[1]["args"], "--model wins")
+	assert.Equal(t, withHooksAny("--model", "opus", "--name", "ha-coder-2"), f.h.params("agent.start")[1]["args"], "--model wins")
 }
 
 // TestPlanChecksTheProfilesModel: the model spawn passes after --model is
@@ -140,7 +140,7 @@ func TestPlanPassesAnEffort(t *testing.T) {
 	kind, args, err := workforce.Plan(p, "coder", "opus", "xhigh")
 	require.NoError(t, err)
 	assert.Equal(t, "claude", kind)
-	assert.Equal(t, []string{"--model", "opus", "--effort", "xhigh", "--name", "ha-coder-1"}, args)
+	assert.Equal(t, withHooks("--model", "opus", "--effort", "xhigh", "--name", "ha-coder-1"), args)
 
 	kind, args, err = workforce.Plan(p, settings.ReviewType, "gpt-5.1-codex", "high")
 	require.NoError(t, err)
@@ -154,7 +154,7 @@ func TestPlanPassesAnEffort(t *testing.T) {
 	}
 	_, args, err = workforce.Plan(p, "coder", "", "aaaaaaaaaaaaaaaa")
 	require.NoError(t, err, "16 letters")
-	assert.Equal(t, []string{"--effort", "aaaaaaaaaaaaaaaa", "--name", "ha-coder-1"}, args)
+	assert.Equal(t, withHooks("--effort", "aaaaaaaaaaaaaaaa", "--name", "ha-coder-1"), args)
 }
 
 // TestSpawnIDs: the lowest n not taken by one of the team's tab labels, any
@@ -932,7 +932,7 @@ func TestSpawnRunsCodexOffTheDaemon(t *testing.T) {
 		"a group's own codex":        {agent: `{ command = ["codex"] }`, want: []any{"--no-daemon"}},
 		"with its model":             {agent: `{ command = ["codex"], model = "o3" }`, want: []any{"--no-daemon", "--model", "o3"}},
 		"the flag already in it":     {agent: `{ command = ["codex", "-s", "workspace-write", "--no-daemon"] }`, want: []any{"-s", "workspace-write", "--no-daemon"}},
-		"a command that is no codex": {agent: `{ command = ["claude"] }`, want: []any{"--name", "ha-qa-1"}},
+		"a command that is no codex": {agent: `{ command = ["claude"] }`, want: withHooksAny("--name", "ha-qa-1")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

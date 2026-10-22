@@ -123,8 +123,9 @@ exempts whatever is later added under that name.
 - `internal/codexhooks/` — installing the `ctx` Codex hooks (ADR-001 A43):
   `codex hooks` writes them into `$CODEX_HOME/hooks.json`, after every entry
   already there, which it keeps as written, and never edits `config.toml` or
-  trusts a hook; `--check` only reports. Tests use temp Codex homes, never
-  the real `~/.codex`.
+  trusts a hook; `--check` only reports. `--turn` adds A42's two
+  `report turn` hooks, each in a group of its own. Tests use temp Codex
+  homes, never the real `~/.codex`.
 - `internal/daemon/` — the daemon's lifecycle (ADR-001 D3, A3, A4): one daemon
   per herdr server, enforced by a flock'd `daemon.lock` that records the
   server's socket inode; the protocol pin; `daemon.log` capped at 10 MB; the
@@ -196,6 +197,7 @@ exempts whatever is later added under that name.
   sender and recipient (A30): each group's counts and members on a tabs team
   or the ◆ spaces, with idle times from the daemon's clock and the rows no
   pane is bound to (A35); opening a tab per worker and waiting for its agent,
+  a Claude one launched with A42's turn hooks as `--settings`,
   after `internal/preflight`'s check, each group up to its count for
   `team up`, which also opens the team's dashboard above the boss
   (`dashboard.go`); and closing the pane a worker's row is bound to, after

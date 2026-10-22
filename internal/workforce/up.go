@@ -93,7 +93,7 @@ func (s *Service) Up(ctx context.Context, req UpRequest) (UpResult, error) {
 		s.tellRouted(ctx, r, pending)
 		decided[r.Group] = r.Decision
 	}
-	res := UpResult{Project: st.team.Project, Groups: fills, Warnings: s.codexWarnings(pending)}
+	res := UpResult{Project: st.team.Project, Groups: fills, Warnings: s.warnings(pending)}
 	res.DashboardOutcome = s.ensureDashboard(ctx, st.team.Project)
 	res.Workers, err = s.bringUp(ctx, st.profile.Spawn, pending)
 	for i := range res.Workers {
