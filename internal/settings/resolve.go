@@ -326,6 +326,7 @@ func buildProfile(name string, values map[string]any) *Profile {
 		p.Rotation.Thresholds, _ = v.([]int)
 	}
 	p.Spawn = buildSpawn(values)
+	p.Routing = deploymentOf(values)
 	if v, ok := lookup(values, "groups"); ok {
 		groups, _ := v.(map[string]any)
 		p.Groups = make(map[string]Group, len(groups))

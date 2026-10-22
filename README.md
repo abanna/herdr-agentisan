@@ -421,12 +421,21 @@ The user's routing rules, built in byte for byte
 reasoning effort each worker starts with, by its type's role (ADR-001 A50).
 `[routing]` in the shared `herdr-agentisan.toml` holds what they leave to
 the deployment: `enabled` (off by default, and while it is on no
-`agent.model` key may be set), each binding's real `model_id`, efforts and
-`enabled`, and `[routing.overrides]`, the user's standing choice for a role
-and the only way to a premium binding. `config resolve` shows each key with
-its layer, then `routing policy:`, the version a decision records.
-`worker spawn` asks routing from NERD-5289 part 1b on; until then the keys
-resolve and nothing reads them.
+`agent.model` key nor codex `--profile` may be set), each binding's real
+`model_id`, efforts its client takes and `enabled`, and
+`[routing.overrides]`, the user's standing choice for a role and the only
+way to a premium binding. `config resolve` shows each key with its layer,
+then `routing policy:`, the version a decision records; with `--project` it
+also refuses an override a worker type with that role cannot run, such as a
+claude binding for a type on codex.
+
+`worker spawn` asks routing once per spawn. While it is on, the decision is
+the launch: `--model` must then name a binding the role allows, by its name
+or model id, and `--effort` one it takes. While it is off, spawn launches as
+before and only records what routing would have chosen. `--task-file
+<path|->` hands routing the boss's task packet, the rules' `task_packet` as
+JSON, at most 64 KiB. Each worker's row keeps the decision it was launched
+with, and each is an `agentisan.worker.routed` event.
 
 ## Messaging
 

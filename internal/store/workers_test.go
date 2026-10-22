@@ -320,6 +320,78 @@ func TestBindWorkerLifecycle(t *testing.T) {
 		"a write planned on generation 0 never ends generation 1")
 }
 
+// TestBindWorkerRecordsTheRouting: a bind records the routing decision the
+// worker was launched with, or none, and a bind of a retired id writes its
+// own over the last one's, so a reused id never inherits a decision (A50).
+// Workers, the poll's read, leaves it out.
+func TestBindWorkerRecordsTheRouting(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	t0 := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	routed := &store.Routing{
+		Role: "coder", Provider: "claude", Binding: "claude_strong", ModelID: "claude-opus-5-5", Effort: "xhigh",
+		OverrideBinding: "claude_strong", OverrideBy: "boss", OverrideEffort: "xhigh",
+		AssignmentDigest: "sha256:ab", PolicyVersion: "v1-0123456789ab", RoutedAt: t0,
+	}
+	w := store.Worker{LogicalID: "ha-coder-1", Project: "herdr-agentisan", Group: "coder", PaneID: "w14:p7", TerminalID: "term_a", Routing: routed}
+
+	_, err := s.BindWorker(ctx, w, t0)
+	require.NoError(t, err)
+	row, err := s.WorkerRow(ctx, "ha-coder-1")
+	require.NoError(t, err)
+	assert.Equal(t, routed, row.InUTC().Routing)
+	live, err := s.Workers(ctx)
+	require.NoError(t, err)
+	require.Len(t, live, 1)
+	assert.Nil(t, live[0].Routing)
+
+	for _, next := range []*store.Routing{
+		{Role: "coder", Provider: "claude", Binding: "claude_mid", ModelID: "claude-sonnet-5-5", Effort: "high", PolicyVersion: "v1-0123456789ab", RoutedAt: t0.Add(time.Hour)},
+		nil,
+	} {
+		require.NoError(t, s.SetWorkerStatus(ctx, store.Worker{LogicalID: "ha-coder-1", Generation: row.Generation}, store.StatusRetired, t0))
+		gen, err := s.BindWorker(ctx, store.Worker{LogicalID: "ha-coder-1", Project: "herdr-agentisan", Group: "coder", PaneID: "w14:p8", TerminalID: "term_b", Routing: next}, t0)
+		require.NoError(t, err)
+		row, err = s.WorkerRow(ctx, "ha-coder-1")
+		require.NoError(t, err)
+		assert.Equal(t, gen, row.Generation)
+		assert.Equal(t, next, row.InUTC().Routing, "the new bind's, with no override left over")
+	}
+
+	_, err = s.BindWorker(ctx, store.Worker{LogicalID: "ha-coder-2", Project: "herdr-agentisan", Group: "coder", PaneID: "w14:p9", TerminalID: "term_c", Routing: &store.Routing{Role: "coder"}}, t0)
+	require.ErrorIs(t, err, store.ErrInvalid, "a decision with no time")
+	_, err = s.WorkerRow(ctx, "ha-coder-2")
+	require.ErrorIs(t, err, store.ErrNoWorker, "and nothing is bound")
+}
+
+// TestAHandoffKeepsTheRouting: a worker's handoff, completed or found by
+// the poll after a live handoff, moves its row to the new terminal and
+// keeps the routing decision it was launched with (A50).
+func TestAHandoffKeepsTheRouting(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	t0 := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
+	routed := &store.Routing{Role: "coder", Provider: "claude", Binding: "claude_mid", ModelID: "claude-sonnet-5-5", Effort: "high", PolicyVersion: "v1-0123456789ab", RoutedAt: t0}
+	_, err := s.BindWorker(ctx, store.Worker{LogicalID: "w", Project: "agentisan", Group: "coder", PaneID: "w14:p2", TerminalID: "term_a", Routing: routed}, t0)
+	require.NoError(t, err)
+
+	h, err := s.BeginHandoff(ctx, "w", "w14:p7", "term_b", t0)
+	require.NoError(t, err)
+	require.NoError(t, s.CompleteHandoff(ctx, h, t0))
+	row, err := s.WorkerRow(ctx, "w")
+	require.NoError(t, err)
+	assert.Equal(t, "term_b", row.TerminalID)
+	assert.Equal(t, routed, row.InUTC().Routing)
+
+	require.NoError(t, s.RekeyWorker(ctx, row.Worker, "w14:p9", "term_c"))
+	row, err = s.WorkerRow(ctx, "w")
+	require.NoError(t, err)
+	assert.Equal(t, "term_c", row.TerminalID)
+	assert.Equal(t, routed, row.InUTC().Routing)
+}
+
 // TestBindWorkerReusesALostID: a lost row is live, so starting and active
 // never bring it back, while an ending retires it; BindWorker alone reuses
 // its id, at the next generation with the new terminal and the shell cleared

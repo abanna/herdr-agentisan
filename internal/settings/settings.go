@@ -15,6 +15,8 @@ import (
 	"errors"
 	"io/fs"
 	"regexp"
+
+	"github.com/abanna/herdr-agentisan/internal/routing"
 )
 
 // SchemaVersion is the only schema_version this binary reads.
@@ -98,6 +100,8 @@ type Profile struct {
 	Rotation Rotation
 	// Spawn is how a new worker's shell is waited for (A23).
 	Spawn Spawn
+	// Routing is [routing], which worker spawn asks for its model (A50).
+	Routing routing.Deployment
 }
 
 // Agent is the command every session starts with, and its model.

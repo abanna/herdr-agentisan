@@ -32,14 +32,15 @@ type Deployment struct {
 
 // CheckFacts checks the user's facts for one binding.
 func (r *Rules) CheckFacts(binding string, f Facts) error {
-	if _, ok := r.bindings[binding]; !ok {
+	b, ok := r.bindings[binding]
+	if !ok {
 		return fmt.Errorf("%w: %q is not a binding of the rules; they have %s", ErrInvalid, binding, strings.Join(r.BindingNames(), ", "))
 	}
 	if f.ModelID != nil && *f.ModelID != "" && !modelIDPattern.MatchString(*f.ModelID) {
-		return fmt.Errorf("%w: model_id %q is not a model id", ErrInvalid, *f.ModelID)
+		return fmt.Errorf("%w: model_id is not a model id: a letter or digit, then letters, digits and . _ - : / @ [ ], at most 128 bytes", ErrInvalid)
 	}
 	if f.Efforts != nil {
-		return checkEfforts(f.Efforts)
+		return checkEfforts(b.Provider, f.Efforts)
 	}
 	return nil
 }
