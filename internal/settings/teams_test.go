@@ -1,6 +1,7 @@
 package settings_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -159,6 +160,64 @@ func TestTeamsErrors(t *testing.T) {
 			for _, s := range tc.wantIn {
 				assert.Contains(t, err.Error(), s)
 			}
+		})
+	}
+}
+
+// TestGroupNamesFitAWorkerID: a group's name is at most 20 characters, from
+// any layer, so a worker's id, <short>-<group>-<n>, fits herdr's 32-character
+// agent names with any short code (8 at most) and n up to 99 (A53). The error
+// names the group with the lowest layer and file that set it, even an empty
+// table; a project and an integration name are not bounded.
+func TestGroupNamesFitAWorkerID(t *testing.T) {
+	t.Parallel()
+	const app = "[projects.app]\nrepo = \"REPO\"\n"
+	at20, at21, long := strings.Repeat("g", 20), strings.Repeat("g", 21), strings.Repeat("g", 300)
+	counts := "workers = 1\nslots = 1\n"
+	tests := map[string]struct {
+		file, repoFile string
+		set            []string
+		wantIn         string // "" for none: it resolves
+	}{
+		"20 characters":           {file: app + "[projects.app.groups." + at20 + "]\n" + counts},
+		"21 from the shared file": {file: "[groups." + at21 + "]\n" + counts + app, wantIn: "groups." + at21 + " (shared, "},
+		"21 from a project":       {file: app + "[projects.app.groups." + at21 + "]\n" + counts, wantIn: "groups." + at21 + " (project, "},
+		"300 from a repo file":    {file: app, repoFile: "[groups." + long + "]\n" + counts, wantIn: "groups." + long + " (repo, "},
+		"21 from --set": {
+			file: app, set: []string{"groups." + at21 + ".workers=1", "groups." + at21 + ".slots=1"}, wantIn: "groups." + at21 + " (flag, ",
+		},
+		"21 that only describes": {file: app + "[projects.app.groups." + at21 + "]\ndescription = \"x\"\n", wantIn: "groups." + at21 + " (project, "},
+		"21 as an empty table":   {file: "[groups." + at21 + "]\n" + app, wantIn: "groups." + at21 + " (shared, "},
+		// The lowest layer that has the group names it.
+		"21 from two layers": {
+			file: app + "[projects.app.groups." + at21 + "]\nslots = 1\n", repoFile: "[groups." + at21 + "]\nworkers = 1\n", wantIn: "groups." + at21 + " (project, ",
+		},
+		"a long project name": {file: "[projects." + long + "]\nrepo = \"REPO\"\n"},
+		"a long integration name": {
+			file: app + "[integrations." + long + "]\nurl = \"https://example.com\"\n",
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			repo, dir := newRepo(t), t.TempDir()
+			writeFile(t, dir, settings.FileName, "schema_version = 1\n"+tc.file, repo)
+			if tc.repoFile != "" {
+				writeFile(t, repo, settings.RepoFileName, "schema_version = 1\n"+tc.repoFile, repo)
+			}
+			project := "app"
+			if name == "a long project name" {
+				project = long
+			}
+
+			_, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: project, Set: tc.set, LookupEnv: envOf(nil)})
+			if tc.wantIn == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorIs(t, err, settings.ErrInvalid)
+			assert.Contains(t, err.Error(), tc.wantIn)
+			assert.Contains(t, err.Error(), "at most 20 characters")
 		})
 	}
 }

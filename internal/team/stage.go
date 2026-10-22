@@ -22,10 +22,11 @@ type StageState struct {
 // StageOf is the state of p's stage at now, from its stage_at and the
 // stretches clock saw. A pane with no stage has none. A pane herdr detects
 // no agent in is stale, its agent gone (F3); otherwise a stage is stale only
-// when the pane is at rest, clock saw its latest stretch begin and end, the
-// pane holds the stage it held as that stretch began, and its stage_at is
-// before that stretch's start. Any of those unknown is a current stage, never
-// a false alarm:
+// when the pane is at rest, clock saw its latest stretch begin and end (two
+// polls at rest, so a Stop hook's report that lands after the first is in
+// time), the pane holds the stage it held as that stretch began, and its
+// stage_at is before that stretch's start. Any of those unknown is a current
+// stage, never a false alarm:
 //   - a stage_at absent, unreadable or after now, as from an older binary;
 //   - a stretch the clock did not see whole, as after a daemon restart;
 //   - a stage that changed during the stretch, whatever stage_at says, as

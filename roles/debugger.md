@@ -32,8 +32,8 @@ would allow more:
 Any other command is denied without asking, and so is every other tool
 that could change something or send something out; that is deliberate.
 Your reads are fenced to the repo and the daemon's directory: a command that
-reads anywhere else is denied, and the Read tool refuses it too, except for
-Claude Code's own files under `~/.claude/`. Never ask for a
+reads anywhere else is denied, and the Read and LSP tools refuse it too,
+except for Claude Code's own files under `~/.claude/`. Never ask for a
 credential, never try to read one, and never work around a denial: the
 `events` commands read Elasticsearch's URL and key themselves, from a file
 you cannot see. If one fails, report its error as it reads.

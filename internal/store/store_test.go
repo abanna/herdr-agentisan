@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -1115,41 +1116,86 @@ func TestCloseAfterAnInterruptedStatement(t *testing.T) {
 	assert.Equal(t, []string{"w1:p1"}, focusPanes(t, path), "what it recorded is durable")
 }
 
-// TestCloseConcurrently: two Closes at once close the store once, and neither
-// fails on the other's close.
+// TestCloseConcurrently: two Closes at once close the store once. After an
+// interrupt neither fails on the other's close. With the connection held, the
+// Close that runs reports the wait it ran out, and the other returns nil at
+// once: closing again is a no-op, even while the first Close still waits.
 func TestCloseConcurrently(t *testing.T) {
 	t.Parallel()
-	path := dbPath(t)
-	s, err := store.Open(t.Context(), path)
-	require.NoError(t, err)
-	interrupt(t, s)
+	t.Run("an interrupted connection", func(t *testing.T) {
+		t.Parallel()
+		path := dbPath(t)
+		s, err := store.Open(t.Context(), path)
+		require.NoError(t, err)
+		interrupt(t, s)
 
+		assert.Equal(t, []error{nil, nil}, closeAtOnce(s))
+		assert.NoFileExists(t, path+"-wal", "the store was closed cleanly")
+	})
+	t.Run("a held connection", func(t *testing.T) {
+		t.Parallel()
+		path := dbPath(t)
+		s, err := store.Open(t.Context(), path)
+		require.NoError(t, err)
+		store.SetCloseWait(s, 50*time.Millisecond)
+		conn, err := store.DB(s).Conn(t.Context())
+		require.NoError(t, err)
+
+		errs := closeAtOnce(s)
+		ran := slices.IndexFunc(errs, func(err error) bool { return err != nil })
+		require.NotEqual(t, -1, ran, "the Close that ran waited for the held connection: %v", errs)
+		require.ErrorIs(t, errs[ran], store.ErrStore)
+		require.ErrorIs(t, errs[ran], context.DeadlineExceeded)
+		require.NoError(t, errs[1-ran], "the other Close found the store closed and returned")
+
+		require.NoError(t, conn.Close())
+		assert.NoFileExists(t, path+"-wal", "the connection closed when its holder let go")
+	})
+}
+
+// closeAtOnce runs two Closes of s at once and returns what each returned.
+func closeAtOnce(s *store.Store) []error {
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	for i := range errs {
 		wg.Go(func() { errs[i] = s.Close() })
 	}
 	wg.Wait()
-	assert.Equal(t, []error{nil, nil}, errs)
-	assert.NoFileExists(t, path+"-wal", "the store was closed cleanly")
+	return errs
 }
 
-// TestCloseReportsAConnectionItCannotOpen: after an interrupt, Close opens a
-// fresh connection to run its statement. One it cannot open, here because
-// the store's directory is gone, is reported, and the store is closed anyway.
+// TestCloseReportsAConnectionItCannotOpen: after an interrupt, the next
+// statement and Close each open a fresh connection. One that cannot be opened,
+// because the store's directory is gone or state.db itself is, is reported,
+// and Close closes the store anyway. A deleted state.db is never made again:
+// only Open creates it, owner-only, so a fresh connection does not (mode=rw),
+// where SQLite would create it empty at its own default mode, 0644.
 func TestCloseReportsAConnectionItCannotOpen(t *testing.T) {
 	t.Parallel()
-	dir := t.TempDir()
-	s, err := store.Open(t.Context(), filepath.Join(dir, "state.db"))
-	require.NoError(t, err)
-	interrupt(t, s)
-	require.NoError(t, os.RemoveAll(dir))
+	for name, remove := range map[string]func(dir, path string) error{
+		"its directory is gone": func(dir, _ string) error { return os.RemoveAll(dir) },
+		"state.db is gone":      func(_, path string) error { return os.Remove(path) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "state.db")
+			s, err := store.Open(t.Context(), path)
+			require.NoError(t, err)
+			require.NoError(t, s.RecordFocus(t.Context(), "w1:p1", time.Now()))
+			interrupt(t, s)
+			require.NoError(t, remove(dir, path))
 
-	err = s.Close()
-	require.ErrorIs(t, err, store.ErrStore)
-	assert.NotErrorIs(t, err, context.DeadlineExceeded, "the open failed; nothing waited")
-	require.ErrorIs(t, s.RecordFocus(t.Context(), "w1:p1", time.Now()), store.ErrStore, "the store is closed")
-	require.NoError(t, s.Close(), "closing again is a no-op")
+			require.ErrorIs(t, s.RecordFocus(t.Context(), "w1:p2", time.Now()), store.ErrStore, "the poll's next statement fails")
+			assert.NoFileExists(t, path, "a statement does not create state.db again")
+			err = s.Close()
+			require.ErrorIs(t, err, store.ErrStore)
+			assert.NotErrorIs(t, err, context.DeadlineExceeded, "the open failed; nothing waited")
+			assert.NoFileExists(t, path, "Close does not create state.db again")
+			require.ErrorIs(t, s.RecordFocus(t.Context(), "w1:p1", time.Now()), store.ErrStore, "the store is closed")
+			require.NoError(t, s.Close(), "closing again is a no-op")
+		})
+	}
 }
 
 // TestCloseWithTheConnectionHeld: a store user still holding the connection
@@ -1171,8 +1217,10 @@ func TestCloseWithTheConnectionHeld(t *testing.T) {
 	case err := <-closed:
 		require.ErrorIs(t, err, store.ErrStore)
 		require.ErrorIs(t, err, context.DeadlineExceeded)
-	case <-time.After(10 * time.Second):
-		t.Fatal("Close blocked on the held connection")
+	case <-time.After(store.BusyTimeout / 2):
+		// Far past the 50 ms wait, and short of BusyTimeout, the wait a Close
+		// that ignored closeWait would run out.
+		t.Fatal("Close waited past its closeWait for the held connection")
 	}
 	require.ErrorIs(t, s.RecordFocus(t.Context(), "w1:p1", time.Now()), store.ErrStore, "the store is closed")
 

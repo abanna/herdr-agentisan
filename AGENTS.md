@@ -119,7 +119,7 @@ exempts whatever is later added under that name.
   `docs/config/claude-hooks.example.json` and
   `docs/config/codex-turn-hooks.example.toml`). They read `HERDR_PANE_ID`, a
   pane-shell variable, which is why it is not in `plugin.Env`.
-- `internal/codexhooks/` — installing those Codex hooks (ADR-001 A43):
+- `internal/codexhooks/` — installing the `ctx` Codex hooks (ADR-001 A43):
   `codex hooks` writes them into `$CODEX_HOME/hooks.json`, after every entry
   already there, which it keeps as written, and never edits `config.toml` or
   trusts a hook; `--check` only reports. Tests use temp Codex homes, never
@@ -202,8 +202,9 @@ exempts whatever is later added under that name.
   own included, which the daemon reads once at start, the repo file
   included (`rotation.go`, A33). A repo file is committed, so it sets only
   colour, github, group counts, models and rotation (A46, `repoFileKeys`,
-  refused by default),
-  and a model from any layer is checked as safe to pass to an agent
+  refused by default, an empty table adding an entry included, A53), and
+  the merged model, whichever layer sets it, is checked as safe to pass to
+  an agent
   (`CheckModel`). Sample in `docs/config/herdr-agentisan.example.toml`.
 - `internal/routing/` — the model and effort each spawned worker starts
   with (ADR-001 A50, NERD-5289). It reads the user's routing rules,

@@ -76,6 +76,18 @@ func TestRepoFileRefusesUserOnlyKeys(t *testing.T) {
 		"the first group in name order": {
 			repoFile: "[groups.qa.agent]\ncommand = [\"codex\"]\n[groups.coder.agent]\ncommand = [\"claude\"]\n", path: "groups.coder.agent.command",
 		},
+		// An empty table sets nothing, but one that adds an entry, here an
+		// integration with no url or token, adds what a repo file may not
+		// set (A53).
+		"an empty integration":         {repoFile: "[integrations.from-the-repo]\n", path: "integrations.from-the-repo"},
+		"an empty integration, inline": {repoFile: "integrations = { from-the-repo = {} }\n", path: "integrations.from-the-repo"},
+		"an empty integration, dotted": {repoFile: "integrations.from-the-repo = {}\n", path: "integrations.from-the-repo"},
+		"the first empty integration in name order": {
+			repoFile: "[integrations.b]\n[integrations.a]\n", path: "integrations.a",
+		},
+		"an empty integration before a later key": {
+			repoFile: "[spawn]\nshell_prompt = \"x\"\n[integrations.a]\n", path: "integrations.a",
+		},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -96,6 +108,9 @@ func TestRepoFileRefusesUserOnlyKeys(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.path+" (repo, ")
 			assert.Contains(t, err.Error(), settings.RepoFileName)
 			assert.Contains(t, err.Error(), "set it in "+settings.FileName+" or with --set")
+			for _, key := range settings.RepoFileKeys {
+				assert.Contains(t, err.Error(), key, "the error lists every key a repo file may set")
+			}
 			if tc.value != "" {
 				assert.NotContains(t, err.Error(), tc.value, "the error never holds the value")
 			}
@@ -104,12 +119,15 @@ func TestRepoFileRefusesUserOnlyKeys(t *testing.T) {
 }
 
 // TestRepoFileKeepsTheSafeKeys: a repo file still sets its colour, GitHub
-// repo, group counts, models and rotation, and an empty table of a refused
-// key sets nothing, so it passes.
+// repo, group counts, models and rotation, and an empty table that adds no
+// entry, [spawn], [integrations] or a group's [agent], sets nothing, so it
+// passes (A46). An
+// empty group, an entry on the way to a group's counts, passes too, here
+// one whose counts the user's own layers set (A53).
 func TestRepoFileKeepsTheSafeKeys(t *testing.T) {
 	t.Parallel()
 	repo, dir := newRepo(t), t.TempDir()
-	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n", repo)
+	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n[projects.app.groups.research]\nworkers = 0\nslots = 1\n", repo)
 	writeFile(t, repo, settings.RepoFileName, `schema_version = 1
 color = "#123456"
 github = "acme/app"
@@ -123,11 +141,12 @@ rotation = { thresholds = [40, 50, 60] }
 [rotation]
 thresholds = [50, 60, 70]
 [spawn]
-[integrations.github]
+[integrations]
 [groups.coder]
 workers = 1
 slots = 1
 [groups.coder.agent]
+[groups.research]
 `, repo)
 
 	got, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
@@ -142,6 +161,7 @@ slots = 1
 		"rotation.thresholds":           {[]int{50, 60, 70}, settings.LayerRepo},
 		"groups.qa.rotation.thresholds": {[]int{40, 50, 60}, settings.LayerRepo},
 		"agent.command":                 {[]string{"claude"}, settings.LayerDefault},
+		"groups.research.slots":         {1, settings.LayerProject},
 	} {
 		l, ok := leaf(t, got, path)
 		require.Truef(t, ok, "no leaf %s in %v", path, got.Sources)

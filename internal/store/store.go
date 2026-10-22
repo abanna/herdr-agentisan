@@ -225,6 +225,11 @@ func dsn(path string) string {
 	// BEGIN IMMEDIATE: a transaction takes the write lock when it starts,
 	// never by upgrading a read lock part way through.
 	q.Set("_txlock", "immediate")
+	// Read-write, never create: only Open creates state.db, owner-only. A
+	// fresh connection after state.db was deleted, such as Close's after an
+	// interrupt, fails rather than make it again, empty and at SQLite's own
+	// default mode, 0644 (NERD-5368).
+	q.Set("mode", "rw")
 	u := url.URL{Scheme: "file", OmitHost: true, Path: path, RawQuery: q.Encode()}
 	return u.String()
 }
@@ -330,7 +335,9 @@ func (s *Store) UserVersion() int { return s.version }
 // checkpoint fails on the interrupt, keeping the files; with nothing else
 // open, closing the pool would then close nothing. So Close first runs one
 // statement, on the connection the pool still holds or on a fresh one: the
-// last connection to close has run a statement since any interrupt.
+// last connection to close has run a statement since any interrupt. A fresh
+// one that cannot be opened, such as when state.db was deleted, which it does
+// not create again, is reported as ErrStore.
 //
 // It waits for the connection up to closeWait. A store user still holding it,
 // which the daemon's shutdown order rules out, is reported as ErrStore rather
@@ -354,6 +361,11 @@ func (s *Store) Close() error {
 // interrupt on a context that never ends. The store has one connection
 // (SetMaxOpenConns(1)), so the statement starts only after every earlier one
 // has released it, an interrupted one included.
+//
+// The statement is what makes the close checkpoint. Taking a fresh connection
+// alone would, today, only because the DSN's synchronous pragma reads the
+// schema as the connection opens; the statement keeps Close independent of
+// the DSN.
 func (s *Store) beforeClose() error {
 	ctx, cancel := context.WithTimeout(context.Background(), s.closeWait)
 	defer cancel()

@@ -570,9 +570,9 @@ func joinParts(parts []line) line {
 
 // bossLine is "boss ▸ ◐ working · #867 release · review · ctx ▓▓░░░░░░ 23%
 // · up 2h14m", with the clock at the right, width cells in all. The runtime
-// gives way first, then the stage and the item; the boss's state and ctx
-// stay. The stage is coloured as a row's is. Watchers are not drawn: nothing
-// counts them (ADR-001 A38).
+// gives way first, then a stale stage's age, the stage and the item; the
+// boss's state and ctx stay. The stage is coloured as a row's is. Watchers
+// are not drawn: nothing counts them (ADR-001 A38).
 func bossLine(f Frame, width int, th Thresholds) line {
 	if width <= 0 {
 		return nil
@@ -600,15 +600,20 @@ const (
 	partItem
 	partStage
 	partRuntime
+	partAge // a stale stage's age, which gives way before the stage
 )
 
-// bossDropOrder is the order the boss line's parts give way.
-var bossDropOrder = []bossPart{partRuntime, partStage, partItem}
+// bossDropOrder is the order the boss line's parts give way. A stale stage's
+// age goes before the stage, which then shows bare, dimmed as old stages are
+// (ADR-001 A42), and drops where even that does not fit.
+var bossDropOrder = []bossPart{partRuntime, partAge, partStage, partItem}
 
-// piece is one part of the boss line and what kind of part it is.
+// piece is one part of the boss line and what kind of part it is. bare is
+// the part once its age has given way, nil for a part with none.
 type piece struct {
 	kind bossPart
 	l    line
+	bare line
 }
 
 // parts are the boss line's parts, in order.
@@ -617,12 +622,17 @@ type parts []piece
 // keep is the parts left once the first drop+1 of bossDropOrder have
 // dropped; drop -1 keeps them all.
 func (p parts) keep(drop int) []line {
+	gone := bossDropOrder[:drop+1]
 	var out []line
 	for _, part := range p {
-		if slices.Contains(bossDropOrder[:drop+1], part.kind) {
+		switch {
+		case slices.Contains(gone, part.kind):
 			continue
+		case part.bare != nil && slices.Contains(gone, partAge):
+			out = append(out, part.bare)
+		default:
+			out = append(out, part.l)
 		}
-		out = append(out, part.l)
 	}
 	return out
 }
@@ -634,24 +644,26 @@ func bossParts(f Frame, th Thresholds) parts {
 	head := line{{"boss", boldStyle}, {" ▸ ", dimStyle}}
 	b := f.Snapshot.Boss
 	if b == nil {
-		return parts{{partFixed, append(head, seg{noBoss, dimStyle})}}
+		return parts{{kind: partFixed, l: append(head, seg{noBoss, dimStyle})}}
 	}
-	out := parts{{partFixed, append(head, seg{StatusIcon(b.Status) + " " + statusLabel(b.Status), statusStyle(b.Status)})}}
+	out := parts{{kind: partFixed, l: append(head, seg{StatusIcon(b.Status) + " " + statusLabel(b.Status), statusStyle(b.Status)})}}
 	if item := clean(b.Item); item != "" {
-		out = append(out, piece{partItem, line{{item, plainStyle}}.truncate(bossItemCap)})
+		out = append(out, piece{kind: partItem, l: line{{item, plainStyle}}.truncate(bossItemCap)})
 	}
 	if stage := clean(b.Stage); stage != "" {
 		l := line{{stage, agentStageStyle(b.Agent)}}.truncate(bossStageCap)
+		p := piece{kind: partStage, l: l}
 		if b.StageStale {
-			// The words say it is old, as a row's time column does.
-			l = append(l, seg{" · " + stageTime(b.Agent, f.Now), staleStyle})
+			// The words say it is old, as a row's time column does, where
+			// they fit.
+			p.l, p.bare = slices.Concat(l, line{{" · " + stageTime(b.Agent, f.Now), staleStyle}}), l
 		}
-		out = append(out, piece{partStage, l})
+		out = append(out, p)
 	}
 	ctx := slices.Concat(line{{"ctx ", dimStyle}}, bar(b.Ctx, bossBarCells, th), line{{" ", plainStyle}, pct(b.Ctx, 0, th)})
-	out = append(out, piece{partFixed, ctx})
+	out = append(out, piece{kind: partFixed, l: ctx})
 	if up := Elapsed(b.StartedAt, f.Now); up != "" {
-		out = append(out, piece{partRuntime, line{{"up " + up, plainStyle}}})
+		out = append(out, piece{kind: partRuntime, l: line{{"up " + up, plainStyle}}})
 	}
 	return out
 }

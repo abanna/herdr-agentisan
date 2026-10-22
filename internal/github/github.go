@@ -188,16 +188,7 @@ func (r Runner) run(ctx context.Context, args ...string) ([]byte, error) {
 	cmd.Stdout, cmd.Stderr = stdout, stderr
 	cmd.WaitDelay = waitDelay
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return os.ErrProcessDone
-		}
-		if err != nil {
-			return fmt.Errorf("kill gh's process group: %w", err)
-		}
-		return nil
-	}
+	cmd.Cancel = func() error { return killGroup(syscall.Kill, cmd.Process.Pid, "gh") }
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("%w: %s: %w", ErrNoGh, r.Bin, err)
 	}
@@ -217,6 +208,25 @@ func (r Runner) run(ctx context.Context, args ...string) ([]byte, error) {
 		return nil, fmt.Errorf("gh %s: %w: %w", verb, ErrGh, err)
 	}
 	return stdout.Bytes(), nil
+}
+
+// killGroup sends SIGKILL, through kill (syscall.Kill), to the process group
+// that pid leads, and is what run's Cancel does. A group already gone is
+// os.ErrProcessDone, which exec takes as done. Any other failure goes back
+// to exec, which kills the leader alone once WaitDelay passes, and run still
+// reports the cancel, the timeout or the output cap. kill passes over a
+// member the daemon may not signal, so an EPERM means it could signal none
+// of them, the leader included: exec's kill fails too, and run waits for the
+// leader to exit.
+func killGroup(kill func(pid int, sig syscall.Signal) error, pid int, what string) error {
+	err := kill(-pid, syscall.SIGKILL)
+	if errors.Is(err, syscall.ESRCH) {
+		return os.ErrProcessDone
+	}
+	if err != nil {
+		return fmt.Errorf("kill %s's process group: %w", what, err)
+	}
+	return nil
 }
 
 // capped keeps the first max bytes written to it and drops the rest. Going
