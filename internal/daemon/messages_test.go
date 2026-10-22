@@ -944,6 +944,38 @@ func TestDispatcherEmitsMessageEvents(t *testing.T) {
 	}
 }
 
+// TestAFailedEventCarriesTheReasonAsKept: a failure's reason, however long
+// and whatever it holds, is on the .failed event as state.db keeps it
+// (store.CleanReason), and never carries the body (QA #75, N3).
+func TestAFailedEventCarriesTheReasonAsKept(t *testing.T) {
+	t.Parallel()
+	th, p, dir := haTeam(t)
+	st := stateStore(t, dir, th)
+	p.setAfter("ha-coder-1", errReply("agent_prompt_failed", "first line\nsecond\x1b[31m red "+strings.Repeat("y", 700)))
+	m := sent(t, st, coder, haBoss, "a body")
+	events, rec := telemetrytest.NewEvents()
+	o := teamOpts(t, dir, th, workforceConfig(t))
+	o.Team.Events = events
+	run(t, o)
+
+	got := eventuallyState(t, st, m.ID, store.MessageFailed)
+	var reason any
+	require.Eventually(t, func() bool {
+		for _, e := range rec.Events() {
+			if e.Name == telemetry.EventMessageFailed && e.Attrs["agentisan.message.id"] == m.ID {
+				reason = e.Attrs["agentisan.message.reason"]
+				return true
+			}
+		}
+		return false
+	}, ready, 10*time.Millisecond, "the .failed event")
+	assert.Equal(t, got.Reason, reason, "the event's reason is the row's")
+	assert.Contains(t, got.Reason, "first line second", "a line break kept as a space")
+	assert.NotContains(t, got.Reason, "\x1b")
+	assert.LessOrEqual(t, len(got.Reason), 512)
+	assert.NotContains(t, got.Reason, "a body")
+}
+
 // TestRecoverDispatchingWithoutTheTeamPoll: a daemon fails what the last
 // one left dispatching as it starts, telling the sender, whether or not it
 // runs the team poll, which the dispatcher needs.

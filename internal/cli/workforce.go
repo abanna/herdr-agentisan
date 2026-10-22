@@ -27,6 +27,10 @@ import (
 // codeDaemonUnavailable answers a command whose daemon cannot be reached.
 const codeDaemonUnavailable = "daemon_unavailable"
 
+// codeDaemonNoAnswer answers a command whose daemon took the request and
+// gave no answer: it may have run the op (A52).
+const codeDaemonNoAnswer = "daemon_no_answer"
+
 // errRefused is the error a refused workforce command returns, after
 // printing its refusal, so the process exits 1.
 var errRefused = errors.New("refused")
@@ -144,6 +148,8 @@ func (f *opFlags) runOp(cmd *cobra.Command, args []string, op string, req func()
 		return printEnvelope(cmd.OutOrStdout(), envelope{OK: true, Data: data})
 	case errors.As(err, &refused):
 		return refuseWith(cmd, refused.Code, refused.Message)
+	case errors.Is(err, daemon.ErrUnavailable) && !errors.Is(err, daemon.ErrNotSent):
+		return refuseWith(cmd, codeDaemonNoAnswer, "the daemon at "+paths.Socket+" took the request and gave no answer, so it may have done it: "+err.Error())
 	case errors.Is(err, daemon.ErrUnavailable):
 		return refuseWith(cmd, codeDaemonUnavailable, "no daemon answered at "+paths.Socket+"; run the daemon-restart action: "+err.Error())
 	}

@@ -38,6 +38,11 @@ const (
 // that answered not_ready.
 const notReadyRetry = 100 * time.Millisecond
 
+// NotReadyWindow is how long Workforce goes on asking a daemon that answers
+// not_ready (A52). It bounds only the waits between asks: every ask gets
+// the op's whole budget and an exchange.
+const NotReadyWindow = 10 * time.Second
+
 // opBudgets is each workforce op's budget given its args, the one table the
 // server and its client both read.
 var opBudgets = map[string]func(json.RawMessage) time.Duration{
@@ -185,26 +190,29 @@ func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleCl
 }
 
 // Workforce runs a workforce op on the daemon at socket with args and returns
-// the data of its answer, waiting the op's budget and an exchange more. A
-// refusal is a RequestError with the op's code. A daemon that has not
-// reconciled its workers rows since it started answers not_ready at once
-// (A35); Workforce asks again, within that same wait, so a command run just
-// after a daemon start waits for its first poll and still never waits longer
-// than its budget and an exchange. A deadline or a cancel that cuts short an
-// ask after a not_ready refusal returns that refusal: the daemon answered,
-// and was not ready, which no restart would change.
+// the data of its answer, giving each ask the op's budget and an exchange
+// more. A refusal is a RequestError with the op's code. A daemon that has
+// not reconciled its workers rows since it started answers not_ready at once
+// (A35); Workforce asks again for NotReadyWindow, so a command run just
+// after a daemon start waits for its first poll. The window ends only the
+// waits between asks, never an ask: one the daemon took may be running its
+// op, which a refusal would hide (A52). So a command never waits longer than
+// the window, the budget and an exchange, and no ask starts after the
+// window. A deadline or a cancel of the caller's own that cuts short an ask
+// after a not_ready refusal returns that refusal (A35): the caller chose to
+// stop, and the daemon was not ready when last it answered.
 func Workforce(ctx context.Context, socket, op string, args any) (json.RawMessage, error) {
 	raw, err := json.Marshal(args)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s: encode args: %w", ErrProtocol, op, err)
 	}
 	wait := OpBudget(op, raw) + ioTimeout
-	ctx, cancel := context.WithTimeout(ctx, wait)
-	defer cancel()
+	asking, stop := context.WithTimeout(ctx, NotReadyWindow)
+	defer stop()
 	var refused error
 	for {
 		data, err := callWith(ctx, socket, op, raw, wait)
-		if refused != nil && (errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)) {
+		if refused != nil && errors.Is(err, ErrUnavailable) && ctx.Err() != nil {
 			return nil, refused
 		}
 		if !errors.Is(err, ErrNotReady) {
@@ -212,9 +220,13 @@ func Workforce(ctx context.Context, socket, op string, args any) (json.RawMessag
 		}
 		refused = err
 		select {
-		case <-ctx.Done():
-			return nil, err
+		case <-asking.Done():
 		case <-time.After(notReadyRetry):
+		}
+		// After the select, not in it: a wait that ends as the window does
+		// may pick either case.
+		if asking.Err() != nil {
+			return nil, err
 		}
 	}
 }

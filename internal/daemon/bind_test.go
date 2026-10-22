@@ -353,10 +353,11 @@ func TestWorkforceOpsWaitForTheFirstReconcile(t *testing.T) {
 }
 
 // TestWorkforceRetriesNotReady: daemon.Workforce asks a daemon that answers
-// not_ready again until it answers, all within the one wait the command has,
-// which the caller's context can shorten: a deadline that ends an exchange,
-// or the wait between two asks, ends the asks at once with the last
-// refusal, and nothing is asked after that.
+// not_ready again until it answers, within its window (A52), which the
+// caller's context can shorten: a deadline that ends an exchange, or the
+// wait between two asks, ends the asks at once with the last refusal. No
+// ask starts after the deadline; the wait's case may still see the one ask
+// a stalled server lets start before it.
 func TestWorkforceRetriesNotReady(t *testing.T) {
 	t.Parallel()
 	// serve answers op not_ready n times, running then before each, and
@@ -378,13 +379,15 @@ func TestWorkforceRetriesNotReady(t *testing.T) {
 		return sock, &calls
 	}
 	// prompt asserts that Workforce returned on the cue passed at
-	// passedAt, not at the end of its own wait (StatusBudget plus an
-	// exchange): a Workforce that ignores its caller's context returns on
-	// the same refusal, 15 s late (QA #77, F-1).
+	// passedAt, within an exchange (5 s): a Workforce that ignores its
+	// caller's context returns on the same refusal at its window's end
+	// (QA #77, F-1), and one that asks once more after the cue, on a
+	// context of its own, waits out that ask's exchange against a server
+	// that holds it (M11, #77's re-QA).
 	prompt := func(t *testing.T, passedAt *atomic.Int64) {
 		t.Helper()
 		require.NotZero(t, passedAt.Load(), "the cue passed")
-		assert.Less(t, time.Since(time.Unix(0, passedAt.Load())), daemon.StatusBudget, "returned on the cue, not on Workforce's own wait")
+		assert.Less(t, time.Since(time.Unix(0, passedAt.Load())), 5*time.Second, "returned on the cue, not on the window or after one more ask")
 	}
 
 	t.Run("asked again until it answers", func(t *testing.T) {
@@ -430,7 +433,8 @@ func TestWorkforceRetriesNotReady(t *testing.T) {
 
 	// The caller's deadline passes in the wait after the first refusal:
 	// the server passes the cue once the client has read the refusal and
-	// closed its end, so the client holds it and is in its 100 ms wait.
+	// closed its end, so the client holds it and is in its 100 ms wait, or
+	// just before it.
 	// Workforce returns that refusal at once, never the context's error
 	// (QA #77, F-2). A cue off a timer raced the client's read, and a
 	// deadline that cuts the first ask short is no answer (#77's review).
@@ -510,11 +514,13 @@ func (c *cueDeadline) Err() error {
 
 func (c *cueDeadline) pass() { c.once.Do(func() { close(c.done) }) }
 
-// TestWorkforceKeepsNotReadyPastTheDeadline: a deadline that cuts short an
-// ask after a not_ready refusal is that refusal, not a daemon gone. The
-// daemon answered, so `team status` must not tell the boss to restart it
-// (QA #48, N2b; NERD-5344's review). So is a cancel. A daemon that goes
-// after a refusal is gone, and a deadline with no refusal yet is no answer.
+// TestWorkforceKeepsNotReadyPastTheDeadline: a deadline of the caller's own
+// that cuts short an ask after a not_ready refusal is that refusal, not a
+// daemon gone. The daemon answered, so `team status` must not tell the boss
+// to restart it (QA #48, N2b; NERD-5344's review). So is a cancel. A daemon
+// that goes after a refusal is gone, with nothing sent, and a deadline with
+// no refusal yet is no answer, to a request the daemon took (A52). An ask's
+// own wait that runs out after a refusal is TestNotReadyWindow's.
 func TestWorkforceKeepsNotReadyPastTheDeadline(t *testing.T) {
 	t.Parallel()
 	for name, end := range map[string]string{
@@ -573,11 +579,13 @@ func TestWorkforceKeepsNotReadyPastTheDeadline(t *testing.T) {
 			if end == "first" {
 				require.ErrorIs(t, err, daemon.ErrUnavailable, "no answer, not a success")
 				assert.ErrorIs(t, err, context.DeadlineExceeded)
+				assert.NotErrorIs(t, err, daemon.ErrNotSent, "the daemon took the ask")
 				assert.Equal(t, int32(1), asks.Load())
 				return
 			}
 			if gone {
 				require.ErrorIs(t, err, daemon.ErrUnavailable)
+				assert.ErrorIs(t, err, daemon.ErrNotSent, "the next dial found no daemon")
 				assert.NotErrorIs(t, err, daemon.ErrNotReady, "gone, not still not ready")
 				assert.NotErrorIs(t, err, context.DeadlineExceeded, "found gone at once, not at the deadline")
 				assert.Equal(t, int32(1), asks.Load())
