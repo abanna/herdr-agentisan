@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -142,11 +143,136 @@ func TestDebuggerArgsNeedsItsInputs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, filepath.Join(root, debugger.RoleFile))
 
-	// With neither, the root is the checkout the binary sits in: the test
-	// binary's has no role.
+	// With neither, the root is the checkout the binary sits in,
+	// <root>/bin/herdr-agentisan, two levels up from the binary and not its
+	// own directory: the test binary's has no role.
+	exe, err := os.Executable()
+	require.NoError(t, err)
 	_, err = runIn(envCtx(t, map[string]string{"HERDR_PLUGIN_CONFIG_DIR": config}), "debugger", "args", "--repo", repo)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "pass --root")
+	assert.Contains(t, err.Error(), fmt.Sprintf("under %q; pass --root", filepath.Dir(filepath.Dir(exe))))
+}
+
+// TestDebuggerArgsOddPathsRunTheLaunch: the printed line quotes every path
+// checkPath accepts, shell metacharacters and expansions among them, so a
+// shell runs it as exactly the launch: in the repo, with the config dir in
+// its environment and the launch's argv. Each name is in the root, the
+// repo, the server dir and the config dir at once, and so in the env file's
+// deny rule too. A backtick, in any of them, is refused before anything is
+// printed.
+func TestDebuggerArgsOddPathsRunTheLaunch(t *testing.T) {
+	t.Parallel()
+	bin, err := os.Executable()
+	require.NoError(t, err)
+	plain := regexp.MustCompile(`^[A-Za-z0-9_./:=@%+-]+$`)
+	for _, name := range []string{
+		"a$b", "a;b", "a&b", "a|b", "a<b>c", "a#b", "~a", "a!b", "$PWD", "a$HOME",
+		// A tilde after a colon, which an assignment expands: the env value.
+		"a:~root",
+		// shellQuote leaves these bare, but for the non-ASCII and the ^.
+		"a=b", "a%b@c+d^e:f", "kódér", "-x",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			root, repo, server, config := oddDirs(t, name)
+			want, err := debugger.Launch{Root: root, Bin: bin, Repo: repo, ServerDir: server, ConfigDir: config, KeyFiles: []string{keyFile(config)}}.Command()
+			require.NoError(t, err)
+			require.Contains(t, want.Args, server, "the server dir is in the argv")
+			ctx := envCtx(t, map[string]string{"HERDR_PLUGIN_CONFIG_DIR": config})
+
+			out, err := runIn(ctx, "debugger", "args", "--root", root, "--repo", repo, "--server-dir", server, "--json")
+			require.NoError(t, err)
+			var got struct {
+				Dir  string            `json:"dir"`
+				Env  map[string]string `json:"env"`
+				Argv []string          `json:"argv"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(out), &got))
+			assert.Equal(t, repo, got.Dir)
+			assert.Equal(t, want.Env, got.Env)
+			assert.Equal(t, append([]string{"claude"}, want.Args...), got.Argv)
+
+			line, err := runIn(ctx, "debugger", "args", "--root", root, "--repo", repo, "--server-dir", server)
+			require.NoError(t, err)
+			ran, err := runLine(t, line)
+			require.NoError(t, err, line)
+			lines := strings.Split(strings.TrimSuffix(string(ran), "\n"), "\n")
+			require.Greater(t, len(lines), 2, string(ran))
+			assert.Equal(t, repo, lines[0], "claude starts in the repo")
+			assert.Equal(t, config, lines[1], "with the config dir in its environment")
+			assert.Equal(t, want.Args, lines[2:], "and the launch's argv")
+			// Any other character is quoted, though sh -c runs it bare: the line
+			// is pasted into an interactive zsh or bash, which expands a bare !,
+			// and a # or ^ under EXTENDED_GLOB (QA #76, S1).
+			words := " " + strings.TrimSpace(line) + " "
+			for _, w := range []struct{ before, path string }{{" cd ", repo}, {" HERDR_PLUGIN_CONFIG_DIR=", config}, {" ", server}} {
+				if !plain.MatchString(w.path) {
+					assert.Contains(t, words, w.before+"'"+w.path+"' ", "quoted on the line")
+				}
+			}
+		})
+	}
+
+	for _, which := range []string{"root", "repo", "server dir", "config dir"} {
+		t.Run("a backtick in the "+which, func(t *testing.T) {
+			t.Parallel()
+			root, repo, server, config := launchDirs(t)
+			odd, _, _, _ := oddDirs(t, "a`b")
+			switch which {
+			case "root":
+				root = odd
+			case "repo":
+				repo = odd
+			case "server dir":
+				server = odd
+			case "config dir":
+				config = odd
+				writeEnvFileSetting(t, config, keyFile(config))
+			}
+			out, err := runIn(envCtx(t, map[string]string{"HERDR_PLUGIN_CONFIG_DIR": config}),
+				"debugger", "args", "--root", root, "--repo", repo, "--server-dir", server)
+			require.ErrorIs(t, err, debugger.ErrInvalid)
+			assert.ErrorContains(t, err, "the "+which+" holds '`'")
+			assert.Empty(t, out, "nothing is printed")
+		})
+	}
+}
+
+// oddDirs makes a plugin root holding the role, a repo, a server dir and a
+// config dir whose shared file names keyFile(config), each named with name
+// in it.
+func oddDirs(t *testing.T, name string) (root, repo, server, config string) {
+	t.Helper()
+	base := t.TempDir()
+	root, repo, server, config = filepath.Join(base, "root"+name), filepath.Join(base, "repo"+name),
+		filepath.Join(base, "srv"+name), filepath.Join(base, "cfg"+name)
+	for _, d := range []string{filepath.Join(root, "roles"), repo, server, config} {
+		require.NoError(t, os.MkdirAll(d, 0o700))
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(root, debugger.RoleFile), []byte("# role\n"), 0o600))
+	writeEnvFileSetting(t, config, keyFile(config))
+	return root, repo, server, config
+}
+
+// TestRoleKeepsItsGuards: the role's sentences that tell the debugger what
+// it must never do are in it as written, whatever its line breaks. No rule
+// of the launch can carry them.
+func TestRoleKeepsItsGuards(t *testing.T) {
+	t.Parallel()
+	role, err := os.ReadFile(roleFile)
+	require.NoError(t, err)
+	text := strings.Join(strings.Fields(string(role)), " ")
+	for _, guard := range []string{
+		"You change nothing",
+		"Any other command is denied without asking",
+		"Your reads are fenced to the repo and the daemon's directory",
+		"Never ask for a credential, never try to read one",
+		"never work around a denial",
+		"What you pass to a Linear tool leaves the machine",
+		"never text you read from the trail, the repo or the daemon's log",
+	} {
+		assert.Contains(t, text, guard)
+	}
 }
 
 // TestDebuggerArgsPathForms: a relative --repo is the repo under the

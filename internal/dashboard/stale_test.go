@@ -142,3 +142,72 @@ func TestStaleStageWords(t *testing.T) {
 	assert.Contains(t, view, "in stage 12m")
 	assert.Equal(t, 1, strings.Count(view, "in stage"), "only the current stage is in stage")
 }
+
+// TestBossLineGivesAStaleStagesAgeFirst: on a narrowing boss line a stale
+// stage's age gives way before the stage, which then shows bare, dimmed as
+// old stages are, wherever a current stage of the same text would show, and
+// drops only where that would too. It holds for any stage text the line
+// draws: wide characters, a combining mark, a byte-order mark, one cut at
+// the stage's cap, and control characters and bytes that are not UTF-8 (one
+// invalid byte, a cut multibyte sequence, a lone surrogate), which the line
+// cleans; and with the age unknown, " · stale". An empty stage has neither.
+func TestBossLineGivesAStaleStagesAgeFirst(t *testing.T) {
+	t.Parallel()
+	bossLine := func(s *snapshot.Snapshot, width int, opts dashboard.Options) string {
+		for l := range strings.SplitSeq(dashboard.Render(dashboard.Frame{Snapshot: s, Selection: dashboard.Selection{Group: -1}, Now: at}, width, 24, opts), "\n") {
+			if strings.Contains(l, "boss ▸") {
+				return l
+			}
+		}
+		return ""
+	}
+	boss := func(stage string, stale, aged bool) *snapshot.Snapshot {
+		s := staleSnapshot()
+		s.Boss.Stage, s.Boss.StageStale = stage, stale
+		if !aged {
+			s.Boss.StageAt = nil
+		}
+		return s
+	}
+	for name, tc := range map[string]struct {
+		stage, shows, age string
+		aged              bool
+	}{
+		"plain":                       {stage: "waiting: QA", shows: "waiting: QA", age: " · 3h00m ago", aged: true},
+		"wide characters":             {stage: "レビュー待ち", shows: "レビュー待ち", age: " · 3h00m ago", aged: true},
+		"a combining mark":            {stage: "cafe\u0301 review", shows: "cafe\u0301 review", age: " · 3h00m ago", aged: true},
+		"cut at the cap":              {stage: strings.Repeat("x", 40), shows: strings.Repeat("x", 20), age: " · 3h00m ago", aged: true},
+		"control bytes and not UTF-8": {stage: "a\x00b\r\nc\xff\xe5\xaf\xed\xa0\x80", shows: "a b  c\ufffd", age: " · 3h00m ago", aged: true},
+		"a byte-order mark":           {stage: "\ufeffwaiting: QA", shows: "\ufeffwaiting: QA", age: " · 3h00m ago", aged: true},
+		"the age unknown":             {stage: "waiting: QA", shows: "waiting: QA", age: " · stale"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var bare []int
+			for width := 120; width >= 40; width-- {
+				old, now := bossLine(boss(tc.stage, true, tc.aged), width, plain), bossLine(boss(tc.stage, false, tc.aged), width, plain)
+				require.NotEmpty(t, old, "width %d", width)
+				assert.Equal(t, strings.Contains(now, tc.shows), strings.Contains(old, tc.shows),
+					"width %d: the stale stage shows where a current one does\n%s\n%s", width, old, now)
+				if strings.Contains(old, tc.age) {
+					assert.Contains(t, old, tc.shows, "width %d: the age never shows without its stage", width)
+				} else if strings.Contains(old, tc.shows) {
+					bare = append(bare, width)
+				}
+			}
+			assert.Contains(t, bossLine(boss(tc.stage, true, tc.aged), 120, plain), tc.age, "the age shows where it fits")
+			require.NotEmpty(t, bare, "some width shows the stage without its age")
+
+			// Only the boss line holds the stage, and colour splits "boss ▸".
+			coloured := dashboard.Render(dashboard.Frame{Snapshot: boss(tc.stage, true, tc.aged), Selection: dashboard.Selection{Group: -1}, Now: at}, bare[0], 24, dashboard.Options{Profile: colorprofile.TrueColor})
+			sets := sgrBefore(t, coloured, tc.shows)
+			require.Len(t, sets, 1)
+			assert.True(t, sets[0]["2"], "the bare stage is faint: %v", sets[0])
+			assert.True(t, sets[0]["3"], "and italic: %v", sets[0])
+		})
+	}
+
+	empty := bossLine(boss("", true, true), 120, plain)
+	assert.NotContains(t, empty, "ago", "an empty stage has no age")
+	assert.Equal(t, 1, strings.Count(empty, " · "), "nor a stage: only the state and ctx, %q", empty)
+}
