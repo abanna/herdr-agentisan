@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/preflight"
 	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/store"
@@ -299,9 +301,12 @@ func Run(ctx context.Context, o Options) (err error) {
 	idle := &team.IdleClock{} // shared: the poll times rests, team status reads them
 	ready := &atomic.Bool{}   // shared: the poll's first reconcile opens the workforce ops (A35)
 	in := newInbox()          // shared: the poll feeds the dispatcher, and send wakes it
+	// Shared: the notices ops set them, and the poll's notices obey them (A44).
+	mutes := notice.NewMutes()
 	var ops map[string]op
 	if svc := o.newWorkforce(st, ident, idle); svc != nil {
 		ops = workforceOps(svc, ready, o.queued(in))
+		maps.Copy(ops, o.noticeOps(in, mutes))
 	}
 	opsCtx, stopOps := context.WithCancel(ctx)
 	srv, err := listen(opsCtx, paths.Socket, o.health(ctx, st, HealthInfo{
@@ -325,7 +330,7 @@ func Run(ctx context.Context, o Options) (err error) {
 		stopFocus()
 		focus.Wait()
 	}()
-	stopTeam := o.startTeam(ctx, st, ident, snapshots, idle, views, ready, in)
+	stopTeam := o.startTeam(ctx, st, ident, snapshots, idle, views, ready, in, mutes)
 	defer stopTeam()
 	o.Logger.Info().Int("pid", os.Getpid()).Uint32("protocol", pong.Protocol).Str("socket", paths.Socket).
 		Int("store_version", st.UserVersion()).Msg("daemon running")
