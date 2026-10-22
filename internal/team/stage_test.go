@@ -60,9 +60,10 @@ var (
 // TestIdleClockStretch: the clock times a working stretch only when it saw
 // both its ends, from the last poll that saw the pane at rest before it,
 // since the stretch began after that poll, with the stage the pane held at
-// that poll. Blocked is part of a stretch; unknown, or leaving the model,
-// forgets the pane; a pane first seen at work, as after a daemon restart,
-// needs a rest, a stretch and a rest again.
+// that poll, to the second poll in a row that sees it at rest again. Blocked
+// is part of a stretch; unknown, or leaving the model, forgets the pane; a
+// pane first seen at work, as after a daemon restart, needs a rest, a
+// stretch and two polls at rest again.
 func TestIdleClockStretch(t *testing.T) {
 	t.Parallel()
 	tests := map[string]struct {
@@ -71,22 +72,25 @@ func TestIdleClockStretch(t *testing.T) {
 		stage     string
 		unknownTo bool
 	}{
-		"a whole stretch, from the last rest before it": {polls: []seen{idle, idle, working, working, idle}, from: poll(1), stage: "build_test"},
-		"done is a rest":                   {polls: []seen{done, working, idle}, from: poll(0), stage: "build_test"},
-		"blocked is part of the stretch":   {polls: []seen{idle, blocked, working, blocked, done}, from: poll(0), stage: "build_test"},
-		"the stage held as it began":       {polls: []seen{{status: team.StatusIdle, stage: "a"}, {status: team.StatusIdle, stage: "b"}, {status: team.StatusWorking, stage: "c"}, {status: team.StatusIdle, stage: "d"}}, from: poll(1), stage: "b"},
-		"the latest of two stretches":      {polls: []seen{idle, working, idle, idle, working, idle}, from: poll(3), stage: "build_test"},
-		"a stretch still going":            {polls: []seen{idle, working}, unknownTo: true},
-		"blocked, still going":             {polls: []seen{idle, blocked}, unknownTo: true},
-		"first seen at work":               {polls: []seen{working, idle}, unknownTo: true},
-		"first seen at work, then a whole": {polls: []seen{working, idle, working, idle}, from: poll(1), stage: "build_test"},
-		"only ever at rest":                {polls: []seen{idle, idle}, unknownTo: true},
-		"unknown forgets the pane":         {polls: []seen{idle, working, unknown, idle}, unknownTo: true},
-		"unknown at rest forgets it too":   {polls: []seen{idle, unknown, working, idle}, unknownTo: true},
-		"gone from the model forgets it":   {polls: []seen{idle, working, gone, idle}, unknownTo: true},
-		"a stretch ended, then gone":       {polls: []seen{idle, working, idle, gone}, unknownTo: true},
-		"a stretch ended, then working on": {polls: []seen{idle, working, idle, working}, unknownTo: true},
-		"never seen":                       {unknownTo: true},
+		"a whole stretch, from the last rest before it": {polls: []seen{idle, idle, working, working, idle, idle}, from: poll(1), stage: "build_test"},
+		"one poll at rest after it is too soon":         {polls: []seen{idle, working, idle}, unknownTo: true},
+		"and still ended at the third":                  {polls: []seen{idle, working, idle, idle, idle}, from: poll(0), stage: "build_test"},
+		"done is a rest":                                {polls: []seen{done, working, done, idle}, from: poll(0), stage: "build_test"},
+		"blocked is part of the stretch":                {polls: []seen{idle, blocked, working, blocked, done, done}, from: poll(0), stage: "build_test"},
+		"the stage held as it began":                    {polls: []seen{{status: team.StatusIdle, stage: "a"}, {status: team.StatusIdle, stage: "b"}, {status: team.StatusWorking, stage: "c"}, {status: team.StatusIdle, stage: "d"}, {status: team.StatusIdle, stage: "e"}}, from: poll(1), stage: "b"},
+		"the latest of two stretches":                   {polls: []seen{idle, working, idle, idle, working, idle, idle}, from: poll(3), stage: "build_test"},
+		"each stretch's end counts its rests anew":      {polls: []seen{idle, working, idle, idle, working, idle}, unknownTo: true},
+		"a stretch still going":                         {polls: []seen{idle, working}, unknownTo: true},
+		"blocked, still going":                          {polls: []seen{idle, blocked}, unknownTo: true},
+		"first seen at work":                            {polls: []seen{working, idle, idle}, unknownTo: true},
+		"first seen at work, then a whole":              {polls: []seen{working, idle, working, idle, idle}, from: poll(1), stage: "build_test"},
+		"only ever at rest":                             {polls: []seen{idle, idle}, unknownTo: true},
+		"unknown forgets the pane":                      {polls: []seen{idle, working, unknown, idle, idle}, unknownTo: true},
+		"unknown at rest forgets it too":                {polls: []seen{idle, unknown, working, idle, idle}, unknownTo: true},
+		"gone from the model forgets it":                {polls: []seen{idle, working, gone, idle, idle}, unknownTo: true},
+		"a stretch ended, then gone":                    {polls: []seen{idle, working, idle, idle, gone}, unknownTo: true},
+		"a stretch ended, then working on":              {polls: []seen{idle, working, idle, idle, working}, unknownTo: true},
+		"never seen":                                    {unknownTo: true},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -130,7 +134,7 @@ func TestIdleClockStretchNilAndConcurrent(t *testing.T) {
 	var c team.IdleClock
 	var wg sync.WaitGroup
 	for range 20 {
-		wg.Go(func() { observe(&c, idle, working, idle) })
+		wg.Go(func() { observe(&c, idle, working, idle, idle) })
 		wg.Go(func() { c.Stretch("w1:p1") })
 	}
 	wg.Wait()
@@ -142,13 +146,13 @@ func TestIdleClockStretchNilAndConcurrent(t *testing.T) {
 func secs(t time.Time) time.Time { return time.Unix(t.Unix(), 0) }
 
 // TestStageOf walks the rule against one clock that saw a whole stretch:
-// at rest at poll 0, working at poll 1, at rest at poll 2 with "build_test",
-// so the stretch began at poll 0, 400 ms into its second.
+// at rest at poll 0, working at poll 1, at rest at polls 2 and 3 with
+// "build_test", so the stretch began at poll 0, 400 ms into its second.
 func TestStageOf(t *testing.T) {
 	t.Parallel()
 	var c team.IdleClock
-	observe(&c, idle, working, idle)
-	now := poll(2).Add(time.Minute)
+	observe(&c, idle, working, idle, idle)
+	now := poll(3).Add(time.Minute)
 	before := secs(poll(0)).Add(-time.Second)
 	pane := func(status team.Status, at time.Time) team.Pane {
 		return team.Pane{ID: "w1:p1", Agent: "claude", Status: status, Stage: "build_test", StageAt: at}
@@ -197,7 +201,7 @@ func TestStageOf(t *testing.T) {
 	// the stage the stretch began with is a changed stage, so current.
 	var spelt team.IdleClock
 	nfc, nfd := "caf\u00e9", "cafe\u0301"
-	observe(&spelt, seen{status: team.StatusIdle, stage: nfc}, seen{status: team.StatusWorking, stage: nfc}, seen{status: team.StatusIdle, stage: nfd})
+	observe(&spelt, seen{status: team.StatusIdle, stage: nfc}, seen{status: team.StatusWorking, stage: nfc}, seen{status: team.StatusIdle, stage: nfd}, seen{status: team.StatusIdle, stage: nfd})
 	for stage, stale := range map[string]bool{nfc: true, nfd: false} {
 		p := team.Pane{ID: "w1:p1", Agent: "claude", Status: team.StatusIdle, Stage: stage, StageAt: before}
 		assert.Equal(t, stale, team.StageOf(p, &spelt, now).Stale, "%+q", stage)
@@ -207,8 +211,8 @@ func TestStageOf(t *testing.T) {
 // TestStageOfTheStretchItSaw: the rule over polls, as the daemon runs it. A
 // stage reported at the end of each turn stays current while the pane
 // rests, the same value reported again included ("waiting: boss"); one left
-// from before a turn that reported nothing goes stale once that turn ends,
-// never while it runs.
+// from before a turn that reported nothing goes stale once that turn has
+// ended, at the second poll that sees the pane at rest, never while it runs.
 func TestStageOfTheStretchItSaw(t *testing.T) {
 	t.Parallel()
 	var c team.IdleClock
@@ -229,10 +233,49 @@ func TestStageOfTheStretchItSaw(t *testing.T) {
 	assert.False(t, state(5, team.StatusIdle).Stale, "the same stage reported again is current")
 
 	assert.False(t, state(6, team.StatusWorking).Stale, "a turn that reports nothing, still running")
-	got := state(7, team.StatusIdle)
+	assert.False(t, state(7, team.StatusIdle).Stale, "at rest for one poll: its Stop hook may still report")
+	got := state(8, team.StatusIdle)
 	assert.True(t, got.Stale, "has ended: the stage is old")
 	assert.Equal(t, reported, got.At)
-	assert.True(t, state(8, team.StatusIdle).Stale, "and stays old while the pane rests")
+	assert.True(t, state(9, team.StatusIdle).Stale, "and stays old while the pane rests")
+}
+
+// TestStageOfGivesTheStopHookAPoll: a Stop hook's report races the poll that
+// first sees its turn's end, so the stage is judged at the second poll at
+// rest. Whichever lands first, a stage the hook reports is current at both;
+// one nothing reports is current at the first and old from the second.
+func TestStageOfGivesTheStopHookAPoll(t *testing.T) {
+	t.Parallel()
+	old := secs(poll(0)).Add(-10 * time.Second)
+	for name, tc := range map[string]struct {
+		// reported is when the hook's report lands, as a stage_at, or zero
+		// when nothing reports.
+		reported time.Time
+		stale    [2]bool
+	}{
+		"the report before the first poll at rest":     {reported: secs(poll(2)).Add(-time.Second)},
+		"the report between the first and second poll": {reported: secs(poll(2)).Add(time.Second)},
+		"no report": {stale: [2]bool{false, true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var c team.IdleClock
+			at := func(n int) time.Time {
+				if !tc.reported.IsZero() && !tc.reported.After(poll(n)) {
+					return tc.reported
+				}
+				return old
+			}
+			state := func(n int, status team.Status) team.StageState {
+				observeAt(&c, n, seen{status: status, stage: "review"})
+				return team.StageOf(team.Pane{ID: "w1:p1", Agent: "claude", Status: status, Stage: "review", StageAt: at(n)}, &c, poll(n))
+			}
+			require.False(t, state(0, team.StatusIdle).Stale)
+			require.False(t, state(1, team.StatusWorking).Stale)
+			assert.Equal(t, tc.stale[0], state(2, team.StatusIdle).Stale, "the first poll at rest")
+			assert.Equal(t, tc.stale[1], state(3, team.StatusIdle).Stale, "the second")
+		})
+	}
 }
 
 // TestStageDisplay: a current stage goes to stage_now as it is; a stale one
@@ -316,7 +359,7 @@ func TestSidebarTokensShowTheStage(t *testing.T) {
 	reported := secs(poll(0)).Add(-time.Hour)
 	var l team.Layout
 	var m team.Model
-	for n, status := range []string{"idle", "working", "idle"} {
+	for n, status := range []string{"idle", "working", "idle", "idle"} {
 		l = stageLayout(status, "build_test", reported)
 		m = team.Build(l, r, nil)
 		c.Observe(m, poll(n))
@@ -336,20 +379,20 @@ func TestSidebarTokensShowTheStage(t *testing.T) {
 		"wN:p1": {"", "build_test · 1h"},
 		"wN:p3": {"", "build_test · 1h"},
 		"w2:p1": {"build_test", ""},
-	}, stages(poll(2)))
+	}, stages(poll(3)))
 
-	reported = secs(poll(2))
+	reported = secs(poll(3))
 	l = stageLayout("idle", "build_test", reported)
 	m = team.Build(l, r, nil)
 	assert.Equal(t, map[string][2]string{
 		"wN:p1": {"build_test", ""},
 		"wN:p3": {"", "build_test · 0m"},
 		"w2:p1": {"build_test", ""},
-	}, stages(poll(2)), "reported again")
+	}, stages(poll(3)), "reported again")
 
 	l = stageLayout("idle", "", reported)
 	m = team.Build(l, r, nil)
-	assert.Equal(t, map[string][2]string{"wN:p1": {}, "wN:p3": {}, "w2:p1": {}}, stages(poll(2)), "no stage clears both")
+	assert.Equal(t, map[string][2]string{"wN:p1": {}, "wN:p3": {}, "w2:p1": {}}, stages(poll(3)), "no stage clears both")
 }
 
 // TestBuildReadsStageAt: a pane's stage_at token is read only as

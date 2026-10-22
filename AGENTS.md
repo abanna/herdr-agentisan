@@ -116,7 +116,7 @@ exempts whatever is later added under that name.
   `docs/config/claude-hooks.example.json` and
   `docs/config/codex-turn-hooks.example.toml`). They read `HERDR_PANE_ID`, a
   pane-shell variable, which is why it is not in `plugin.Env`.
-- `internal/codexhooks/` — installing those Codex hooks (ADR-001 A43):
+- `internal/codexhooks/` — installing the `ctx` Codex hooks (ADR-001 A43):
   `codex hooks` writes them into `$CODEX_HOME/hooks.json`, after every entry
   already there, which it keeps as written, and never edits `config.toml` or
   trusts a hook; `--check` only reports. Tests use temp Codex homes, never
