@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
+	"github.com/abanna/herdr-agentisan/internal/debugger"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/preflight"
 	"github.com/abanna/herdr-agentisan/internal/settings"
@@ -435,6 +436,17 @@ func TestTheWorkforceGetsThePreflightHook(t *testing.T) {
 	require.NoError(t, svc.Preflight(t.Context(), "/repo"))
 	assert.Equal(t, "/repo", checked)
 	assert.Nil(t, daemon.WorkforceOf(daemon.Options{Team: &daemon.TeamOptions{}}, daemon.Identity{}).Preflight)
+}
+
+// TestTheWorkforceGetsTheDebuggerLaunch: a debugger worker's launch names
+// the plugin's checkout and binary `daemon run` was given, and the daemon's
+// own directory for its herdr server, which holds daemon.log (A32).
+func TestTheWorkforceGetsTheDebuggerLaunch(t *testing.T) {
+	t.Parallel()
+	o := daemon.Options{StateDir: "/state", HerdrSocket: "/run/herdr.sock", Team: &daemon.TeamOptions{PluginRoot: "/plugin", Binary: "/plugin/bin/herdr-agentisan"}}
+	paths, err := daemon.PathsFor(o.StateDir, o.HerdrSocket)
+	require.NoError(t, err)
+	assert.Equal(t, debugger.Launch{Root: "/plugin", Bin: "/plugin/bin/herdr-agentisan", ServerDir: paths.Dir}, daemon.WorkforceOf(o, daemon.Identity{}).Debugger)
 }
 
 // TestWorkforceCodes: every workforce refusal has a code of its own, and

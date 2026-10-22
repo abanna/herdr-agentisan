@@ -14,7 +14,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/abanna/herdr-agentisan/internal/debugger"
-	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/trail"
 )
 
@@ -52,10 +51,10 @@ func newDebuggerArgsCmd() *cobra.Command {
 				return fmt.Errorf("debugger args: the plugin binary: %w", err)
 			}
 			if root == "" {
-				root = pluginRoot(lookup, bin)
+				root = debugger.Root(lookup, bin)
 			}
-			if _, err := os.Stat(filepath.Join(root, debugger.RoleFile)); err != nil {
-				return fmt.Errorf("debugger args: no %s under %q; pass --root, the plugin's checkout: %w", debugger.RoleFile, root, err)
+			if err := debugger.CheckRoot(root); err != nil {
+				return fmt.Errorf("debugger args: %w; pass --root", err)
 			}
 			// claude's --add-dir refuses a server dir that is not a
 			// directory; say so before printing a launch that cannot start.
@@ -70,7 +69,7 @@ func newDebuggerArgsCmd() *cobra.Command {
 			if configDir == "" {
 				return errors.New("debugger args: pass --config-dir, the plugin's config dir, or set " + trail.ConfigDirEnv)
 			}
-			keyFiles, err := keyFiles(configDir, lookup)
+			keyFiles, err := debugger.KeyFiles(configDir, lookup)
 			if err != nil {
 				return fmt.Errorf("debugger args: %w", err)
 			}
@@ -104,33 +103,6 @@ func newDebuggerArgsCmd() *cobra.Command {
 	c.Flags().StringVar(&configDir, "config-dir", "", "the plugin's config dir (default: $"+trail.ConfigDirEnv+")")
 	addJSONFlag(c, &asJSON)
 	return c
-}
-
-// keyFiles is the env file the shared config in configDir names, which
-// holds the trail's read key, and its target when it is a link: the launch
-// denies both to Read. The file itself is never opened.
-func keyFiles(configDir string, lookup func(string) (string, bool)) ([]string, error) {
-	envFile, err := settings.DebuggerEnvFile(configDir, lookup)
-	if err != nil {
-		return nil, fmt.Errorf("the shared config: %w", err)
-	}
-	if envFile == "" {
-		return nil, fmt.Errorf("set [debugger] env_file in %s: the debugger's events read the trail's key from it", filepath.Join(configDir, settings.FileName))
-	}
-	keys := []string{envFile}
-	if target, err := filepath.EvalSymlinks(envFile); err == nil && target != envFile {
-		keys = append(keys, target)
-	}
-	return keys, nil
-}
-
-// pluginRoot is HERDR_PLUGIN_ROOT when herdr set it, else the checkout the
-// binary was built into (<root>/bin/herdr-agentisan).
-func pluginRoot(lookup func(string) (string, bool), bin string) string {
-	if r, _ := lookup("HERDR_PLUGIN_ROOT"); r != "" {
-		return r
-	}
-	return filepath.Dir(filepath.Dir(bin))
 }
 
 var shellSafe = regexp.MustCompile(`^[A-Za-z0-9_./:=@%+-]+$`)

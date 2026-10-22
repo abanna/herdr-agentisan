@@ -12,6 +12,7 @@ import (
 
 	"github.com/abanna/herdr-agentisan/internal/config"
 	"github.com/abanna/herdr-agentisan/internal/daemon"
+	"github.com/abanna/herdr-agentisan/internal/debugger"
 	"github.com/abanna/herdr-agentisan/internal/github"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/logging"
@@ -80,12 +81,12 @@ func daemonOptions(cmd *cobra.Command, stateDirFlag string, client bool) (daemon
 			return daemon.Options{}, fmt.Errorf("load config: %w", err)
 		}
 	}
+	exe, err := os.Executable()
+	if err != nil {
+		return daemon.Options{}, fmt.Errorf("find this binary: %w", err)
+	}
 	hooks, _ := ctx.Value(daemonHooksKey{}).(daemon.Hooks)
 	if hooks.Spawn == nil {
-		exe, err := os.Executable()
-		if err != nil {
-			return daemon.Options{}, fmt.Errorf("find this binary: %w", err)
-		}
 		hooks.Spawn = daemon.ExecSpawn(exe, "daemon", "run", "--state-dir", stateDir)
 	}
 	return daemon.Options{
@@ -98,7 +99,10 @@ func daemonOptions(cmd *cobra.Command, stateDirFlag string, client bool) (daemon
 		Commit:          config.Commit,
 		Logger:          logging.From(ctx),
 		Hooks:           hooks,
-		Team:            &daemon.TeamOptions{ConfigDir: env.ConfigDir, GitHub: daemon.GitHubOptions{Gh: findGh(lookup)}},
+		Team: &daemon.TeamOptions{
+			ConfigDir: env.ConfigDir, GitHub: daemon.GitHubOptions{Gh: findGh(lookup)},
+			PluginRoot: debugger.Root(lookup, exe), Binary: exe,
+		},
 	}, nil
 }
 

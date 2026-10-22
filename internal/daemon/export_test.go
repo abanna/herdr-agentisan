@@ -256,9 +256,11 @@ func ServeOp(ctx context.Context, path, name, code string, budget time.Duration,
 var CallWith = callWith
 
 // WorkforceOf is the workforce service a daemon run with o builds, for the
-// herdr server ident names.
+// herdr server ident names, in o's directory for that server when o names
+// one.
 func WorkforceOf(o Options, ident Identity) *workforce.Service {
-	return o.newWorkforce(nil, ident, &team.IdleClock{})
+	paths, _ := PathsFor(o.StateDir, o.HerdrSocket)
+	return o.newWorkforce(nil, ident, &team.IdleClock{}, paths.Dir)
 }
 
 // LogNotice writes m as the log sink does (A44).

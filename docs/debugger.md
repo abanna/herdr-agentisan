@@ -7,7 +7,7 @@ workflow from evidence (ADR-001 item 12, A32). It ships with the plugin:
 - `herdr-agentisan events` reads the workflow event trail
   ([`telemetry.md`](telemetry.md)) back out of Elasticsearch;
 - `internal/debugger` builds its read-only launch, and `worker spawn --group
-  debugger` will start it (item 4).
+  debugger` starts it as one of the team's workers.
 
 It reads the trail, the daemon's log, the project's repo and Linear. Its
 tools write nothing, and its reads are fenced to the repo and the daemon's
@@ -66,9 +66,34 @@ worker <id>`.
 
 ## Launching it
 
-`worker spawn --group debugger` launches it in the project's repo (part 2,
-after item 4). Until then, `herdr-agentisan debugger args` prints the same
-launch for a start by hand:
+`herdr-agentisan worker spawn --group debugger` starts it as one of the
+team's workers (ADR-001 A32, A23). It gets a `<short>-debugger-<n>` tab in
+the team's workspace, in the project's repo, and a `workers` row, so the
+dashboard shows it in its group and `/` finds it by name. The group needs a
+slot, and the debugger needs its env file:
+
+```toml
+[groups.debugger]        # or [projects.<p>.groups.debugger]
+workers = 0              # team up starts none
+slots = 1
+# agent = { model = "sonnet" }   # a model only: the launch is the plugin's
+
+[debugger]
+env_file = "~/.config/herdr-agentisan/elastic.env"
+```
+
+Spawn builds the launch below from the daemon's plugin checkout and binary,
+the repo, the daemon's directory and the env file, then adds the
+workforce's `--model` and `--name`. Its group sets no command, and the
+top-level `[agent] command` never applies to it: a flag there, such as a
+permission mode, would lift its fence. A launch spawn cannot build is
+refused whole, with `config_invalid`, before any tab opens: no `env_file`,
+no role under the checkout, the env file in the repo, or an `.mcp.json` it
+cannot read. A debugger reports no `ctx` and writes no handoff, so retire
+it with a plain `worker retire <id>`: `--after-handoff` is refused.
+
+`herdr-agentisan debugger args` prints the same launch for a start by hand,
+outside the team:
 
 ```
 herdr-agentisan debugger args --repo ~/src/project --server-dir <the daemon's srv-… dir> [--config-dir <dir>] [--json]

@@ -384,8 +384,9 @@ query '<ES|QL>'` read the events in Elasticsearch. They take its URL and read
 key from the env file `[debugger] env_file` names, at each query, so the key
 never enters an agent's environment. `herdr-agentisan debugger args` prints
 the claude command that starts it read-only, its reads fenced to the repo
-and the daemon's directory; `worker spawn --group debugger`
-will launch it. See [`docs/debugger.md`](docs/debugger.md).
+and the daemon's directory; `worker spawn --group debugger` starts it as one
+of the team's workers, in a group of its own. See
+[`docs/debugger.md`](docs/debugger.md).
 
 ## Teams: one workspace, one tab per worker
 

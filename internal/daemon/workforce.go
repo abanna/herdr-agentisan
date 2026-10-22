@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/abanna/herdr-agentisan/internal/debugger"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
@@ -188,7 +189,9 @@ func decodeArgs(args json.RawMessage, out any) error {
 
 // newWorkforce is the daemon's workforce service, or nil when the team poll
 // is off: every herdr call it makes proves the server's identity first (A3).
-func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleClock) *workforce.Service {
+// A debugger it spawns may read serverDir, the daemon's own directory
+// (A32).
+func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleClock, serverDir string) *workforce.Service {
 	if o.Team == nil {
 		return nil
 	}
@@ -199,6 +202,7 @@ func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleCl
 		Idle:      idle,
 		Now:       o.Now,
 		Preflight: o.Hooks.Preflight,
+		Debugger:  debugger.Launch{Root: o.Team.PluginRoot, Bin: o.Team.Binary, ServerDir: serverDir},
 	}
 }
 

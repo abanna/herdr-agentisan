@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/abanna/herdr-agentisan/internal/debugger"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/preflight"
 	"github.com/abanna/herdr-agentisan/internal/report"
@@ -109,6 +110,11 @@ type Service struct {
 	// CodexHooks reports whether Codex's ctx hooks are installed; nil
 	// checks nothing. A Codex spawn without them warns (A22, A43).
 	CodexHooks func() (bool, error)
+	// Debugger is what a debugger worker's launch names besides the
+	// project's repo, the config dir and the env file it names (A32): the
+	// plugin's checkout and binary, and the daemon's directory. Without a
+	// checkout and a binary, a debugger spawn is refused.
+	Debugger debugger.Launch
 	// ReadyPoll, BusyWindow and HandoffPoll override the defaults above.
 	ReadyPoll, BusyWindow, HandoffPoll time.Duration
 

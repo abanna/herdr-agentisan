@@ -242,3 +242,26 @@ func TestRoleMatchesTheLaunch(t *testing.T) {
 	assert.Contains(t, text, telemetry.EventStatusChanged)
 	assert.True(t, slices.ContainsFunc(launch.Args, func(a string) bool { return strings.HasSuffix(a, debugger.RoleFile) }))
 }
+
+// TestDaemonRunKnowsThePluginCheckout: `daemon run` gives the workforce the
+// plugin's checkout and binary, which a debugger worker's launch names
+// (A32): the checkout herdr set, else the one the binary sits in.
+func TestDaemonRunKnowsThePluginCheckout(t *testing.T) {
+	t.Parallel()
+	e := newDaemonEnv(t)
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	root := t.TempDir()
+	for name, tc := range map[string]struct {
+		env  map[string]string
+		want string
+	}{
+		"herdr's":          {env: map[string]string{"HERDR_PLUGIN_ROOT": root}, want: root},
+		"the binary's own": {want: filepath.Dir(filepath.Dir(exe))},
+	} {
+		o, err := cli.DaemonOptions(cli.WithLookupEnv(t.Context(), e.lookup(tc.env)))
+		require.NoError(t, err, name)
+		assert.Equal(t, tc.want, o.Team.PluginRoot, name)
+		assert.Equal(t, exe, o.Team.Binary, name)
+	}
+}

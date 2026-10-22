@@ -87,7 +87,9 @@ repeat = 300
 # Spawn adds --no-daemon to any codex command that lacks it (A22). The command
 # runs claude or codex (D12) and carries no --model, -m, --name, -n or
 # --effort, nor a codex -c setting model or model_reasoning_effort: the
-# workforce sets them.
+# workforce sets them. The debugger runs the plugin's read-only launch
+# (docs/debugger.md, [debugger] below): its group sets a model only, never a
+# command, and [agent]'s command never applies to it.
 [groups.precheck]
 workers = 1
 slots = 1

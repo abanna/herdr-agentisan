@@ -291,8 +291,11 @@ exempts whatever is later added under that name.
   ships with the plugin (item 12, A32): its role, and its launch as data,
   claude with `--permission-mode dontAsk`, a read-only allow list and its
   reads fenced to the repo it starts in and the daemon's directory.
-  `herdr-agentisan events` and `debugger args` are its commands;
-  `TestRoleMatchesTheLaunch` keeps the role, the CLI and the launch in step.
+  `herdr-agentisan events` and `debugger args` are its commands, and
+  `worker spawn --group debugger` starts it as a team worker (A32 part 2),
+  the launch's inputs looked up by `Root`, `CheckRoot` and `KeyFiles` for
+  both; `TestRoleMatchesTheLaunch` keeps the role, the CLI and the launch in
+  step.
 - `.devcontainer/` — the reproducible dev environment: Go 1.26.10 plus the
   two tools `go tool` does not resolve (Task, uv).
 - `docs/architecture.md` — why the pieces are shaped this way, and the

@@ -300,7 +300,7 @@ func Run(ctx context.Context, o Options) (err error) {
 	ready := &atomic.Bool{}   // shared: the poll's first reconcile opens the workforce ops (A35)
 	in := newInbox()          // shared: the poll feeds the dispatcher, and send wakes it
 	var ops map[string]op
-	if svc := o.newWorkforce(st, ident, idle); svc != nil {
+	if svc := o.newWorkforce(st, ident, idle, paths.Dir); svc != nil {
 		ops = workforceOps(svc, ready, o.queued(in))
 	}
 	opsCtx, stopOps := context.WithCancel(ctx)
