@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -38,8 +39,9 @@ const waitDelay = 2 * time.Second
 // maxReason bounds how much of gh's stderr an error carries.
 const maxReason = 200
 
-// The fields `gh pr list` is asked for: what herdr-status.sh asked for.
-const prFields = "number,headRefName,mergeStateStatus,reactionGroups,statusCheckRollup"
+// The fields `gh pr list` is asked for: what herdr-status.sh asked for, and
+// the head commit the boss's notices are keyed by (A45).
+const prFields = "number,headRefName,headRefOid,mergeStateStatus,reactionGroups,statusCheckRollup"
 
 // issuesQuery counts a repo's open issues exactly; `gh issue list` caps
 // what it lists.
@@ -56,6 +58,8 @@ var (
 	ErrNoGh = errors.New("gh cannot be run")
 	// ErrRepo means a repo is not owner/name.
 	ErrRepo = errors.New("not a GitHub repo as owner/name")
+	// ErrNumber means a PR number is not one GitHub gives: below 1.
+	ErrNumber = errors.New("not a PR number")
 	// ErrGh means gh ran and failed: not logged in, no such repo, rate
 	// limited, killed. The error carries the first line of its stderr.
 	ErrGh = errors.New("gh failed")
@@ -99,14 +103,39 @@ func Find(path string) string {
 
 // PRs lists repo's open pull requests, release-please's skipped, by number.
 func (r Runner) PRs(ctx context.Context, repo string) ([]snapshot.PR, error) {
-	if err := checkRepo(repo); err != nil {
-		return nil, err
-	}
-	out, err := r.run(ctx, "pr", "list", "--repo="+repo, "--state=open", fmt.Sprintf("--limit=%d", PRLimit), "--json="+prFields)
+	o, err := r.OpenPRs(ctx, repo)
 	if err != nil {
 		return nil, err
 	}
-	return ParsePRs(out)
+	return o.Headers(), nil
+}
+
+// OpenPRs lists repo's open pull requests as PRs does, each with its head
+// and check counts.
+func (r Runner) OpenPRs(ctx context.Context, repo string) (Open, error) {
+	if err := checkRepo(repo); err != nil {
+		return Open{}, err
+	}
+	out, err := r.run(ctx, "pr", "list", "--repo="+repo, "--state=open", fmt.Sprintf("--limit=%d", PRLimit), "--json="+prFields)
+	if err != nil {
+		return Open{}, err
+	}
+	return ParseOpenPRs(out)
+}
+
+// PRView reads the state of repo's PR n, which has left the open list.
+func (r Runner) PRView(ctx context.Context, repo string, n int) (PRState, error) {
+	if err := checkRepo(repo); err != nil {
+		return PRState{}, err
+	}
+	if n < 1 {
+		return PRState{}, fmt.Errorf("%w: %d", ErrNumber, n)
+	}
+	out, err := r.run(ctx, "pr", "view", strconv.Itoa(n), "--repo="+repo, "--json=state,mergeCommit")
+	if err != nil {
+		return PRState{}, err
+	}
+	return ParsePRView(out)
 }
 
 // OpenIssues counts repo's open issues, exactly.

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/stretchr/testify/assert"
@@ -155,8 +156,9 @@ func TestClaudeHookSnippetRunsReportTurn(t *testing.T) {
 // TestCodexTurnHookSnippetRunsReportTurn keeps the documented Codex turn
 // hooks runnable and apart from A43's: Stop and UserPromptSubmit each run the
 // real `report turn`, asynchronously, under a timeout, in a group of its own,
-// so `codex hooks` never finds one beside `report codex`; and README links
-// the sample.
+// so `codex hooks` never finds one beside `report codex`; and README and
+// `report turn`'s help name the sample, the help never A43's ctx hooks, in
+// lines that fit 80 columns.
 func TestCodexTurnHookSnippetRunsReportTurn(t *testing.T) {
 	t.Parallel()
 	sample, err := os.ReadFile(filepath.Join("..", "..", "docs", "config", "codex-turn-hooks.example.toml"))
@@ -194,6 +196,14 @@ func TestCodexTurnHookSnippetRunsReportTurn(t *testing.T) {
 	readme, err := os.ReadFile(filepath.Join("..", "..", "README.md"))
 	require.NoError(t, err)
 	assert.Contains(t, string(readme), "(docs/config/codex-turn-hooks.example.toml)")
+
+	sub, _, err := cli.Root().Find([]string{"report", "turn"})
+	require.NoError(t, err)
+	assert.Contains(t, sub.Long, "docs/config/codex-turn-hooks.example.toml")
+	assert.NotContains(t, sub.Long, "docs/config/codex-hooks.example.toml", "codex hooks installs those, not the turn hooks")
+	for line := range strings.Lines(sub.Long) {
+		assert.LessOrEqual(t, utf8.RuneCountInString(strings.TrimSuffix(line, "\n")), 80, "%q", line)
+	}
 }
 
 // TestReportTurnTakesCodexsPayload: Codex's Stop, with its null final
