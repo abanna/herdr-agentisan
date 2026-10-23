@@ -307,7 +307,8 @@ func TestOpenWaitsForALockUpToTheBusyTimeout(t *testing.T) {
 		after    time.Duration // and Open ends no sooner than this
 	}{
 		// No upper bound on a success: after the lock goes, a fresh file
-		// costs ten fsyncs, which take seconds on a busy disk.
+		// costs ten fsyncs, which take seconds on a busy disk. On Linux
+		// the tests' state is on tmpfs (NERD-5503), but a run can opt out.
 		"an exclusive lock released within the busy timeout": {lock: "BEGIN EXCLUSIVE", hold: 300 * time.Millisecond, after: 150 * time.Millisecond},
 		"an exclusive lock held past the busy timeout": {
 			lock: "BEGIN EXCLUSIVE", hold: long, want: store.ErrOpen,
