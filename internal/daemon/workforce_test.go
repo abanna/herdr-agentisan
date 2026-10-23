@@ -740,7 +740,8 @@ func TestWorkforceCodes(t *testing.T) {
 // TestOpBudgets: team status, retire, send and handoff ready get 10 s, spawn
 // 100 s, team up a spawn's, whatever that is, and retire --after-handoff
 // 1,500 s, both in the client's wait and in the budget the daemon's op map
-// enforces; any other op none of its own.
+// enforces; any other op none of its own. Every op the daemon serves gets the
+// same budget from both, read from the one table (QA #39 item 1).
 func TestOpBudgets(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -765,6 +766,7 @@ func TestOpBudgets(t *testing.T) {
 	assert.Equal(t, []string{daemon.OpHandoffReady, daemon.OpSend, daemon.OpTeamStatus, daemon.OpTeamUp, daemon.OpWorkerRetire, daemon.OpWorkerSpawn}, daemon.WorkforceOpNames())
 	for _, op := range daemon.WorkforceOpNames() {
 		assert.Positive(t, daemon.ServedBudget(op, nil), "%s has a budget in the table, not a nil one", op)
+		assert.Equal(t, daemon.ServedBudget(op, nil), daemon.OpBudget(op, nil), "%s: the client waits the budget the daemon enforces", op)
 	}
 }
 

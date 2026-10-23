@@ -230,7 +230,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   (`handoff.go`, A33), the daemon writing the `handoff` token on a worker's
   agent pane once `pane.get` proves its terminal, with no row changed. The
   daemon runs them, with the plugin's dashboard pane and the Codex hooks
-  check `internal/cli` gives it; `internal/cli` only asks it.
+  check `internal/cli` gives it; `internal/cli` only asks it, and asks herdr
+  only to confirm its own pane (`FindCallerPane`), when no `--project` names
+  the team, for `send`'s sender and for `handoff ready` with no target.
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret

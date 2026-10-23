@@ -282,8 +282,14 @@ func configFailed(err error) error {
 	return fmt.Errorf("%w: %w", ErrConfig, err)
 }
 
-// selectTeam picks the team sel names among teams. Only an explicit project
-// may name the ◆ spaces project; the defaults look for a tabs team.
+// selectTeam picks the team sel names among teams: an explicit project,
+// else the caller's. A caller in a tabs team's workspace is that team's, and
+// one in a ◆ space is the spaces project's, which status reports and the ops
+// that change a team refuse (resolve), never the only tabs team's. With no
+// [spaces] project configured the spaces are the unnamed project's, as the
+// team poll and send read them, which has no configuration to report or
+// staff, so it is refused (QA #39). A caller in neither, or no caller, gets
+// the only tabs team.
 func selectTeam(sel Selector, teams []settings.Team, l layout) (settings.Team, error) {
 	if sel.Project != "" {
 		i := slices.IndexFunc(teams, func(t settings.Team) bool { return t.Project == sel.Project })
@@ -304,11 +310,25 @@ func selectTeam(sel Selector, teams []settings.Team, l layout) (settings.Team, e
 				return t, nil
 			}
 		}
+		if inSpaces(l, p.WorkspaceID) {
+			i := slices.IndexFunc(teams, func(t settings.Team) bool { return t.Layout == settings.LayoutSpaces })
+			if i < 0 {
+				return settings.Team{}, fmt.Errorf("%w: the caller's pane is in a ◆ space, which no [spaces] project configures, so it is the unnamed project's; pass --project to name a team", ErrNoTarget)
+			}
+			return teams[i], nil
+		}
 	}
 	if len(tabs) == 1 {
 		return tabs[0], nil
 	}
 	return settings.Team{}, fmt.Errorf("%w: pass --project: the caller's pane is in no team's workspace, and the tabs teams are %s", ErrBadRequest, names(tabs))
+}
+
+// inSpaces reports whether workspace is one of the ◆ spaces, as the spaces
+// resolver reads them, ◆ boss and ◆ herdr included.
+func inSpaces(l layout, workspace string) bool {
+	r := team.Spaces{}.Resolve(l.Layout)
+	return slices.ContainsFunc(r.Sites, func(s team.Site) bool { return slices.Contains(s.Workspaces, workspace) })
 }
 
 func names(teams []settings.Team) string {
