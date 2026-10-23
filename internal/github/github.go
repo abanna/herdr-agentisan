@@ -40,8 +40,9 @@ const waitDelay = 2 * time.Second
 const maxReason = 200
 
 // The fields `gh pr list` is asked for: what herdr-status.sh asked for, and
-// the head commit the boss's notices are keyed by (A45).
-const prFields = "number,headRefName,headRefOid,mergeStateStatus,reactionGroups,statusCheckRollup"
+// the head commit and each reviewer's latest review the boss's notices are
+// keyed by (A45).
+const prFields = "number,headRefName,headRefOid,latestReviews,mergeStateStatus,reactionGroups,statusCheckRollup"
 
 // issuesQuery counts a repo's open issues exactly; `gh issue list` caps
 // what it lists.
@@ -60,6 +61,11 @@ var (
 	ErrRepo = errors.New("not a GitHub repo as owner/name")
 	// ErrNumber means a PR number is not one GitHub gives: below 1.
 	ErrNumber = errors.New("not a PR number")
+	// ErrLogin means a reviewer's login is not one GitHub gives.
+	ErrLogin = errors.New("not a GitHub login")
+	// ErrNoReview means the review query answered without the review asked
+	// for.
+	ErrNoReview = errors.New("the review is not in GitHub's answer")
 	// ErrGh means gh ran and failed: not logged in, no such repo, rate
 	// limited, killed. The error carries the first line of its stderr.
 	ErrGh = errors.New("gh failed")

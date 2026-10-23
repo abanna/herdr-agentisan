@@ -349,16 +349,20 @@ The daemon tells each team's boss what its team poll sees (ADR-001 A44):
 
 From the GitHub collector (A45), it tells each project's boss when one of
 its repo's PRs merged, its CI failed or passed at a head, it has a merge
-conflict at a head, or it got its first 👍:
+conflict at a head, it got its first 👍, or it got a review, with the
+review's P-badge counts from its body and inline comments, as the Codex
+connector marks its findings:
 
 ```
 herdr-agentisan #50 merged as 1e0fb1b
 #50 CI failed at 1e0fb1b (2 of 7 checks)
+#1006 review by chatgpt-codex-connector at afa239d: commented, P1 ×2
 ```
 
 Each is told once, across restarts, from `state.db`. A repo's first
-collection only records what is true then. GitHub's lines never carry a
-title, branch, body or comment.
+collection only records what is true then, and so does the first that
+looks for reviews. The PR author's own reviews are not told. GitHub's lines
+never carry a title, branch, body or comment.
 
 It also tells each boss, once, that the daemon started. Turns that end while
 the daemon is down are not reported. The boss's own panes and plain shells are
