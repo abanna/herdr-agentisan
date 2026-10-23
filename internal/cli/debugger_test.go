@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -145,12 +146,20 @@ func TestDebuggerArgsNeedsItsInputs(t *testing.T) {
 
 	// With neither, the root is the checkout the binary sits in,
 	// <root>/bin/herdr-agentisan, two levels up from the binary and not its
-	// own directory: the test binary's has no role.
+	// own directory: the test binary's has no role, as an installed copy's
+	// has none, and the error says so.
 	exe, err := os.Executable()
 	require.NoError(t, err)
 	_, err = runIn(envCtx(t, map[string]string{"HERDR_PLUGIN_CONFIG_DIR": config}), "debugger", "args", "--repo", repo)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), fmt.Sprintf("under %q; pass --root", filepath.Dir(filepath.Dir(exe))))
+	assert.Contains(t, err.Error(), fmt.Sprintf("under %q", filepath.Dir(filepath.Dir(exe))))
+	assert.Contains(t, err.Error(), "it is the checkout around this binary, "+exe+", and an installed copy (task install, go install) sits in none: pass --root")
+	assert.Contains(t, err.Error(), "or set HERDR_PLUGIN_ROOT")
+
+	// A HERDR_PLUGIN_ROOT with no role is named as the source.
+	_, err = runIn(envCtx(t, map[string]string{"HERDR_PLUGIN_CONFIG_DIR": config, "HERDR_PLUGIN_ROOT": t.TempDir()}), "debugger", "args", "--repo", repo)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "it is HERDR_PLUGIN_ROOT's; pass --root")
 }
 
 // TestDebuggerArgsOddPathsRunTheLaunch: the printed line quotes every path
@@ -367,4 +376,29 @@ func TestRoleMatchesTheLaunch(t *testing.T) {
 	}
 	assert.Contains(t, text, telemetry.EventStatusChanged)
 	assert.True(t, slices.ContainsFunc(launch.Args, func(a string) bool { return strings.HasSuffix(a, debugger.RoleFile) }))
+}
+
+// TestDaemonRunKnowsThePluginCheckout: `daemon run` gives the workforce the
+// plugin's checkout and binary, which a debugger worker's launch names
+// (A32): the checkout herdr set, else the one the binary sits in.
+func TestDaemonRunKnowsThePluginCheckout(t *testing.T) {
+	t.Parallel()
+	e := newDaemonEnv(t)
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	root := t.TempDir()
+	for name, tc := range map[string]struct {
+		env  map[string]string
+		want string
+	}{
+		"herdr's":          {env: map[string]string{"HERDR_PLUGIN_ROOT": root}, want: root},
+		"the binary's own": {want: filepath.Dir(filepath.Dir(exe))},
+	} {
+		cmd := &cobra.Command{}
+		cmd.SetContext(cli.WithLookupEnv(t.Context(), e.lookup(tc.env)))
+		o, err := cli.DaemonOptions(cmd, "", false)
+		require.NoError(t, err, name)
+		assert.Equal(t, tc.want, o.Team.PluginRoot, name)
+		assert.Equal(t, exe, o.Team.Binary, name)
+	}
 }

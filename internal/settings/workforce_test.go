@@ -13,15 +13,19 @@ import (
 // TestAgentFor: a type launches its group's own command and model when the
 // group sets a command, never the top-level model that belongs to the
 // top-level command; review launches codex unless its group says otherwise;
-// every other type launches the top-level command, with its group's model or
-// the top-level one.
+// the debugger launches claude, never the top-level command or one of its
+// group's, whose arguments the workforce builds (A32); every other type
+// launches the top-level command, with its group's model or the top-level
+// one.
 func TestAgentFor(t *testing.T) {
 	t.Parallel()
 	top := settings.Agent{Command: []string{"claude", "--setting-sources", "user,project"}, Model: "opus"}
 	tests := map[string]struct {
 		groups map[string]settings.Group
-		typ    string
-		want   settings.Agent
+		// top replaces the top-level agent.
+		top  *settings.Agent
+		typ  string
+		want settings.Agent
 	}{
 		"a type with no group of its own":            {typ: "coder", want: top},
 		"a group without an agent":                   {groups: map[string]settings.Group{"coder": {Workers: 1, Slots: 1}}, typ: "coder", want: top},
@@ -32,11 +36,21 @@ func TestAgentFor(t *testing.T) {
 		"review keeps its group's model":             {groups: map[string]settings.Group{"review": {Agent: settings.Agent{Model: "gpt-5"}}}, typ: "review", want: settings.Agent{Command: []string{"codex", "--no-daemon", "--sandbox", "read-only"}, Model: "gpt-5"}},
 		"review set back to claude":                  {groups: map[string]settings.Group{"review": {Agent: settings.Agent{Command: []string{"claude"}}}}, typ: "review", want: settings.Agent{Command: []string{"claude"}}},
 		"the match on review is exact":               {typ: "Review", want: top},
+		"the debugger is claude, with the top model": {typ: "debugger", want: settings.Agent{Command: []string{"claude"}, Model: "opus"}},
+		"the debugger keeps its group's model":       {groups: map[string]settings.Group{"debugger": {Agent: settings.Agent{Model: "sonnet"}}}, typ: "debugger", want: settings.Agent{Command: []string{"claude"}, Model: "sonnet"}},
+		"a codex top level's model is not claude's":  {top: &settings.Agent{Command: []string{"codex"}, Model: "gpt-5"}, typ: "debugger", want: settings.Agent{Command: []string{"claude"}}},
+		"claude by path at the top level":            {top: &settings.Agent{Command: []string{"/usr/local/bin/claude"}, Model: "opus"}, typ: "debugger", want: settings.Agent{Command: []string{"claude"}, Model: "opus"}},
+		"no top-level command":                       {top: &settings.Agent{Model: "opus"}, typ: "debugger", want: settings.Agent{Command: []string{"claude"}}},
+		"a debugger group's command never applies":   {groups: map[string]settings.Group{"debugger": {Agent: settings.Agent{Command: []string{"codex"}}}}, typ: "debugger", want: settings.Agent{Command: []string{"claude"}, Model: "opus"}},
+		"the match on debugger is exact":             {typ: "Debugger", want: top},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			p := settings.Profile{Agent: top, Groups: tc.groups}
+			if tc.top != nil {
+				p.Agent = *tc.top
+			}
 			got := p.AgentFor(tc.typ)
 			assert.Equal(t, tc.want, got)
 
@@ -168,6 +182,9 @@ func TestLoadRefusesWorkforceKeys(t *testing.T) {
 		"codex's -c with a quoted, spaced key": {body: "[agent]\ncommand = [\"codex\", \"-c\", ' \"model\" = o3']\n", wantErr: settings.ErrInvalid, wantAt: "agent.command"},
 		"codex by path in a group, with -c":    {body: "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"/opt/bin/codex\", \"--no-daemon\", \"-c\", \"model=o3\"] }\n", wantErr: settings.ErrInvalid, wantAt: "groups.qa.agent.command"},
 		"a group agent key it does not know":   {body: "[groups.qa]\nworkers = 0\nslots = 1\nagent = { kind = \"codex\" }\n", wantErr: settings.ErrUnknownKey},
+		// The debugger runs the plugin's launch (A32): its group sets no
+		// command, not even claude alone.
+		"a debugger group's command":           {body: "[groups.debugger]\nworkers = 0\nslots = 1\nagent = { command = [\"claude\"] }\n", wantErr: settings.ErrInvalid, wantAt: "groups.debugger.agent.command"},
 		"an empty shell prompt":                {body: "[spawn]\nshell_prompt = \"\"\n", wantErr: settings.ErrInvalid, wantAt: "spawn.shell_prompt"},
 		"a shell prompt that does not compile": {body: "[spawn]\nshell_prompt = \"(\"\n", wantErr: settings.ErrInvalid, wantAt: "spawn.shell_prompt"},
 		"an empty key name":                    {body: "[spawn]\nshell_ready_keys = [\"enter\", \" \"]\n", wantErr: settings.ErrInvalid, wantAt: "spawn.shell_ready_keys"},
@@ -234,4 +251,24 @@ func TestLoadAcceptsTheWorkforceEdges(t *testing.T) {
 			require.NoError(t, err)
 		})
 	}
+}
+
+// TestLoadRefusesADebuggerCommandFromAnyLayer: a project's table or --set
+// cannot give the debugger a command either, while a model alone resolves.
+func TestLoadRefusesADebuggerCommandFromAnyLayer(t *testing.T) {
+	t.Parallel()
+	repo, dir := newRepo(t), t.TempDir()
+	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n[projects.app.groups.debugger]\nworkers = 0\nslots = 1\nagent = { command = [\"claude\"] }\n", repo)
+	_, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
+	require.ErrorIs(t, err, settings.ErrInvalid)
+	assert.Contains(t, err.Error(), "groups.debugger.agent.command")
+
+	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n[projects.app.groups.debugger]\nworkers = 0\nslots = 1\nagent = { model = \"sonnet\" }\n", repo)
+	res, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
+	require.NoError(t, err)
+	assert.Equal(t, settings.Agent{Command: []string{"claude"}, Model: "sonnet"}, res.Profile.AgentFor("debugger"))
+
+	_, err = settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil), Set: []string{`groups.debugger.agent.command=["claude"]`}})
+	require.ErrorIs(t, err, settings.ErrInvalid)
+	assert.Contains(t, err.Error(), "groups.debugger.agent.command")
 }
