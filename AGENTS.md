@@ -94,6 +94,8 @@ follow the same rule.
   very last line of the message, with nothing after it. A status line
   anywhere else, inside a sentence or behind a list marker, is not read. If
   you open a message with a status headline, repeat it as the last line.
+  Where your role names its own closing lines, as `roles/review.md` does,
+  write those instead: they keep this form.
 - **Item:** whenever your task changes, state it on a line that opens with
   `item:`, such as `item: NERD-5370` or `item: PR#100`, directly above the
   status line. One inside a sentence is not read.
