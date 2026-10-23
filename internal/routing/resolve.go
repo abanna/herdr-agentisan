@@ -130,6 +130,9 @@ const (
 	ReasonJevNoChange Reason = "jev_no_change"
 	// ReasonJevFailure: Jev gave no usable answer; jev_error says why.
 	ReasonJevFailure Reason = "jev_failure"
+	// ReasonJevKeyUnavailable: Jev was not asked, for want of the TypeSafe
+	// key (ErrJevKey); jev_error says why.
+	ReasonJevKeyUnavailable Reason = "jev_key_unavailable"
 	// ReasonJevInsufficient: Jev found the information insufficient to
 	// classify the assignment, below the sufficiency threshold.
 	ReasonJevInsufficient Reason = "jev_insufficient"
@@ -171,8 +174,9 @@ type Decision struct {
 	JevModelReturned string          `json:"jev_model_returned"`
 	Answers          json.RawMessage `json:"answers"`
 	FallbackReason   Reason          `json:"fallback_reason"`
-	// JevError is why Jev gave no usable answer: its error, which never
-	// carries the key; "" unless the reason is jev_failure.
+	// JevError is why Jev gave no usable answer, or was not asked for want
+	// of a key: its error, which never carries the key; "" unless the reason
+	// is jev_failure or jev_key_unavailable.
 	JevError  string    `json:"jev_error"`
 	Override  *Override `json:"override"`
 	Timestamp time.Time `json:"timestamp"`

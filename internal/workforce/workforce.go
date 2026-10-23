@@ -112,6 +112,9 @@ type Service struct {
 	// CodexHooks reports whether Codex's ctx hooks are installed; nil
 	// checks nothing. A Codex spawn without them warns (A22, A43).
 	CodexHooks func() (bool, error)
+	// CodexTurnHooks reports whether Codex's turn hooks are installed; nil
+	// checks nothing. A Codex spawn without them warns (A42, A43).
+	CodexTurnHooks func() (bool, error)
 	// Debugger is what a debugger worker's launch names besides the
 	// project's repo, the config dir and the env file it names (A32): the
 	// plugin's checkout and binary, and the daemon's directory. Without a

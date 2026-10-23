@@ -3,6 +3,7 @@ package workforce
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -148,7 +149,7 @@ func (s *Service) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 	for i := range workers {
 		routedResult(&workers[i], d)
 	}
-	return SpawnResult{Project: st.team.Project, Workers: workers, Warnings: s.codexWarnings(pending)}, err
+	return SpawnResult{Project: st.team.Project, Workers: workers, Warnings: s.warnings(pending)}, err
 }
 
 // route asks routing for the spawn's model and effort (A50), on the profile
@@ -243,19 +244,53 @@ func kindOf(a settings.Agent) string {
 	return filepath.Base(a.Command[0])
 }
 
+// warnings are what the boss should fix about the workers in ws that did
+// not stop them: first each Claude group that starts without the turn
+// hooks, then Codex's hooks, which are the machine's.
+func (s *Service) warnings(ws []opened) []string {
+	return append(settingsWarnings(ws), s.codexWarnings(ws)...)
+}
+
+// settingsWarnings warns once for each group whose Claude workers start
+// without the turn hooks, since their command passes a --settings of its own
+// (A42): the worker runs, but reports its item and stage only through hooks
+// the user installed.
+func settingsWarnings(ws []opened) []string {
+	var groups, out []string
+	for _, w := range ws {
+		if w.launch.ownSettings && !slices.Contains(groups, w.group) {
+			groups = append(groups, w.group)
+			out = append(out, fmt.Sprintf("%s's agent command passes a --settings of its own, and Claude Code applies only one, so its workers start without the turn hooks: each reports its item and stage only through hooks you installed", w.group))
+		}
+	}
+	return out
+}
+
 // codexWarnings warns when a Codex worker was planned and Codex's ctx hooks
-// are not installed (A22, A43): the worker runs, but reports no ctx.
+// are not installed (A22, A43), or its turn hooks (A42): the worker runs, but
+// reports no ctx, or no item or stage.
 func (s *Service) codexWarnings(ws []opened) []string {
-	if s.CodexHooks == nil || !slices.ContainsFunc(ws, func(w opened) bool { return w.launch.kind == codexKind }) {
+	if !slices.ContainsFunc(ws, func(w opened) bool { return w.launch.kind == codexKind }) {
 		return nil
 	}
-	switch installed, err := s.CodexHooks(); {
-	case err != nil:
-		return []string{fmt.Sprintf("could not check Codex's ctx hooks: %v", err)}
-	case !installed:
-		return []string{"Codex's ctx hooks are not installed, so a Codex worker reports no ctx: run `herdr-agentisan codex hooks`, then trust them once in Codex"}
+	var out []string
+	if s.CodexHooks != nil {
+		switch installed, err := s.CodexHooks(); {
+		case err != nil:
+			out = append(out, fmt.Sprintf("could not check Codex's ctx hooks: %v", err))
+		case !installed:
+			out = append(out, "Codex's ctx hooks are not installed, so a Codex worker reports no ctx: run `herdr-agentisan codex hooks`, then trust them once in Codex")
+		}
 	}
-	return nil
+	if s.CodexTurnHooks != nil {
+		switch installed, err := s.CodexTurnHooks(); {
+		case err != nil:
+			out = append(out, fmt.Sprintf("could not check Codex's turn hooks: %v", err))
+		case !installed:
+			out = append(out, "Codex's turn hooks are not installed, so a Codex worker reports no item or stage: run `herdr-agentisan codex hooks --turn`, then trust them once in Codex")
+		}
+	}
+	return out
 }
 
 // debuggerLaunch builds a debugger worker's launch in repo (A32), from
@@ -462,11 +497,77 @@ const noDaemon = "--no-daemon"
 
 // launch is how one worker's agent is started: herdr's kind, which picks its
 // executable, the arguments after it, and what its tab's shell is given
-// besides the worker's id.
+// besides the worker's id. ownSettings reports a Claude command that passes
+// a --settings of its own, so the launch has no turn hooks.
 type launch struct {
-	kind string
-	args []string
-	env  map[string]string
+	kind        string
+	args        []string
+	env         map[string]string
+	ownSettings bool
+}
+
+// settingsFlag is Claude Code's --settings. It applies only the last one it
+// is given, whole: a launch with two would drop one (Claude Code 2.1.309).
+const settingsFlag = "--settings"
+
+// turnHooks is the --settings a Claude worker starts with: A42's two turn
+// hooks, each handler as the sample has it
+// (docs/config/claude-hooks.example.json). Claude Code adds them to the hooks
+// every settings file installs, and runs a handler the user installed too
+// only once (Claude Code 2.1.308). herdr single-quotes it in the pane's shell
+// (A46), and it holds neither a single quote nor a backslash, which fish
+// reads as an escape inside them.
+const turnHooks = `{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"herdr-agentisan report turn","timeout":10,"async":true}]}],"Stop":[{"hooks":[{"type":"command","command":"herdr-agentisan report turn","timeout":10,"async":true}]}]}}`
+
+// passesSettings reports whether a Claude command's arguments pass
+// --settings, as --settings x or --settings=x; Claude matches a long flag
+// whole (A53). Any argument that reads as one counts, a flag's value or a
+// prompt included: a launch then goes without the turn hooks, and never has
+// two.
+func passesSettings(args []string) bool {
+	return slices.ContainsFunc(args, func(a string) bool {
+		return a == settingsFlag || strings.HasPrefix(a, settingsFlag+"=")
+	})
+}
+
+// withTurnHooks is the debugger's launch args with A42's turn hooks put into
+// the one --settings object they pass, its read fence (A32): Claude Code
+// applies only the last --settings it is given, whole, so the hooks cannot
+// ride a second one (A42). The fence's own keys are kept, each value as it
+// was; a launch with no such object, more than one, or one with hooks of its
+// own is refused, since its fence is not the one this knows.
+func withTurnHooks(args []string) ([]string, error) {
+	i := slices.Index(args, settingsFlag)
+	n := 0
+	for _, a := range args {
+		if a == settingsFlag || strings.HasPrefix(a, settingsFlag+"=") {
+			n++
+		}
+	}
+	if i < 0 || i+1 == len(args) || n != 1 {
+		return nil, fmt.Errorf("%w: it passes %d --settings flags, not one object", ErrConfig, n)
+	}
+	var fence map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(args[i+1]), &fence); err != nil || fence == nil {
+		return nil, fmt.Errorf("%w: its --settings is not a JSON object", ErrConfig)
+	}
+	if _, ok := fence["hooks"]; ok {
+		return nil, fmt.Errorf("%w: its --settings has hooks of its own", ErrConfig)
+	}
+	var hooks struct {
+		Hooks json.RawMessage `json:"hooks"`
+	}
+	if err := json.Unmarshal([]byte(turnHooks), &hooks); err != nil {
+		return nil, fmt.Errorf("%w: the turn hooks: %w", ErrConfig, err)
+	}
+	fence["hooks"] = hooks.Hooks
+	one, err := json.Marshal(fence)
+	if err != nil {
+		return nil, fmt.Errorf("%w: the debugger's --settings: %w", ErrConfig, err)
+	}
+	out := slices.Clone(args)
+	out[i+1] = string(one)
+	return out, nil
 }
 
 // choice is the model and effort ("" for none) a spawn's agents start with,
@@ -484,8 +585,10 @@ var effortPattern = regexp.MustCompile(`^[a-z]{1,16}$`)
 // which herdr runs from the shell's PATH, and the arguments the command's own,
 // for the debugger type its launch's (dbg, A32), --no-daemon for Codex if
 // absent, c's model and effort and, for Claude only, --name with the id
-// (herdr names a Codex). A debugger's tab also gets its launch's
-// environment.
+// (herdr names a Codex), then the turn hooks as --settings, unless the
+// command passes its own; the debugger's go into its launch's one
+// --settings object instead (withTurnHooks). A debugger's tab also gets its
+// launch's environment.
 func plan(p *settings.Profile, typ string, c choice, ids []string, dbg *debugger.Command) ([]planned, error) {
 	agent := p.AgentFor(typ)
 	var env map[string]string
@@ -493,7 +596,11 @@ func plan(p *settings.Profile, typ string, c choice, ids []string, dbg *debugger
 		if dbg == nil {
 			return nil, fmt.Errorf("%w: %s: its launch was not built", ErrConfig, typ)
 		}
-		agent.Command = append(agent.Command, dbg.Args...)
+		args, err := withTurnHooks(dbg.Args)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s's launch: %w", ErrConfig, typ, err)
+		}
+		agent.Command = append(agent.Command, args...)
 		env = dbg.Env
 	}
 	if err := settings.CheckAgentCommand(agent.Command); err != nil {
@@ -517,6 +624,11 @@ func plan(p *settings.Profile, typ string, c choice, ids []string, dbg *debugger
 	if c.provider != "" && kind != c.provider {
 		return nil, fmt.Errorf("%w: %s's agent changed from %s to %s while routing chose its model; spawn again", ErrConfig, typ, c.provider, kind)
 	}
+	// own is a command passing a --settings of the user's, which starts
+	// without the turn hooks; the debugger's is the plugin's fence, which
+	// carries them already.
+	hooked := typ == settings.DebuggerType
+	own := kind == "claude" && !hooked && passesSettings(agent.Command[1:])
 	out := make([]planned, 0, len(ids))
 	for _, id := range ids {
 		args := slices.Clone(agent.Command[1:])
@@ -535,8 +647,11 @@ func plan(p *settings.Profile, typ string, c choice, ids []string, dbg *debugger
 		}
 		if kind == "claude" {
 			args = append(args, "--name", id)
+			if !own && !hooked {
+				args = append(args, settingsFlag, turnHooks)
+			}
 		}
-		out = append(out, planned{id: id, group: typ, launch: launch{kind: kind, args: args, env: env}})
+		out = append(out, planned{id: id, group: typ, launch: launch{kind: kind, args: args, env: env, ownSettings: own}})
 	}
 	return out, nil
 }

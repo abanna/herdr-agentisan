@@ -597,7 +597,8 @@ func TestTheWorkforceGetsThePreflightHook(t *testing.T) {
 	t.Parallel()
 	var checked string
 	dash := workforce.DashboardPane{PluginID: "p", Entrypoint: "dashboard", Title: "Dashboard"}
-	o := daemon.Options{Team: &daemon.TeamOptions{Dashboard: dash, CodexHooks: func() (bool, error) { return true, nil }}, Hooks: daemon.Hooks{Preflight: func(_ context.Context, repo string) error {
+	turnErr := errors.New("turn hooks checked")
+	o := daemon.Options{Team: &daemon.TeamOptions{Dashboard: dash, CodexHooks: func() (bool, error) { return true, nil }, CodexTurnHooks: func() (bool, error) { return false, turnErr }}, Hooks: daemon.Hooks{Preflight: func(_ context.Context, repo string) error {
 		checked = repo
 		return nil
 	}}}
@@ -609,6 +610,9 @@ func TestTheWorkforceGetsThePreflightHook(t *testing.T) {
 	installed, err := svc.CodexHooks()
 	require.NoError(t, err)
 	assert.True(t, installed)
+	require.NotNil(t, svc.CodexTurnHooks)
+	_, err = svc.CodexTurnHooks()
+	require.ErrorIs(t, err, turnErr)
 	assert.Nil(t, daemon.WorkforceOf(daemon.Options{Team: &daemon.TeamOptions{}}, daemon.Identity{}).Preflight)
 }
 

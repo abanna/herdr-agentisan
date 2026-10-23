@@ -171,12 +171,12 @@ func TestCheckSecrets(t *testing.T) {
 				got, err := settings.CheckSecrets(t.Context(), settings.Resolved{
 					Values:  map[string]any{"color": "#123456"},
 					Sources: map[string]string{"color": settings.LayerShared},
-				}, envOf(tc.env), fakeOp(tc.op))
+				}, envOf(tc.env), fakeOp(tc.op), nil)
 				require.NoError(t, err)
 				assert.Empty(t, got)
 				return
 			}
-			got, err := settings.CheckSecrets(t.Context(), resolved, envOf(tc.env), fakeOp(tc.op))
+			got, err := settings.CheckSecrets(t.Context(), resolved, envOf(tc.env), fakeOp(tc.op), nil)
 
 			require.Len(t, got, 2)
 			assert.Equal(t, "integrations.github.token", got[0].Path)
@@ -198,4 +198,61 @@ func TestCheckSecrets(t *testing.T) {
 			require.ErrorIs(t, err, settings.ErrSecretUnavailable)
 		})
 	}
+}
+
+// TestCheckSecretsReadsJevsKeyFile: routing.jev.env_file, when set, is read
+// through readKeyFile at its ~/-expanded path, in path order with the
+// references, and is missing when the read fails, when there is no reader
+// or when ~/ cannot expand; no env file, no read.
+func TestCheckSecretsReadsJevsKeyFile(t *testing.T) {
+	t.Parallel()
+	resolved := func(envFile string) settings.Resolved {
+		return settings.Resolved{
+			Values: map[string]any{
+				"integrations": map[string]any{"github": map[string]any{"token": settings.SecretRef{Env: "GITHUB_TOKEN"}}},
+				"routing":      map[string]any{"jev": map[string]any{"env_file": envFile}},
+			},
+			Sources: map[string]string{"integrations.github.token": settings.LayerShared, "routing.jev.env_file": settings.LayerShared},
+		}
+	}
+	home := envOf(map[string]string{"GITHUB_TOKEN": plainSecret, "HOME": "/home/u"})
+	var read []string
+	ok := func(_ context.Context, path string) error { read = append(read, path); return nil }
+	locked := func(context.Context, string) error { return errors.New("did not answer within 10s") }
+
+	got, err := settings.CheckSecrets(t.Context(), resolved("~/.config/typesafe.env"), home, nil, ok)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, "integrations.github.token", got[0].Path)
+	assert.Equal(t, settings.SecretStatus{Path: "routing.jev.env_file", EnvFile: "/home/u/.config/typesafe.env"}, got[1])
+	assert.Equal(t, "file:/home/u/.config/typesafe.env", got[1].Source())
+	assert.Equal(t, "env:GITHUB_TOKEN", got[0].Source())
+	assert.Equal(t, []string{"/home/u/.config/typesafe.env"}, read)
+
+	for name, tc := range map[string]struct {
+		env     func(string) (string, bool)
+		read    func(context.Context, string) error
+		envFile string
+		errIn   string
+	}{
+		"the read fails":  {env: home, read: locked, envFile: "/home/u/.config/typesafe.env", errIn: "did not answer"},
+		"no reader":       {env: home, envFile: "/home/u/.config/typesafe.env", errIn: "no env file reader"},
+		"~/ with no HOME": {env: envOf(map[string]string{"GITHUB_TOKEN": plainSecret}), read: ok, envFile: "~/.config/typesafe.env", errIn: "HOME is not set"},
+	} {
+		read = nil
+		got, err := settings.CheckSecrets(t.Context(), resolved("~/.config/typesafe.env"), tc.env, nil, tc.read)
+		require.ErrorIs(t, err, settings.ErrSecretUnavailable, name)
+		require.Len(t, got, 2, name)
+		assert.NoError(t, got[0].Err, name)
+		assert.Equal(t, tc.envFile, got[1].EnvFile, name)
+		require.ErrorIs(t, got[1].Err, settings.ErrSecretUnavailable, name)
+		assert.Contains(t, got[1].Err.Error(), tc.errIn, name)
+		assert.Empty(t, read, name)
+	}
+
+	read = nil
+	got, err = settings.CheckSecrets(t.Context(), resolved(""), home, nil, ok)
+	require.NoError(t, err)
+	require.Len(t, got, 1, "an empty env file names none")
+	assert.Empty(t, read)
 }

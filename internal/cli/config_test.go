@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/abanna/herdr-agentisan/internal/cli"
+	"github.com/abanna/herdr-agentisan/internal/jev"
 	"github.com/abanna/herdr-agentisan/internal/routing"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 )
@@ -543,4 +544,69 @@ func TestConfigResolveShowsTheSpacesProject(t *testing.T) {
 	_, err = runCtx(configCtx(t, nil, nil), "config", "resolve", "--config-dir", dir, "--set", "spaces.project=beta")
 	require.ErrorIs(t, err, settings.ErrNoProject)
 	assert.Contains(t, err.Error(), "known projects: alpha, app")
+}
+
+// TestConfigResolveChecksJevsKeyFile: --check-secrets reads TYPESAFE_API_KEY
+// from routing.jev.env_file, set whether or not Jev is enabled, and reports
+// it set or missing by its file, never by its value; without the flag the
+// file is never read.
+func TestConfigResolveChecksJevsKeyFile(t *testing.T) {
+	t.Parallel()
+	const key = "tsk-never-printed-0123"
+	// Built from the constant, so no line in the source reads as a key assigned.
+	const keyEq = jev.KeyVar + "="
+	for name, tc := range map[string]struct {
+		envFile string
+		missing bool
+	}{
+		"the key":           {envFile: "OTHER=other-value-9\n" + keyEq + key + "\n"},
+		"no such variable":  {envFile: "OTHER=other-value-9\n", missing: true},
+		"no such file":      {missing: true},
+		"a key with spaces": {envFile: keyEq + "'tsk never printed'\n", missing: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			envFile := filepath.Join(dir, "typesafe.env")
+			if tc.envFile != "" {
+				require.NoError(t, os.WriteFile(envFile, []byte(tc.envFile), 0o600))
+			}
+			shared := "schema_version = 1\n[routing.jev]\nenv_file = \"" + envFile + "\"\n"
+			require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte(shared), 0o600))
+			ctx := configCtx(t, nil, nil)
+
+			out, err := runCtx(ctx, "config", "resolve", "--config-dir", dir)
+			require.NoError(t, err, "without --check-secrets nothing is read")
+			assert.NotContains(t, out, "routing.jev.env_file: ")
+
+			out, err = runCtx(ctx, "config", "resolve", "--config-dir", dir, "--check-secrets")
+			for _, s := range []string{key, "tsk never printed", "other-value-9"} {
+				assert.NotContains(t, out, s)
+				if err != nil {
+					assert.NotContains(t, err.Error(), s)
+				}
+			}
+			if tc.missing {
+				require.ErrorIs(t, err, settings.ErrSecretUnavailable)
+				assert.Contains(t, out, "routing.jev.env_file: missing (")
+			} else {
+				require.NoError(t, err)
+				assert.Contains(t, out, "routing.jev.env_file: set\n")
+			}
+
+			out, err = runCtx(ctx, "config", "resolve", "--config-dir", dir, "--check-secrets", "--json")
+			assert.Equal(t, tc.missing, err != nil)
+			assert.NotContains(t, out, key)
+			var got struct {
+				Secrets []map[string]string `json:"secrets"`
+			}
+			require.NoError(t, json.Unmarshal([]byte(out), &got), "output: %s", out)
+			require.Len(t, got.Secrets, 1)
+			s := got.Secrets[0]
+			assert.Equal(t, "routing.jev.env_file", s["path"])
+			assert.Equal(t, "file:"+envFile, s["ref"])
+			assert.Equal(t, map[bool]string{false: "set", true: "missing"}[tc.missing], s["status"])
+			assert.Equal(t, tc.missing, s["reason"] != "")
+		})
+	}
 }

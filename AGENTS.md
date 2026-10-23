@@ -148,8 +148,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
 - `internal/codexhooks/` — installing the `ctx` Codex hooks (ADR-001 A43):
   `codex hooks` writes them into `$CODEX_HOME/hooks.json`, after every entry
   already there, which it keeps as written, and never edits `config.toml` or
-  trusts a hook; `--check` only reports. Tests use temp Codex homes, never
-  the real `~/.codex`.
+  trusts a hook; `--check` only reports. `--turn` adds A42's two
+  `report turn` hooks, each in a group of its own. Tests use temp Codex
+  homes, never the real `~/.codex`.
 - `internal/daemon/` — the daemon's lifecycle (ADR-001 D3, A3, A4): one daemon
   per herdr server, enforced by a flock'd `daemon.lock` that records the
   server's socket inode; the protocol pin; `daemon.log` capped at 10 MB; the
@@ -223,6 +224,7 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   sender and recipient (A30): each group's counts and members on a tabs team
   or the ◆ spaces, with idle times from the daemon's clock and the rows no
   pane is bound to (A35); opening a tab per worker and waiting for its agent,
+  a Claude one launched with A42's turn hooks as `--settings`,
   after `internal/preflight`'s check, each group up to its count for
   `team up`, which also opens the team's dashboard above the boss
   (`dashboard.go`); closing the pane a worker's row is bound to, after its
@@ -259,12 +261,16 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   `agentisan.worker.routed` event. A coder's decision says when Jev should
   be asked (`AsksJev`), and `ApplyJev` maps Jev's answer onto it (A57): the
   request is `JevRequest`'s, and the caller makes the call, so routing never
-  sees the key. Nothing asks Jev yet.
+  sees the key; `[routing.jev]` switches it (`JevEnabled`) and sets its
+  thresholds. Nothing asks Jev yet.
 - `internal/jev/` — the client of TypeSafe's System One (ADR-001 A57): one
   POST of the body routing built, with the key as the Bearer token, within
   the rules' timeout, never retried or redirected; no error carries the key,
-  the request or TypeSafe's body. Tests run an httptest TypeSafe, never the
-  real one.
+  the request or TypeSafe's body. `Keys` reads the key, `TYPESAFE_API_KEY`,
+  from `[routing.jev] env_file`: kept 10 minutes, one read of a file in
+  flight, each ask waiting at most a second, so a locked 1Password costs a
+  spawn a second; `Asker` drops a key TypeSafe refuses. Tests run an
+  httptest TypeSafe, never the real one, and a FIFO for a locked file.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
   embedded from `migrations/` and tracked by `user_version`. The daemon holds
@@ -350,6 +356,7 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   over `logs-agentisan.otel-*`, the debugger's recipes, and the env file its
   URL and read key come from, `[debugger] env_file` in the shared config,
   read at each query. No caller chooses the URL, the variables or the file.
+  Its reader, `ReadEnvFile`, also reads Jev's key for `internal/jev`.
   Tests run an httptest Elasticsearch on a recorded answer
   (`testdata/worker-trail.json`).
 - `internal/debugger/` and `roles/debugger.md` — the debugger agent that
