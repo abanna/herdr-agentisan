@@ -23,6 +23,11 @@ type Watch struct {
 	// so it cannot tell a pane herdr knows only by name from a shell: it
 	// keeps each pane judged before as it was named, and judges no exit.
 	agents []placed
+	// untold holds the panes that turned blocked at a call whose agent.list
+	// failed, which could not judge them to run an agent, while they stay
+	// blocked and unjudged: each block is told at the first call that judges
+	// an agent there.
+	untold map[string]bool
 	// turns is each terminal's completion_seq as last read; a nil value is
 	// read, and none.
 	turns map[string]*uint64
@@ -33,7 +38,7 @@ type Watch struct {
 	// they were last judged to run an agent; fresh counts, for each of the
 	// others, the polls it has been judged one, all of them unknown. A pane
 	// that stops running an agent leaves both, and starts again if it comes
-	// back.
+	// back, as does one whose terminal changed: a new agent runs there.
 	known map[string]bool
 	fresh map[string]int
 }
@@ -47,7 +52,7 @@ const freshPolls = 20
 
 // NewWatch is a Watch that has seen nothing yet.
 func NewWatch() *Watch {
-	return &Watch{turns: map[string]*uint64{}, unknown: map[string]bool{}, known: map[string]bool{}, fresh: map[string]int{}}
+	return &Watch{untold: map[string]bool{}, turns: map[string]*uint64{}, unknown: map[string]bool{}, known: map[string]bool{}, fresh: map[string]int{}}
 }
 
 // Observe is what changed from the last model observed to m, as notices:
@@ -56,9 +61,13 @@ func NewWatch() *Watch {
 //   - a worker that turned blocked, or from blocked to working, idle or
 //     done, or left the team, at once: its pane closed or moved away, or,
 //     when agents answered (named), its agent exited and left a shell;
+//   - a pane that turned blocked at a call that could not judge it to run
+//     an agent, at the first call that judges one there, if it is still
+//     blocked; the end of that block is not told;
 //   - a worker seen in a known status that turned unknown, when it still
 //     is at the next call; one never seen known, at the freshPolls-th call
-//     in a row that judged it to run an agent, the first call included;
+//     in a row that judged it to run an agent, the first call included. A
+//     pane whose terminal changed runs a new agent, never seen known;
 //   - a worker whose terminal's completion_seq changed to a new value,
 //     when agents is agent.list's answer for this poll (named). A terminal
 //     seen for the first time is a baseline; one agent.list no longer lists
@@ -68,7 +77,8 @@ func NewWatch() *Watch {
 // list never becomes the baseline (A21).
 func (w *Watch) Observe(m team.Model, agents []herdr.AgentInfo, named bool) []Notice {
 	first := w.last == nil
-	now := w.judge(m, named)
+	now := w.judge(m, agents, named)
+	w.renew(now)
 	var out []Notice
 	if first {
 		for _, p := range m.Projects {
@@ -88,10 +98,13 @@ func (w *Watch) Observe(m team.Model, agents []herdr.AgentInfo, named bool) []No
 // judge is m's group panes that run an agent. Without named, a pane judged
 // one before is still one, named as it was, and a pane seen for the first
 // time is one only by the agent herdr detected in it. A pane judged before
-// on the same terminal keeps its name while agent.list names it nothing: a
-// poll reads pane.list before agent.list, so an exit between the two reads
-// drops the name a poll before it drops the agent.
-func (w *Watch) judge(m team.Model, named bool) []placed {
+// on the same terminal keeps its name only while this call cannot name it:
+// agents failed (named false), or lists neither the pane nor its terminal.
+// A poll reads pane.list before agent.list, so an exit between the two
+// reads drops the agent from agent.list a poll before pane.list drops it.
+// A terminal agents lists with no name runs an agent nobody named, and a
+// new terminal a new agent: either is its pane's.
+func (w *Watch) judge(m team.Model, agents []herdr.AgentInfo, named bool) []placed {
 	was := map[string]team.Worker{}
 	for _, a := range w.agents {
 		was[a.worker.Pane.ID] = a.worker
@@ -105,7 +118,7 @@ func (w *Watch) judge(m team.Model, named bool) []placed {
 		case !g.worker.Pane.IsAgent():
 			continue
 		}
-		if known && g.worker.Pane.Name == "" && g.worker.Pane.TerminalID == k.Pane.TerminalID {
+		if known && g.worker.Pane.Name == "" && g.worker.Pane.TerminalID == k.Pane.TerminalID && (!named || !lists(agents, g.worker.Pane)) {
 			g.worker.Pane.Name = k.Pane.Name
 		}
 		out = append(out, g)
@@ -113,22 +126,58 @@ func (w *Watch) judge(m team.Model, named bool) []placed {
 	return out
 }
 
+// lists reports whether agents, agent.list's answer, lists p's agent: an
+// entry for p's pane, or for the terminal p shows.
+func lists(agents []herdr.AgentInfo, p team.Pane) bool {
+	return slices.ContainsFunc(agents, func(a herdr.AgentInfo) bool {
+		return a.PaneID == p.ID || (p.TerminalID != "" && a.TerminalID == p.TerminalID)
+	})
+}
+
+// renew forgets what the last calls saw of each of now's panes whose
+// terminal changed since the last call judged it, as a live handoff
+// reissues it: the agent there is a new one, never seen known, with no
+// unknown pending. It runs before statuses, whose two-poll rule asks
+// whether a pane was known before this call.
+func (w *Watch) renew(now []placed) {
+	was := map[string]string{}
+	for _, a := range w.agents {
+		was[a.worker.Pane.ID] = a.worker.Pane.TerminalID
+	}
+	for _, a := range now {
+		id := a.worker.Pane.ID
+		if term, ok := was[id]; ok && term != a.worker.Pane.TerminalID {
+			delete(w.known, id)
+			delete(w.fresh, id)
+			delete(w.unknown, id)
+		}
+	}
+}
+
 // statuses are the notices for the status changes from prev to m, of the
 // panes now judges to run an agent, and for the agent panes the last call
 // judged that have left: their pane closed or moved out of every group, or,
 // when agent.list answered this call (named), their agent exited and left
-// a shell.
+// a shell. A pane that turns blocked at a call that cannot judge it, one
+// without named, waits in untold for a call that can.
 func (w *Watch) statuses(prev, m team.Model, now []placed, named bool) []Notice {
 	agents := map[string]team.Worker{}
 	for _, a := range now {
 		agents[a.worker.Pane.ID] = a.worker
 	}
 	var out []Notice
-	held := w.unknown
-	w.unknown = map[string]bool{}
+	held, untold := w.unknown, w.untold
+	w.unknown, w.untold = map[string]bool{}, map[string]bool{}
 	for _, tr := range team.Transitions(prev, m) {
 		worker, ok := agents[tr.Worker.Pane.ID]
-		if tr.Boss || !ok {
+		if tr.Boss {
+			continue
+		}
+		if !ok {
+			// A pane herdr knows only by name reads as a shell here.
+			if !named && tr.To == string(team.StatusBlocked) {
+				w.untold[tr.Worker.Pane.ID] = true
+			}
 			continue
 		}
 		switch {
@@ -136,7 +185,7 @@ func (w *Watch) statuses(prev, m team.Model, now []placed, named bool) []Notice 
 			out = append(out, Notice{Project: tr.Project, Subject: worker.Pane.ID, Worker: WorkerName(worker), Kind: Blocked, Text: blockedText(worker)})
 		case tr.To == string(team.StatusUnknown) && w.known[worker.Pane.ID]:
 			w.unknown[worker.Pane.ID] = true
-		case tr.From == string(team.StatusBlocked) && slices.Contains(answered, team.Status(tr.To)):
+		case tr.From == string(team.StatusBlocked) && slices.Contains(answered, team.Status(tr.To)) && !untold[worker.Pane.ID]:
 			out = append(out, Notice{Project: tr.Project, Subject: worker.Pane.ID, Worker: WorkerName(worker), Kind: Unblocked, Text: unblockedText(worker)})
 		}
 	}
@@ -149,7 +198,11 @@ func (w *Watch) statuses(prev, m team.Model, now []placed, named bool) []Notice 
 		}
 	}
 	for _, g := range groupWorkers(m) {
-		shell[g.worker.Pane.ID] = !g.worker.Pane.IsAgent()
+		id := g.worker.Pane.ID
+		shell[id] = !g.worker.Pane.IsAgent()
+		if _, judged := agents[id]; untold[id] && !judged && !named && g.worker.Pane.Status == team.StatusBlocked {
+			w.untold[id] = true
+		}
 	}
 	for _, a := range w.agents {
 		id := a.worker.Pane.ID
@@ -165,8 +218,11 @@ func (w *Watch) statuses(prev, m team.Model, now []placed, named bool) []Notice 
 		}
 	}
 	for _, a := range now {
-		if held[a.worker.Pane.ID] && a.worker.Pane.Status == team.StatusUnknown {
-			out = append(out, Notice{Project: a.project, Subject: a.worker.Pane.ID, Worker: WorkerName(a.worker), Kind: Unknown, Text: unknownText(a.worker)})
+		switch id := a.worker.Pane.ID; {
+		case held[id] && a.worker.Pane.Status == team.StatusUnknown:
+			out = append(out, Notice{Project: a.project, Subject: id, Worker: WorkerName(a.worker), Kind: Unknown, Text: unknownText(a.worker)})
+		case untold[id] && a.worker.Pane.Status == team.StatusBlocked:
+			out = append(out, Notice{Project: a.project, Subject: id, Worker: WorkerName(a.worker), Kind: Blocked, Text: blockedText(a.worker)})
 		}
 	}
 	return out
@@ -175,7 +231,7 @@ func (w *Watch) statuses(prev, m team.Model, now []placed, named bool) []Notice 
 // fresher counts the polls now's agent panes have not been seen known, and
 // is the unknown notice for each one at its freshPolls-th, once. It runs
 // after statuses, whose two-poll rule asks whether a pane was known before
-// this call.
+// this call, and after renew, which forgets a pane whose terminal changed.
 func (w *Watch) fresher(now []placed) []Notice {
 	var out []Notice
 	in := map[string]bool{}
