@@ -597,7 +597,8 @@ func TestTheWorkforceGetsThePreflightHook(t *testing.T) {
 	t.Parallel()
 	var checked string
 	dash := workforce.DashboardPane{PluginID: "p", Entrypoint: "dashboard", Title: "Dashboard"}
-	o := daemon.Options{Team: &daemon.TeamOptions{Dashboard: dash, CodexHooks: func() (bool, error) { return true, nil }}, Hooks: daemon.Hooks{Preflight: func(_ context.Context, repo string) error {
+	turnErr := errors.New("turn hooks checked")
+	o := daemon.Options{Team: &daemon.TeamOptions{Dashboard: dash, CodexHooks: func() (bool, error) { return true, nil }, CodexTurnHooks: func() (bool, error) { return false, turnErr }}, Hooks: daemon.Hooks{Preflight: func(_ context.Context, repo string) error {
 		checked = repo
 		return nil
 	}}}
@@ -609,6 +610,9 @@ func TestTheWorkforceGetsThePreflightHook(t *testing.T) {
 	installed, err := svc.CodexHooks()
 	require.NoError(t, err)
 	assert.True(t, installed)
+	require.NotNil(t, svc.CodexTurnHooks)
+	_, err = svc.CodexTurnHooks()
+	require.ErrorIs(t, err, turnErr)
 	assert.Nil(t, daemon.WorkforceOf(daemon.Options{Team: &daemon.TeamOptions{}}, daemon.Identity{}).Preflight)
 }
 
@@ -740,7 +744,8 @@ func TestWorkforceCodes(t *testing.T) {
 // TestOpBudgets: team status, retire, send and handoff ready get 10 s, spawn
 // 100 s, team up a spawn's, whatever that is, and retire --after-handoff
 // 1,500 s, both in the client's wait and in the budget the daemon's op map
-// enforces; any other op none of its own.
+// enforces; any other op none of its own. Every op the daemon serves gets the
+// same budget from both, read from the one table (QA #39 item 1).
 func TestOpBudgets(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -765,6 +770,7 @@ func TestOpBudgets(t *testing.T) {
 	assert.Equal(t, []string{daemon.OpHandoffReady, daemon.OpSend, daemon.OpTeamStatus, daemon.OpTeamUp, daemon.OpWorkerRetire, daemon.OpWorkerSpawn}, daemon.WorkforceOpNames())
 	for _, op := range daemon.WorkforceOpNames() {
 		assert.Positive(t, daemon.ServedBudget(op, nil), "%s has a budget in the table, not a nil one", op)
+		assert.Equal(t, daemon.ServedBudget(op, nil), daemon.OpBudget(op, nil), "%s: the client waits the budget the daemon enforces", op)
 	}
 }
 

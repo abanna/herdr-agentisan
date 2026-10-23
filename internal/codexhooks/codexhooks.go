@@ -2,7 +2,9 @@
 // agent's context use to its herdr pane (ADR-001 A22, A27, A43): async
 // PostToolUse (every tool), Stop and PostCompact hooks that run
 // `herdr-agentisan report codex`, in Codex's user hooks file,
-// $CODEX_HOME/hooks.json.
+// $CODEX_HOME/hooks.json. With them, on request, it installs the turn hooks
+// (A42): async Stop and UserPromptSubmit hooks that run `herdr-agentisan
+// report turn`, each in a group of its own, so Stop holds one group of each.
 //
 // Codex only reads that file, so writing it never competes with Codex's own
 // writes to config.toml, where it records the hooks the user trusts. Other
@@ -40,8 +42,8 @@ const (
 	MaxFileSize = 1 << 20
 
 	configName = "config.toml"
-	// command is what each hook runs; the docs' sample runs the same.
-	command = "herdr-agentisan report codex"
+	// binary is the program each hook runs; the docs' samples run the same.
+	binary = "herdr-agentisan"
 	// timeout is each hook's timeout in seconds.
 	timeout = 10
 	// toolEvent is the one event whose group has a matcher: every tool.
@@ -50,10 +52,26 @@ const (
 	commandType = "command"
 )
 
-// events are the Codex events `report codex` runs from, in the order a
-// result lists them. Never SessionEnd: Codex runs it whenever it unloads a
-// thread (A27).
-var events = []string{toolEvent, "Stop", "PostCompact"}
+// set is one set of hooks: the Codex events that run one report command, in
+// the order a result lists them.
+type set struct {
+	// verb is the report's: each hook runs `herdr-agentisan report <verb>`.
+	verb   string
+	events []string
+}
+
+// command is what each of s's hooks runs.
+func (s set) command() string { return binary + " report " + s.verb }
+
+var (
+	// ctxSet is the ctx hooks (A22, A27, A43). Never SessionEnd: Codex runs
+	// it whenever it unloads a thread (A27).
+	ctxSet = set{verb: "codex", events: []string{toolEvent, "Stop", "PostCompact"}}
+	// turnSet is the turn hooks (A42), in their sample's order.
+	turnSet = set{verb: "turn", events: []string{"Stop", "UserPromptSubmit"}}
+	// sets is every set, as config.toml is read for each.
+	sets = []set{ctxSet, turnSet}
+)
 
 // topKeys are the keys Codex allows at the top of a hooks file: it ignores
 // a file with any other.
@@ -67,25 +85,25 @@ var (
 	// regular file, too large, not valid JSON or TOML, or in a shape Codex
 	// itself refuses.
 	ErrInvalid = errors.New("not a Codex file this can update")
-	// ErrAmbiguous means an event runs `report codex` beside another hook in
-	// one group, or twice: which one is ours is the user's to say.
-	ErrAmbiguous = errors.New("ambiguous report codex hook")
-	// ErrInConfigTOML means config.toml already runs `report codex`. A copy
-	// in hooks.json as well would run every report twice.
-	ErrInConfigTOML = errors.New("report codex hooks are already in config.toml")
+	// ErrAmbiguous means an event runs one of our reports beside another hook
+	// in one group, or twice: which one is ours is the user's to say.
+	ErrAmbiguous = errors.New("ambiguous report hook")
+	// ErrInConfigTOML means config.toml already runs a report this would
+	// install. A copy in hooks.json as well would run every report twice.
+	ErrInConfigTOML = errors.New("report hooks are already in config.toml")
 	// ErrUnwritable means the hooks file cannot be replaced safely: it has
 	// other hard links, which a rename would leave behind, or the user may
 	// not write it, which a rename in a writable directory would bypass.
 	ErrUnwritable = errors.New("hooks file cannot be replaced safely")
 	// ErrNotInstalled means not every hook is present as this writes it.
-	ErrNotInstalled = errors.New("report codex hooks are not all installed")
+	ErrNotInstalled = errors.New("report hooks are not all installed")
 )
 
 // State is what an install did to one event's hook, or what a check found.
 type State string
 
 const (
-	// Added means the event had no `report codex` hook, and now has one.
+	// Added means the event had no hook running the report, and now has one.
 	Added State = "added"
 	// Updated means its hook was replaced in place, keeping its command.
 	Updated State = "updated"
@@ -93,17 +111,19 @@ const (
 	Unchanged State = "unchanged"
 	// Present means a check found the hook as this writes it.
 	Present State = "present"
-	// Differs means a check found a `report codex` hook that is not as this
-	// writes it: not async, another timeout or matcher, or a field more.
+	// Differs means a check found a hook running the report that is not as
+	// this writes it: not async, another timeout or matcher, or a field more.
 	Differs State = "differs"
-	// Missing means a check found no `report codex` hook for the event.
+	// Missing means a check found no hook running the report for the event.
 	Missing State = "missing"
 )
 
-// Hook is one event's outcome.
+// Hook is one event's outcome for one report.
 type Hook struct {
 	Event string `json:"event"`
-	State State  `json:"state"`
+	// Report is the report's verb, codex or turn: Stop runs both.
+	Report string `json:"report"`
+	State  State  `json:"state"`
 	// Source is the file that holds the hook; "" when there is none.
 	Source string `json:"source,omitempty"`
 }
@@ -120,13 +140,20 @@ type Result struct {
 	HooksOff bool `json:"hooks_off"`
 }
 
-// Installed reports whether every event has its hook as this writes it.
-func (r Result) Installed() bool {
-	if len(r.Hooks) != len(events) {
-		return false
-	}
-	for _, h := range r.Hooks {
-		switch h.State {
+// Installed reports whether every ctx hook is as this writes it.
+func (r Result) Installed() bool { return r.has(ctxSet) }
+
+// TurnInstalled reports whether both turn hooks are as this writes them.
+func (r Result) TurnInstalled() bool { return r.has(turnSet) }
+
+// has reports whether r holds each of s's hooks as this writes it.
+func (r Result) has(s set) bool {
+	for _, e := range s.events {
+		i := slices.IndexFunc(r.Hooks, func(h Hook) bool { return h.Report == s.verb && h.Event == e })
+		if i < 0 {
+			return false
+		}
+		switch r.Hooks[i].State {
 		case Added, Updated, Unchanged, Present:
 		default:
 			return false
@@ -152,10 +179,16 @@ type Handler struct {
 
 // Hooks returns the group each event runs `report codex` from, as an
 // install writes it.
-func Hooks() map[string]Group {
-	out := make(map[string]Group, len(events))
-	for _, e := range events {
-		out[e] = group(e, command)
+func Hooks() map[string]Group { return ctxSet.groups() }
+
+// TurnHooks returns the group each event runs `report turn` from, as
+// InstallWithTurn writes it.
+func TurnHooks() map[string]Group { return turnSet.groups() }
+
+func (s set) groups() map[string]Group {
+	out := make(map[string]Group, len(s.events))
+	for _, e := range s.events {
+		out[e] = group(e, s.command())
 	}
 	return out
 }
@@ -194,11 +227,18 @@ func Home(lookup func(string) (string, bool)) (string, error) {
 	return filepath.Join(home, ".codex"), nil
 }
 
-// Install adds each event's hook to home's hooks file, or brings it in line
-// in place, and writes the file only when that changed something. It
-// refuses, changing nothing, when config.toml already runs `report codex`
-// or the file is one it cannot update safely. It creates home if needed.
-func Install(home string) (Result, error) {
+// Install adds each ctx hook to home's hooks file, or brings it in line in
+// place, and writes the file only when that changed something. It refuses,
+// changing nothing, when config.toml already runs `report codex` or the file
+// is one it cannot update safely. It creates home if needed.
+func Install(home string) (Result, error) { return install(home, ctxSet) }
+
+// InstallWithTurn is Install for the ctx hooks and the turn hooks together:
+// each turn hook goes after the ctx hook in its event, so Stop's keeps its
+// place, and nothing is written when config.toml already runs either report.
+func InstallWithTurn(home string) (Result, error) { return install(home, ctxSet, turnSet) }
+
+func install(home string, want ...set) (Result, error) {
 	path := filepath.Join(home, FileName)
 	res := Result{Path: path}
 	cfg, err := readConfig(home)
@@ -206,10 +246,12 @@ func Install(home string) (Result, error) {
 		return res, err
 	}
 	res.HooksOff = cfg.hooksOff
-	if len(cfg.found) > 0 {
-		res.Hooks = cfg.hooks()
-		return res, fmt.Errorf("%w: %s runs `%s` from its %s hooks; remove them there and install again, or keep them there and leave %s out",
-			ErrInConfigTOML, cfg.path, command, strings.Join(cfg.found, ", "), FileName)
+	for _, s := range want {
+		if found := cfg.found[s.verb]; len(found) > 0 {
+			res.Hooks = cfg.hooks(want)
+			return res, fmt.Errorf("%w: %s runs `%s` from its %s hooks; remove them there and install again, or keep them there and leave %s out",
+				ErrInConfigTOML, cfg.path, s.command(), strings.Join(found, ", "), FileName)
+		}
 	}
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		return res, fmt.Errorf("create %s: %w", home, err)
@@ -223,13 +265,15 @@ func Install(home string) (Result, error) {
 		return res, err
 	}
 	changed := false
-	for _, e := range events {
-		st, err := doc.install(path, e)
-		if err != nil {
-			return res, err
+	for _, s := range want {
+		for _, e := range s.events {
+			st, err := doc.install(path, s, e)
+			if err != nil {
+				return res, err
+			}
+			res.Hooks = append(res.Hooks, Hook{Event: e, Report: s.verb, State: st, Source: path})
+			changed = changed || st != Unchanged
 		}
-		res.Hooks = append(res.Hooks, Hook{Event: e, State: st, Source: path})
-		changed = changed || st != Unchanged
 	}
 	if !changed {
 		return res, nil
@@ -246,23 +290,37 @@ func Install(home string) (Result, error) {
 }
 
 // InstalledIn reports whether Codex, in the home lookup names (Home), runs
-// every hook as Install writes it: each one installed, and hooks not turned
-// off in config.toml. It writes nothing.
+// every ctx hook as Install writes it: each one installed, and hooks not
+// turned off in config.toml. It writes nothing.
 func InstalledIn(lookup func(string) (string, bool)) (bool, error) {
+	return installedIn(lookup, ctxSet)
+}
+
+// TurnInstalledIn is InstalledIn for the turn hooks.
+func TurnInstalledIn(lookup func(string) (string, bool)) (bool, error) {
+	return installedIn(lookup, turnSet)
+}
+
+func installedIn(lookup func(string) (string, bool), s set) (bool, error) {
 	home, err := Home(lookup)
 	if err != nil {
 		return false, err
 	}
-	res, err := Check(home)
+	res, err := check(home, s)
 	if err != nil {
 		return false, err
 	}
-	return res.Installed() && !res.HooksOff, nil
+	return res.has(s) && !res.HooksOff, nil
 }
 
-// Check reports each event's hook, in the hooks file or else in
-// config.toml, and writes nothing. A home that does not exist has none.
-func Check(home string) (Result, error) {
+// Check reports each ctx hook, in the hooks file or else in config.toml,
+// and writes nothing. A home that does not exist has none.
+func Check(home string) (Result, error) { return check(home, ctxSet) }
+
+// CheckWithTurn is Check for the ctx hooks and the turn hooks together.
+func CheckWithTurn(home string) (Result, error) { return check(home, ctxSet, turnSet) }
+
+func check(home string, want ...set) (Result, error) {
 	path := filepath.Join(home, FileName)
 	res := Result{Path: path}
 	cfg, err := readConfig(home)
@@ -278,28 +336,30 @@ func Check(home string) (Result, error) {
 	if err != nil {
 		return res, err
 	}
-	for _, e := range events {
-		st, err := doc.check(path, e)
-		if err != nil {
-			return res, err
-		}
-		h := Hook{Event: e, State: st, Source: path}
-		if st == Missing {
-			h.Source = ""
-			if s, ok := cfg.ours[e]; ok {
-				h.State, h.Source = s, cfg.path
+	for _, s := range want {
+		for _, e := range s.events {
+			st, err := doc.check(path, s, e)
+			if err != nil {
+				return res, err
 			}
+			h := Hook{Event: e, Report: s.verb, State: st, Source: path}
+			if st == Missing {
+				h.Source = ""
+				if found, ok := cfg.ours[s.verb][e]; ok {
+					h.State, h.Source = found, cfg.path
+				}
+			}
+			res.Hooks = append(res.Hooks, h)
 		}
-		res.Hooks = append(res.Hooks, h)
 	}
 	return res, nil
 }
 
-// isReportCodex reports whether a hook command runs `herdr-agentisan report
-// codex`, by any path and with anything after it, such as a redirect.
-func isReportCodex(cmd string) bool {
+// isReport reports whether a hook command runs `herdr-agentisan report
+// <verb>`, by any path and with anything after it, such as a redirect.
+func isReport(cmd, verb string) bool {
 	f := strings.Fields(cmd)
-	return len(f) >= 3 && filepath.Base(f[0]) == "herdr-agentisan" && f[1] == "report" && f[2] == "codex"
+	return len(f) >= 3 && filepath.Base(f[0]) == binary && f[1] == "report" && f[2] == verb
 }
 
 // file is the hooks file as read.
@@ -464,8 +524,12 @@ func decodeObject(raw []byte, out *map[string]json.RawMessage) bool {
 	return len(trimmed) > 0 && trimmed[0] == '{' && json.Unmarshal(trimmed, out) == nil
 }
 
-// groups returns event's groups; none when it has no entry or a null one.
+// groups returns event's groups, as an install has changed them so far;
+// none when it has no entry or a null one.
 func (d *document) groups(path, event string) ([]json.RawMessage, error) {
+	if changed, ok := d.changed[event]; ok {
+		return changed, nil
+	}
 	raw, ok := d.hooks[event]
 	trimmed := bytes.TrimSpace(raw)
 	if !ok || bytes.Equal(trimmed, []byte("null")) {
@@ -484,9 +548,9 @@ type handler struct {
 	Command *string `json:"command"`
 }
 
-// findOurs returns the index of event's one group that runs `report codex`
-// and nothing else, and its command; -1 when there is none.
-func findOurs(path, event string, groups []json.RawMessage) (int, string, error) {
+// findOurs returns the index of event's one group that runs s's report and
+// nothing else, and its command; -1 when there is none.
+func findOurs(path string, s set, event string, groups []json.RawMessage) (int, string, error) {
 	at, cmd := -1, ""
 	for i, raw := range groups {
 		var g struct {
@@ -504,7 +568,7 @@ func findOurs(path, event string, groups []json.RawMessage) (int, string, error)
 			if len(th) == 0 || th[0] != '{' || json.Unmarshal(th, &hd) != nil {
 				return -1, "", invalidf(path, "has a %s hook that is not an object with a string type and command", event)
 			}
-			if hd.Type != nil && *hd.Type == commandType && hd.Command != nil && isReportCodex(*hd.Command) {
+			if hd.Type != nil && *hd.Type == commandType && hd.Command != nil && isReport(*hd.Command, s.verb) {
 				mine = *hd.Command
 			}
 		}
@@ -512,27 +576,27 @@ func findOurs(path, event string, groups []json.RawMessage) (int, string, error)
 		case mine == "":
 			continue
 		case len(g.Hooks) > 1:
-			return -1, "", fmt.Errorf("%w: %s runs `%s` beside other hooks in one %s group; give it a group of its own", ErrAmbiguous, path, command, event)
+			return -1, "", fmt.Errorf("%w: %s runs `%s` beside other hooks in one %s group; give it a group of its own", ErrAmbiguous, path, s.command(), event)
 		case at >= 0:
-			return -1, "", fmt.Errorf("%w: %s runs `%s` from %s twice; keep one", ErrAmbiguous, path, command, event)
+			return -1, "", fmt.Errorf("%w: %s runs `%s` from %s twice; keep one", ErrAmbiguous, path, s.command(), event)
 		}
 		at, cmd = i, mine
 	}
 	return at, cmd, nil
 }
 
-// install adds or updates event's hook.
-func (d *document) install(path, event string) (State, error) {
+// install adds or updates s's hook for event.
+func (d *document) install(path string, s set, event string) (State, error) {
 	groups, err := d.groups(path, event)
 	if err != nil {
 		return "", err
 	}
-	at, cmd, err := findOurs(path, event, groups)
+	at, cmd, err := findOurs(path, s, event, groups)
 	if err != nil {
 		return "", err
 	}
 	if at < 0 {
-		raw, err := marshal(group(event, command))
+		raw, err := marshal(group(event, s.command()))
 		if err != nil {
 			return "", err
 		}
@@ -551,13 +615,13 @@ func (d *document) install(path, event string) (State, error) {
 	return Updated, nil
 }
 
-// check reports event's hook.
-func (d *document) check(path, event string) (State, error) {
+// check reports s's hook for event.
+func (d *document) check(path string, s set, event string) (State, error) {
 	groups, err := d.groups(path, event)
 	if err != nil {
 		return "", err
 	}
-	at, cmd, err := findOurs(path, event, groups)
+	at, cmd, err := findOurs(path, s, event, groups)
 	if err != nil {
 		return "", err
 	}
@@ -624,22 +688,26 @@ func sameJSON(a, b []byte) bool {
 // config is what config.toml says about our hooks.
 type config struct {
 	path string
-	// found lists the events, any of Codex's, that run `report codex`.
-	found []string
-	// ours is the state of each of our events that runs it there.
-	ours     map[string]State
+	// found lists, by report verb, the events, any of Codex's, that run the
+	// report.
+	found map[string][]string
+	// ours is, by report verb, the state of each of the set's events that
+	// runs it there.
+	ours     map[string]map[string]State
 	hooksOff bool
 }
 
-// hooks lists our events' states in config.toml.
-func (c config) hooks() []Hook {
-	out := make([]Hook, 0, len(events))
-	for _, e := range events {
-		h := Hook{Event: e, State: Missing}
-		if s, ok := c.ours[e]; ok {
-			h.State, h.Source = s, c.path
+// hooks lists the states in config.toml of want's events.
+func (c config) hooks(want []set) []Hook {
+	var out []Hook
+	for _, s := range want {
+		for _, e := range s.events {
+			h := Hook{Event: e, Report: s.verb, State: Missing}
+			if st, ok := c.ours[s.verb][e]; ok {
+				h.State, h.Source = st, c.path
+			}
+			out = append(out, h)
 		}
-		out = append(out, h)
 	}
 	return out
 }
@@ -647,7 +715,7 @@ func (c config) hooks() []Hook {
 // readConfig reads home's config.toml, which it never writes. A file that
 // does not exist says nothing.
 func readConfig(home string) (config, error) {
-	c := config{path: filepath.Join(home, configName), ours: map[string]State{}}
+	c := config{path: filepath.Join(home, configName), found: map[string][]string{}, ours: map[string]map[string]State{}}
 	st, err := os.Stat(c.path)
 	if errors.Is(err, fs.ErrNotExist) {
 		return c, nil
@@ -679,35 +747,45 @@ func readConfig(home string) (config, error) {
 			if !ok {
 				continue
 			}
-			handlers, _ := gm["hooks"].([]any)
-			cmd := ""
-			for _, h := range handlers {
-				hm, _ := h.(map[string]any)
-				if t, _ := hm["type"].(string); t == commandType {
-					if s, _ := hm["command"].(string); isReportCodex(s) {
-						cmd = s
-					}
-				}
-			}
-			if cmd == "" {
-				continue
-			}
-			if !slices.Contains(c.found, event) {
-				c.found = append(c.found, event)
-			}
-			if !slices.Contains(events, event) {
-				continue
-			}
-			st := Differs
-			if len(handlers) == 1 && sameTOML(gm, group(event, cmd)) {
-				st = Present
-			}
-			if c.ours[event] != Present {
-				c.ours[event] = st
+			for _, s := range sets {
+				c.read(s, event, gm)
 			}
 		}
 	}
 	return c, nil
+}
+
+// read records a config.toml group of event's that runs s's report.
+func (c *config) read(s set, event string, gm map[string]any) {
+	handlers, _ := gm["hooks"].([]any)
+	cmd := ""
+	for _, h := range handlers {
+		hm, _ := h.(map[string]any)
+		if t, _ := hm["type"].(string); t == commandType {
+			if str, _ := hm["command"].(string); isReport(str, s.verb) {
+				cmd = str
+			}
+		}
+	}
+	if cmd == "" {
+		return
+	}
+	if !slices.Contains(c.found[s.verb], event) {
+		c.found[s.verb] = append(c.found[s.verb], event)
+	}
+	if !slices.Contains(s.events, event) {
+		return
+	}
+	st := Differs
+	if len(handlers) == 1 && sameTOML(gm, group(event, cmd)) {
+		st = Present
+	}
+	if c.ours[s.verb] == nil {
+		c.ours[s.verb] = map[string]State{}
+	}
+	if c.ours[s.verb][event] != Present {
+		c.ours[s.verb][event] = st
+	}
 }
 
 // sameTOML reports whether a decoded TOML group is want.

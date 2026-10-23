@@ -34,10 +34,6 @@ type DashboardOutcome struct {
 	DashboardError string     `json:"dashboard_error,omitempty"`
 }
 
-// DashboardLabel is the label team up gives a team's dashboard pane. A
-// worker's tab label ends in -<n>, so it is never one.
-func DashboardLabel(short string) string { return short + "-dashboard" }
-
 // dashboardBudget bounds the dashboard's herdr calls, which run before the
 // agents start. The split, label, swap or focus it ends is out of time, as a
 // spawn's calls are; the layout's read before them, which every op shares,
@@ -45,14 +41,17 @@ func DashboardLabel(short string) string { return short + "-dashboard" }
 const dashboardBudget = 5 * time.Second
 
 // ensureDashboard finds project's dashboard, a pane in its workspace labelled
-// DashboardLabel or, as one prefix+d opened, with the entrypoint's title, or
+// team.DashboardLabel or, as one prefix+d opened, with the entrypoint's title
+// (team.Tabs.Dashboard, which also leaves it out of the team), or
 // opens one above the boss's pane, the first agent in its tab, as the
 // snapshot names the boss. herdr splits only right or down, so that is a
 // split down from the boss, then a swap with it. The label comes first: a
 // swap that fails still leaves a dashboard the next run finds. herdr's swap
 // focuses the dashboard in the boss's tab and switches to that tab, so the
 // boss is focused again, which the tab keeps for the user's next visit, and
-// then the pane that had focus, when it was not the boss. It holds the
+// then the pane that had focus, when it was not the boss. Only a swap herdr
+// declined, naming why, moved no focus; one that failed otherwise may have
+// swapped, its reply lost, so the boss is focused after it too. It holds the
 // workforce lock, so two runs open one.
 func (s *Service) ensureDashboard(ctx context.Context, project string) DashboardOutcome {
 	d := s.Dashboard
@@ -70,9 +69,10 @@ func (s *Service) ensureDashboard(ctx context.Context, project string) Dashboard
 	if st.workspace == "" {
 		return DashboardOutcome{DashboardError: "the team has no workspace labelled " + project}
 	}
-	label := DashboardLabel(st.team.Short)
+	label := team.DashboardLabel(st.team.Short)
+	dash := team.Tabs{Short: st.team.Short, DashboardTitle: d.Title}
 	if i := slices.IndexFunc(st.layout.Panes, func(p herdr.PaneInfo) bool {
-		return p.WorkspaceID == st.workspace && (p.Label == label || d.Title != "" && p.Label == d.Title)
+		return p.WorkspaceID == st.workspace && dash.Dashboard(p)
 	}); i >= 0 {
 		return DashboardOutcome{Dashboard: &Dashboard{PaneID: st.layout.Panes[i].PaneID}}
 	}
@@ -90,9 +90,11 @@ func (s *Service) ensureDashboard(ctx context.Context, project string) Dashboard
 		errs = append(errs, callFailed(ctx, "label the dashboard "+label, err))
 	}
 	var back []string
-	if err := s.Herdr.SwapPanes(ctx, p.PaneID, boss); err != nil {
-		errs = append(errs, callFailed(ctx, "move the dashboard above the boss; it is below", err))
-	} else {
+	swapErr := s.Herdr.SwapPanes(ctx, p.PaneID, boss)
+	if swapErr != nil {
+		errs = append(errs, callFailed(ctx, "move the dashboard above the boss; it is below", swapErr))
+	}
+	if !errors.Is(swapErr, herdr.ErrSwapDeclined) {
 		back = append(back, boss)
 	}
 	if focused := focusedPane(st.layout.Panes); focused != "" && !slices.Contains(back, focused) {

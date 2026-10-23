@@ -112,6 +112,9 @@ type Service struct {
 	// CodexHooks reports whether Codex's ctx hooks are installed; nil
 	// checks nothing. A Codex spawn without them warns (A22, A43).
 	CodexHooks func() (bool, error)
+	// CodexTurnHooks reports whether Codex's turn hooks are installed; nil
+	// checks nothing. A Codex spawn without them warns (A42, A43).
+	CodexTurnHooks func() (bool, error)
 	// Debugger is what a debugger worker's launch names besides the
 	// project's repo, the config dir and the env file it names (A32): the
 	// plugin's checkout and binary, and the daemon's directory. Without a
@@ -216,9 +219,12 @@ func SelectorFor(ctx context.Context, h report.PaneFinder, project string, pane 
 	return Selector{CallerPane: caller}, err
 }
 
-// layout is herdr's answers one op works from.
+// layout is herdr's answers one op works from, with the title herdr gives
+// the plugin's dashboard pane when prefix+d opens it, which a tabs team
+// leaves out (resolverOf).
 type layout struct {
 	team.Layout
+	dashboardTitle string
 }
 
 // readLayout lists everything an op needs from herdr.
@@ -239,7 +245,7 @@ func (s *Service) readLayout(ctx context.Context) (layout, error) {
 	if err != nil {
 		return layout{}, herdrFailed("list agents", err)
 	}
-	return layout{team.Layout{Workspaces: workspaces, Panes: panes, Tabs: tabs, Agents: agents}}, nil
+	return layout{Layout: team.Layout{Workspaces: workspaces, Panes: panes, Tabs: tabs, Agents: agents}, dashboardTitle: s.Dashboard.Title}, nil
 }
 
 func herdrFailed(what string, err error) error {
@@ -279,8 +285,14 @@ func configFailed(err error) error {
 	return fmt.Errorf("%w: %w", ErrConfig, err)
 }
 
-// selectTeam picks the team sel names among teams. Only an explicit project
-// may name the ◆ spaces project; the defaults look for a tabs team.
+// selectTeam picks the team sel names among teams: an explicit project,
+// else the caller's. A caller in a tabs team's workspace is that team's, and
+// one in a ◆ space is the spaces project's, which status reports and the ops
+// that change a team refuse (resolve), never the only tabs team's. With no
+// [spaces] project configured the spaces are the unnamed project's, as the
+// team poll and send read them, which has no configuration to report or
+// staff, so it is refused (QA #39). A caller in neither, or no caller, gets
+// the only tabs team.
 func selectTeam(sel Selector, teams []settings.Team, l layout) (settings.Team, error) {
 	if sel.Project != "" {
 		i := slices.IndexFunc(teams, func(t settings.Team) bool { return t.Project == sel.Project })
@@ -301,11 +313,25 @@ func selectTeam(sel Selector, teams []settings.Team, l layout) (settings.Team, e
 				return t, nil
 			}
 		}
+		if inSpaces(l, p.WorkspaceID) {
+			i := slices.IndexFunc(teams, func(t settings.Team) bool { return t.Layout == settings.LayoutSpaces })
+			if i < 0 {
+				return settings.Team{}, fmt.Errorf("%w: the caller's pane is in a ◆ space, which no [spaces] project configures, so it is the unnamed project's; pass --project to name a team", ErrNoTarget)
+			}
+			return teams[i], nil
+		}
 	}
 	if len(tabs) == 1 {
 		return tabs[0], nil
 	}
 	return settings.Team{}, fmt.Errorf("%w: pass --project: the caller's pane is in no team's workspace, and the tabs teams are %s", ErrBadRequest, names(tabs))
+}
+
+// inSpaces reports whether workspace is one of the ◆ spaces, as the spaces
+// resolver reads them, ◆ boss and ◆ herdr included.
+func inSpaces(l layout, workspace string) bool {
+	r := team.Spaces{}.Resolve(l.Layout)
+	return slices.ContainsFunc(r.Sites, func(s team.Site) bool { return slices.Contains(s.Workspaces, workspace) })
 }
 
 func names(teams []settings.Team) string {

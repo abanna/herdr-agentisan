@@ -7,6 +7,9 @@ var Refusal = refusal
 // CleanText is text as the dispatcher types it (B6).
 var CleanText = cleanText
 
+// OffToken is cleaned text ended off a completion token (A30).
+var OffToken = offToken
+
 // TextOf is what the dispatcher types a message as (Q9, B5).
 var TextOf = textOf
 

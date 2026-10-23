@@ -29,3 +29,10 @@ func PlanRouted(p *settings.Profile, typ, model, effort, provider string) (kind 
 	}
 	return ps[0].launch.kind, ps[0].launch.args, nil
 }
+
+// TurnHooks is the --settings a Claude worker starts with (A42).
+const TurnHooks = turnHooks
+
+// WithTurnHooks is the debugger's launch args with the turn hooks in its
+// one --settings object.
+func WithTurnHooks(args []string) ([]string, error) { return withTurnHooks(args) }

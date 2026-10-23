@@ -3,6 +3,7 @@ package notice
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/github"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
@@ -56,6 +57,76 @@ func GitHubMerged(repo string, n int, commit string) GitHubEvent {
 		text += " as " + short(commit)
 	}
 	return GitHubEvent{n, Merged, commit, text}
+}
+
+// GitHubReview is a review a PR shows (A45), keyed by its reviewer and the
+// time it was submitted, the only identity the PR list gives. Its line is
+// the one told when its P-badges cannot be read; GitHubReviewed's
+// otherwise.
+type GitHubReview struct {
+	GitHubEvent
+	Review github.Review
+}
+
+// GitHubReviews are the reviews prs show, each reviewer's latest, by PR.
+func GitHubReviews(prs []github.OpenPR) []GitHubReview {
+	var out []GitHubReview
+	for _, p := range prs {
+		for _, r := range p.Reviews {
+			out = append(out, GitHubReview{GitHubEvent{p.Number, Review, ReviewKey(r), reviewText(p.Number, r, "", "P-badges not read")}, r})
+		}
+	}
+	return out
+}
+
+// ReviewKey is r's seen-set key: its reviewer's login and when it was
+// submitted.
+func ReviewKey(r github.Review) string {
+	return r.Login + " " + r.Submitted.UTC().Format(time.RFC3339Nano)
+}
+
+// GitHubReviewed is r with its line from d, as the review query read it:
+// the commit reviewed, the state and the P-badge counts, P0 first.
+func GitHubReviewed(r GitHubReview, d github.ReviewDetail) GitHubEvent {
+	var counts []string
+	for level, n := range d.Badges {
+		if n > 0 {
+			counts = append(counts, fmt.Sprintf("P%d ×%d", level, n))
+		}
+	}
+	found := "no P-badges"
+	if len(counts) > 0 {
+		found = strings.Join(counts, ", ")
+	}
+	if d.Read < d.Comments {
+		found += fmt.Sprintf(" (first %d of %d comments)", d.Read, d.Comments)
+	}
+	e := r.GitHubEvent
+	e.Text = reviewText(r.PR, d.Review, d.Commit, found)
+	return e
+}
+
+// reviewStates are the words a review's line says its state in.
+var reviewStates = map[string]string{
+	github.ReviewApproved:         "approved",
+	github.ReviewChangesRequested: "changes requested",
+	github.ReviewCommented:        "commented",
+	github.ReviewDismissed:        "dismissed",
+	"":                            "reviewed",
+}
+
+// reviewText is "#50 review by alice at 1e0fb1b: approved, P1 ×2": a login
+// that is not one is "a reviewer", and a commit not read is left out.
+func reviewText(n int, r github.Review, commit, found string) string {
+	who := r.Login
+	if who == "" {
+		who = "a reviewer"
+	}
+	text := fmt.Sprintf("#%d review by %s", n, who)
+	if commit != "" {
+		text += " at " + short(commit)
+	}
+	return text + ": " + reviewStates[r.State] + ", " + found
 }
 
 // short is an oid's first 7 characters, as git abbreviates it.

@@ -25,6 +25,9 @@ type GitHubEvent struct {
 type GitHubState struct {
 	// Seeded is a repo whose first successful collection was recorded.
 	Seeded bool
+	// Kinds are the kinds added later whose own first collection was
+	// recorded (migration 0006).
+	Kinds map[string]bool
 	// Open are the PRs open at its last successful collection, by number.
 	Open []int
 	// Seen are the events recorded.
@@ -36,8 +39,10 @@ type GitHubState struct {
 type GitHubUpdate struct {
 	Project, Repo string
 	// Collected is a successful collection: the repo is marked seeded, or
-	// its mark observed again.
+	// its mark observed again, and so is each kind's.
 	Collected bool
+	// SeedKinds are kinds whose first collection this is: each is marked.
+	SeedKinds []string
 	// Open are PRs the collection found open: each is recorded, or its row
 	// and its events' rows are observed again.
 	Open []int
@@ -49,27 +54,31 @@ type GitHubUpdate struct {
 
 // GitHub returns what the store holds of project's repo.
 func (s *Store) GitHub(ctx context.Context, project, repo string) (GitHubState, error) {
-	out := GitHubState{Open: []int{}, Seen: map[GitHubEvent]bool{}}
+	out := GitHubState{Kinds: map[string]bool{}, Open: []int{}, Seen: map[GitHubEvent]bool{}}
 	err := s.db.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM github_seeded WHERE project = ? AND repo = ?)", project, repo).Scan(&out.Seeded)
 	if err != nil {
 		return GitHubState{}, fmt.Errorf("%w: read github state: %w", ErrStore, err)
 	}
 	rows, err := s.db.QueryContext(ctx, `SELECT 0, pr, '', '' FROM github_open WHERE project = ?1 AND repo = ?2
-UNION ALL SELECT 1, pr, kind, key FROM github_seen WHERE project = ?1 AND repo = ?2 ORDER BY 1, 2`, project, repo)
+UNION ALL SELECT 1, pr, kind, key FROM github_seen WHERE project = ?1 AND repo = ?2
+UNION ALL SELECT 2, 0, kind, '' FROM github_seeded_kinds WHERE project = ?1 AND repo = ?2 ORDER BY 1, 2`, project, repo)
 	if err != nil {
 		return GitHubState{}, fmt.Errorf("%w: read github state: %w", ErrStore, err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only; rows.Err reports what matters
 	for rows.Next() {
-		var seen bool
+		var table int
 		var e GitHubEvent
-		if err := rows.Scan(&seen, &e.PR, &e.Kind, &e.Key); err != nil {
+		if err := rows.Scan(&table, &e.PR, &e.Kind, &e.Key); err != nil {
 			return GitHubState{}, fmt.Errorf("%w: read github state: %w", ErrStore, err)
 		}
-		if seen {
-			out.Seen[e] = true
-		} else {
+		switch table {
+		case 0:
 			out.Open = append(out.Open, e.PR)
+		case 1:
+			out.Seen[e] = true
+		default:
+			out.Kinds[e.Kind] = true
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -104,6 +113,15 @@ func (s *Store) UpdateGitHub(ctx context.Context, u GitHubUpdate, at time.Time) 
 ON CONFLICT DO UPDATE SET last_seen = max(last_seen, excluded.last_seen)`, u.Project, u.Repo, ns); err != nil {
 			return err
 		}
+		if err := exec("UPDATE github_seeded_kinds SET last_seen = max(last_seen, ?3) WHERE project = ?1 AND repo = ?2", u.Project, u.Repo, ns); err != nil {
+			return err
+		}
+	}
+	for _, kind := range u.SeedKinds {
+		if err := exec(`INSERT INTO github_seeded_kinds (project, repo, kind, first_seen, last_seen) VALUES (?1, ?2, ?3, ?4, ?4)
+ON CONFLICT DO UPDATE SET last_seen = max(last_seen, excluded.last_seen)`, u.Project, u.Repo, kind, ns); err != nil {
+			return err
+		}
 	}
 	for _, pr := range u.Open {
 		if err := exec(`INSERT INTO github_open (project, repo, pr, first_seen, last_seen) VALUES (?1, ?2, ?3, ?4, ?4)
@@ -132,8 +150,11 @@ ON CONFLICT DO UPDATE SET last_seen = max(last_seen, excluded.last_seen)`, u.Pro
 }
 
 // check refuses an update the schema would: no project or repo, a PR below
-// 1, or an event with no kind.
+// 1, or an event or a seed with no kind.
 func (u GitHubUpdate) check() error {
+	if slices.Contains(u.SeedKinds, "") {
+		return fmt.Errorf("%w: a github seed with no kind", ErrInvalid)
+	}
 	prs := slices.Concat(u.Open, u.Resolved)
 	for _, e := range u.Seen {
 		if e.Kind == "" {
@@ -153,7 +174,7 @@ func (u GitHubUpdate) check() error {
 // PruneGitHub deletes the GitHub notices' rows the collector last observed
 // more than GitHubRetention before now (A45), and reports how many it
 // deleted: a merged PR's events, a closed repo's, a repo no longer
-// configured.
+// configured, its seed marks included.
 func (s *Store) PruneGitHub(ctx context.Context, now time.Time) (int64, error) {
 	cutoff, err := nanos(now.Add(-GitHubRetention))
 	if err != nil {
@@ -164,6 +185,7 @@ func (s *Store) PruneGitHub(ctx context.Context, now time.Time) (int64, error) {
 		{"github_seen", "DELETE FROM github_seen WHERE last_seen < ?"},
 		{"github_open", "DELETE FROM github_open WHERE last_seen < ?"},
 		{"github_seeded", "DELETE FROM github_seeded WHERE last_seen < ?"},
+		{"github_seeded_kinds", "DELETE FROM github_seeded_kinds WHERE last_seen < ?"},
 	} {
 		res, err := s.db.ExecContext(ctx, p.query, cutoff)
 		if err != nil {

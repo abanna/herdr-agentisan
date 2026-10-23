@@ -64,10 +64,10 @@ thresholds = [55, 65, 75]
 # worker's turn ended, it turned blocked or no longer is, it turned unknown,
 # it left the team, and, once, that the daemon started; and from GitHub
 # (A45): a PR merged, its CI failed or passed, it has a merge conflict, it
-# got its first 👍. skip names the kinds not told: turn_ended, blocked,
-# unblocked, unknown, gone, started, the context levels ctx_soft and
-# ctx_hard, and merged, ci_failed, ci_passed, dirty and approved;
-# ctx_ceiling always goes. A boss gets at most one message every
+# got its first 👍, it got a review, with the review's P-badge counts. skip
+# names the kinds not told: turn_ended, blocked, unblocked, unknown, gone,
+# started, the context levels ctx_soft and ctx_hard, and merged, ci_failed,
+# ci_passed, dirty, approved and review; ctx_ceiling always goes. A boss gets at most one message every
 # gap seconds (0 to 3600) and the same worker and kind again within repeat
 # seconds (0 to 86400) is dropped. Read once when the daemon starts, from
 # this file only, never a repo file.
@@ -102,10 +102,13 @@ repeat = 300
 # still name a model: the --model the workforce passes outranks both, by each
 # CLI's own precedence, and with no model set the command's configuration
 # decides (A53). An abbreviation such as --mod is no --model to either:
-# claude matches long flags whole, and codex refuses it. The debugger runs
-# the plugin's read-only launch (docs/debugger.md, [debugger] below): its
-# group sets a model only, never a command, and [agent]'s command never
-# applies to it.
+# claude matches long flags whole, and codex refuses it. A claude command
+# with a --settings of its own starts without the turn hooks spawn passes
+# every other Claude worker, since Claude Code applies only one --settings;
+# spawn warns of it (A42). The debugger runs the plugin's read-only launch
+# (docs/debugger.md, [debugger] below), whose one --settings carries the turn
+# hooks: its group sets a model only, never a command, and [agent]'s command
+# never applies to it.
 #
 # To a codex command that chooses no sandbox (-s, --sandbox, --approve-for-me,
 # the bypass flag, their aliases --not-so-yolo and --yolo, or -c setting
@@ -224,8 +227,20 @@ locks = ["/run/user/1000/agentisan/gate.0.lock"]
 #            enabled, e.g. [routing.bindings.claude_mid] model_id = "…".
 #   [routing.overrides]  <role> = "<binding>": your standing choice, and the
 #            only way to a premium binding (Fable, Astra). This file only.
+#   [routing.jev]  Jev's complexity answer for a coder spawned with a task
+#            packet (ADR-001 A57). enabled false (the default) never asks
+#            Jev, and Jev is asked only while routing is enabled too;
+#            env_file is the env file holding TYPESAFE_API_KEY, an absolute
+#            path or one under ~/, required while enabled (a file 1Password
+#            mounts works: while it is locked, a spawn takes the default);
+#            confidence_pct and sufficiency_pct, whole percents, replace the
+#            rules' 75 and 80. `config resolve --check-secrets` reads the key.
 [routing]
 enabled = false
+
+[routing.jev]
+enabled = false
+env_file = "~/.config/herdr-agentisan/typesafe.env"
 
 # ---------------------------------------------------------------------------
 # Projects. The key is the project's name: lower case, digits and dashes.

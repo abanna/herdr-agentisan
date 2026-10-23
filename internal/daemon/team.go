@@ -50,6 +50,9 @@ type TeamOptions struct {
 	// the daemon's own environment, for the warning a Codex spawn gives
 	// without them (A22, A43); nil checks nothing.
 	CodexHooks func() (bool, error)
+	// CodexTurnHooks is CodexHooks for Codex's turn hooks, for a Codex
+	// spawn's warning that its workers report no item or stage (A42).
+	CodexTurnHooks func() (bool, error)
 	// procLocks and proc, when set, stand in for /proc/locks and /proc in
 	// counting the test slots, and readLocks for the reading of them
 	// (tests).
@@ -64,14 +67,16 @@ type teamConfig struct {
 	tabs   []team.Tabs
 }
 
-func teamConfigOf(teams []settings.Team) teamConfig {
+// teamConfigOf reads teams for the poll. Every tabs team leaves out its
+// dashboard pane, titled title when prefix+d opened it (team.Tabs.Dashboard).
+func teamConfigOf(teams []settings.Team, title string) teamConfig {
 	var c teamConfig
 	for _, t := range teams {
 		if t.Layout == settings.LayoutSpaces {
 			c.spaces = team.Spaces{Project: t.Project, Color: t.Color}
 			continue
 		}
-		c.tabs = append(c.tabs, team.Tabs{Project: t.Project, Short: t.Short, Color: t.Color})
+		c.tabs = append(c.tabs, team.Tabs{Project: t.Project, Short: t.Short, Color: t.Color, DashboardTitle: title})
 	}
 	return c
 }
@@ -168,7 +173,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 		o.Logger.Error().Err(err).Msg("herdr-agentisan.toml does not resolve; the ◆ spaces belong to the unnamed project, and no tabs team is found, until it is fixed and the daemon restarts")
 		teams = nil
 	}
-	cfg := teamConfigOf(teams)
+	cfg := teamConfigOf(teams, o.Team.Dashboard.Title)
 	in.configure(cfg)
 	tabs := make([]string, 0, len(cfg.tabs))
 	for _, t := range cfg.tabs {

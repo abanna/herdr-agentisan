@@ -2,11 +2,21 @@
 # ghtest's stand-in for gh. It records the call in $FAKE_GH_DIR, then answers
 # as the files there say. It never reaches GitHub, and it writes down only
 # the variables it names, never the rest of its environment. A call is `pr`
-# (pr list), `view` (pr view <n>) or `api`; mode.<call> overrides mode.
+# (pr list), `view` (pr view <n>), `review` (api graphql with a user= field,
+# for PR number=<n>) or `api`; mode.<call> overrides mode.
 set -u
 d=${FAKE_GH_DIR:?}
 call=${1:-}
 if [ "$call" = pr ] && [ "${2:-}" = view ]; then call=view; fi
+n=
+if [ "$call" = api ]; then
+	for a in "$@"; do
+		case $a in
+		user=*) call=review ;;
+		number=*) n=${a#number=} ;;
+		esac
+	done
+fi
 echo "$call" >>"$d/calls"
 printf '%s\n' "$@" >"$d/args.$call"
 tty=none
@@ -36,6 +46,10 @@ case $call in
 pr) cat "$d/prs" ;;
 view) cat "$d/view.${3:-}" 2>/dev/null || {
 	echo "GraphQL: Could not resolve to a PullRequest with the number of ${3:-}." >&2
+	exit 1
+} ;;
+review) cat "$d/review.$n" 2>/dev/null || {
+	echo "GraphQL: Could not resolve to a PullRequest with the number of $n." >&2
 	exit 1
 } ;;
 api) cat "$d/issues" ;;

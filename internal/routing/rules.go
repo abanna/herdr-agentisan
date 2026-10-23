@@ -101,6 +101,8 @@ type Rules struct {
 	Status   string
 	bindings map[string]Binding
 	roles    map[string]Role
+	// jev is what the rules say of asking Jev (A57).
+	jev jevRules
 	// digest is the sha256 of the rules as given, for the policy version.
 	digest string
 }
@@ -113,7 +115,7 @@ type rulesJSON struct {
 	RoutingOwner  string                 `json:"routing_owner"`
 	Bindings      map[string]bindingJSON `json:"bindings"`
 	Roles         map[string]roleJSON    `json:"roles"`
-	// Jev's request and thresholds are read by a later part; the rest is
+	// Jev's request and the policy's numbers are read (jevOf); the rest is
 	// for the people and agents who read the rules.
 	TaskPacket         json.RawMessage `json:"task_packet"`
 	JevRequestTemplate json.RawMessage `json:"jev_request_template"`
@@ -199,6 +201,11 @@ func ParseRules(raw []byte) (*Rules, error) {
 		}
 		r.roles[name] = role
 	}
+	jev, err := jevOf(doc.JevRequestTemplate, doc.Policy)
+	if err != nil {
+		return nil, err
+	}
+	r.jev = jev
 	return r, nil
 }
 

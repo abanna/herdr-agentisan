@@ -48,7 +48,7 @@ func TestSpawnOpensOneTabPerWorker(t *testing.T) {
 	for _, s := range starts {
 		id := s["name"].(string)
 		assert.Equal(t, "claude", s["kind"])
-		assert.Equal(t, []any{"--model", "sonnet", "--name", id}, s["args"])
+		assert.Equal(t, withHooksAny("--model", "sonnet", "--name", id), s["args"])
 		assert.InDelta(t, 90000, s["timeout_ms"], 1)
 	}
 	require.Len(t, res.Workers, 2)
@@ -93,11 +93,11 @@ func TestSpawnTakesAModelFromTheRepoFile(t *testing.T) {
 	starts := f.h.params("agent.start")
 	require.Len(t, starts, 1)
 	assert.Equal(t, "claude", starts[0]["kind"])
-	assert.Equal(t, []any{"--model", "sonnet", "--name", "ha-coder-1"}, starts[0]["args"])
+	assert.Equal(t, withHooksAny("--model", "sonnet", "--name", "ha-coder-1"), starts[0]["args"])
 
 	_, err = f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1, Model: "opus"})
 	require.NoError(t, err)
-	assert.Equal(t, []any{"--model", "opus", "--name", "ha-coder-2"}, f.h.params("agent.start")[1]["args"], "--model wins")
+	assert.Equal(t, withHooksAny("--model", "opus", "--name", "ha-coder-2"), f.h.params("agent.start")[1]["args"], "--model wins")
 }
 
 // TestPlanChecksTheProfilesModel: the model spawn passes after --model is
@@ -141,7 +141,7 @@ func TestPlanPassesAnEffort(t *testing.T) {
 	kind, args, err := workforce.Plan(p, "coder", "opus", "xhigh")
 	require.NoError(t, err)
 	assert.Equal(t, "claude", kind)
-	assert.Equal(t, []string{"--model", "opus", "--effort", "xhigh", "--name", "ha-coder-1"}, args)
+	assert.Equal(t, withHooks("--model", "opus", "--effort", "xhigh", "--name", "ha-coder-1"), args)
 
 	kind, args, err = workforce.Plan(p, settings.ReviewType, "gpt-5.1-codex", "high")
 	require.NoError(t, err)
@@ -155,7 +155,7 @@ func TestPlanPassesAnEffort(t *testing.T) {
 	}
 	_, args, err = workforce.Plan(p, "coder", "", "aaaaaaaaaaaaaaaa")
 	require.NoError(t, err, "16 letters")
-	assert.Equal(t, []string{"--effort", "aaaaaaaaaaaaaaaa", "--name", "ha-coder-1"}, args)
+	assert.Equal(t, withHooks("--effort", "aaaaaaaaaaaaaaaa", "--name", "ha-coder-1"), args)
 }
 
 // TestSpawnIDs: the lowest n not taken by one of the team's tab labels, any
@@ -948,7 +948,7 @@ func TestSpawnRunsCodexOffTheDaemon(t *testing.T) {
 		"a group's own codex":        {agent: `{ command = ["codex"] }`, want: []any{"--no-daemon", "--sandbox", "danger-full-access"}},
 		"with its model":             {agent: `{ command = ["codex"], model = "o3" }`, want: []any{"--no-daemon", "--sandbox", "danger-full-access", "--model", "o3"}},
 		"the flag already in it":     {agent: `{ command = ["codex", "-s", "workspace-write", "--no-daemon"] }`, want: []any{"-s", "workspace-write", "--no-daemon"}},
-		"a command that is no codex": {agent: `{ command = ["claude"] }`, want: []any{"--name", "ha-qa-1"}},
+		"a command that is no codex": {agent: `{ command = ["claude"] }`, want: withHooksAny("--name", "ha-qa-1")},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -1373,6 +1373,216 @@ func TestSpawnMarksTheWorkersUpActiveFirst(t *testing.T) {
 	assert.Equal(t, "ha-coder-1", res.Workers[0].ID)
 	assert.Equal(t, store.StatusActive, f.row(t, "ha-coder-1").Status)
 	assert.Equal(t, store.StatusFailed, f.row(t, "ha-coder-2").Status)
+}
+
+// TestSpawnClosesWhatItOpenedWhenCancelled: a spawn whose own context ends,
+// at a shutdown's cancel or its deadline, while it opens a worker still
+// closes the tab or workspace it just opened, on a settle context of its own:
+// on the op's, the close would fail at once and leave a pane no row binds,
+// whose label takes the id. Both of open's cleanups: the new workspace's tab
+// label refused, and the row's write on the ended context, for a first worker
+// and for a later one, whose pane is closed with the worker opened before it
+// (NERD-5350).
+func TestSpawnClosesWhatItOpenedWhenCancelled(t *testing.T) {
+	t.Parallel()
+	const assay = "\n[projects.assay]\nrepo = \"REPO\"\nshort = \"as\"\n[projects.assay.groups.qa]\nworkers = 1\nslots = 2\n"
+	tests := map[string]struct {
+		req workforce.SpawnRequest
+		id  string
+		// opens is the call that opened the worker's pane; opens2, that it
+		// opened two, the first worker's and the failed one's.
+		opens  string
+		opens2 bool
+		// cut ends the op's context where the test wants it to fail.
+		cut func(f *fixture, cancel context.CancelFunc) *herdrtest.Server
+	}{
+		"the new workspace's tab label": {
+			req: workforce.SpawnRequest{Selector: workforce.Selector{Project: "assay"}, Group: "qa", Count: 1}, id: "as-qa-1", opens: "workspace.create",
+			cut: func(f *fixture, cancel context.CancelFunc) *herdrtest.Server {
+				return wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+					if r.Method == "tab.rename" {
+						cancel()
+						return errReply("server_error")
+					}
+					return next()
+				})
+			},
+		},
+		"the row, after the tab opened": {
+			req: workforce.SpawnRequest{Selector: workforce.Selector{Project: "herdr-agentisan"}, Group: "coder", Count: 1}, id: "ha-coder-1", opens: "tab.create",
+			cut: func(f *fixture, cancel context.CancelFunc) *herdrtest.Server { return cutAtRow(t, f, cancel, 1) },
+		},
+		"a later worker's row": {
+			req: workforce.SpawnRequest{Selector: workforce.Selector{Project: "herdr-agentisan"}, Group: "coder", Count: 2}, id: "ha-coder-2", opens: "tab.create", opens2: true,
+			cut: func(f *fixture, cancel context.CancelFunc) *herdrtest.Server { return cutAtRow(t, f, cancel, 2) },
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, teamConfig+assay)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			srv := tc.cut(f, cancel)
+
+			_, err := f.svc.Spawn(ctx, tc.req)
+			require.Error(t, err)
+			opened := 1
+			if tc.opens2 {
+				opened = 2
+			}
+			require.Equal(t, opened, countCalls(srv, tc.opens), "the worker's pane was opened, then its open failed: %v", err)
+			assert.Nil(t, f.h.tabByLabel(tc.id), "no tab of %s is left open", tc.id)
+			assert.False(t, f.h.hasWorkspace("assay"), "nor a workspace opened for it")
+			assert.Equal(t, []string{f.boss}, f.h.paneIDs(), "only the boss's pane is left")
+			_, err = f.st.WorkerRow(t.Context(), tc.id)
+			assert.ErrorIs(t, err, store.ErrNoWorker, "and no row binds anything")
+		})
+	}
+}
+
+// cutAtRow ends the op's context right before the nth tab.create's worker's
+// row is written, after that tab is open: the row's stamp is read just then.
+func cutAtRow(t *testing.T, f *fixture, cancel context.CancelFunc, n int32) *herdrtest.Server {
+	t.Helper()
+	var tabs atomic.Int32
+	srv := wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+		reply := next()
+		if r.Method == "tab.create" {
+			tabs.Add(1)
+		}
+		return reply
+	})
+	f.svc.Now = func() time.Time {
+		if tabs.Load() == n {
+			cancel()
+		}
+		return time.Now()
+	}
+	return srv
+}
+
+// TestSpawnCleansUpAFailedOpenOnOneBudget: when a later worker's open fails,
+// the pane it opened and the workers opened before it are cleaned up at once
+// on one settle budget, so a herdr that holds every close past it keeps the
+// workforce lock, and a daemon's stop, waiting that budget once, not once per
+// cleanup (#96's review of NERD-5350). The worker opened before is failed,
+// and the failed open's pane binds no row.
+func TestSpawnCleansUpAFailedOpenOnOneBudget(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	release := make(chan struct{})
+	var tabs atomic.Int32
+	wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+		if r.Method == "pane.get" {
+			<-release // every cleanup's pane.get, past the settle budget
+		}
+		reply := next()
+		if r.Method == "tab.create" {
+			tabs.Add(1)
+		}
+		return reply
+	})
+	// After wrapHerdr's own: cleanups run last first, so the held calls are
+	// released before the server closes.
+	t.Cleanup(func() { close(release) })
+	var cut time.Time
+	// The second worker's row is stamped right before its write, after its
+	// tab opened: the op's context ends there.
+	f.svc.Now = func() time.Time {
+		if tabs.Load() == 2 && cut.IsZero() {
+			cut = time.Now()
+			cancel()
+		}
+		return time.Now()
+	}
+
+	_, err := f.svc.Spawn(ctx, workforce.SpawnRequest{Selector: workforce.Selector{Project: "herdr-agentisan"}, Group: "coder", Count: 2})
+	require.Error(t, err)
+	require.False(t, cut.IsZero(), "the second open failed on the cut: %v", err)
+	assert.Less(t, time.Since(cut), 6*time.Second, "one 4 s settle budget for every cleanup, not one each")
+	assert.Equal(t, store.StatusFailed, f.row(t, "ha-coder-1").Status)
+	_, err = f.st.WorkerRow(t.Context(), "ha-coder-2")
+	assert.ErrorIs(t, err, store.ErrNoWorker)
+}
+
+// TestSpawnsEndOnTheirCancel: a shutdown cancels the daemon's in-flight ops
+// (ADR-001 A23, NERD-5350 item 2). A spawn held inside the workforce lock on a
+// herdr call, and one queued behind that lock, both end at the cancel: the
+// herdr call is cut off at once, the first one's cleanup runs on its own
+// settle budget, and the queued one fails its first call. So a daemon's stop
+// waits about the settle budget, never a spawn's budget.
+func TestSpawnsEndOnTheirCancel(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig+"\n[projects.assay]\nrepo = \"REPO\"\nshort = \"as\"\n[projects.assay.groups.qa]\nworkers = 1\nslots = 2\n")
+	held, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	srv := wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+		if r.Method == "tab.rename" {
+			once.Do(func() { close(held) })
+			<-release // held past the cancel: only the client's cut-off ends the call
+		}
+		return next()
+	})
+	// After wrapHerdr's own: cleanups run last first, so the held call is
+	// released before the server closes.
+	t.Cleanup(func() { close(release) })
+	checked := make(chan struct{}, 2)
+	f.svc.Preflight = func(context.Context, string) error {
+		checked <- struct{}{}
+		return nil
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	first, queued := make(chan error, 1), make(chan error, 1)
+	go func() {
+		_, err := f.svc.Spawn(ctx, workforce.SpawnRequest{Selector: workforce.Selector{Project: "assay"}, Group: "qa", Count: 1})
+		first <- err
+	}()
+	wait := func(what string, ch <-chan struct{}) {
+		t.Helper()
+		select {
+		case <-ch:
+		case err := <-first:
+			t.Fatalf("the first spawn ended before %s: %v", what, err)
+		case <-time.After(10 * time.Second):
+			t.Fatalf("the first spawn never reached %s", what)
+		}
+	}
+	wait("its preflight", checked)
+	wait("its tab.rename, inside the lock", held) // it holds the lock now
+	go func() {
+		_, err := f.svc.Spawn(ctx, workforce.SpawnRequest{Selector: workforce.Selector{Project: "herdr-agentisan"}, Group: "coder", Count: 1})
+		queued <- err
+	}()
+	select {
+	case <-checked:
+	case err := <-queued:
+		t.Fatalf("the second spawn ended before its preflight: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("the second spawn never reached its preflight")
+	}
+	// Past its preflight, a spawn's next herdr read is inside the lock.
+	lists := countCalls(srv, "pane.list")
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, lists, countCalls(srv, "pane.list"), "the second spawn waits on the lock: it has read nothing since its preflight")
+
+	cancel()
+	cancelled := time.Now()
+	for name, ch := range map[string]chan error{"the spawn holding the lock": first, "the spawn queued on it": queued} {
+		select {
+		case err := <-ch:
+			require.Error(t, err, name)
+		case <-time.After(10 * time.Second):
+			t.Fatalf("%s outlived the cancel", name)
+		}
+	}
+	assert.Less(t, time.Since(cancelled), 3*time.Second, "within the settle budget, not a spawn's")
+	assert.False(t, f.h.hasWorkspace("assay"), "the first spawn's workspace is closed")
+	assert.Equal(t, []string{f.boss}, f.h.paneIDs(), "and the queued spawn opened nothing")
 }
 
 // TestSpawnFailsTheRowBeforeASlowClose: a herdr that holds the cleanup's

@@ -20,11 +20,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
+	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/telemetry"
 	"github.com/abanna/herdr-agentisan/internal/telemetry/telemetrytest"
+	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
 // setPanes replaces the panes herdr lists. It never edits a listed pane in
@@ -121,6 +123,56 @@ func TestTeamPollEmitsStatusTransitions(t *testing.T) {
 		"the changes gave no events")
 	polled(t, th.srv, 2)
 	assert.Equal(t, want, rec.Events(), "one event per change, and none from the polls after")
+}
+
+// TestTeamPollLeavesOutTheDashboard is the cutover's F2 on the poll: the
+// team's dashboard pane in the boss's tab, labelled as team up labels it or
+// with the title the daemon is given for one prefix+d opens, is no member,
+// so its arrival is no boss's status change; a plain shell split there still
+// is the boss's, and its arrival is one.
+func TestTeamPollLeavesOutTheDashboard(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	pane := func(id, label, agent, status string) map[string]any {
+		return map[string]any{"pane_id": id, "workspace_id": "w14", "tab_id": "w14:t1", "label": label, "agent": agent, "agent_status": status, "focused": false}
+	}
+	th.mu.Lock()
+	th.workspaces = append(th.workspaces, herdr.WorkspaceInfo{WorkspaceID: "w14", Label: "herdr-agentisan"})
+	th.tabs = []map[string]any{{"tab_id": "w14:t1", "workspace_id": "w14", "number": 1, "label": "ha-boss", "focused": false, "pane_count": 1, "agent_status": "working"}}
+	th.panes = append(th.panes, pane("w14:p1", "", "claude", "working"))
+	th.mu.Unlock()
+	events, rec := telemetrytest.NewEvents()
+	o := teamOpts(t, shortDir(t), th, configDir(t, "[projects.herdr-agentisan]\nrepo = \"/y\"\nshort = \"ha\"\nlayout = \"tabs\"\n"))
+	o.Team.Events = events
+	o.Team.Dashboard = workforce.DashboardPane{PluginID: "nerdsrun.agentisan", Entrypoint: "dashboard", Title: "Agentisan dashboard"}
+	serving(t, o, th.fakeHerdr)
+	// statuses are the status changes recorded, not the notices' messages.
+	statuses := func() []telemetrytest.Event {
+		var out []telemetrytest.Event
+		for _, e := range rec.Events() {
+			if e.Name == telemetry.EventStatusChanged {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+	polled(t, th.srv, 2)
+	require.Empty(t, statuses(), "the first poll is a baseline")
+
+	th.setPanes(append(th.listedPanes(),
+		pane("w14:p7", "ha-dashboard", "", "unknown"),
+		pane("w14:p8", "Agentisan dashboard", "", "unknown"),
+		pane("w14:p9", "", "", "unknown"),
+	))
+	split := telemetrytest.Event{Name: telemetry.EventStatusChanged, Attrs: map[string]any{
+		"agentisan.worker.id": "w14:p9", "agentisan.worker.bound": false,
+		"agentisan.project": "herdr-agentisan", "agentisan.group": "", "agentisan.role": "boss",
+		"agentisan.agent": "", "herdr.pane.id": "w14:p9",
+		"agentisan.status.from": "absent", "agentisan.status.to": "unknown",
+	}}
+	require.Eventually(t, func() bool { return len(statuses()) >= 1 }, ready, 5*time.Millisecond, "the split gave no event")
+	polled(t, th.srv, 2)
+	assert.Equal(t, []telemetrytest.Event{split}, statuses(), "only the shell split arrived in the boss's place")
 }
 
 // TestTeamPollKeepsItsBaselineAcrossAFailedList: a poll whose pane.list

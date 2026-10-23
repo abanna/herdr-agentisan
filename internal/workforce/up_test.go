@@ -18,6 +18,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
+	"github.com/abanna/herdr-agentisan/internal/team"
 	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
@@ -181,26 +182,32 @@ func TestUpOpensTheDashboardAboveTheBoss(t *testing.T) {
 	assert.Equal(t, workforce.DashboardOutcome{Dashboard: &workforce.Dashboard{PaneID: dash, Opened: true}}, res.DashboardOutcome)
 	assert.Equal(t, []string{dash, f.boss}, f.h.tabPanes(f.boss), "above the boss")
 	f.h.mu.Lock()
-	assert.Equal(t, workforce.DashboardLabel("ha"), f.h.pane(dash).label)
+	assert.Equal(t, team.DashboardLabel("ha"), f.h.pane(dash).label)
 	assert.Equal(t, away, f.h.focused, "focus given back")
 	f.h.mu.Unlock()
-	assert.Equal(t, "ha-dashboard", workforce.DashboardLabel("ha"))
+	assert.Equal(t, "ha-dashboard", team.DashboardLabel("ha"))
 }
 
 // TestUpFocusesTheBossThenGivesFocusBack: herdr's swap focuses the
 // dashboard in the boss's tab, which the tab keeps for the user's next visit,
 // and switches to that tab. So team up focuses the boss again, then the pane
 // that had focus when it was not the boss: the user is back where they were,
-// and the boss's tab shows its boss. A declined swap moved no focus, so only
-// the pane that had it gets it back; a refused focus on the boss still gives
-// it back (QA #96 N1).
+// and the boss's tab shows its boss. Only a swap herdr declined, naming why,
+// moved no focus, so only the pane that had it gets it back. One unchanged
+// with no reason still focused the dashboard in the boss's tab, and one whose
+// reply was lost may have swapped: the boss is focused after both (#96's
+// review, NERD-5350). A refused focus on the boss still gives it back (QA #96
+// N1).
 func TestUpFocusesTheBossThenGivesFocusBack(t *testing.T) {
 	t.Parallel()
 	tests := map[string]struct {
 		// before is the pane focused at load: "away", "boss", "beside" (a
 		// pane in the boss's tab) or "" for none.
-		before  string
-		decline bool
+		before string
+		// swap is how herdr answers the swap: "" as it is, "declined" with a
+		// reason, "unchanged" with none (herdr focused the dashboard in the
+		// boss's tab all the same), or "lost": swapped, then an error.
+		swap string
 		// refuse is the pane whose pane.focus herdr refuses.
 		refuse string
 		// focuses are the panes focused, in order; after, the user's focus
@@ -213,7 +220,9 @@ func TestUpFocusesTheBossThenGivesFocusBack(t *testing.T) {
 		"focus on the boss":          {before: "boss", focuses: []string{"boss"}, after: "boss", tab: "boss"},
 		"focus beside the boss":      {before: "beside", focuses: []string{"boss", "beside"}, after: "beside", tab: "beside"},
 		"no pane focused":            {before: "", focuses: []string{"boss"}, after: "boss", tab: "boss"},
-		"the swap declined":          {before: "away", decline: true, focuses: []string{"away"}, after: "away", tab: ""},
+		"the swap declined":          {before: "away", swap: "declined", focuses: []string{"away"}, after: "away", tab: ""},
+		"the swap unchanged":         {before: "away", swap: "unchanged", focuses: []string{"boss", "away"}, after: "away", tab: "boss"},
+		"the swap's answer lost":     {before: "away", swap: "lost", focuses: []string{"boss", "away"}, after: "away", tab: "boss"},
 		"the boss's focus refused":   {before: "away", refuse: "boss", focuses: []string{"boss", "away"}, after: "away", tab: "dashboard"},
 	}
 	for name, tc := range tests {
@@ -228,9 +237,23 @@ func TestUpFocusesTheBossThenGivesFocusBack(t *testing.T) {
 			}
 			f.h.focused = panes[tc.before]
 			srv := wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+				unchanged := map[string]any{"changed": false, "source_pane_id": "x", "focused_pane_id": "x", "layout": map[string]any{}}
 				switch {
-				case r.Method == "pane.swap" && tc.decline:
-					return herdrtest.Reply{Result: map[string]any{"type": "pane_swap", "swap": map[string]any{"changed": false, "reason": "no_neighbor", "source_pane_id": "x", "focused_pane_id": "x", "layout": map[string]any{}}}}
+				case r.Method == "pane.swap" && tc.swap == "declined":
+					unchanged["reason"] = "no_neighbor"
+					return herdrtest.Reply{Result: map[string]any{"type": "pane_swap", "swap": unchanged}}
+				case r.Method == "pane.swap" && tc.swap == "unchanged":
+					var p struct {
+						Source string `json:"source_pane_id"`
+					}
+					require.NoError(t, json.Unmarshal(r.Params, &p))
+					f.h.mu.Lock()
+					f.h.tabFocus[f.h.pane(p.Source).tab] = p.Source // herdr's focus_pane(source), outside its if changed
+					f.h.mu.Unlock()
+					return herdrtest.Reply{Result: map[string]any{"type": "pane_swap", "swap": unchanged}}
+				case r.Method == "pane.swap" && tc.swap == "lost":
+					next()
+					return errReply("server_error")
 				case r.Method == "pane.focus" && tc.refuse != "" && strings.Contains(string(r.Params), `"`+panes[tc.refuse]+`"`):
 					return errReply("server_error")
 				}

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/abanna/herdr-agentisan/internal/routing"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 )
 
@@ -55,6 +56,10 @@ func TestSampleConfigResolves(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(home, ".config", "herdr-agentisan", "elastic.env"), envFile, "the sample names the debugger's env file")
 	assert.False(t, all.Routing().Enabled, "the sample leaves routing off")
+	assert.Equal(t, &routing.JevFacts{}, all.Routing().Jev, "the sample leaves Jev off")
+	envFile, err = all.JevEnvFile(envOf(map[string]string{"HOME": home}))
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, ".config", "herdr-agentisan", "typesafe.env"), envFile, "the sample names Jev's env file")
 	assert.Equal(t, settings.LayerShared, all.Sources["routing.enabled"], "the sample sets routing.enabled itself")
 	assert.Equal(t, []settings.Team{
 		{Project: "agentisan", Layout: settings.LayoutSpaces, Color: "#7c3aed", Descriptions: map[string]string{

@@ -41,7 +41,7 @@ func TestSpawnGivesCodexItsTypesSandbox(t *testing.T) {
 		"a coder's --not-so-yolo":           {group: "coder", agent: `{ command = ["codex", "--not-so-yolo"] }`, want: []any{"--not-so-yolo", "--no-daemon"}},
 		"a coder's -c default_permissions":  {group: "coder", agent: `{ command = ["codex", "-c", "default_permissions=\":workspace\""] }`, want: []any{"-c", `default_permissions=":workspace"`, "--no-daemon"}},
 		"a coder's profile is no choice":    {group: "coder", agent: `{ command = ["codex", "-p", "work"] }`, want: []any{"-p", "work", "--no-daemon", "--sandbox", "danger-full-access"}},
-		"a claude coder":                    {group: "coder", agent: `{ command = ["claude"] }`, want: []any{"--name", "ha-coder-1"}},
+		"a claude coder":                    {group: "coder", agent: `{ command = ["claude"] }`, want: withHooksAny("--name", "ha-coder-1")},
 		"before the model and effort": {
 			group: "qa", agent: `{ command = ["codex"] }`, req: workforce.SpawnRequest{Model: "o3", Effort: "high"},
 			want: []any{"--no-daemon", "--sandbox", "danger-full-access", "--model", "o3", "-c", `model_reasoning_effort="high"`},

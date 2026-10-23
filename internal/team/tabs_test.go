@@ -319,3 +319,71 @@ func TestTabsPlacesOnlyItsOwnTabsOnce(t *testing.T) {
 	assert.Len(t, m.Projects[0].Groups[0].Workers, 1, "a tab listed twice is placed once")
 	assert.Equal(t, []team.Token{{Target: team.Target{WorkspaceID: "w14"}, Value: "1 agent · 0 working · 0 ready"}}, team.Tokens(m))
 }
+
+// TestTabsLeavesOutTheDashboard: a pane labelled <short>-dashboard, as team
+// up names the one it opens, or with the manifest's title, as prefix+d opens
+// one, is no member of the team, in the boss's tab or a worker's. Any other
+// pane there keeps its place: a plain shell split is still the boss's, and
+// with no title configured an empty label matches nothing.
+func TestTabsLeavesOutTheDashboard(t *testing.T) {
+	t.Parallel()
+	const title = "Agentisan dashboard"
+	tests := map[string]struct {
+		label, tab, title string
+		want              string // "boss", "coder" or "" for no member
+	}{
+		"team up's dashboard in the boss's tab":          {label: "ha-dashboard", tab: "w14:t1", title: title},
+		"team up's, with no title configured":            {label: "ha-dashboard", tab: "w14:t1"},
+		"prefix+d's dashboard in the boss's tab":         {label: title, tab: "w14:t1", title: title},
+		"prefix+d's dashboard in a worker's tab":         {label: title, tab: "w14:t2", title: title},
+		"team up's label in a worker's tab":              {label: "ha-dashboard", tab: "w14:t2", title: title},
+		"a plain shell split in the boss's tab":          {label: "", tab: "w14:t1", title: title, want: "boss"},
+		"a shell split with no title configured":         {label: "", tab: "w14:t1", want: "boss"},
+		"the title when none is configured":              {label: title, tab: "w14:t1", want: "boss"},
+		"another team's dashboard label":                 {label: "as-dashboard", tab: "w14:t1", title: title, want: "boss"},
+		"a label that only starts as the dashboard's":    {label: "ha-dashboard-1", tab: "w14:t1", title: title, want: "boss"},
+		"a shell split in a worker's tab":                {label: "", tab: "w14:t2", title: title, want: "coder"},
+		"a label that only ends as the manifest title's": {label: "my " + title, tab: "w14:t2", title: title, want: "coder"},
+		"a case variant of team up's label":              {label: "HA-Dashboard", tab: "w14:t1", title: title, want: "boss"},
+		"the title in another case":                      {label: "agentisan dashboard", tab: "w14:t1", title: title, want: "boss"},
+		"team up's label padded":                         {label: " ha-dashboard", tab: "w14:t1", title: title, want: "boss"},
+		"a non-ASCII label":                              {label: "◆ ha-dashboard", tab: "w14:t1", title: title, want: "boss"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			l := team.Layout{
+				Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "w14", Label: "herdr-agentisan"}},
+				Panes: []herdr.PaneInfo{
+					{PaneID: "w14:p1", WorkspaceID: "w14", TabID: "w14:t1", Agent: "claude", AgentStatus: "idle"},
+					{PaneID: "w14:p2", WorkspaceID: "w14", TabID: "w14:t2", Agent: "claude", AgentStatus: "idle"},
+					{PaneID: "w14:p9", WorkspaceID: "w14", TabID: tc.tab, Label: tc.label, AgentStatus: "unknown"},
+				},
+				Tabs: []herdr.TabInfo{{TabID: "w14:t1", WorkspaceID: "w14", Label: "ha-boss"}, {TabID: "w14:t2", WorkspaceID: "w14", Label: "ha-coder-1"}},
+			}
+			m := team.Build(l, team.Tabs{Project: "herdr-agentisan", Short: "ha", DashboardTitle: tc.title}, nil)
+			require.Len(t, m.Projects, 1)
+			members := map[string][]string{}
+			for _, w := range m.Projects[0].Boss {
+				members["boss"] = append(members["boss"], w.Pane.ID)
+			}
+			for _, g := range m.Projects[0].Groups {
+				for _, w := range g.Workers {
+					members[g.Name] = append(members[g.Name], w.Pane.ID)
+				}
+			}
+			want := map[string][]string{"boss": {"w14:p1"}, "coder": {"w14:p2"}}
+			if tc.want != "" {
+				want[tc.want] = append(want[tc.want], "w14:p9")
+			}
+			assert.Equal(t, want, members)
+		})
+	}
+}
+
+// TestDashboardLabel: team up's label for a team's dashboard pane.
+func TestDashboardLabel(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "ha-dashboard", team.DashboardLabel("ha"))
+	assert.Equal(t, "ag-dashboard", team.DashboardLabel("ag"))
+}

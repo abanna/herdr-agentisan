@@ -86,6 +86,9 @@ too.
   message the daemon sent it as `[agentisan] originally to <worker>: <body>`.
 - The body is typed with CR and CRLF as LF, and with every other control
   character but LF and TAB left out.
+- A text that ends on a word starting with `@` or `$` is typed with one
+  space after it, so Codex opens no file or mention popup to take the
+  Enter. Claude and Codex trim it.
 - The header in front of a body, `[msg <ulid> from <sender>]` with or
   without `, originally to <worker>`, or `[agentisan] originally to
   <worker>:`, doesn't hide an `item:` line that opens the body: `report
