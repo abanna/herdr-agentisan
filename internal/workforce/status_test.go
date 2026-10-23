@@ -66,6 +66,33 @@ func TestStatus(t *testing.T) {
 	assert.Equal(t, int64(0), *got.Groups[0].Members[0].IdleS, "a clock stepped back reports no rest, not a negative one")
 }
 
+// TestStatusShowsACodexWorker (NERD-5507): a Codex worker's member shows its
+// agent, status and ctx as a Claude's does, and a Codex started by hand in
+// a group's tab takes the group's slot. A reviewer the fixture adds by its
+// group alone is a Codex, as review's default provider says.
+func TestStatusShowsACodexWorker(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	w := f.workerAs(t, "ha-coder-1", "coder", "codex")
+	f.h.setPane(w.PaneID, func(p *fakePane) { p.status, p.tokens = "working", map[string]string{"ctx": "55"} })
+	hand := f.h.addTab(f.ws, "ha-qa-2", "codex", "done")
+	reviewer := f.worker(t, "ha-review-1", "review")
+
+	got, err := f.svc.Status(t.Context(), workforce.StatusRequest{})
+	require.NoError(t, err)
+	ctx55 := 55
+	require.Len(t, got.Groups, 3)
+	assert.Equal(t, workforce.GroupStatus{
+		Name: "coder", Workers: 2, Slots: 3, Occupied: 1, Open: 2, Configured: true, Targets: []string{f.ws},
+		Members: []workforce.Member{{ID: "ha-coder-1", Recorded: true, PaneID: w.PaneID, Agent: "codex", Status: "working", Ctx: &ctx55}},
+	}, got.Groups[0])
+	assert.Equal(t, workforce.GroupStatus{
+		Name: "qa", Workers: 1, Slots: 1, Occupied: 1, Configured: true, Targets: []string{f.ws},
+		Members: []workforce.Member{{ID: "ha-qa-2", PaneID: hand, Agent: "codex", Status: "done"}},
+	}, got.Groups[1], "a Codex started by hand takes the slot")
+	assert.Equal(t, []workforce.Member{{ID: "ha-review-1", Recorded: true, PaneID: reviewer.PaneID, Agent: "codex", Status: "idle"}}, got.Groups[2].Members, "review's workers are Codex")
+}
+
 // TestStatusLeavesOutTheDashboard is the cutover's F2: the team's dashboard
 // pane in the boss's tab, labelled as team up labels it or with the title
 // prefix+d gives it, is no boss member; a plain shell split there still is.
@@ -552,4 +579,38 @@ func TestStatusGatesALastAgentsCtx(t *testing.T) {
 	got := ctxAt(start.Add(time.Second))
 	require.NotNil(t, got)
 	assert.Equal(t, 70, *got)
+}
+
+// TestFixtureWorkerUsesTheConfiguredKind pins the fixture itself: worker
+// follows the group's launch, while workerAs explicitly overrides it.
+func TestFixtureWorkerUsesTheConfiguredKind(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		config, group, override, want string
+	}{
+		"default coder":    {config: teamConfig, group: "coder", want: "claude"},
+		"default review":   {config: teamConfig, group: "review", want: "codex"},
+		"configured coder": {config: teamConfig + "\n[projects.herdr-agentisan.groups.coder.agent]\ncommand = [\"codex\"]\n", group: "coder", want: "codex"},
+		"configured QA":    {config: teamConfig + "\n[projects.herdr-agentisan.groups.qa.agent]\ncommand = [\"codex\"]\n", group: "qa", want: "codex"},
+		"explicit Codex":   {config: teamConfig, group: "coder", override: "codex", want: "codex"},
+		"explicit Claude":  {config: teamConfig, group: "review", override: "claude", want: "claude"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, tc.config)
+			id := "ha-" + tc.group + "-1"
+			var w worker
+			if tc.override == "" {
+				w = f.worker(t, id, tc.group)
+			} else {
+				w = f.workerAs(t, id, tc.group, tc.override)
+			}
+			f.h.mu.Lock()
+			p := f.h.pane(w.PaneID)
+			if assert.NotNil(t, p) {
+				assert.Equal(t, tc.want, p.agent, "the actual fixture pane follows the configured kind or explicit override")
+			}
+			f.h.mu.Unlock()
+		})
+	}
 }

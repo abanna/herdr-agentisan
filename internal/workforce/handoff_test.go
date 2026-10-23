@@ -34,8 +34,8 @@ func TestHandoffReady(t *testing.T) {
 	hand := f.h.addTab(f.ws, "ha-qa-3", "claude", "idle")
 	other := f.worker(t, "ha-coder-2", "coder")
 	stale := f.worker(t, "ha-review-1", "review")
-	codex := f.h.addTab(f.ws, "ha-coder-3", "codex", "unknown")
-	f.bindRow(t, "ha-coder-3", "coder", codex)
+	codex := f.workerAs(t, "ha-coder-3", "coder", "codex").PaneID
+	f.h.setPane(codex, func(p *fakePane) { p.status = "unknown" })
 	f.h.mu.Lock()
 	f.h.alias["w3:p1"] = stale.PaneID
 	f.h.mu.Unlock()
