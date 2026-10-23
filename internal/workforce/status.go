@@ -113,7 +113,7 @@ func (s *Service) Status(ctx context.Context, req StatusRequest) (StatusResult, 
 	if err != nil {
 		return StatusResult{}, fmt.Errorf("read workers: %w", err)
 	}
-	m := team.Build(l.Layout, resolverOf(t), rows)
+	m := team.Build(l.Layout, resolverOf(t, l.dashboardTitle), rows)
 	var pr team.Project
 	if i := slices.IndexFunc(m.Projects, func(p team.Project) bool { return p.Name == t.Project }); i >= 0 {
 		pr = m.Projects[i]

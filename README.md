@@ -442,8 +442,9 @@ query '<ES|QL>'` read the events in Elasticsearch. They take its URL and read
 key from the env file `[debugger] env_file` names, at each query, so the key
 never enters an agent's environment. `herdr-agentisan debugger args` prints
 the claude command that starts it read-only, its reads fenced to the repo
-and the daemon's directory; `worker spawn --group debugger`
-will launch it. See [`docs/debugger.md`](docs/debugger.md).
+and the daemon's directory; `worker spawn --group debugger` starts it as one
+of the team's workers, in a group of its own. See
+[`docs/debugger.md`](docs/debugger.md).
 
 ## The Codex reviewer
 
@@ -497,6 +498,7 @@ drives them.
 | `team up [--project p]` | Fills each group up to its `workers` count, empty slots only, so a full team gets none; opens the team's dashboard above the boss when none is open |
 | `worker spawn --group g [--count n] [--model m]` | Adds workers, refused whole past the group's `slots` or when the repo fails the tdaddy preflight |
 | `worker retire <id> [--after-handoff]` | Closes a worker's pane, by logical id or pane id; with the flag, once its handoff is written |
+| `handoff ready [<id>] [--clear]` | Marks a worker ready to be replaced, once it has written its handoff: the daemon sets the `handoff` token on its agent pane, by logical id, tab label or pane id, or this pane with none; `--clear` takes it off (ADR-001 A33) |
 
 Each prints one JSON object and exits 1 when refused. Without `--project`
 status, up and spawn read the team whose workspace the command runs in, else
@@ -581,7 +583,8 @@ where `dashboard-tab.sh` jumped to the one it had made, so close a dashboard
 with `q`. Add `--direction down` to split below the focused pane instead.
 `team up` opens one for you, above the boss, labelled `<short>-dashboard`,
 when the team's workspace has none, and leaves one prefix+d opened there as
-it is.
+it is. Either is no member of the team: `team status` does not list it as the
+boss's (ADR-001 A19's addendum).
 See [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml).
 
 `herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json`

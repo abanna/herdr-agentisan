@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -12,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/abanna/herdr-agentisan/internal/debugger"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/routing"
 	"github.com/abanna/herdr-agentisan/internal/settings"
@@ -96,10 +99,19 @@ func (s *Service) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 		}
 	}
 	// The preflight can take seconds, so it runs before the lock: it reads
-	// the host, not the team.
+	// the host, not the team. So does a debugger's launch, which reads the
+	// env file's name and stats it, and every MCP config above the repo.
 	_, p, _, err := s.resolve(ctx, req.Selector)
 	if err != nil {
 		return SpawnResult{}, err
+	}
+	var dbg *debugger.Command
+	if g, ok := p.Groups[req.Group]; ok && !g.DescribesOnly && req.Group == settings.DebuggerType {
+		c, err := s.debuggerLaunch(p.Repo)
+		if err != nil {
+			return SpawnResult{}, configFailed(err)
+		}
+		dbg = &c
 	}
 	if err := s.preflight(ctx, p.Repo); err != nil {
 		return SpawnResult{}, err
@@ -126,7 +138,7 @@ func (s *Service) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 			return nil, err
 		}
 		c := choice{model: cmp.Or(req.Model, st.profile.AgentFor(req.Group).Model), effort: req.Effort}
-		return planRouted(st.profile, req.Group, c, d, ids)
+		return planRouted(st.profile, req.Group, c, d, ids, dbg)
 	})
 	if err != nil {
 		return SpawnResult{}, err
@@ -188,13 +200,14 @@ func rowOf(d *routing.Decision) *store.Routing {
 }
 
 // planRouted plans ids of typ with base's launch, or with the one d chose
-// when routing applied it, and gives each planned row d's record (A50).
+// when routing applied it, and gives each planned row d's record (A50); dbg
+// is a debugger's launch, as plan takes it.
 // Spawn and team up plan through it, so both launch what routing chose.
-func planRouted(p *settings.Profile, typ string, base choice, d *routing.Decision, ids []string) ([]planned, error) {
+func planRouted(p *settings.Profile, typ string, base choice, d *routing.Decision, ids []string, dbg *debugger.Command) ([]planned, error) {
 	if d != nil && d.Applied {
 		base = choice{model: d.ModelID, effort: d.Effort, provider: d.Provider}
 	}
-	ps, err := plan(p, typ, base, ids)
+	ps, err := plan(p, typ, base, ids, dbg)
 	for i := range ps {
 		ps[i].routing = rowOf(d)
 	}
@@ -245,6 +258,28 @@ func (s *Service) codexWarnings(ws []opened) []string {
 	return nil
 }
 
+// debuggerLaunch builds a debugger worker's launch in repo (A32), from
+// s.Debugger, the config dir and the env file its configuration names.
+func (s *Service) debuggerLaunch(repo string) (debugger.Command, error) {
+	l := s.Debugger
+	if l.Root == "" || l.Bin == "" {
+		return debugger.Command{}, fmt.Errorf("%w: the daemon was not given the plugin's checkout and binary", debugger.ErrInvalid)
+	}
+	if err := debugger.CheckRoot(l.Root); err != nil {
+		return debugger.Command{}, err //nolint:wrapcheck // the debugger's own error, wrapped by configFailed
+	}
+	lookup := s.LookupEnv
+	if lookup == nil {
+		lookup = os.LookupEnv
+	}
+	keys, err := debugger.KeyFiles(s.ConfigDir, lookup)
+	if err != nil {
+		return debugger.Command{}, err //nolint:wrapcheck // the debugger's own error, wrapped by configFailed
+	}
+	l.Repo, l.ConfigDir, l.KeyFiles = repo, s.ConfigDir, keys
+	return l.Command() //nolint:wrapcheck // the debugger's own error, wrapped by configFailed
+}
+
 // planned is one worker about to be opened.
 type planned struct {
 	id, group string
@@ -290,7 +325,11 @@ func (s *Service) planAndOpen(ctx context.Context, sel Selector, planFn func(sta
 // (its first tab then becomes the worker's), and binds its row. When the rest
 // of an open fails, left is the pane it opened, for abandon to close.
 func (s *Service) open(ctx context.Context, st *state, p planned) (opened, *herdr.Created, error) {
-	env := map[string]string{WorkerEnv: p.id}
+	env := maps.Clone(p.launch.env)
+	if env == nil {
+		env = map[string]string{}
+	}
+	env[WorkerEnv] = p.id
 	var (
 		c   herdr.Created
 		err error
@@ -422,10 +461,12 @@ const codexKind = "codex"
 const noDaemon = "--no-daemon"
 
 // launch is how one worker's agent is started: herdr's kind, which picks its
-// executable, and the arguments after it.
+// executable, the arguments after it, and what its tab's shell is given
+// besides the worker's id.
 type launch struct {
 	kind string
 	args []string
+	env  map[string]string
 }
 
 // choice is the model and effort ("" for none) a spawn's agents start with,
@@ -441,10 +482,20 @@ var effortPattern = regexp.MustCompile(`^[a-z]{1,16}$`)
 
 // plan builds each id's launch: the kind is the command's bare executable,
 // which herdr runs from the shell's PATH, and the arguments the command's own,
-// --no-daemon for Codex if absent, c's model and effort and, for Claude only,
-// --name with the id (herdr names a Codex).
-func plan(p *settings.Profile, typ string, c choice, ids []string) ([]planned, error) {
+// for the debugger type its launch's (dbg, A32), --no-daemon for Codex if
+// absent, c's model and effort and, for Claude only, --name with the id
+// (herdr names a Codex). A debugger's tab also gets its launch's
+// environment.
+func plan(p *settings.Profile, typ string, c choice, ids []string, dbg *debugger.Command) ([]planned, error) {
 	agent := p.AgentFor(typ)
+	var env map[string]string
+	if typ == settings.DebuggerType {
+		if dbg == nil {
+			return nil, fmt.Errorf("%w: %s: its launch was not built", ErrConfig, typ)
+		}
+		agent.Command = append(agent.Command, dbg.Args...)
+		env = dbg.Env
+	}
 	if err := settings.CheckAgentCommand(agent.Command); err != nil {
 		return nil, fmt.Errorf("%w: %s: %w", ErrConfig, typ, err)
 	}
@@ -485,7 +536,7 @@ func plan(p *settings.Profile, typ string, c choice, ids []string) ([]planned, e
 		if kind == "claude" {
 			args = append(args, "--name", id)
 		}
-		out = append(out, planned{id: id, group: typ, launch: launch{kind: kind, args: args}})
+		out = append(out, planned{id: id, group: typ, launch: launch{kind: kind, args: args, env: env}})
 	}
 	return out, nil
 }

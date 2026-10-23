@@ -29,11 +29,25 @@ type Watch struct {
 	// unknown holds the panes that turned unknown at the last poll, told
 	// about only if they still are at this one.
 	unknown map[string]bool
+	// known holds the agent panes seen in a status other than unknown since
+	// they were last judged to run an agent; fresh counts, for each of the
+	// others, the polls it has been judged one, all of them unknown. A pane
+	// that stops running an agent leaves both, and starts again if it comes
+	// back.
+	known map[string]bool
+	fresh map[string]int
 }
+
+// freshPolls is how many polls an agent pane never seen in a known status
+// is unknown, counted from the first that judged it to run an agent, before
+// it is told unknown: a spawned agent herdr has not yet classified is no
+// news (ADR-001 A44's addendum, the cutover's F3). A pane seen known keeps
+// the two-poll rule.
+const freshPolls = 20
 
 // NewWatch is a Watch that has seen nothing yet.
 func NewWatch() *Watch {
-	return &Watch{turns: map[string]*uint64{}, unknown: map[string]bool{}}
+	return &Watch{turns: map[string]*uint64{}, unknown: map[string]bool{}, known: map[string]bool{}, fresh: map[string]int{}}
 }
 
 // Observe is what changed from the last model observed to m, as notices:
@@ -42,7 +56,9 @@ func NewWatch() *Watch {
 //   - a worker that turned blocked, or from blocked to working, idle or
 //     done, or left the team, at once: its pane closed or moved away, or,
 //     when agents answered (named), its agent exited and left a shell;
-//   - a worker that turned unknown, when it still is at the next call;
+//   - a worker seen in a known status that turned unknown, when it still
+//     is at the next call; one never seen known, at the freshPolls-th call
+//     in a row that judged it to run an agent, the first call included;
 //   - a worker whose terminal's completion_seq changed to a new value,
 //     when agents is agent.list's answer for this poll (named). A terminal
 //     seen for the first time is a baseline; one agent.list no longer lists
@@ -61,6 +77,7 @@ func (w *Watch) Observe(m team.Model, agents []herdr.AgentInfo, named bool) []No
 	} else {
 		out = append(out, w.statuses(*w.last, m, now, named)...)
 	}
+	out = append(out, w.fresher(now)...)
 	if named {
 		out = append(out, w.turnsOf(m, agents, first)...)
 	}
@@ -117,7 +134,7 @@ func (w *Watch) statuses(prev, m team.Model, now []placed, named bool) []Notice 
 		switch {
 		case tr.To == string(team.StatusBlocked):
 			out = append(out, Notice{Project: tr.Project, Subject: worker.Pane.ID, Worker: WorkerName(worker), Kind: Blocked, Text: blockedText(worker)})
-		case tr.To == string(team.StatusUnknown):
+		case tr.To == string(team.StatusUnknown) && w.known[worker.Pane.ID]:
 			w.unknown[worker.Pane.ID] = true
 		case tr.From == string(team.StatusBlocked) && slices.Contains(answered, team.Status(tr.To)):
 			out = append(out, Notice{Project: tr.Project, Subject: worker.Pane.ID, Worker: WorkerName(worker), Kind: Unblocked, Text: unblockedText(worker)})
@@ -150,6 +167,40 @@ func (w *Watch) statuses(prev, m team.Model, now []placed, named bool) []Notice 
 	for _, a := range now {
 		if held[a.worker.Pane.ID] && a.worker.Pane.Status == team.StatusUnknown {
 			out = append(out, Notice{Project: a.project, Subject: a.worker.Pane.ID, Worker: WorkerName(a.worker), Kind: Unknown, Text: unknownText(a.worker)})
+		}
+	}
+	return out
+}
+
+// fresher counts the polls now's agent panes have not been seen known, and
+// is the unknown notice for each one at its freshPolls-th, once. It runs
+// after statuses, whose two-poll rule asks whether a pane was known before
+// this call.
+func (w *Watch) fresher(now []placed) []Notice {
+	var out []Notice
+	in := map[string]bool{}
+	for _, a := range now {
+		id := a.worker.Pane.ID
+		in[id] = true
+		switch {
+		case w.known[id]:
+		case a.worker.Pane.Status != team.StatusUnknown:
+			w.known[id] = true
+		default:
+			w.fresh[id]++
+			if w.fresh[id] == freshPolls {
+				out = append(out, Notice{Project: a.project, Subject: id, Worker: WorkerName(a.worker), Kind: Unknown, Text: unknownText(a.worker)})
+			}
+		}
+	}
+	for id := range w.known {
+		if !in[id] {
+			delete(w.known, id)
+		}
+	}
+	for id := range w.fresh {
+		if !in[id] {
+			delete(w.fresh, id)
 		}
 	}
 	return out

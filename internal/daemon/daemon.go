@@ -304,8 +304,8 @@ func Run(ctx context.Context, o Options) (err error) {
 	// Shared: the notices ops set them, and the poll's notices obey them (A44).
 	mutes := notice.NewMutes()
 	var ops map[string]op
-	if svc := o.newWorkforce(st, ident, idle); svc != nil {
-		ops = workforceOps(svc, ready, o.queued(in))
+	if svc := o.newWorkforce(st, ident, idle, paths.Dir); svc != nil {
+		ops = workforceOps(svc, ready, o.queued(in), o.marked)
 		maps.Copy(ops, o.noticeOps(in, mutes))
 	}
 	opsCtx, stopOps := context.WithCancel(ctx)

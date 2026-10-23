@@ -66,6 +66,26 @@ func TestStatus(t *testing.T) {
 	assert.Equal(t, int64(0), *got.Groups[0].Members[0].IdleS, "a clock stepped back reports no rest, not a negative one")
 }
 
+// TestStatusLeavesOutTheDashboard is the cutover's F2: the team's dashboard
+// pane in the boss's tab, labelled as team up labels it or with the title
+// prefix+d gives it, is no boss member; a plain shell split there still is.
+func TestStatusLeavesOutTheDashboard(t *testing.T) {
+	t.Parallel()
+	f := upFixture(t, teamConfig)
+	byTeamUp := f.h.addPane(f.boss, "", "unknown")
+	f.h.setPane(byTeamUp, func(p *fakePane) { p.label = "ha-dashboard" })
+	byKey := f.h.addPane(f.boss, "", "unknown")
+	f.h.setPane(byKey, func(p *fakePane) { p.label = dashTitle })
+	split := f.h.addPane(f.boss, "", "unknown")
+
+	got, err := f.svc.Status(t.Context(), workforce.StatusRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, []workforce.Member{
+		{ID: f.boss, PaneID: f.boss, Agent: "claude", Status: "working"},
+		{ID: split, PaneID: split, Status: "unknown"},
+	}, got.Boss)
+}
+
 // TestStatusStage: each member's stage carries its stage_at, in UTC, and
 // stage_stale from the poll's clock, the same rule the snapshot uses (ADR-001
 // A42): the coder worked a turn the clock saw whole and reported nothing in

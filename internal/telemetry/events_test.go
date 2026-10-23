@@ -174,6 +174,7 @@ func TestNilEventsEmitNothing(t *testing.T) {
 		events.StatusChanged(t.Context(), telemetry.StatusChange{WorkerID: "w", From: "idle", To: "working"})
 		events.WorkerRouted(t.Context(), "w", "p", "coder", routing.Decision{})
 		events.CtxLevelCrossed(t.Context(), telemetry.CtxLevel{WorkerID: "w", Level: "soft"})
+		events.HandoffStep(t.Context(), telemetry.Handoff{WorkerID: "w", Step: telemetry.HandoffReady})
 	})
 }
 
@@ -271,6 +272,32 @@ func TestCtxLevelEmitsTheSchema(t *testing.T) {
 	assert.Equal(t, "INFO", records[0].SeverityText())
 	assert.Equal(t, "ha-coder-1 at 78% crossed ceiling (75%)", records[0].Body().AsString())
 	assert.False(t, records[0].Timestamp().IsZero())
+}
+
+// TestHandoffEmitsTheSchema is A33's contract for the handoff event, as
+// docs/telemetry.md lists it: its name, exactly its six attributes, the body
+// line and the severity, spelled out by hand.
+func TestHandoffEmitsTheSchema(t *testing.T) {
+	t.Parallel()
+	for _, step := range []string{"ready", "cleared"} {
+		events, rec := telemetrytest.NewEvents()
+		events.HandoffStep(t.Context(), telemetry.Handoff{WorkerID: "ha-coder-1", Bound: true, Project: "ha", Group: "coder", PaneID: "w1:p1", Step: step})
+
+		got := rec.Events()
+		require.Len(t, got, 1)
+		assert.Equal(t, "agentisan.worker.handoff", got[0].Name)
+		assert.Equal(t, map[string]any{
+			"agentisan.worker.id": "ha-coder-1", "agentisan.worker.bound": true,
+			"agentisan.project": "ha", "agentisan.group": "coder", "herdr.pane.id": "w1:p1",
+			"agentisan.handoff.step": step,
+		}, got[0].Attrs, "exactly the schema's attributes, no more")
+		records := rec.Records()
+		assert.Equal(t, log.SeverityInfo, records[0].Severity())
+		assert.Equal(t, "INFO", records[0].SeverityText())
+		assert.Equal(t, "ha-coder-1 handoff "+step, records[0].Body().AsString())
+		assert.False(t, records[0].Timestamp().IsZero())
+	}
+	assert.Equal(t, []string{"ready", "cleared"}, []string{telemetry.HandoffReady, telemetry.HandoffCleared})
 }
 
 // TestSetupEventsWithoutAnEndpointIsANoop: with no endpoint (the default,

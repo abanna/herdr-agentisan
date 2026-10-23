@@ -7,7 +7,7 @@ workflow from evidence (ADR-001 item 12, A32). It ships with the plugin:
 - `herdr-agentisan events` reads the workflow event trail
   ([`telemetry.md`](telemetry.md)) back out of Elasticsearch;
 - `internal/debugger` builds its read-only launch, and `worker spawn --group
-  debugger` will start it (item 4).
+  debugger` starts it as one of the team's workers.
 
 It reads the trail, the daemon's log, the project's repo and Linear. Its
 tools write nothing, and its reads are fenced to the repo and the daemon's
@@ -66,9 +66,42 @@ worker <id>`.
 
 ## Launching it
 
-`worker spawn --group debugger` launches it in the project's repo (part 2,
-after item 4). Until then, `herdr-agentisan debugger args` prints the same
-launch for a start by hand:
+`herdr-agentisan worker spawn --group debugger` starts it as one of the
+team's workers (ADR-001 A32, A23). It gets a `<short>-debugger-<n>` tab in
+the team's workspace, in the project's repo, and a `workers` row, so the
+dashboard shows it in its group and `/` finds it by name. The group needs a
+slot, and the debugger needs its env file:
+
+```toml
+[groups.debugger]        # or [projects.<p>.groups.debugger]
+workers = 0              # team up starts none
+slots = 1
+# agent = { model = "sonnet" }   # a model only: the launch is the plugin's
+
+[debugger]
+env_file = "~/.config/herdr-agentisan/elastic.env"
+```
+
+Spawn builds the launch below from the daemon's plugin checkout and binary,
+the repo, the daemon's directory and the env file, then adds the
+workforce's `--model` and `--name`. Its group sets no command, and the
+top-level `[agent] command` never applies to it: a flag there, such as a
+permission mode, would lift its fence. A launch spawn cannot build is
+refused whole, with `config_invalid`, before any tab opens: no `env_file`,
+no role (a regular file) under the checkout, the env file in the repo or the
+daemon's directory, an `.mcp.json` it cannot read, or a path a tool rule
+cannot carry. `team up` fills a group whose `workers` is above 0 with the
+same launch, and one it cannot build refuses the whole team up only when a
+debugger is to open. Its model is `--model`, else its group's, else `[agent]`'s
+when `[agent]`'s command is claude; while `[routing] enabled` is on, routing's
+`alex_debugger` role chooses its model and effort (ADR-001 A50). A debugger
+reports no `ctx` and writes no handoff, so retire it with a plain
+`worker retire <id>`:
+`--after-handoff` is refused for one bound to a pane (an unbound one is
+retired with nothing closed, as any is).
+
+`herdr-agentisan debugger args` prints the same launch for a start by hand,
+outside the team:
 
 ```
 herdr-agentisan debugger args --repo ~/src/project --server-dir <the daemon's srv-… dir> [--config-dir <dir>] [--json]
@@ -81,7 +114,10 @@ same as `dir`, `env` and `argv`. The parts of the launch:
 
 - **The role,** appended from the plugin checkout with
   `--append-system-prompt-file <root>/roles/debugger.md`. `--root` defaults to
-  `$HERDR_PLUGIN_ROOT`, then to the checkout the binary was built in.
+  `$HERDR_PLUGIN_ROOT`, then to the checkout around the binary
+  (`<root>/bin/herdr-agentisan`). An installed copy, from `task install` or
+  `go install`, sits in no checkout, so run the checkout's binary or pass
+  `--root`; the error says where the root it tried came from.
 - **The session's facts,** in a second prompt: the plugin binary's path,
   the repo, and `daemon.log` when `--server-dir` names the daemon's directory
   (`$HERDR_PLUGIN_STATE_DIR/srv-<id>`).
@@ -97,9 +133,12 @@ same as `dir`, `env` and `argv`. The parts of the launch:
   such as `HERDR_PLUGIN_CONFIG_DIR=… <bin> events …`, or behind `env`: an
   allow rule matches past an assignment only of the variables Claude Code
   counts as safe, so the debugger cannot point `events` at another env file.
-  Whether the rule also approves a command substitution inside its
-  argument, such as `<bin> events query "$(…)"`, is neither documented
-  nor checked live: Claude Code's reference says only that deny and ask
+  The live check on #76 (2026-10-22) saw `dontAsk` deny
+  `<bin> events query "$(cat …)"`, whose nested `cat` read a file outside
+  the read fence, while `<bin> events query 'FROM … | LIMIT 1'` ran. It did
+  not try a substitution whose nested command stays inside the fence; such a
+  command reads nothing the fence does not already admit, and the env file
+  lies outside it. Claude Code's reference documents only that deny and ask
   rules see the nested command.
 - **Denied outright:** reading the repo's `.env*` files and the env file
   (by its name, and its target when it is a link), Edit, Write, NotebookEdit,

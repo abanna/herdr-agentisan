@@ -84,6 +84,7 @@ func TestWorkforceHelpMeetsTheWrapper(t *testing.T) {
 		"team up":       {"--project", "--state-dir"},
 		"worker spawn":  {"--group", "--count", "--model", "--effort", "--task-file", "--project", "--state-dir"},
 		"worker retire": {"--after-handoff", "--state-dir"},
+		"handoff ready": {"--clear", "--state-dir"},
 	}
 	e := newDaemonEnv(t)
 	for cmd, flags := range tests {
