@@ -21,6 +21,7 @@ import (
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/testtmp"
 )
 
 // helperEnv switches the test binary into a helper process: ExecSpawn
@@ -30,6 +31,7 @@ const helperEnv = "DAEMON_TEST_HELPER"
 func TestMain(m *testing.M) {
 	switch os.Getenv(helperEnv) {
 	case "":
+		testtmp.Use()
 		os.Exit(m.Run())
 	case "identity":
 		helperIdentity()

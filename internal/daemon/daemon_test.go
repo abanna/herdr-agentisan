@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -34,7 +35,9 @@ import (
 // seconds on a runner whose disk other suites keep busy: under an fsync hog a
 // fresh store.Open took a median of 2.3 s and up to 5.3 s, against 40 ms
 // idle. A daemon that is ready ends every wait at once, so the size costs
-// nothing when nothing is wrong.
+// nothing when nothing is wrong. On Linux the tests' state is on tmpfs
+// (testtmp, NERD-5503), where those fsyncs wait on no disk; ready stays for
+// a host without one, or a run that opts out.
 //
 // It covers one bounded thing at a time. The tests NERD-5354 F3 named,
 // TestBackWalksTheHistory (through backDaemon),
@@ -357,11 +360,14 @@ func socketPath(t *testing.T, stateDir, herdrSocket string) string {
 func healthy(t *testing.T, stateDir string, h *fakeHerdr) daemon.HealthInfo {
 	t.Helper()
 	var info daemon.HealthInfo
-	require.Eventually(t, func() bool {
+	if !assert.Eventually(t, func() bool {
 		var err error
 		info, err = daemon.Health(t.Context(), socketPath(t, stateDir, h.path))
 		return err == nil
-	}, ready, 10*time.Millisecond, "the daemon never answered health")
+	}, ready, 10*time.Millisecond, "the daemon never answered health") {
+		logStacks(t)
+		t.FailNow()
+	}
 	return info
 }
 
@@ -384,9 +390,24 @@ func (r *running) healthy(t *testing.T, stateDir string, h *fakeHerdr) daemon.He
 		case <-time.After(10 * time.Millisecond):
 		}
 		if time.Now().After(deadline) {
+			logStacks(t)
 			t.Fatalf("the daemon never answered health within %v: %v", ready, err)
 		}
 	}
+}
+
+// logStacks logs every goroutine's stack when a daemon never answered
+// health, so the failure shows where its start waits: such dumps showed
+// the starts NERD-5503 fixed waiting in state.db's fsyncs.
+func logStacks(t *testing.T) {
+	t.Helper()
+	buf := make([]byte, 4<<20)
+	n := runtime.Stack(buf, true)
+	cut := ""
+	if n == len(buf) {
+		cut = ", cut at 4 MiB"
+	}
+	t.Logf("every goroutine when the wait ran out%s:\n%s", cut, buf[:n])
 }
 
 func TestPathsForClasses(t *testing.T) {
