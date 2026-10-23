@@ -27,6 +27,10 @@ var (
 	// ErrAgentNotFound means no agent answers to the target
 	// (agent_not_found).
 	ErrAgentNotFound = errors.New("herdr agent not found")
+	// ErrLaunchPending means agent.rename found the agent still starting:
+	// herdr changes no name while agent.start's launch is pending
+	// (agent_launch_pending, 0.9.5 src/app/agents.rs:124-126).
+	ErrLaunchPending = errors.New("herdr agent launch is still pending")
 	// ErrWaitTimeout is herdr's timeout code. pane.wait_for_output answers it
 	// when it saw no match in time (src/api/wait.rs:114-126), but agent.prompt
 	// answers it too when typing its text timed out (0.9.5
@@ -45,10 +49,11 @@ var ErrNotSwapped = errors.New("herdr swapped no panes")
 // workforceCodes maps the codes above to their sentinels; APIError.Is reads
 // it.
 var workforceCodes = map[string]error{
-	"agent_pane_busy":  ErrPaneBusy,
-	"agent_name_taken": ErrNameTaken,
-	"agent_not_found":  ErrAgentNotFound,
-	"timeout":          ErrWaitTimeout,
+	"agent_pane_busy":      ErrPaneBusy,
+	"agent_name_taken":     ErrNameTaken,
+	"agent_not_found":      ErrAgentNotFound,
+	"agent_launch_pending": ErrLaunchPending,
+	"timeout":              ErrWaitTimeout,
 }
 
 // Created is a new tab, or a new workspace's first tab, and the pane herdr
@@ -401,8 +406,76 @@ func (c Client) RenamePane(ctx context.Context, paneID, label string) error {
 	if err := c.Call(ctx, "pane.rename", params, &out); err != nil {
 		return err
 	}
-	if out.Type != "pane_info" || out.Pane == nil || out.Pane.PaneID == "" {
+	if out.Type != typePaneInfo || out.Pane == nil || out.Pane.PaneID == "" {
 		return fmt.Errorf("%w: pane.rename: result type %q with no pane, want \"pane_info\"", ErrProtocol, out.Type)
 	}
 	return nil
+}
+
+// PaneSplit splits a pane in two, never focusing the new one: a worker's
+// replacement must not pull the user away from what they are looking at.
+type PaneSplit struct {
+	TargetPaneID string
+	// Direction is "right" or "down".
+	Direction string
+	// Ratio is the target's share of the split; 0 sends none, so herdr's
+	// 0.5 applies.
+	Ratio float64
+	// Cwd is the new pane's working directory; "" leaves it to herdr, which
+	// follows the target's.
+	Cwd string
+	// Env is set in the new pane's shell.
+	Env map[string]string
+}
+
+// SplitPane opens a pane beside s.TargetPaneID and returns it with its
+// terminal: pane.split, answered with pane_info {pane}, the pane pane.get
+// reads (0.9.5 src/app/api/panes.rs:133-140). A target herdr does not have is
+// ErrPaneNotFound.
+func (c Client) SplitPane(ctx context.Context, s PaneSplit) (PaneInfo, error) {
+	params := struct {
+		TargetPaneID string            `json:"target_pane_id"`
+		Direction    string            `json:"direction"`
+		Ratio        float64           `json:"ratio,omitempty"`
+		Cwd          string            `json:"cwd,omitempty"`
+		Focus        bool              `json:"focus"`
+		Env          map[string]string `json:"env,omitempty"`
+	}{TargetPaneID: s.TargetPaneID, Direction: s.Direction, Ratio: s.Ratio, Cwd: s.Cwd, Env: s.Env}
+	var out struct {
+		Type string    `json:"type"`
+		Pane *PaneInfo `json:"pane"`
+	}
+	if err := c.Call(ctx, "pane.split", params, &out); err != nil {
+		return PaneInfo{}, err
+	}
+	if out.Type != typePaneInfo {
+		return PaneInfo{}, fmt.Errorf("%w: pane.split: result type %q, want \"pane_info\"", ErrProtocol, out.Type)
+	}
+	if out.Pane == nil || out.Pane.PaneID == "" || out.Pane.TerminalID == "" {
+		return PaneInfo{}, fmt.Errorf("%w: pane.split: result has no pane.pane_id or pane.terminal_id", ErrProtocol)
+	}
+	return *out.Pane, nil
+}
+
+// RenameAgent gives the agent herdr knows as target, its pane id or its
+// name but never its terminal, the name name, or clears its name when name is
+// "": agent.rename, answered with agent_info. herdr reads a missing name as
+// clearing it and refuses "" (0.9.5 src/app/agents.rs:98-101, 130-133).
+// Renaming an agent to the name it has, or clearing a name it lacks,
+// succeeds and changes nothing. ErrNameTaken means another terminal has the
+// name, ErrLaunchPending that its launch is still pending, and
+// ErrAgentNotFound that target hosts no agent.
+func (c Client) RenameAgent(ctx context.Context, target, name string) (Agent, error) {
+	params := struct {
+		Target string `json:"target"`
+		Name   string `json:"name,omitempty"`
+	}{Target: target, Name: name}
+	var out struct {
+		Type  string `json:"type"`
+		Agent *Agent `json:"agent"`
+	}
+	if err := c.Call(ctx, "agent.rename", params, &out); err != nil {
+		return Agent{}, err
+	}
+	return agentResult("agent.rename", "agent_info", out.Type, out.Agent)
 }

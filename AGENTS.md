@@ -199,11 +199,12 @@ exempts whatever is later added under that name.
   after `internal/preflight`'s check, each group up to its count for
   `team up`, which also opens the team's dashboard above the boss
   (`dashboard.go`); closing the pane a worker's row is bound to, after its
-  handoff when asked, with the row retired; and `handoff ready`
-  (`handoff.go`, A33), the daemon writing the `handoff` token on a worker's
-  agent pane once `pane.get` proves its terminal, with no row changed. The
-  daemon runs them, with the plugin's dashboard pane and the Codex hooks
-  check `internal/cli` gives it; `internal/cli` only asks it.
+  handoff when asked, with the row retired, never while its handoff is
+  pending, and failing the handoff whose replacement pane it closes (A33);
+  and `handoff ready` (`handoff.go`, A33), the daemon writing the `handoff`
+  token on a worker's agent pane once `pane.get` proves its terminal, with no
+  row changed. The daemon runs them, with the plugin's dashboard pane and the
+  Codex hooks check `internal/cli` gives it; `internal/cli` only asks it.
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
@@ -236,9 +237,11 @@ exempts whatever is later added under that name.
   claimed one at a time, oldest first; the daemon's notices to a boss are
   added to the one still queued (`notify.go`, A44); and a pending handoff
   (`handoffs.go`) holds a worker's inbox until it completes, which rebinds
-  the worker in the same transaction. A `workers` row binds its pane by
-  terminal, with the shell the team poll read (migration 0003, A35), and the
-  routing decision it was launched with (migration 0005, A50); the poll's
+  the worker in the same transaction, or fails; while it is pending no
+  ending is written to the worker's row, and a worker still starting
+  begins none (A33). A `workers` row binds its pane by terminal, with the
+  shell the team poll read (migration 0003, A35), and the routing decision
+  it was launched with (migration 0005, A50); the poll's
   writes are compare-and-sets on the row as it read it. The GitHub notices'
   seen-set, open PRs and seed marks (`github.go`, migration 0004, A45) make
   each event told once across restarts. Tests open a fresh database in a temp

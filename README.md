@@ -496,7 +496,7 @@ drives them.
 | `team status [--project p]` | Every group's counts and open slots, and each worker's status, ctx, item, stage (and whether it is old) and idle time |
 | `team up [--project p]` | Fills each group up to its `workers` count, empty slots only, so a full team gets none; opens the team's dashboard above the boss when none is open |
 | `worker spawn --group g [--count n] [--model m]` | Adds workers, refused whole past the group's `slots` or when the repo fails the tdaddy preflight |
-| `worker retire <id> [--after-handoff]` | Closes a worker's pane, by logical id or pane id; with the flag, once its handoff is written |
+| `worker retire <id> [--after-handoff]` | Closes a worker's pane, by logical id or pane id; with the flag, once its handoff is written. Refused (`handoff_pending`) while the worker is being replaced; retiring the replacement's pane abandons that rotation and answers `handoff_failed` with the worker's id (ADR-001 A33) |
 | `handoff ready [<id>] [--clear]` | Marks a worker ready to be replaced, once it has written its handoff: the daemon sets the `handoff` token on its agent pane, by logical id, tab label or pane id, or this pane with none; `--clear` takes it off (ADR-001 A33) |
 
 Each prints one JSON object and exits 1 when refused. Without `--project`

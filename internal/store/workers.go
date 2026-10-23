@@ -289,15 +289,24 @@ var endsWorker = map[string]bool{StatusRetired: true, StatusFailed: true, Status
 
 // setWorkerStatus moves the live row at a generation to a status. ?4 is the
 // retirement time, NULL for starting and active, which never bring a lost row
-// back: only BindWorker does.
+// back: only BindWorker does. A retirement leaves a row with a pending
+// handoff alone, as markWorkerLost does, so the handoff never outlives its
+// row (A33 part 2a).
 const setWorkerStatus = `UPDATE workers SET status = ?3, retired_at = max(?4, created_at)
-WHERE logical_id = ?1 AND generation = ?2 AND retired_at IS NULL AND (?4 IS NOT NULL OR status <> 'lost')`
+WHERE logical_id = ?1 AND generation = ?2 AND retired_at IS NULL AND (?4 IS NOT NULL OR status <> 'lost')
+	AND (?4 IS NULL OR NOT EXISTS (SELECT 1 FROM handoffs AS h WHERE h.logical_id = ?1 AND h.state = 'pending'))`
+
+// heldByHandoff tells a retirement setWorkerStatus refused for a pending
+// handoff from one with no live row at the generation.
+const heldByHandoff = `SELECT EXISTS (SELECT 1 FROM workers WHERE logical_id = ?1 AND generation = ?2 AND retired_at IS NULL)
+	AND EXISTS (SELECT 1 FROM handoffs WHERE logical_id = ?1 AND state = 'pending')`
 
 // SetWorkerStatus moves w's row, at w's generation and not retired, to status
 // at at. Retired, failed and gone retire it, lost or not, at at, or at its
-// creation time if at is earlier. ErrNoWorker means no such row is live: it
-// was retired, rebound at another generation, or, for starting and active,
-// marked lost.
+// creation time if at is earlier, but never while the worker's handoff is
+// pending (ErrHandoffPending): it ends once the handoff completes or fails.
+// ErrNoWorker means no such row is live: it was retired, rebound at another
+// generation, or, for starting and active, marked lost.
 func (s *Store) SetWorkerStatus(ctx context.Context, w Worker, status string, at time.Time) error {
 	if status != StatusStarting && status != StatusActive && !endsWorker[status] {
 		return fmt.Errorf("%w: worker status %q", ErrInvalid, status)
@@ -315,6 +324,15 @@ func (s *Store) SetWorkerStatus(ctx context.Context, w Worker, status string, at
 		return fmt.Errorf("%w: set worker %s %s: %w", ErrStore, w.LogicalID, status, err)
 	}
 	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		var held bool
+		if retired != nil {
+			if err := s.db.QueryRowContext(ctx, heldByHandoff, w.LogicalID, w.Generation).Scan(&held); err != nil {
+				return fmt.Errorf("%w: set worker %s %s: %w", ErrStore, w.LogicalID, status, err)
+			}
+		}
+		if held {
+			return fmt.Errorf("%w: %s stays live until its handoff completes or fails", ErrHandoffPending, w.LogicalID)
+		}
 		return fmt.Errorf("%w: %s is not a live worker at generation %d", ErrNoWorker, w.LogicalID, w.Generation)
 	}
 	return nil
