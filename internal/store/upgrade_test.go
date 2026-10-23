@@ -66,8 +66,10 @@ func TestUpgradeFromTheFirstSchema(t *testing.T) {
 func TestUpgradeTakesEachProviderFromItsRouting(t *testing.T) {
 	t.Parallel()
 	seven := fstest.MapFS{}
-	for _, name := range []string{"0001_init.sql", "0002_messages.sql", "0003_worker_identity.sql", "0004_github_notices.sql",
-		"0005_worker_routing.sql", "0006_github_seeded_kinds.sql", "0007_board.sql"} {
+	for _, name := range []string{
+		"0001_init.sql", "0002_messages.sql", "0003_worker_identity.sql", "0004_github_notices.sql",
+		"0005_worker_routing.sql", "0006_github_seeded_kinds.sql", "0007_board.sql",
+	} {
 		raw, err := os.ReadFile(filepath.Join("migrations", name)) // #nosec G304 -- this package's own migrations
 		require.NoError(t, err)
 		seven[name] = &fstest.MapFile{Data: raw}
