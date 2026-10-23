@@ -1,0 +1,39 @@
+{
+ "data": {
+  "repository": {
+   "pullRequest": {
+    "user": {
+     "nodes": []
+    },
+    "bot": {
+     "nodes": [
+      {
+       "author": {
+        "login": "chatgpt-codex-connector"
+       },
+       "state": "COMMENTED",
+       "submittedAt": "2026-10-22T23:20:14Z",
+       "commit": {
+        "oid": "1e0fb1b9c2a54e1f9d3b7a6c5e4d3c2b1a0f9e8d"
+       },
+       "body": "<!-- codex-review-receipt:v1 -->\n\n\n### 💡 Codex Review\n\nHere are some automated review suggestions for this pull request.\n\n<details> <summary>ℹ️ About Codex in GitHub</summary>\n<br/>\n\nCodex has been enabled to automatically review pull requests in this repo.\n</details>",
+       "comments": {
+        "totalCount": 2,
+        "nodes": [
+         {
+          "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  A finding's title**\n\nWhat the finding says.\n\nUseful? React with 👍 / 👎.",
+          "replyTo": null
+         },
+         {
+          "body": "**<sub><sub>![P1 Badge](https://img.shields.io/badge/P1-orange?style=flat)</sub></sub>  A finding's title**\n\nWhat the finding says.\n\nUseful? React with 👍 / 👎.",
+          "replyTo": null
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  }
+ }
+}
