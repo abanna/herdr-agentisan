@@ -25,8 +25,13 @@ type Member struct {
 	Recorded bool   `json:"recorded"`
 	PaneID   string `json:"pane_id"`
 	// Agent is the agent herdr detects, such as "claude"; "" for a shell.
-	Agent  string `json:"agent"`
-	Status string `json:"status"`
+	Agent string `json:"agent"`
+	// Provider is the agent its row records it was launched as, claude or
+	// codex (ADR-001 A66); absent for a pane no row binds and a row bound
+	// before migration 0008. Beside Agent, it shows a pane that now runs
+	// another agent than its worker was launched as.
+	Provider string `json:"provider,omitempty"`
+	Status   string `json:"status"`
 	// Ctx is the context used, from the ctx token; null when absent, not a
 	// percentage or on a pane herdr detects no agent in (ADR-001 A27), never
 	// 0 for unknown.
@@ -75,6 +80,9 @@ type UnboundWorker struct {
 	// it, else what it was while herdr lists its terminal nowhere, until
 	// the poll re-keys or loses it.
 	Status string `json:"status"`
+	// Provider is the agent the row records it was launched as (A66);
+	// absent for a row bound before migration 0008.
+	Provider string `json:"provider,omitempty"`
 }
 
 // StatusResult is team status's answer.
@@ -123,7 +131,7 @@ func (s *Service) Status(ctx context.Context, req StatusRequest) (StatusResult, 
 		out.Workspaces = []string{}
 	}
 	for _, w := range pr.Boss {
-		out.Boss = append(out.Boss, s.member(w, layout{}))
+		out.Boss = append(out.Boss, s.member(w, layout{}, nil))
 	}
 	// A tabs team's worker is named by its tab's label when no row binds it.
 	labels := l
@@ -150,7 +158,7 @@ func (s *Service) Status(ctx context.Context, req StatusRequest) (StatusResult, 
 			g.Targets = append(g.Targets, tg.WorkspaceID)
 		}
 		for _, w := range found[name].Workers {
-			g.Members = append(g.Members, s.member(w, labels))
+			g.Members = append(g.Members, s.member(w, labels, rows))
 		}
 		out.Groups = append(out.Groups, g)
 	}
@@ -167,18 +175,21 @@ func unbound(project string, l layout, rows []store.Worker) []UnboundWorker {
 	out := []UnboundWorker{}
 	for _, r := range rows {
 		if r.Project == project && (r.Status == store.StatusLost || !listed[r.TerminalID]) {
-			out = append(out, UnboundWorker{ID: r.LogicalID, Group: r.Group, PaneID: r.PaneID, Status: r.Status})
+			out = append(out, UnboundWorker{ID: r.LogicalID, Group: r.Group, PaneID: r.PaneID, Status: r.Status, Provider: r.Provider})
 		}
 	}
 	return out
 }
 
 // member reports one worker of the model, named by its tab's label in l
-// when no row binds it.
-func (s *Service) member(w team.Worker, l layout) Member {
+// when no row binds it, with the provider its row among rows records.
+func (s *Service) member(w team.Worker, l layout, rows []store.Worker) Member {
 	m := Member{
 		ID: w.ID, Recorded: w.Bound, PaneID: w.Pane.ID, Agent: w.Pane.Agent, Status: string(w.Pane.Status),
 		Item: w.Pane.Item, Stage: w.Pane.Stage,
+	}
+	if i := slices.IndexFunc(rows, func(r store.Worker) bool { return w.Bound && r.LogicalID == w.ID }); i >= 0 {
+		m.Provider = rows[i].Provider
 	}
 	if !w.Bound {
 		if p, ok := l.pane(w.Pane.ID); ok {

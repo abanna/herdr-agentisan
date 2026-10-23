@@ -279,7 +279,7 @@ func TestBindWorkerLifecycle(t *testing.T) {
 	s := open(t, dbPath(t))
 	ctx := t.Context()
 	t0 := time.Date(2026, 10, 19, 20, 0, 0, 0, time.UTC)
-	w := store.Worker{LogicalID: "ha-coder-2", Project: "herdr-agentisan", Group: "coder", PaneID: "w14:p7", TerminalID: "term_a"}
+	w := store.Worker{LogicalID: "ha-coder-2", Provider: "claude", Project: "herdr-agentisan", Group: "coder", PaneID: "w14:p7", TerminalID: "term_a"}
 
 	gen, err := s.BindWorker(ctx, w, t0)
 	require.NoError(t, err)
@@ -290,7 +290,7 @@ func TestBindWorkerLifecycle(t *testing.T) {
 	assert.Equal(t, store.Row{Worker: w, CreatedAt: t0}, row.InUTC())
 
 	require.NoError(t, s.SetWorkerStatus(ctx, w, store.StatusActive, t0.Add(time.Second)))
-	_, err = s.BindWorker(ctx, store.Worker{LogicalID: "ha-coder-2", PaneID: "w14:p9", TerminalID: "term_b"}, t0.Add(2*time.Second))
+	_, err = s.BindWorker(ctx, store.Worker{LogicalID: "ha-coder-2", Provider: "claude", PaneID: "w14:p9", TerminalID: "term_b"}, t0.Add(2*time.Second))
 	require.ErrorIs(t, err, store.ErrWorkerLive, "a live id is never rebound")
 	w.Status = store.StatusActive
 	live, err := s.Workers(ctx)
@@ -308,13 +308,13 @@ func TestBindWorkerLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, live)
 
-	_, err = s.BindWorker(ctx, store.Worker{LogicalID: "ha-coder-2", Project: "assay", Group: "qa", PaneID: "w14:pA", TerminalID: "term_c"}, t0.Add(time.Hour))
+	_, err = s.BindWorker(ctx, store.Worker{LogicalID: "ha-coder-2", Provider: "claude", Project: "assay", Group: "qa", PaneID: "w14:pA", TerminalID: "term_c"}, t0.Add(time.Hour))
 	require.ErrorIs(t, err, store.ErrWorkerLive, "another project's id is never taken over (QA #78 F4)")
 	unchanged, err := s.WorkerRow(ctx, "ha-coder-2")
 	require.NoError(t, err)
 	assert.Equal(t, row, unchanged)
 
-	again := store.Worker{LogicalID: "ha-coder-2", Project: "herdr-agentisan", Group: "qa", PaneID: "w14:pA", TerminalID: "term_c"}
+	again := store.Worker{LogicalID: "ha-coder-2", Provider: "codex", Project: "herdr-agentisan", Group: "qa", PaneID: "w14:pA", TerminalID: "term_c"}
 	gen, err = s.BindWorker(ctx, again, t0.Add(time.Hour))
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), gen)
@@ -340,7 +340,7 @@ func TestBindWorkerRecordsTheRouting(t *testing.T) {
 		OverrideBinding: "claude_strong", OverrideBy: "boss", OverrideEffort: "xhigh",
 		AssignmentDigest: "sha256:ab", PolicyVersion: "v1-0123456789ab", RoutedAt: t0,
 	}
-	w := store.Worker{LogicalID: "ha-coder-1", Project: "herdr-agentisan", Group: "coder", PaneID: "w14:p7", TerminalID: "term_a", Routing: routed}
+	w := store.Worker{LogicalID: "ha-coder-1", Provider: "claude", Project: "herdr-agentisan", Group: "coder", PaneID: "w14:p7", TerminalID: "term_a", Routing: routed}
 
 	_, err := s.BindWorker(ctx, w, t0)
 	require.NoError(t, err)
@@ -357,7 +357,7 @@ func TestBindWorkerRecordsTheRouting(t *testing.T) {
 		nil,
 	} {
 		require.NoError(t, s.SetWorkerStatus(ctx, store.Worker{LogicalID: "ha-coder-1", Generation: row.Generation}, store.StatusRetired, t0))
-		gen, err := s.BindWorker(ctx, store.Worker{LogicalID: "ha-coder-1", Project: "herdr-agentisan", Group: "coder", PaneID: "w14:p8", TerminalID: "term_b", Routing: next}, t0)
+		gen, err := s.BindWorker(ctx, store.Worker{LogicalID: "ha-coder-1", Provider: "claude", Project: "herdr-agentisan", Group: "coder", PaneID: "w14:p8", TerminalID: "term_b", Routing: next}, t0)
 		require.NoError(t, err)
 		row, err = s.WorkerRow(ctx, "ha-coder-1")
 		require.NoError(t, err)
@@ -365,7 +365,7 @@ func TestBindWorkerRecordsTheRouting(t *testing.T) {
 		assert.Equal(t, next, row.InUTC().Routing, "the new bind's, with no override left over")
 	}
 
-	_, err = s.BindWorker(ctx, store.Worker{LogicalID: "ha-coder-2", Project: "herdr-agentisan", Group: "coder", PaneID: "w14:p9", TerminalID: "term_c", Routing: &store.Routing{Role: "coder"}}, t0)
+	_, err = s.BindWorker(ctx, store.Worker{LogicalID: "ha-coder-2", Provider: "claude", Project: "herdr-agentisan", Group: "coder", PaneID: "w14:p9", TerminalID: "term_c", Routing: &store.Routing{Role: "coder"}}, t0)
 	require.ErrorIs(t, err, store.ErrInvalid, "a decision with no time")
 	_, err = s.WorkerRow(ctx, "ha-coder-2")
 	require.ErrorIs(t, err, store.ErrNoWorker, "and nothing is bound")
@@ -373,14 +373,15 @@ func TestBindWorkerRecordsTheRouting(t *testing.T) {
 
 // TestAHandoffKeepsTheRouting: a worker's handoff, completed or found by
 // the poll after a live handoff, moves its row to the new terminal and
-// keeps the routing decision it was launched with (A50).
+// keeps the routing decision it was launched with (A50) and its provider
+// (A66).
 func TestAHandoffKeepsTheRouting(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
 	ctx := t.Context()
 	t0 := time.Date(2026, 10, 21, 12, 0, 0, 0, time.UTC)
 	routed := &store.Routing{Role: "coder", Provider: "claude", Binding: "claude_mid", ModelID: "claude-sonnet-5-5", Effort: "high", PolicyVersion: "v1-0123456789ab", RoutedAt: t0}
-	_, err := s.BindWorker(ctx, store.Worker{LogicalID: "w", Project: "agentisan", Group: "coder", PaneID: "w14:p2", TerminalID: "term_a", Routing: routed}, t0)
+	_, err := s.BindWorker(ctx, store.Worker{LogicalID: "w", Provider: "claude", Project: "agentisan", Group: "coder", PaneID: "w14:p2", TerminalID: "term_a", Routing: routed}, t0)
 	require.NoError(t, err)
 	// Active, as spawn marks it once its agent is up: a starting worker
 	// hands off nothing.
@@ -393,12 +394,14 @@ func TestAHandoffKeepsTheRouting(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "term_b", row.TerminalID)
 	assert.Equal(t, routed, row.InUTC().Routing)
+	assert.Equal(t, "claude", row.Provider, "and the provider it runs (A66)")
 
 	require.NoError(t, s.RekeyWorker(ctx, row.Worker, "w14:p9", "term_c"))
 	row, err = s.WorkerRow(ctx, "w")
 	require.NoError(t, err)
 	assert.Equal(t, "term_c", row.TerminalID)
 	assert.Equal(t, routed, row.InUTC().Routing)
+	assert.Equal(t, "claude", row.Provider)
 }
 
 // TestBindWorkerReusesALostID: a lost row is live, so starting and active
@@ -419,13 +422,13 @@ func TestBindWorkerReusesALostID(t *testing.T) {
 	}
 	assert.Equal(t, lost, liveRow(t, s, "w"))
 
-	gen, err := s.BindWorker(ctx, store.Worker{LogicalID: "w", Project: "agentisan", Group: "coders", PaneID: "w14:p9", TerminalID: "term_new"}, t0)
+	gen, err := s.BindWorker(ctx, store.Worker{LogicalID: "w", Provider: "claude", Project: "agentisan", Group: "coders", PaneID: "w14:p9", TerminalID: "term_new"}, t0)
 	require.NoError(t, err)
 	assert.Equal(t, int64(4), gen)
 	assert.Equal(t, store.Worker{
 		LogicalID: "w", Project: "agentisan", Group: "coders", PaneID: "w14:p9", Generation: 4,
-		TerminalID: "term_new", Status: store.StatusStarting,
-	}, liveRow(t, s, "w"))
+		TerminalID: "term_new", Status: store.StatusStarting, Provider: "claude",
+	}, liveRow(t, s, "w"), "a row with no provider takes the new bind's (A66)")
 
 	require.NoError(t, s.MarkWorkerLost(ctx, liveRow(t, s, "w")))
 	require.NoError(t, s.SetWorkerStatus(ctx, liveRow(t, s, "w"), store.StatusRetired, t0), "an ending retires a lost row")
@@ -447,7 +450,7 @@ func TestBindWorkerKeepsAnotherProjectsID(t *testing.T) {
 	retire(t, s, "v")
 	lost := liveRow(t, s, "w")
 
-	_, err := s.BindWorker(ctx, store.Worker{LogicalID: "w", Project: "assay", Group: "coders", PaneID: "w14:p9", TerminalID: "term_new"}, t1)
+	_, err := s.BindWorker(ctx, store.Worker{LogicalID: "w", Provider: "claude", Project: "assay", Group: "coders", PaneID: "w14:p9", TerminalID: "term_new"}, t1)
 	require.ErrorIs(t, err, store.ErrWorkerLive)
 	assert.Contains(t, err.Error(), "w is live, or is another project's than assay")
 	assert.Equal(t, lost, liveRow(t, s, "w"), "nothing changed")
@@ -477,7 +480,7 @@ func TestBindWorkerFailsAStaleHandoff(t *testing.T) {
 	require.NoError(t, err)
 	retire(t, s, "w")
 
-	gen, err := s.BindWorker(ctx, store.Worker{LogicalID: "w", Project: "agentisan", Group: "coders", PaneID: "w14:p9", TerminalID: "term_new"}, t1.Add(time.Hour))
+	gen, err := s.BindWorker(ctx, store.Worker{LogicalID: "w", Provider: "claude", Project: "agentisan", Group: "coders", PaneID: "w14:p9", TerminalID: "term_new"}, t1.Add(time.Hour))
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), gen)
 	assert.Equal(t, "failed", handoffState(t, s, stale))
@@ -494,7 +497,7 @@ func TestBindWorkerFailsAStaleHandoff(t *testing.T) {
 	seedWorker(t, s, "v", "w15:p2", 0)
 	held, err := s.BeginHandoff(ctx, "v", "w15:p7", terminal("w15:p7"), t1)
 	require.NoError(t, err)
-	_, err = s.BindWorker(ctx, store.Worker{LogicalID: "v", PaneID: "w15:p9", TerminalID: "term_other"}, t1.Add(time.Hour))
+	_, err = s.BindWorker(ctx, store.Worker{LogicalID: "v", Provider: "claude", PaneID: "w15:p9", TerminalID: "term_other"}, t1.Add(time.Hour))
 	require.ErrorIs(t, err, store.ErrWorkerLive)
 	assert.Equal(t, "pending", handoffState(t, s, held), "a refused bind changes nothing")
 }
@@ -509,7 +512,7 @@ func TestSetWorkerStatusEndings(t *testing.T) {
 		t.Run(status, func(t *testing.T) {
 			t.Parallel()
 			s := open(t, dbPath(t))
-			w := store.Worker{LogicalID: "x-qa-1", PaneID: "w1:p1", TerminalID: "term_1"}
+			w := store.Worker{LogicalID: "x-qa-1", Provider: "claude", PaneID: "w1:p1", TerminalID: "term_1"}
 			_, err := s.BindWorker(t.Context(), w, t0)
 			require.NoError(t, err)
 
@@ -564,12 +567,16 @@ func TestWorkerWritesRefuseWhatTheyCannotRecord(t *testing.T) {
 	s := open(t, dbPath(t))
 	ctx := t.Context()
 	t0 := time.Date(2026, 10, 19, 20, 0, 0, 0, time.UTC)
-	w := store.Worker{LogicalID: "x-qa-1", PaneID: "w1:p1", TerminalID: "term_1"}
+	w := store.Worker{LogicalID: "x-qa-1", Provider: "claude", PaneID: "w1:p1", TerminalID: "term_1"}
 
 	for name, bad := range map[string]store.Worker{
 		"no id":       {PaneID: "w1:p1", TerminalID: "term_1"},
 		"no pane":     {LogicalID: "x-qa-1", TerminalID: "term_1"},
 		"no terminal": {LogicalID: "x-qa-1", PaneID: "w1:p1"},
+		// A66: every bind records the provider its worker runs.
+		"no provider":      {LogicalID: "x-qa-1", PaneID: "w1:p1", TerminalID: "term_1"},
+		"another provider": {LogicalID: "x-qa-1", Provider: "gemini", PaneID: "w1:p1", TerminalID: "term_1"},
+		"a case variant":   {LogicalID: "x-qa-1", Provider: "Claude", PaneID: "w1:p1", TerminalID: "term_1"},
 	} {
 		_, err := s.BindWorker(ctx, bad, t0)
 		require.ErrorIs(t, err, store.ErrInvalid, name)

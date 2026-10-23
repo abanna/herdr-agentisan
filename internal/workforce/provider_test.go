@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/abanna/herdr-agentisan/internal/routing"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
@@ -57,24 +58,40 @@ func TestSpawnRunsTheGroupsProvider(t *testing.T) {
 // TestSpawnRefusesAModelOfTheOtherProvider: with routing off, a spawn's
 // --model, or the group's, whose name says the other provider runs it is
 // refused before anything opens, naming both providers and never the model;
-// a name the plugin does not know passes (A62).
+// a name the plugin does not know passes (A62). The boss's --model checks
+// the provider and never chooses it, so its refusal is a provider_mismatch
+// that says to pass --provider; the group's is the configuration's (A66).
 func TestSpawnRefusesAModelOfTheOtherProvider(t *testing.T) {
 	t.Parallel()
 	codexQA := strings.Replace(teamConfig, "[projects.herdr-agentisan.groups.qa]\n", "[projects.herdr-agentisan.groups.qa]\nagent = { command = [\"codex\"] }\n", 1)
 	for name, tc := range map[string]struct {
 		config string
 		req    workforce.SpawnRequest
+		want   error
 		says   string
 	}{
-		"a claude model for codex": {config: codexQA, req: workforce.SpawnRequest{Group: "qa", Count: 1, Model: "claude-opus-5-5"}, says: "qa's agent model is a claude model, and its agent runs codex"},
-		"a codex model for claude": {config: teamConfig, req: workforce.SpawnRequest{Group: "coder", Count: 1, Model: "gpt-6.1-sol"}, says: "coder's agent model is a codex model, and its agent runs claude"},
-		"the group's own model":    {config: strings.Replace(codexQA, "command = [\"codex\"] }", "command = [\"codex\"], model = \"sonnet\" }", 1), req: workforce.SpawnRequest{Group: "qa", Count: 1}, says: "a claude model"},
+		"a claude model for codex": {
+			config: codexQA, req: workforce.SpawnRequest{Group: "qa", Count: 1, Model: "claude-opus-5-5"}, want: routing.ErrProviderMismatch,
+			says: "--model is a claude model, and qa runs codex here; --model never chooses the provider: pass --provider claude",
+		},
+		"a codex model for claude": {
+			config: teamConfig, req: workforce.SpawnRequest{Group: "coder", Count: 1, Model: "gpt-6.1-sol"}, want: routing.ErrProviderMismatch,
+			says: "--model is a codex model, and coder runs claude here; --model never chooses the provider: pass --provider codex",
+		},
+		"a codex model for the provider asked": {
+			config: teamConfig, req: workforce.SpawnRequest{Group: "coder", Count: 1, Model: "gpt-6.1-sol", Provider: "claude"}, want: routing.ErrProviderMismatch,
+			says: "--model is a codex model, and coder runs claude here",
+		},
+		"the group's own model": {
+			config: strings.Replace(codexQA, "command = [\"codex\"] }", "command = [\"codex\"], model = \"sonnet\" }", 1), req: workforce.SpawnRequest{Group: "qa", Count: 1},
+			want: workforce.ErrConfig, says: "qa's agent model is a claude model, and its agent runs codex",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			f := newFixture(t, tc.config)
 			_, err := f.svc.Spawn(t.Context(), tc.req)
-			require.ErrorIs(t, err, workforce.ErrConfig)
+			require.ErrorIs(t, err, tc.want)
 			assert.Contains(t, err.Error(), tc.says)
 			assert.NotContains(t, err.Error(), "opus-5-5")
 			assert.NotContains(t, err.Error(), "6.1-sol")

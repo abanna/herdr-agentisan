@@ -212,9 +212,9 @@ func newTeamUpCmd() *cobra.Command {
 
 func newWorkerSpawnCmd() *cobra.Command {
 	var (
-		f                              opFlags
-		group, model, effort, taskFile string
-		count                          int
+		f                                        opFlags
+		group, model, effort, taskFile, provider string
+		count                                    int
 	)
 	c := &cobra.Command{
 		Use:   "spawn",
@@ -223,7 +223,9 @@ func newWorkerSpawnCmd() *cobra.Command {
 			"pass the group's slots or the repo fails the preflight (tdaddy in a Go\n" +
 			"repo). Each gets the lowest free logical id, <short>-<type>-<n>, as its\n" +
 			"tab label and agent name. With [routing] enabled, routing chooses\n" +
-			"their model and effort from the type's role and --task-file (A50).",
+			"their model and effort from the type's role and --task-file (A50).\n" +
+			"They run --provider, else the packet's provider_preference, else the\n" +
+			"type's default provider (A66).",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			task, err := readTask(cmd.InOrStdin(), taskFile)
@@ -232,7 +234,7 @@ func newWorkerSpawnCmd() *cobra.Command {
 			}
 			return f.runOp(cmd, args, daemon.OpWorkerSpawn, func() (any, error) {
 				sel, err := f.selector(cmd.Context())
-				return workforce.SpawnRequest{Selector: sel, Group: group, Count: count, Model: model, Effort: effort, Task: task}, err
+				return workforce.SpawnRequest{Selector: sel, Group: group, Count: count, Model: model, Effort: effort, Task: task, Provider: provider}, err
 			})
 		},
 	}
@@ -242,6 +244,7 @@ func newWorkerSpawnCmd() *cobra.Command {
 	c.Flags().StringVar(&model, "model", "", "the model, instead of the group's; with routing on, a binding the role allows, by name or model id")
 	c.Flags().StringVar(&effort, "effort", "", "the reasoning effort, such as high")
 	c.Flags().StringVar(&taskFile, "task-file", "", "the task packet routing reads, as JSON: a file, or - for stdin")
+	c.Flags().StringVar(&provider, "provider", "", "the agent they run, claude or codex (default: the packet's provider_preference, else the type's default)")
 	return c
 }
 

@@ -82,7 +82,7 @@ func TestWorkforceHelpMeetsTheWrapper(t *testing.T) {
 	tests := map[string][]string{
 		"team status":   {"--project", "--state-dir"},
 		"team up":       {"--project", "--state-dir"},
-		"worker spawn":  {"--group", "--count", "--model", "--effort", "--task-file", "--project", "--state-dir"},
+		"worker spawn":  {"--group", "--count", "--model", "--effort", "--task-file", "--provider", "--project", "--state-dir"},
 		"worker retire": {"--after-handoff", "--state-dir"},
 		"handoff ready": {"--clear", "--state-dir"},
 	}
@@ -273,6 +273,10 @@ func TestWorkforceCommandsAskTheDaemon(t *testing.T) {
 		"worker spawn, the caller's team": {
 			args: []string{"worker", "spawn", "--group", "coder", "--count", "2", "--model", "sonnet"}, reply: ok, pane: "w9:p9",
 			sent: `{"v":1,"op":"worker.spawn","args":{"caller_pane":"w14:p1","group":"coder","count":2,"model":"sonnet"}}`, want: ok,
+		},
+		"worker spawn of a provider": {
+			args: []string{"worker", "spawn", "--group", "coder", "--provider", "codex", "--project", "ha"}, reply: ok, pane: "w14:p1",
+			sent: `{"v":1,"op":"worker.spawn","args":{"project":"ha","group":"coder","count":1,"provider":"codex"}}`, want: ok,
 		},
 		"worker spawn's count defaults to 1": {
 			args: []string{"worker", "spawn", "--group", "qa", "--project", "ha"}, reply: ok, pane: "w14:p1",

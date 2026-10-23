@@ -914,7 +914,7 @@ func TestDispatcherReturnsAnEndedQueueToItsBoss(t *testing.T) {
 		"its id bound again": func(t *testing.T, st *store.Store) {
 			t.Helper()
 			retire(t, st)
-			gen, err := st.BindWorker(t.Context(), store.Worker{LogicalID: "ha-coder-1", Project: "ha", Group: "coder", PaneID: "w14:p2", TerminalID: "term_w14:p2"}, time.Now())
+			gen, err := st.BindWorker(t.Context(), store.Worker{LogicalID: "ha-coder-1", Provider: "claude", Project: "ha", Group: "coder", PaneID: "w14:p2", TerminalID: "term_w14:p2"}, time.Now())
 			require.NoError(t, err)
 			require.EqualValues(t, 1, gen)
 			require.NoError(t, st.SetWorkerStatus(t.Context(), store.Worker{LogicalID: "ha-coder-1", Generation: 1}, store.StatusActive, time.Now()))

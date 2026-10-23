@@ -284,7 +284,7 @@ func TestBeginHandoffRefusesAStartingWorker(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
 	ctx := t.Context()
-	w := store.Worker{LogicalID: "w", Project: "agentisan", Group: "coders", PaneID: "w14:p2", TerminalID: terminal("w14:p2")}
+	w := store.Worker{LogicalID: "w", Provider: "claude", Project: "agentisan", Group: "coders", PaneID: "w14:p2", TerminalID: terminal("w14:p2")}
 	gen, err := s.BindWorker(ctx, w, t1)
 	require.NoError(t, err)
 

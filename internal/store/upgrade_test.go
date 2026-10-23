@@ -37,7 +37,7 @@ func TestUpgradeFromTheFirstSchema(t *testing.T) {
 
 	s := open(t, path)
 	assert.Equal(t, store.SchemaVersion(), s.UserVersion())
-	assert.Equal(t, 7, s.UserVersion())
+	assert.Equal(t, 8, s.UserVersion())
 	row, err := s.WorkerRow(t.Context(), "w")
 	require.NoError(t, err)
 	assert.Nil(t, row.Routing, "a worker bound before 0005 was not launched by routing")
@@ -57,6 +57,47 @@ func TestUpgradeFromTheFirstSchema(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, store.BoardState{}, board, "0007's board starts empty")
 	assert.Equal(t, int64(1), post(t, s, teamPost("agentisan", "w", "after the upgrade")).Seq)
+}
+
+// TestUpgradeTakesEachProviderFromItsRouting is the live state.db's path
+// into 0008: a row routing launched gets its decision's provider, the one it
+// runs, and a row it did not launch has none, since nothing records which
+// agent it was launched as (A66).
+func TestUpgradeTakesEachProviderFromItsRouting(t *testing.T) {
+	t.Parallel()
+	seven := fstest.MapFS{}
+	for _, name := range []string{"0001_init.sql", "0002_messages.sql", "0003_worker_identity.sql", "0004_github_notices.sql",
+		"0005_worker_routing.sql", "0006_github_seeded_kinds.sql", "0007_board.sql"} {
+		raw, err := os.ReadFile(filepath.Join("migrations", name)) // #nosec G304 -- this package's own migrations
+		require.NoError(t, err)
+		seven[name] = &fstest.MapFile{Data: raw}
+	}
+	path := dbPath(t)
+	v7, err := store.OpenWith(t.Context(), path, seven)
+	require.NoError(t, err)
+	require.Equal(t, 7, v7.UserVersion())
+	_, err = store.DB(v7).ExecContext(t.Context(), `INSERT INTO workers (logical_id, project, grp, pane_id, terminal_id, generation, status, created_at,
+	routed_at, routed_role, routed_provider, routed_binding, routed_model_id, routed_effort, assignment_digest, policy_version) VALUES
+	('ha-review-1', 'ha', 'review', 'w14:p3', 'term_r', 0, 'active', 0, 1, 'code_review', 'codex', 'codex_strong', 'gpt-6.1-sol', 'high', '', 'v1-0123456789ab'),
+	('ha-coder-1', 'ha', 'coder', 'w14:p4', 'term_c', 0, 'active', 0, 1, 'coder', 'claude', 'claude_mid', 'claude-sonnet-5-5', 'high', '', 'v1-0123456789ab');
+INSERT INTO workers (logical_id, project, grp, pane_id, terminal_id, generation, status, created_at) VALUES
+	('ha-qa-1', 'ha', 'qa', 'w14:p5', 'term_q', 0, 'active', 0)`)
+	require.NoError(t, err)
+	require.NoError(t, v7.Close())
+
+	s := open(t, path)
+	for id, want := range map[string]string{"ha-review-1": "codex", "ha-coder-1": "claude", "ha-qa-1": ""} {
+		row, err := s.WorkerRow(t.Context(), id)
+		require.NoError(t, err)
+		assert.Equal(t, want, row.Provider, id)
+	}
+	live, err := s.Workers(t.Context())
+	require.NoError(t, err)
+	providers := map[string]string{}
+	for _, w := range live {
+		providers[w.LogicalID] = w.Provider
+	}
+	assert.Equal(t, map[string]string{"ha-coder-1": "claude", "ha-qa-1": "", "ha-review-1": "codex"}, providers)
 }
 
 // TestUpgradeKeepsTheGitHubSeed is the live state.db's path into 0006: a
