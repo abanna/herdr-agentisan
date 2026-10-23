@@ -39,7 +39,9 @@ type DashboardOutcome struct {
 func DashboardLabel(short string) string { return short + "-dashboard" }
 
 // dashboardBudget bounds the dashboard's herdr calls, which run before the
-// agents start.
+// agents start. The split, label, swap or focus it ends is out of time, as a
+// spawn's calls are; the layout's read before them, which every op shares,
+// stays a herdr failure.
 const dashboardBudget = 5 * time.Second
 
 // ensureDashboard finds project's dashboard, a pane in its workspace labelled
@@ -81,15 +83,15 @@ func (s *Service) ensureDashboard(ctx context.Context, project string) Dashboard
 	boss := st.model.Boss[i].Pane.ID
 	p, err := s.Herdr.OpenPluginSplit(ctx, herdr.PluginSplit{PluginID: d.PluginID, Entrypoint: d.Entrypoint, TargetPaneID: boss, Direction: "down"})
 	if err != nil {
-		return DashboardOutcome{DashboardError: herdrFailed("open the dashboard", err).Error()}
+		return DashboardOutcome{DashboardError: callFailed(ctx, "open the dashboard", err).Error()}
 	}
 	var errs []error
 	if err := s.Herdr.RenamePane(ctx, p.PaneID, label); err != nil {
-		errs = append(errs, herdrFailed("label the dashboard "+label, err))
+		errs = append(errs, callFailed(ctx, "label the dashboard "+label, err))
 	}
 	var back []string
 	if err := s.Herdr.SwapPanes(ctx, p.PaneID, boss); err != nil {
-		errs = append(errs, herdrFailed("move the dashboard above the boss; it is below", err))
+		errs = append(errs, callFailed(ctx, "move the dashboard above the boss; it is below", err))
 	} else {
 		back = append(back, boss)
 	}
@@ -98,7 +100,7 @@ func (s *Service) ensureDashboard(ctx context.Context, project string) Dashboard
 	}
 	for _, id := range back {
 		if _, err := s.Herdr.FocusPane(ctx, id); err != nil {
-			errs = append(errs, herdrFailed("give focus back to "+id, err))
+			errs = append(errs, callFailed(ctx, "give focus back to "+id, err))
 		}
 	}
 	out := DashboardOutcome{Dashboard: &Dashboard{PaneID: p.PaneID, Opened: true}}

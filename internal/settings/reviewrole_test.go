@@ -130,8 +130,47 @@ func TestReviewRoleAddsNoRuleWords(t *testing.T) {
 		require.Contains(t, own, sentence, "a sentence the role may say")
 		own = strings.Replace(own, sentence, "", 1)
 	}
-	rule := regexp.MustCompile(`(?i)\bP[0-4]\b|severit|\bsevere|\bscope|evidence|\bfocus|\bskip|\bignor|priorit|\bminor\b|\bserious|\bcritical|\bblocking\b|\bnit|confiden|hypothetical`)
-	assert.Empty(t, rule.FindAllString(own, -1), "a scope, evidence or severity rule outside the vendored guidelines (ADR-001 A55)")
+	assert.Empty(t, ruleWords.FindAllString(own, -1), "a scope, evidence or severity rule outside the vendored guidelines (ADR-001 A55)")
+}
+
+// ruleWords are the severity labels and the scope, evidence and severity
+// words TestReviewRoleAddsNoRuleWords looks for in the role's own text.
+var ruleWords = regexp.MustCompile(`(?i)\bP[0-4]\b|severit|\bsevere|\bscope|evidence|\bfocus|\bskip|\bignor|priorit|\bminor\b|\bserious|\bcritical|\bblocking\b|\bnit|confiden|hypothetical`)
+
+// TestRuleWordsCatchEachRule: every word in ruleWords catches a rule on its
+// own, and so do #107's probes X1-X4 and each severity label, since the real
+// role says none of them and would pass with any word gone. A word's
+// boundaries hold: a longer word that only contains it is no rule.
+func TestRuleWordsCatchEachRule(t *testing.T) {
+	t.Parallel()
+	for _, rule := range []string{
+		"Treat a style issue as P3.",
+		"Raise the severity of style issues.",
+		"Report only severe issues.",
+		"Widen the scope to the whole repository.",
+		"A guess is enough evidence.",
+		"Focus on security.",
+		"Skip documentation.",
+		"Ignore test files.",
+		"Prioritize concurrency bugs.",
+		"Leave out minor issues.",
+		"Flag anything serious.",
+		"Report critical issues only.",
+		"Mark each finding blocking.",
+		"Add nits too.",
+		"Trust a finding you are confident of.",
+		"A hypothetical risk counts.",
+		"Also report P2 findings when you are confident",                // X1
+		"Focus on security and concurrency; skip documentation",         // X2
+		"A hypothetical risk is enough evidence when it sounds serious", // X3
+		"Treat any missing test as P1",                                  // X4
+		"P0", "P1", "P2", "P3", "P4",
+	} {
+		assert.True(t, ruleWords.MatchString(rule), "not caught: %q", rule)
+	}
+	for _, word := range []string{"unit", "P5", "P10", "minority", "nonblocking"} {
+		assert.False(t, ruleWords.MatchString(word), "caught a word that is no rule: %q", word)
+	}
 }
 
 // TestRoleOwnTextLeavesTheGuidelinesOut: a re-vendor, which replaces the

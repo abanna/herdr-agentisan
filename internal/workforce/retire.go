@@ -66,13 +66,17 @@ type target struct {
 // bound to no pane is retired with nothing closed. A worker's tab label
 // names its agent pane only for an id no live row has. Whichever names the
 // pane, the row bound to its terminal is the one retired, and a pane in a
-// team's <short>-boss tab is refused (ErrNotAWorker). With AfterHandoff it
-// first waits, without the workforce lock, until the pane with the target's
-// terminal carries a non-empty handoff token, polling every HandoffPoll; a
-// terminal herdr stops listing while it waits is the worker gone, and ctx
-// ending first is ErrHandoffTimeout, with the pane left open. The pane is
-// closed only once pane.get shows it still has that terminal. Retiring what
-// is retired already answers Changed false.
+// team's <short>-boss tab is refused (ErrNotAWorker), as is AfterHandoff
+// for a debugger's row bound to a pane, which can write no handoff
+// (ErrBadRequest). With AfterHandoff it first waits, without the workforce
+// lock, until the pane with the target's terminal carries a non-empty
+// handoff token, polling every HandoffPoll; a terminal herdr stops listing
+// while it waits is the worker gone, and ctx ending first is
+// ErrHandoffTimeout, with the pane left open. The pane is closed only once pane.get shows it still has that
+// terminal. Retiring what is retired already answers Changed false. Under
+// the workforce lock, finish keeps A33 part 2a's rule: no row is ended while
+// its handoff is pending, and retiring a pending handoff's replacement fails
+// that handoff.
 func (s *Service) Retire(ctx context.Context, req RetireRequest) (RetireResult, error) {
 	if strings.TrimSpace(req.Target) == "" {
 		return RetireResult{}, fmt.Errorf("%w: retire needs a logical id or a pane id", ErrBadRequest)
@@ -80,6 +84,9 @@ func (s *Service) Retire(ctx context.Context, req RetireRequest) (RetireResult, 
 	tg, done, err := s.resolveTarget(ctx, req.Target)
 	if err != nil || done != nil {
 		return deref(done), err
+	}
+	if req.AfterHandoff && tg.row != nil && tg.paneID != "" && tg.row.Group == settings.DebuggerType {
+		return RetireResult{}, fmt.Errorf("%w: %s is a debugger, which writes no handoff (A32); retire it without --after-handoff", ErrBadRequest, tg.id)
 	}
 	var gone bool
 	if req.AfterHandoff && tg.paneID != "" && !tg.unlisted {
