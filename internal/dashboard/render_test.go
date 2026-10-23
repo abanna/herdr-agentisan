@@ -1,8 +1,11 @@
 package dashboard_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -37,7 +40,7 @@ var attrs = dashboard.Options{Profile: colorprofile.ASCII}
 var fullColour = dashboard.Options{Profile: colorprofile.TrueColor}
 
 // fixtures are every snapshot in testdata.
-var fixtures = []string{"full", "empty", "blocked", "crowd", "wide", "group", "shells", "aged", "held"}
+var fixtures = []string{"full", "empty", "blocked", "crowd", "wide", "group", "shells", "aged", "held", "codex"}
 
 // fixture loads testdata/<name>.json through the same source the CLI uses.
 func fixture(t *testing.T, name string) *snapshot.Snapshot {
@@ -97,6 +100,11 @@ func TestRenderGolden(t *testing.T) {
 		"blocked_120x40":             {frame: frame("blocked", first, true), w: 120, h: 40},
 		"empty_80x24":                {frame: frame("empty", first, true), w: 80, h: 24},
 		"wide_120x40":                {frame: frame("wide", first, true), w: 120, h: 40},
+		// A team running Claude and gpt- models (A58): each gpt- model draws
+		// as its word and version, sol6.1 beside sol6 and sol5.6, at 97
+		// cells, the user's portrait pane, and on a narrow screen.
+		"codex_97x40": {frame: frame("codex", first, true), w: 97, h: 40},
+		"codex_80x24": {frame: frame("codex", first, true), w: 80, h: 24},
 		// Plain shells draw ▸ (ADR-001 A38); a shell with a handoff stays ⟳,
 		// and an unnamed agent stays ?.
 		"shells_80x24":  {frame: frame("shells", first, true), w: 80, h: 24},
@@ -874,24 +882,71 @@ func TestShortModel(t *testing.T) {
 		// and all.
 		"claude-opus-5-5[1m]":   "opus",
 		"claude-sonnet-5-5[1m]": "son",
-		// A Codex model by its name, wherever it says codex.
-		"gpt-5-codex":       "cdx",
-		"gpt-5.5-codex":     "cdx",
+		// A gpt- model is its word and its version (A58), so the routing
+		// rules' Codex models, and the ones a worker started by hand may
+		// run, each draw as their own: gpt-6-sol, gpt-6.1-sol and
+		// gpt-5.6-sol all drew sol.
+		"gpt-6-luna":  "luna6",
+		"gpt-6.1-sol": "sol6.1",
+		"gpt-6-astra": "astra6",
+		"gpt-6-sol":   "sol6",
+		"gpt-5.6-sol": "sol5.6",
+		"GPT-6-Luna":  "luna6",
+		"GPT-6.1-SOL": "sol6.1",
+		"gpt-5-mini":  "mini5",
+		"gpt-sol":     "sol",
+		// One whose name says codex is cdx and its version, wherever the
+		// name says it; what follows codex is not drawn, so -max draws as
+		// the plain one (A58).
+		"gpt-5-codex":       "cdx5",
+		"gpt-5.5-codex":     "cdx5.5",
+		"gpt-5.1-codex-max": "cdx5.1",
+		"gpt-5 codex":       "cdx5",
+		"gpt-codex":         "cdx",
+		// One that does not end in a word is gpt and its version: gpt-5.5
+		// drew gpt- (R22).
+		"gpt-5.5": "gpt5.5",
+		"gpt-4o":  "gpt4o",
+		"gpt-6-1": "gpt6-1",
+		"gpt-":    "gpt",
+		// Too wide for the column: the word gives way first, to one cell,
+		// then the version.
+		"gpt-4.1-mini":  "min4.1",
+		"gpt-6.1-luna":  "lun6.1",
+		"gpt-6-luna2":   "g6-lun",
+		"gpt-123456789": "g12345",
+		"gpt-6-日本":      "日本6",
+		"gpt-6.1-日本語":   "日6.1",
+		// A wide character does not fit one cell, so beside a five-cell
+		// version a word that starts with one goes whole.
+		"gpt-10.25-日本":       "10.25",
+		"gpt-6.1-sol\x1b[2J": "sol6.1",
+		// A version as wide as the column keeps five cells of it, after a
+		// one-cell word; a name that nests gpt- is still cut to six.
+		"gpt-12345":   "g12345",
+		"gpt-123456":  "g12345",
+		"gpt-gpt-5.5": "ggpt-5",
+		// Bytes no agent reports, which a fixture can still hold: invalid,
+		// truncated, a lone surrogate or Latin-1 draw as one U+FFFD, and a
+		// NUL, CR or LF as a space, which ends the name.
+		"gpt-6.1-\xff":       "g6.1-\ufffd",
+		"gpt-6-\xe6\x97":     "gpt6-\ufffd",
+		"gpt-6-\xed\xa0\x80": "gpt6-\ufffd",
+		"gpt-6-\xe9":         "gpt6-\ufffd",
+		"gpt-6.1-sol\x00x":   "sol6.1",
+		"gpt-6.1-sol\r\n":    "sol6.1",
+		// A name is drawn from its bytes as given: an accent precomposed is a
+		// letter, one decomposed is a letter and a mark, so no word; and a
+		// leading BOM, which report.ValidModel refuses, makes no gpt- name.
+		"gpt-6-\u00e9":      "\u00e96",
+		"gpt-6-e\u0301":     "gpt6-e\u0301",
+		"\ufeffgpt-6.1-sol": "\ufeffgpt-",
+		"   ":               "",
+		// Any other model whose name says codex is cdx.
 		"codex-mini-latest": "cdx",
 		"Codex":             "cdx",
-		// A gpt- model that ends in a word is that word, so the three Codex
-		// models the routing rules bind each draw as their own.
-		"gpt-6-luna":  "luna",
-		"gpt-6.1-sol": "sol",
-		"gpt-6-astra": "astr",
-		"GPT-6-Luna":  "luna",
-		"gpt-5-mini":  "mini",
-		// Any other model is its first word, cut: a gpt- name that does not
-		// end in a word, or a word that is not a gpt- name's.
-		"gpt-5.5":          "gpt-",
-		"gpt-6-1":          "gpt-",
-		"gpt-":             "gpt-",
-		"gpt-6-luna2":      "gpt-",
+		// Any other model is its first word, cut to four cells: a word that
+		// is not a gpt- name's.
 		"gpt6-luna":        "gpt6",
 		"chatgpt-6-luna":   "chat",
 		"o3":               "o3",
@@ -905,8 +960,143 @@ func TestShortModel(t *testing.T) {
 	for in, want := range tests {
 		t.Run(in, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, want, dashboard.ShortModel(in))
+			got := dashboard.ShortModel(in)
+			assert.Equal(t, want, got)
+			assert.LessOrEqual(t, ansi.StringWidth(got), dashboard.ModelCells, "the label fits its column")
 		})
+	}
+}
+
+// TestShortModelKeepsTheVersion: whatever a gpt- model's word, the version
+// survives whole in its label, so two versions of one word never draw
+// alike, and the label fits its column.
+func TestShortModelKeepsTheVersion(t *testing.T) {
+	t.Parallel()
+
+	versions := []string{"5", "6", "5.5", "5.6", "6.1", "10.2", "6-1"}
+	for _, word := range []string{"sol", "luna", "astra", "mini", "codex", "日本"} {
+		seen := map[string]string{}
+		for _, v := range versions {
+			model := "gpt-" + v + "-" + word
+			got := dashboard.ShortModel(model)
+			assert.LessOrEqual(t, ansi.StringWidth(got), dashboard.ModelCells, model)
+			assert.True(t, strings.HasSuffix(got, v), "%s draws %q, which cuts its version", model, got)
+			assert.Greater(t, ansi.StringWidth(got), ansi.StringWidth(v), "%s draws %q, with no word", model, got)
+			if prev, ok := seen[got]; ok {
+				t.Errorf("%s and %s both draw %q", prev, model, got)
+			}
+			seen[got] = model
+		}
+	}
+}
+
+// TestShortModelTellsTheBindingsApart: every model the routing rules bind,
+// and the models a Codex worker started by hand may run beside them, draws
+// a label of its own that fits the column, read from the rules file the
+// binary embeds, so a binding added later is held to it too.
+func TestShortModelTellsTheBindingsApart(t *testing.T) {
+	t.Parallel()
+
+	raw, err := os.ReadFile(filepath.Join("..", "routing", "rules", "jev-routing-v1.json"))
+	require.NoError(t, err)
+	var rules struct {
+		Bindings map[string]struct {
+			ModelID string `json:"model_id"`
+		} `json:"bindings"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &rules))
+	require.NotEmpty(t, rules.Bindings)
+
+	models := []string{"gpt-5.5", "gpt-6-sol", "gpt-5.6-sol"}
+	for _, name := range slices.Sorted(maps.Keys(rules.Bindings)) {
+		models = append(models, rules.Bindings[name].ModelID)
+	}
+	seen := map[string]string{}
+	for _, m := range models {
+		got := dashboard.ShortModel(m)
+		require.NotEmpty(t, got, m)
+		assert.LessOrEqual(t, ansi.StringWidth(got), dashboard.ModelCells, m)
+		if prev, ok := seen[got]; ok {
+			t.Errorf("%s and %s both draw %q", prev, m, got)
+		}
+		seen[got] = m
+	}
+}
+
+// TestTheModelColumnWidensIntoTheStage: on the user's portrait pane, 97
+// cells wide, on a narrow 80 and wider, a team running gpt- models keeps
+// every column: the model column's two extra cells come out of the stage,
+// which takes what is left, and every other column keeps its width.
+func TestTheModelColumnWidensIntoTheStage(t *testing.T) {
+	t.Parallel()
+
+	gpt := fixture(t, "codex").Groups
+	four := slices.Clone(gpt)
+	for i := range four {
+		four[i].Agents = slices.Clone(four[i].Agents)
+		for j := range four[i].Agents {
+			four[i].Agents[j].Model = "claude-opus-5-5"
+		}
+	}
+	const state, model, item, stage, clock = 0, 1, 2, 3, 4
+	for _, w := range []int{80, 97, 120} {
+		t.Run(fmt.Sprint(w), func(t *testing.T) {
+			t.Parallel()
+			name, cols := dashboard.ColumnWidths(gpt, at, w)
+			name4, cols4 := dashboard.ColumnWidths(four, at, w)
+			require.Equal(t, dashboard.ModelCells, cols[model], "the column is as wide as sol6.1")
+			require.Equal(t, 4, cols4[model], "and opus is four cells")
+			for _, c := range []int{state, item, stage, clock} {
+				assert.Positive(t, cols[c], "column %d drops", c)
+			}
+			assert.Equal(t, name4, name, "the name keeps its width")
+			assert.Equal(t, cols4[stage]-2, cols[stage], "the stage gives up the two cells")
+			for _, c := range []int{state, item, clock} {
+				assert.Equal(t, cols4[c], cols[c], "column %d keeps its width", c)
+			}
+		})
+	}
+}
+
+// TestTheModelColumnAtTheCaps: with every name and item past its cap, the
+// user's 97-cell pane and a 120 still keep every column beside a six-cell
+// model, the stage giving up the two cells (A58). At 80 this team's row has
+// no two cells to spare, so the time column, the first the renderer drops,
+// gives way, where the same team on four-cell models keeps it.
+func TestTheModelColumnAtTheCaps(t *testing.T) {
+	t.Parallel()
+
+	capped := func(model string) []snapshot.Group {
+		groups := fixture(t, "codex").Groups
+		for i := range groups {
+			for j := range groups[i].Agents {
+				a := &groups[i].Agents[j]
+				a.Name, a.Item = strings.Repeat("n", 20), strings.Repeat("i", 20)
+				if model != "" {
+					a.Model = model
+				}
+			}
+		}
+		return groups
+	}
+	gpt, four := capped(""), capped("claude-opus-5-5")
+	const state, model, item, stage, clock = 0, 1, 2, 3, 4
+	for _, w := range []int{97, 120} {
+		name, cols := dashboard.ColumnWidths(gpt, at, w)
+		name4, cols4 := dashboard.ColumnWidths(four, at, w)
+		require.Equal(t, dashboard.ModelCells, cols[model], "at %d the column is as wide as sol6.1", w)
+		for _, c := range []int{state, item, stage, clock} {
+			assert.Positive(t, cols[c], "at %d column %d drops", w, c)
+		}
+		assert.Equal(t, name4, name, "at %d the name keeps its width", w)
+		assert.Equal(t, cols4[stage]-2, cols[stage], "at %d the stage gives up the two cells", w)
+	}
+	_, cols := dashboard.ColumnWidths(gpt, at, 80)
+	_, cols4 := dashboard.ColumnWidths(four, at, 80)
+	assert.Positive(t, cols4[clock], "four-cell models keep the time at 80")
+	assert.Zero(t, cols[clock], "a six-cell model's row drops the time at 80")
+	for _, c := range []int{state, model, item, stage} {
+		assert.Positive(t, cols[c], "at 80 column %d drops", c)
 	}
 }
 

@@ -75,13 +75,19 @@ func CtxTokens(l Layout) []PaneTokens {
 		if !(Pane{Agent: p.Agent, Name: names[p.PaneID]}).IsAgent() {
 			continue
 		}
-		key, value := CtxDisplay(ctxOf(p))
-		tokens := map[string]string{CtxOKKey: "", CtxWarnKey: "", CtxHotKey: ""}
-		tokens[key] = value
-		out = append(out, PaneTokens{PaneID: p.PaneID, Tokens: tokens})
+		out = append(out, PaneTokens{PaneID: p.PaneID, Tokens: bandTokens(ctxOf(p))})
 	}
 	slices.SortFunc(out, func(a, b PaneTokens) int { return strings.Compare(a.PaneID, b.PaneID) })
 	return out
+}
+
+// bandTokens is ctx's display in its band's key, with the other two band
+// keys empty, which clears them.
+func bandTokens(ctx string) map[string]string {
+	key, value := CtxDisplay(ctx)
+	tokens := map[string]string{CtxOKKey: "", CtxWarnKey: "", CtxHotKey: ""}
+	tokens[key] = value
+	return tokens
 }
 
 // ctxOf is p's ctx token, or "" when herdr detects no agent in p (ADR-001

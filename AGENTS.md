@@ -133,8 +133,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   in a pane shell (`StateDir`, ADR-001 A51).
 - `internal/report/` — an agent pushing its own state to its pane as herdr
   tokens (ADR-001 D4), and the token contract for the keys it writes.
-  `report statusline` turns Claude's statusline JSON into `ctx` and the
-  `model` it runs, with its `model_at` (A56),
+  `report statusline` turns Claude's statusline JSON into `ctx`, with its
+  `ctx_at` (A61), and the `model` it runs, with its `model_at` (A56),
   `report codex` does the same from a Codex hook and its session's rollout
   (A22, hooks sampled in `docs/config/codex-hooks.example.toml`), with a
   24 h TTL (A27), and
@@ -167,9 +167,12 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   the current agent's (`team.CurrentModels`, A56), else its launch model from
   the pane's processes
   (`models.go`, A39; one `pane.process_info` reply per pane per poll, shared
-  with the reconcile, `processinfo.go`) and the boss with its agent process's
-  start, its runtime (A47), with the workspaces each holds, which the `snapshot`
-  op serves by project or workspace, so the op never calls herdr (A18, A24,
+  with the reconcile, `processinfo.go`), and its ctx only while the current
+  agent reported it, gated by those processes' starts before anything reads
+  it, team status included (`team.GateCtx`, A61), and the boss with its
+  agent process's start, its runtime (A47), with the workspaces each holds,
+  which the `snapshot` op serves by project or workspace, so the op never
+  calls herdr (A18, A24,
   `snapshot.go`, with `SnapshotSource`, the dashboard's client), each group
   with its description, re-read when the shared file changes
   (`descriptions.go`, A36), and sends each status change since the last
@@ -225,7 +228,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   or the ◆ spaces, with idle times from the daemon's clock and the rows no
   pane is bound to (A35); opening a tab per worker and waiting for its agent,
   a Claude one launched with A42's turn hooks as `--settings`,
-  after `internal/preflight`'s check, each group up to its count for
+  after `internal/preflight`'s check and, for a coder with a task packet,
+  Jev's answer (`jev.go`, A57), each group up to its count for
   `team up`, which also opens the team's dashboard above the boss
   (`dashboard.go`); closing the pane a worker's row is bound to, after its
   handoff when asked, with the row retired, never while its handoff is
@@ -251,13 +255,18 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   refused by default, an empty table adding an entry included, A53), and
   the merged model, whichever layer sets it, is checked as safe to pass to
   an agent
-  (`CheckModel`). Sample in `docs/config/herdr-agentisan.example.toml`.
+  (`CheckModel`), and the sandbox each worker type's Codex starts in when
+  its command chooses none (`sandbox.go`, A59: read-only for review, full
+  access for coder, qa and precheck), which spawn adds.
+  Sample in `docs/config/herdr-agentisan.example.toml`.
 - `internal/routing/` — the model and effort each spawned worker starts
   with (ADR-001 A50, NERD-5289). It reads the user's routing rules,
   embedded byte for byte from `rules/jev-routing-v1.json` and decoded
   strictly, and the deployment facts from `[routing]` (`internal/settings`).
   `Policy.Resolve` maps a worker type's role and provider, the boss's task
-  packet (`DecodeTask`, bounded) and overrides onto a binding. It returns a
+  packet (`DecodeTask`, bounded) and overrides onto a binding, the user's
+  override binding only workers of its own provider, one binding per
+  provider (`RoleOverride`, A63). It returns a
   `Decision` that is also the audit record. `worker spawn` asks it once per
   spawn, and `team up` once per group it fills, before anything opens; each
   records it on each worker's row and sends it as an
@@ -265,14 +274,16 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   be asked (`AsksJev`), and `ApplyJev` maps Jev's answer onto it (A57): the
   request is `JevRequest`'s, and the caller makes the call, so routing never
   sees the key; `[routing.jev]` switches it (`JevEnabled`) and sets its
-  thresholds. Nothing asks Jev yet.
+  thresholds. `worker spawn` asks Jev (`internal/workforce/jev.go`), through
+  the daemon's `jev.Asker`; `team up` never does.
 - `internal/jev/` — the client of TypeSafe's System One (ADR-001 A57): one
   POST of the body routing built, with the key as the Bearer token, within
   the rules' timeout, never retried or redirected; no error carries the key,
   the request or TypeSafe's body. `Keys` reads the key, `TYPESAFE_API_KEY`,
   from `[routing.jev] env_file`: kept 10 minutes, one read of a file in
   flight, each ask waiting at most a second, so a locked 1Password costs a
-  spawn a second; `Asker` drops a key TypeSafe refuses. Tests run an
+  spawn a second; `Asker` drops a key TypeSafe refuses. The daemon holds
+  one `Keys` for its life. Tests run an
   httptest TypeSafe, never the real one, and a FIFO for a locked file.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations

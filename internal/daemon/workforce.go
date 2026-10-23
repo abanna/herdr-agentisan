@@ -12,6 +12,7 @@ import (
 
 	"github.com/abanna/herdr-agentisan/internal/debugger"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/jev"
 	"github.com/abanna/herdr-agentisan/internal/routing"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
@@ -254,8 +255,8 @@ func decodeArgs(args json.RawMessage, out any) error {
 // newWorkforce is the daemon's workforce service, or nil when the team poll
 // is off: every herdr call it makes proves the server's identity first (A3).
 // A debugger it spawns may read serverDir, the daemon's own directory
-// (A32).
-func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleClock, serverDir string) *workforce.Service {
+// (A32). A spawn asks Jev with one key cache for the daemon's life (A57).
+func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleClock, starts *team.StartClock, serverDir string) *workforce.Service {
 	if o.Team == nil {
 		return nil
 	}
@@ -264,6 +265,7 @@ func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleCl
 		Store:          st,
 		ConfigDir:      o.Team.ConfigDir,
 		Idle:           idle,
+		Starts:         starts,
 		Now:            o.Now,
 		Preflight:      o.Hooks.Preflight,
 		CodexHooks:     o.Team.CodexHooks,
@@ -271,6 +273,7 @@ func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleCl
 		Dashboard:      o.Team.Dashboard,
 		Debugger:       debugger.Launch{Root: o.Team.PluginRoot, Bin: o.Team.Binary, ServerDir: serverDir},
 		Routed:         o.routed,
+		Jev:            jev.Asker{Keys: &jev.Keys{}},
 	}
 }
 

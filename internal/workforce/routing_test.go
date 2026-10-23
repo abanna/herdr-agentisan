@@ -235,9 +235,9 @@ func TestSpawnRoutingRefusals(t *testing.T) {
 			config: strings.Replace(routingOn, "groups.review]\nworkers = 0\nslots = 1\n", "groups.review]\nworkers = 0\nslots = 1\nagent = { command = [\"claude\"] }\n", 1),
 			req:    workforce.SpawnRequest{Group: "review", Count: 1}, want: routing.ErrBlocked, says: "it allows only codex_strong, none under claude",
 		},
-		"the user's override a type cannot run": {
-			config: routingOn + "\n[projects.herdr-agentisan.groups.precheck]\nworkers = 0\nslots = 1\nagent = { command = [\"codex\"] }\n\n[routing.overrides]\npre_check = \"claude_mid\"\n",
-			req:    workforce.SpawnRequest{Group: "precheck", Count: 1}, want: routing.ErrProviderMismatch, says: "claude_mid, which the user's [routing.overrides] chose for pre_check, is a claude binding, and the worker type precheck runs codex",
+		"the user's override, disabled": {
+			config: routingOn + "\n[routing.overrides]\npre_check = \"claude_mid\"\n\n[routing.bindings.claude_mid]\nenabled = false\n",
+			req:    workforce.SpawnRequest{Group: "qa", Count: 1}, want: routing.ErrOverrideRefused, says: "claude_mid, which the user's [routing.overrides] chose for pre_check, is disabled",
 		},
 		"a binding the role refuses":  {req: workforce.SpawnRequest{Group: "coder", Count: 1, Model: "claude_small"}, want: routing.ErrOverrideRefused, says: "claude_mid, claude_strong, codex_strong"},
 		"an alias, not a binding":     {req: workforce.SpawnRequest{Group: "coder", Count: 1, Model: "opus"}, want: routing.ErrOverrideRefused},
@@ -273,6 +273,46 @@ func TestSpawnRoutingRefusals(t *testing.T) {
 			}
 			assert.Empty(t, f.h.params("tab.create"), "nothing opens")
 			assert.Empty(t, rec.all(), "nothing is recorded")
+		})
+	}
+}
+
+// TestSpawnUnderAnOverrideOfTheOtherProvider: the user's override binds only
+// workers of its binding's provider, so a codex worker under the live
+// coder = "claude_strong" takes its own default, codex_strong, and a list sets
+// the codex binding too; each row records what applied (A63).
+func TestSpawnUnderAnOverrideOfTheOtherProvider(t *testing.T) {
+	t.Parallel()
+	codexCoder := strings.Replace(routingOn, "groups.coder]\n", "groups.coder]\nagent = { command = [\"codex\"] }\n", 1)
+	// A coder's Codex starts with full access (A59).
+	codexArgs := []any{"--no-daemon", "--sandbox", "danger-full-access", "--model", "gpt-6.1-sol", "-c", `model_reasoning_effort="high"`}
+	tests := map[string]struct {
+		overrides string
+		reason    routing.Reason
+		row       *store.Routing
+	}{
+		"the live string": {overrides: "coder = \"claude_strong\"\n", reason: routing.ReasonTaskNotFound, row: &store.Routing{Role: "coder", Provider: "codex", Binding: "codex_strong", ModelID: "gpt-6.1-sol", Effort: "high"}},
+		"a list": {overrides: "coder = [\"claude_strong\", \"codex_strong\"]\n", row: &store.Routing{
+			Role: "coder", Provider: "codex", Binding: "codex_strong", ModelID: "gpt-6.1-sol", Effort: "high", OverrideBinding: "codex_strong", OverrideBy: "user",
+		}},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f, rec := routedFixture(t, codexCoder+"\n[routing.overrides]\n"+tc.overrides)
+
+			res, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1})
+			require.NoError(t, err, "a codex coder is no longer refused as provider_mismatch")
+			starts := f.h.params("agent.start")
+			require.Len(t, starts, 1)
+			assert.Equal(t, "codex", starts[0]["kind"])
+			assert.Equal(t, codexArgs, starts[0]["args"])
+			d := rec.all()[0].Decision
+			require.NotNil(t, d)
+			tc.row.PolicyVersion = d.PolicyVersion
+			assert.Equal(t, tc.row, routingOf(t, f, res.Workers[0].ID))
+			assert.Equal(t, tc.reason, d.FallbackReason, "the default's reason, or none for an override")
+			assert.Equal(t, routing.Codex, d.Provider)
 		})
 	}
 }

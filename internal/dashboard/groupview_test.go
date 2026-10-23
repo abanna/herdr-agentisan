@@ -64,6 +64,8 @@ func TestGroupViewGolden(t *testing.T) {
 		// Stale stages (A42): "reported 3h05m ago", or "stage stale" when
 		// no report gave a time, where a current one is "in stage 4m".
 		"aged_coders_120x40": {frame: view("aged", "coders", first), w: 120, h: 40},
+		// A box's model is its word and version too (A58).
+		"codex_coder_97x40": {frame: view("codex", "coder", first), w: 97, h: 40},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
