@@ -42,6 +42,11 @@ const (
 	// Codex that exits leaves it until the TTL runs out or the next Codex in
 	// the pane reports.
 	CodexCtxTTL = 24 * time.Hour
+	// CtxAtKey is the pane token holding when the ctx was reported, in Unix
+	// milliseconds (FormatModelAt), set in every report that sets ctx, so a
+	// reader can tell the current agent's ctx from one an agent before it in
+	// the pane left (A61): model_at dates only a report with a model.
+	CtxAtKey = "ctx_at"
 	// MaxStatuslineBytes bounds the statusline JSON read from stdin. Claude
 	// sends a few kilobytes; the cap stops a runaway writer from growing the
 	// buffer without limit.
@@ -194,7 +199,7 @@ func modelOf(raw json.RawMessage) string {
 	return ValidModel(m)
 }
 
-// FormatModelAt is t as a model_at value: whole Unix milliseconds, in
+// FormatModelAt is t as a model_at or ctx_at value: whole Unix milliseconds, in
 // decimal. Milliseconds, not stage_at's seconds, so a report made within a
 // second of its agent's start is never read as older than the agent.
 func FormatModelAt(t time.Time) string { return strconv.FormatInt(t.UnixMilli(), 10) }
@@ -204,6 +209,18 @@ func FormatModelAt(t time.Time) string { return strconv.FormatInt(t.UnixMilli(),
 // leading zero. Anything else is no model_at, and a model without one is
 // never taken as current.
 func ParseModelAt(v string) (time.Time, bool) {
+	return parseMillis(v)
+}
+
+// ParseCtxAt reads a ctx_at value, which FormatModelAt writes too, by
+// ParseModelAt's rules: anything else is no ctx_at (A61).
+func ParseCtxAt(v string) (time.Time, bool) {
+	return parseMillis(v)
+}
+
+// parseMillis reads a positive count of Unix milliseconds in canonical
+// decimal.
+func parseMillis(v string) (time.Time, bool) {
 	n, err := strconv.ParseInt(v, 10, 64)
 	if err != nil || n <= 0 || strconv.FormatInt(n, 10) != v {
 		return time.Time{}, false
@@ -309,9 +326,9 @@ func Statusline(ctx context.Context, rep Reporter, pane Pane, r io.Reader) (Resu
 }
 
 // push sets rd's tokens in one report, each expiring after ttl, on the pane
-// the reporting process runs in: ctx when rd has one, and the model with
-// model_at from pane's clock when rd has one. One herdr.CallTimeout bounds
-// the whole push, finding the pane included.
+// the reporting process runs in: ctx with ctx_at when rd has one, and the
+// model with model_at when rd has one, each stamped from pane's clock. One
+// herdr.CallTimeout bounds the whole push, finding the pane included.
 func push(ctx context.Context, rep Reporter, pane Pane, rd Reading, ttl time.Duration) (Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, herdr.CallTimeout)
 	defer cancel()
@@ -322,6 +339,7 @@ func push(ctx context.Context, rep Reporter, pane Pane, rd Reading, ttl time.Dur
 	tokens := map[string]string{}
 	if rd.HasCtx {
 		tokens[CtxKey] = strconv.Itoa(rd.Ctx)
+		tokens[CtxAtKey] = FormatModelAt(pane.now())
 	}
 	if rd.Model != "" {
 		tokens[ModelKey] = rd.Model

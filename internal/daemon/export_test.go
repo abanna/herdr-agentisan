@@ -270,7 +270,7 @@ var CallWith = callWith
 // one.
 func WorkforceOf(o Options, ident Identity) *workforce.Service {
 	paths, _ := PathsFor(o.StateDir, o.HerdrSocket)
-	return o.newWorkforce(nil, ident, &team.IdleClock{}, paths.Dir)
+	return o.newWorkforce(nil, ident, &team.IdleClock{}, &team.StartClock{}, paths.Dir)
 }
 
 // FlushNotices flushes b into s as the poll does.

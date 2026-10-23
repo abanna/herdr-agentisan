@@ -100,8 +100,10 @@ type teamPoll struct {
 	// stages times each pane's stage across polls (A18).
 	stages *team.StageClock
 	// idle times each pane's rest across polls, for team status (A23).
-	idle  *team.IdleClock
-	cache *snapshotCache
+	idle *team.IdleClock
+	// starts holds each team agent pane's start, for team status (A61).
+	starts *team.StartClock
+	cache  *snapshotCache
 	// header is each project's GitHub state, which the collector keeps
 	// (A29).
 	header *headerCache
@@ -127,7 +129,7 @@ type teamPoll struct {
 // returns stops all four and waits for them, so once it returns nothing more
 // is pushed or typed, the view is cleared unless the server is gone, and no
 // gh is left running.
-func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, idle *team.IdleClock, views *viewSync, ready *atomic.Bool, in *inbox, mutes *notice.Mutes) (stop func()) {
+func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, idle *team.IdleClock, starts *team.StartClock, views *viewSync, ready *atomic.Bool, in *inbox, mutes *notice.Mutes) (stop func()) {
 	if o.Team == nil {
 		return func() {}
 	}
@@ -136,7 +138,7 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 	n := o.newNotices(st, in, mutes)
 	var wg sync.WaitGroup
 	wg.Go(func() { o.collectGitHub(ctx, header, o.newGitHubNotices(st, n)) })
-	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header, idle, views, ready, in, n) })
+	wg.Go(func() { o.pollTeam(ctx, st, ident, cache, header, idle, starts, views, ready, in, n) })
 	wg.Go(func() { o.syncView(ctx, views, ident) })
 	wg.Go(func() { o.newDispatcher(st, in).run(ctx) })
 	return func() {
@@ -167,7 +169,7 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 //
 // Each poll gives in its model, or none when it built none, and so wakes the
 // dispatcher.
-func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, header *headerCache, idle *team.IdleClock, views *viewSync, ready *atomic.Bool, in *inbox, n *notices) {
+func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, header *headerCache, idle *team.IdleClock, starts *team.StartClock, views *viewSync, ready *atomic.Bool, in *inbox, n *notices) {
 	teams, err := settings.Teams(o.Team.ConfigDir)
 	if err != nil {
 		o.Logger.Error().Err(err).Msg("herdr-agentisan.toml does not resolve; the ◆ spaces belong to the unnamed project, and no tabs team is found, until it is fixed and the daemon restarts")
@@ -181,7 +183,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 	}
 	o.Logger.Info().Str("project", cfg.spaces.Project).Str("color", cfg.spaces.Color).Strs("tabs_teams", tabs).Msg("team poll running")
 	tp := teamPoll{
-		cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, idle: idle, cache: cache, header: header,
+		cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, idle: idle, starts: starts, cache: cache, header: header,
 		models: newLaunchModels(), descriptions: newGroupDescriptions(o.Team.ConfigDir),
 		slots: o.newSlotCounter(), bind: &binder{ready: ready},
 		notices: n,
@@ -297,6 +299,17 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	}
 	m := team.Build(l, tp.cfg.resolver(), rows)
 	now := o.Now()
+	// The agents' starts come before anything reads ctx, a failed agent list
+	// or not: a ctx reported before its pane's agent started is one an agent
+	// before it left, and no reader sees it (A61).
+	models, err := tp.models.refresh(ctx, c, pp, agentPanes(m, panes), o.Hooks.StartTime, now, o.Logger)
+	if err != nil {
+		return nil, "", err
+	}
+	// The boss's runtime is its agent process's (A47).
+	started := tp.models.started(o.Hooks.StartedAt)
+	team.GateCtx(&m, started)
+	tp.starts.Observe(m, started)
 	// A pane's rest is pane.list's status, so a failed agent list does not
 	// stop the idle clock, nor the notices of a status change.
 	tp.idle.Observe(m, now)
@@ -304,12 +317,6 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	o.observeCtx(ctx, c, tp.notices, m, now)
 	if agentsErr == nil {
 		tp.stages.Observe(m, now)
-		models, err := tp.models.refresh(ctx, c, pp, agentPanes(m, panes), o.Hooks.StartTime, now, o.Logger)
-		if err != nil {
-			return nil, "", err
-		}
-		// The boss's runtime is its agent process's (A47).
-		started := tp.models.started(o.Hooks.StartedAt)
 		// A model the pane's agent reported wins over its launch model
 		// while it is the current agent's (A56).
 		models = team.CurrentModels(m, models, started)

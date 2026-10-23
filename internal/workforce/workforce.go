@@ -103,6 +103,9 @@ type Service struct {
 	Stat      func(string) (fs.FileInfo, error)
 	// Idle is the poll's idle clock, for team status.
 	Idle *team.IdleClock
+	// Starts is the poll's agent starts, which gate team status's ctx (A61);
+	// nil gates nothing.
+	Starts *team.StartClock
 	// Now is the clock rows are stamped and idle times read with; nil means
 	// time.Now.
 	Now func() time.Time

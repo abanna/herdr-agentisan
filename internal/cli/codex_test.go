@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/stretchr/testify/assert"
@@ -61,6 +62,7 @@ func TestReportCodexPushesCtx(t *testing.T) {
 	srv := herdrtest.Start(t, paneHerdr("w15:p4"))
 	var logs bytes.Buffer
 
+	before := time.Now()
 	out, err := runCodex(cli.WithLineage(reportCtx(t, srv.Path, "w15:p4", &logs), codexLineage(false)), codexHook(t, 24610, ""))
 	require.NoError(t, err)
 	assert.Empty(t, out, "a hook's stdout is Codex's to read: it must print nothing")
@@ -68,7 +70,8 @@ func TestReportCodexPushesCtx(t *testing.T) {
 	reqs := srv.Requests()
 	require.Len(t, reqs, 2)
 	assert.Equal(t, "pane.report_metadata", reqs[1].Method)
-	assert.JSONEq(t, `{"pane_id":"w15:p4","source":"agentisan","tokens":{"ctx":"5"},"ttl_ms":86400000}`, string(reqs[1].Params))
+	params := stampedCtx(t, reqs[1].Params, before)
+	assert.JSONEq(t, `{"pane_id":"w15:p4","source":"agentisan","tokens":{"ctx":"5"},"ttl_ms":86400000}`, params)
 	assert.Contains(t, logs.String(), `"ctx":5`)
 }
 

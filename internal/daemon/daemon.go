@@ -299,12 +299,15 @@ func Run(ctx context.Context, o Options) (err error) {
 	w := newWalker() // shared: the collector tells it where focus goes
 	snapshots := &snapshotCache{}
 	idle := &team.IdleClock{} // shared: the poll times rests, team status reads them
-	ready := &atomic.Bool{}   // shared: the poll's first reconcile opens the workforce ops (A35)
-	in := newInbox()          // shared: the poll feeds the dispatcher, and send wakes it
+	// shared: the poll records each agent's start, team status gates ctx by
+	// it (A61)
+	starts := &team.StartClock{}
+	ready := &atomic.Bool{} // shared: the poll's first reconcile opens the workforce ops (A35)
+	in := newInbox()        // shared: the poll feeds the dispatcher, and send wakes it
 	// Shared: the notices ops set them, and the poll's notices obey them (A44).
 	mutes := notice.NewMutes()
 	var ops map[string]op
-	if svc := o.newWorkforce(st, ident, idle, paths.Dir); svc != nil {
+	if svc := o.newWorkforce(st, ident, idle, starts, paths.Dir); svc != nil {
 		ops = workforceOps(svc, ready, o.queued(in), o.marked)
 		maps.Copy(ops, o.noticeOps(in, mutes))
 	}
@@ -330,7 +333,7 @@ func Run(ctx context.Context, o Options) (err error) {
 		stopFocus()
 		focus.Wait()
 	}()
-	stopTeam := o.startTeam(ctx, st, ident, snapshots, idle, views, ready, in, mutes)
+	stopTeam := o.startTeam(ctx, st, ident, snapshots, idle, starts, views, ready, in, mutes)
 	defer stopTeam()
 	o.Logger.Info().Int("pid", os.Getpid()).Uint32("protocol", pong.Protocol).Str("socket", paths.Socket).
 		Int("store_version", st.UserVersion()).Msg("daemon running")
