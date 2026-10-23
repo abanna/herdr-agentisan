@@ -3,6 +3,7 @@ package debugger_test
 import (
 	"encoding/json"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -30,11 +31,13 @@ var launch = debugger.Launch{
 // second prompt gives the paths, and dontAsk denies every call that would
 // ask: the debugger reads the repo and the daemon's directory, runs
 // `events` and the built-in read-only commands, reads Linear, and does
-// nothing else. The session tools that never ask are denied by name. With
-// no MCP config above the repo, the settings are the fence alone. Its
-// reads are fenced to its working directories: the repo it starts in and
-// the daemon's directory. The env names the config dir, where `events`
-// finds its env file, and never a URL or a key.
+// nothing else. Its built-in tools are Bash, Read and ToolSearch alone, and
+// its one MCP server is Linear's connector; the session tools that never
+// ask are denied by name beneath that, and so are Linear's writes. With no
+// MCP config above the repo, the settings are the fence and the server
+// allowlist. Its reads are fenced to its working directories: the repo it
+// starts in and the daemon's directory. The env names the config dir, where
+// `events` finds its env file, and never a URL or a key.
 func TestCommand(t *testing.T) {
 	t.Parallel()
 	got, err := launch.Command()
@@ -47,8 +50,9 @@ func TestCommand(t *testing.T) {
 			"daemon.log is /home/u/.local/state/herdr/plugins/agentisan/srv-0123456789ab/daemon.log (rotated to daemon.log.1).",
 		"--setting-sources", "project",
 		"--permission-mode", "dontAsk",
-		"--settings", `{"permissions":{"blockReadsOutsideWorkingDirectories":true}}`,
+		"--settings", `{"permissions":{"blockReadsOutsideWorkingDirectories":true},"allowedMcpServers":[{"serverUrl":"https://mcp.linear.app/*"}]}`,
 		"--add-dir", "/home/u/.local/state/herdr/plugins/agentisan/srv-0123456789ab",
+		"--tools", "Bash,Read,ToolSearch",
 		"--allowedTools",
 		"Read(//home/u/src/assay/**)",
 		"Read(//home/u/.local/state/herdr/plugins/agentisan/srv-0123456789ab/**)",
@@ -63,6 +67,11 @@ func TestCommand(t *testing.T) {
 		"Artifact", "ArtifactData", "ArtifactComments", "DesignSync",
 		"EnterWorktree", "ExitWorktree",
 		"ListMcpResourcesTool", "ReadMcpResourceTool", "ReadMcpResourceDirTool",
+		"mcp__claude_ai_Linear__save_*", "mcp__claude_ai_Linear__delete_*", "mcp__claude_ai_Linear__create_*",
+		"mcp__claude_ai_Linear__update_*", "mcp__claude_ai_Linear__merge_*", "mcp__claude_ai_Linear__submit_*",
+		"mcp__claude_ai_Linear__share_*", "mcp__claude_ai_Linear__unshare_*", "mcp__claude_ai_Linear__mark_*",
+		"mcp__claude_ai_Linear__resolve_*", "mcp__claude_ai_Linear__restore_*", "mcp__claude_ai_Linear__retire_*",
+		"mcp__claude_ai_Linear__prepare_*",
 	}, got.Args)
 	assert.Equal(t, map[string]string{"HERDR_PLUGIN_CONFIG_DIR": launch.ConfigDir}, got.Env)
 	assert.Equal(t, launch.Repo, got.Dir, "it starts in the repo: the directory it starts in is a working directory")
@@ -86,19 +95,24 @@ func TestCommand(t *testing.T) {
 	assert.Contains(t, got.Args, "Read(//run/user/1000/op/local.env)")
 }
 
-// assertFenced checks that args turn on the read fence, by the setting's
-// exact name: Claude Code ignores a key it does not know, so a misspelled
-// one would leave the reads unfenced without a word.
+// assertFenced checks that args turn on the read fence and allow Linear's
+// connector as the only MCP server, by the settings' exact names: Claude
+// Code ignores a key it does not know, so a misspelled one would leave the
+// reads unfenced, or every server loading, without a word. The allowlist
+// is a top-level key, beside permissions, not inside it.
 func assertFenced(t *testing.T, args []string) {
 	t.Helper()
 	i := slices.Index(args, "--settings")
 	require.GreaterOrEqual(t, i, 0, "the launch passes --settings")
 	require.Less(t, i+1, len(args))
 	var s struct {
-		Permissions map[string]any `json:"permissions"`
+		Permissions       map[string]any `json:"permissions"`
+		AllowedMcpServers []any          `json:"allowedMcpServers"`
 	}
 	require.NoError(t, json.Unmarshal([]byte(args[i+1]), &s))
 	assert.Equal(t, map[string]any{"blockReadsOutsideWorkingDirectories": true}, s.Permissions)
+	assert.Equal(t, []any{map[string]any{"serverUrl": "https://mcp.linear.app/*"}}, s.AllowedMcpServers,
+		"Linear's connector, by URL: a claude.ai connector's name cannot go in an allowlist")
 }
 
 // TestCommandRejectsTheProjectsMCPServers: every server named in the
@@ -131,7 +145,8 @@ func TestCommandRejectsTheProjectsMCPServers(t *testing.T) {
 	writeMCP(parent, `{"mcpServers":null}`)
 	got, err = l.Command()
 	require.NoError(t, err)
-	assert.Contains(t, got.Args, `{"permissions":{"blockReadsOutsideWorkingDirectories":true}}`, "no servers, no key")
+	assert.Contains(t, got.Args, `{"permissions":{"blockReadsOutsideWorkingDirectories":true},"allowedMcpServers":[{"serverUrl":"https://mcp.linear.app/*"}]}`,
+		"no servers, no disabledMcpjsonServers key")
 
 	for name, body := range map[string]string{"not JSON": `{"mcpServers":`, "not an object": `[]`, "servers not an object": `{"mcpServers":["a"]}`} {
 		writeMCP(parent, body)
@@ -219,6 +234,114 @@ func between(t *testing.T, args []string, from, to string) []string {
 	require.GreaterOrEqual(t, i, 0, "the launch passes %s", from)
 	require.Greater(t, j, i, "the launch passes %s after %s", to, from)
 	return args[i+1 : j]
+}
+
+// after is the arguments after flag, the first one, to the end: the
+// launch's last list.
+func after(t *testing.T, args []string, flag string) []string {
+	t.Helper()
+	i := slices.Index(args, flag)
+	require.GreaterOrEqual(t, i, 0, "the launch passes %s", flag)
+	return args[i+1:]
+}
+
+// TestCommandKeepsTheToolsItsRulesName: --tools keeps every built-in tool
+// an allow rule names, or the rule would allow a tool the session does not
+// have, and no deny rule names one of them bare, which would remove it.
+// Linear's rules name MCP tools, which --tools does not reach.
+func TestCommandKeepsTheToolsItsRulesName(t *testing.T) {
+	t.Parallel()
+	noServerDir := launch
+	noServerDir.ServerDir = ""
+	for name, l := range map[string]debugger.Launch{"with the server dir": launch, "without it": noServerDir} {
+		got, err := l.Command()
+		require.NoError(t, err, name)
+		list := between(t, got.Args, "--tools", "--allowedTools")
+		require.Len(t, list, 1, "%s: one comma-joined list", name)
+		tools := strings.Split(list[0], ",")
+		for _, rule := range between(t, got.Args, "--allowedTools", "--disallowedTools") {
+			if strings.HasPrefix(rule, "mcp__") {
+				continue
+			}
+			tool, _, _ := strings.Cut(rule, "(")
+			assert.Contains(t, tools, tool, "%s: %s names a tool --tools keeps", name, rule)
+		}
+		for _, rule := range after(t, got.Args, "--disallowedTools") {
+			assert.NotContains(t, tools, rule, "%s: a bare deny would remove %s", name, rule)
+		}
+	}
+}
+
+// linearTools is every tool Linear's claude.ai connector offered on
+// 2026-10-23 (Claude Code 2.1.309), by its name after the prefix. Its reads
+// begin get_, list_, search_ or extract_; every other verb writes.
+const linearTools = `
+create_attachment create_attachment_from_upload create_initiative_label create_issue_label
+delete_attachment delete_comment delete_customer delete_customer_need delete_diff_comment delete_status_update
+extract_images
+get_agent_skill get_attachment get_diff get_diff_threads get_document get_initiative get_issue get_issue_status
+get_milestone get_notifications get_project get_release get_release_note get_status_updates get_team get_template
+get_triage_responsibility get_user get_workspace
+list_agent_skills list_comments list_custom_views list_customer_needs list_customers list_cycles list_diffs
+list_documents list_initiative_labels list_initiatives list_issue_labels list_issue_statuses list_issues
+list_milestones list_project_labels list_projects list_release_notes list_release_pipelines list_releases
+list_teams list_templates list_users
+mark_notification merge_diff prepare_attachment_upload resolve_diff_thread
+restore_initiative_label restore_issue_label restore_project_label
+retire_initiative_label retire_issue_label retire_project_label
+save_comment save_customer save_customer_need save_diff_comment save_document save_initiative
+save_initiative_label save_issue save_issue_label save_milestone save_project save_project_label
+save_release save_release_note save_status_update
+search_documentation share_issue submit_diff_review unshare_issue update_diff`
+
+// TestCommandDeniesLinearsWrites: the launch's Linear globs remove every
+// tool of Linear's connector that writes, each by exactly one glob, and
+// none that reads, the three the debugger may call among them; every glob
+// removes one at least. A deny rule's glob must match the whole tool name,
+// as path.Match does. A verb Linear adds later is matched by none: dontAsk
+// still refuses its tools, since no rule allows them.
+func TestCommandDeniesLinearsWrites(t *testing.T) {
+	t.Parallel()
+	got, err := launch.Command()
+	require.NoError(t, err)
+	first := debugger.LinearReadTools[0]
+	prefix := first[:strings.LastIndex(first, "__")+2]
+	var globs []string
+	for _, rule := range after(t, got.Args, "--disallowedTools") {
+		if strings.HasPrefix(rule, prefix) {
+			globs = append(globs, rule)
+		}
+	}
+	require.NotEmpty(t, globs)
+	denying := func(tool string) []string {
+		var m []string
+		for _, g := range globs {
+			ok, err := path.Match(g, tool)
+			require.NoError(t, err, g)
+			if ok {
+				m = append(m, g)
+			}
+		}
+		return m
+	}
+	used := map[string]bool{}
+	for _, name := range strings.Fields(linearTools) {
+		tool := prefix + name
+		if slices.ContainsFunc([]string{"get_", "list_", "search_", "extract_"}, func(v string) bool { return strings.HasPrefix(name, v) }) {
+			assert.Empty(t, denying(tool), "%s reads", tool)
+			continue
+		}
+		m := denying(tool)
+		assert.Len(t, m, 1, "%s writes: one glob removes it", tool)
+		for _, g := range m {
+			used[g] = true
+		}
+	}
+	assert.Len(t, used, len(globs), "each of %v removes a tool Linear offers", globs)
+	for _, tool := range debugger.LinearReadTools {
+		assert.Contains(t, strings.Fields(linearTools), strings.TrimPrefix(tool, prefix), "%s is a tool Linear offers", tool)
+		assert.Empty(t, denying(tool), "%s is allowed, and a deny would beat the allow", tool)
+	}
 }
 
 // TestCommandRefusesUnusablePaths: every path is absolute and clean, and
