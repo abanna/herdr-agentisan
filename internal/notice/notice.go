@@ -55,10 +55,12 @@ const (
 	Dirty Kind = "dirty"
 	// Approved is a PR's first 👍.
 	Approved Kind = "approved"
+	// Review is a PR's new review, with its P-badge counts.
+	Review Kind = "review"
 )
 
 // Kinds are every kind, in the order the configuration documents them.
-var Kinds = []Kind{TurnEnded, Blocked, Unblocked, Unknown, Gone, Started, CtxSoft, CtxHard, CtxCeiling, Merged, CIFailed, CIPassed, Dirty, Approved}
+var Kinds = []Kind{TurnEnded, Blocked, Unblocked, Unknown, Gone, Started, CtxSoft, CtxHard, CtxCeiling, Merged, CIFailed, CIPassed, Dirty, Approved, Review}
 
 // Skippable reports whether a team's configuration can skip k: every kind
 // but the context ceiling, which always reaches the boss (D7).
@@ -71,7 +73,7 @@ func (k Kind) Skippable() bool { return k != CtxCeiling }
 // GitHub's: its seen-set tells each once, and a PR's CI failing again at a
 // new head is news.
 func (k Kind) Repeats() bool {
-	return !slices.Contains([]Kind{TurnEnded, Started, CtxSoft, CtxHard, CtxCeiling, Merged, CIFailed, CIPassed, Dirty, Approved}, k)
+	return !slices.Contains([]Kind{TurnEnded, Started, CtxSoft, CtxHard, CtxCeiling, Merged, CIFailed, CIPassed, Dirty, Approved, Review}, k)
 }
 
 // Notice is one line for one team's boss.

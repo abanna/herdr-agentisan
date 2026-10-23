@@ -210,8 +210,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   levels' source (`CtxWatch`: each
   agent pane's ctx crossing its rotation thresholds, the boss's included,
   remembered by terminal and re-armed 5 under, A33), GitHub's events
-  (`github.go`, A45: merged, CI failed or passed, a conflict, a 👍, each
-  with its seen-set key), the per-boss pacing (`Batcher`: coalesced, at most
+  (`github.go`, A45: merged, CI failed or passed, a conflict, a 👍, a
+  review with its P-badge counts, each with its seen-set key), the
+  per-boss pacing (`Batcher`: coalesced, at most
   one message per gap, repeats and muted workers dropped, 8 KiB a message),
   the boss's mutes (`Mutes`) and the `Sink` that delivers it: the daemon's
   appends each message to the boss's notice still queued in the inbox
@@ -274,8 +275,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   terminal, with the shell the team poll read (migration 0003, A35), and the
   routing decision it was launched with (migration 0005, A50); the poll's
   writes are compare-and-sets on the row as it read it. The GitHub notices'
-  seen-set, open PRs and seed marks (`github.go`, migration 0004, A45) make
-  each event told once across restarts. Tests open a fresh database in a temp
+  seen-set, open PRs and seed marks, a kind's own included (`github.go`,
+  migrations 0004 and 0006, A45), make each event told once across
+  restarts. Tests open a fresh database in a temp
   dir; the store is never mocked.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
@@ -290,7 +292,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   the team poll and caches each project's result for the snapshot, then
   diffs each list against state.db and hands the boss's GitHub notices to
   the poll (`ghnotices.go`, A45), looking up a PR that left the list with
-  `gh pr view`.
+  `gh pr view`, and a new review's P-badge counts with one GraphQL call
+  (`reviews.go`).
 - `internal/testslots/` — the dashboard header's test slots (ADR-001 A31,
   A40): which of a project's lock files some process holds a lock on, read
   from the kernel's `/proc/locks` once every team poll without opening or
