@@ -12,3 +12,10 @@ func UseOn(base string, statfs func(string, *unix.Statfs_t) error, access func(s
 ) error {
 	return use(base, sys{statfs: statfs, access: access, getenv: getenv, setenv: setenv, stderr: stderr})
 }
+
+// CheckUsedOn is CheckUsed's verdict on tempDir, with the host's calls given.
+func CheckUsedOn(tempDir string, statfs func(string, *unix.Statfs_t) error, access func(string, uint32) error,
+	getenv func(string) string, setenv func(string, string) error, stderr io.Writer,
+) (skip, fail string) {
+	return checkUsed(tempDir, sys{statfs: statfs, access: access, getenv: getenv, setenv: setenv, stderr: stderr})
+}

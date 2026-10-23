@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
+	"testing"
 
 	"golang.org/x/sys/unix"
 )
@@ -81,4 +83,34 @@ func onto(base string, s sys) string {
 		return fmt.Sprintf("TMPDIR cannot be set: %v", err)
 	}
 	return ""
+}
+
+// CheckUsed fails t when the tests are not on Base though Use could have put
+// them there: a package whose TestMain stopped calling Use would otherwise run
+// on the disk again, with every test green. It skips when Use would have
+// stayed off Base for any of its reasons. Each package that calls Use has one
+// test calling it.
+func CheckUsed(t testing.TB) {
+	t.Helper()
+	skip, fail := checkUsed(os.TempDir(), host())
+	if fail != "" {
+		t.Fatal(fail)
+	}
+	if skip != "" {
+		t.Skip(skip)
+	}
+}
+
+// checkUsed is CheckUsed's verdict on the tests' temporary directory, read
+// before it runs: why to skip, or why to fail. It asks onto, so its reasons
+// to skip are Use's own, but it never sets TMPDIR.
+func checkUsed(tempDir string, s sys) (skip, fail string) {
+	s.setenv = func(string, string) error { return nil }
+	if why := onto(Base, s); why != "" {
+		return "testtmp stays off " + Base + ": " + why, ""
+	}
+	if tempDir != Base && !strings.HasPrefix(tempDir, Base+"/") {
+		return "", fmt.Sprintf("the tests' temporary directory is %s, not on %s: TestMain does not call testtmp.Use", tempDir, Base)
+	}
+	return "", ""
 }

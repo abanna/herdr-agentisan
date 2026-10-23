@@ -8,7 +8,8 @@
 // (ADR-001 A1): only the tests' state moves.
 //
 // Each package whose tests open a state.db or start a daemon calls Use from
-// its TestMain. Only _test files import it.
+// its TestMain, and has one test that calls CheckUsed, which fails when the
+// TestMain stops calling Use. Only _test files import it.
 package testtmp
 
 import (
