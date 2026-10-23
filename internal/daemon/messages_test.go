@@ -708,10 +708,10 @@ func TestDispatcherFailsAPaneMessageItCannotType(t *testing.T) {
 			if tc.failed {
 				got := eventuallyState(t, st, m.ID, store.MessageFailed)
 				assert.Equal(t, tc.reason, got.Reason)
-				// The dispatcher emits the event once its Fail has committed,
-				// and another connection can read that commit while the fsync
-				// still holds the dispatcher: wait for the event, then two
-				// polls, so a second one would be seen too (NERD-5535).
+				// The dispatcher emits the event on its own goroutine once its
+				// Fail has returned, and another connection can read the
+				// commit before that: wait for the event, then two polls, so
+				// a second one would be seen too (NERD-5535).
 				require.Eventually(t, func() bool { return len(failedEvents(rec)) > 0 }, ready, 10*time.Millisecond, "no failed event")
 				polled(t, th.srv, 2)
 				assert.Equal(t, []string{m.ID}, messageIDs(t, dir, th)(), "a message the daemon sent gets no notice")
