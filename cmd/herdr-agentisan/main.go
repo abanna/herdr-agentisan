@@ -85,7 +85,7 @@ func run() int {
 		fang.WithVersion(config.Version),
 		fang.WithCommit(config.Commit),
 	); err != nil {
-		return 1
+		return cli.ExitCode(err)
 	}
 	return 0
 }

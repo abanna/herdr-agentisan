@@ -168,7 +168,7 @@ slots = 1
 		assert.Equalf(t, w.value, l.Value, "value of %s", path)
 		assert.Equalf(t, w.layer, l.Layer, "layer of %s", path)
 	}
-	assert.Equal(t, "sonnet", got.Profile.AgentFor("qa").Model)
+	assert.Equal(t, "sonnet", agentFor(t, *got.Profile, "qa").Model)
 	assert.Equal(t, []int{40, 50, 60}, got.Profile.Groups["qa"].Rotation.Thresholds)
 	assert.Nil(t, got.Profile.Groups["coder"].Rotation.Thresholds, "a group that sets none has none of its own")
 	assert.Empty(t, got.Profile.Spawn.ShellReadyKeys)
@@ -248,9 +248,16 @@ func TestRepoFileNamesCannotSplitAPath(t *testing.T) {
 // kind, so the allowlist alone decides.
 func TestEveryProfileKeyIsClassified(t *testing.T) {
 	t.Parallel()
-	repoSettable := []string{"agent.model", "color", "github", "groups.*.agent.model", "groups.*.rotation.thresholds", "groups.*.slots", "groups.*.workers", "rotation.thresholds"}
+	repoSettable := []string{
+		"agent.claude.model", "agent.codex.model", "agent.model", "color", "github",
+		"groups.*.agent.claude.model", "groups.*.agent.codex.model", "groups.*.agent.model",
+		"groups.*.rotation.thresholds", "groups.*.slots", "groups.*.workers", "rotation.thresholds",
+	}
 	usersOnly := []string{
 		"agent.command", "groups.*.agent.command", "groups.*.description",
+		// A provider's command, and a type's provider, choose what runs (A62).
+		"agent.claude.command", "agent.codex.command", "groups.*.agent.claude.command",
+		"groups.*.agent.codex.command", "groups.*.agent.provider",
 		"integrations.*.token", "integrations.*.url", "repo",
 		"spawn.shell_prompt", "spawn.shell_ready_after_s", "spawn.shell_ready_keys", "verify",
 	}

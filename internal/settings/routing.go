@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"maps"
-	"path/filepath"
 	"slices"
 	"time"
 
@@ -106,6 +105,12 @@ func (m merged) checkRouting() error {
 	groups, _ := v.(map[string]any)
 	for _, name := range slices.Sorted(maps.Keys(groups)) {
 		agents = append(agents, "groups."+name+"."+agentKey)
+	}
+	tables := len(agents)
+	for _, prov := range providers {
+		for _, agent := range agents[:tables] {
+			agents = append(agents, agent+"."+prov)
+		}
 	}
 	for _, agent := range agents {
 		if _, set := m.get(agent + ".model"); set {
@@ -229,14 +234,17 @@ func (p Profile) CheckRoutingProviders() error {
 }
 
 // providersOf are the providers a worker of type typ runs, each a pair
-// CheckRoutingProviders checks: its agent command's. P16 (NERD-5517) widens
-// it to every provider the type may run.
+// CheckRoutingProviders checks: the provider of the agent its spawn runs,
+// AgentFor's for the type's default provider, when that is claude or codex
+// (A62). Nothing chooses another provider until P18 (NERD-5519), whose
+// --provider widens it to every provider the type may run, providers less
+// those refused.
 func (p Profile) providersOf(typ string) []string {
-	cmd := p.AgentFor(typ).Command
-	if len(cmd) == 0 {
-		return nil
+	agent, err := p.AgentFor(typ, "")
+	if prov := executable(agent.Command); err == nil && slices.Contains(providers, prov) {
+		return []string{prov}
 	}
-	return []string{filepath.Base(cmd[0])}
+	return nil
 }
 
 // deploymentOf reads [routing] out of a resolved tree.

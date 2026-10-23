@@ -71,6 +71,8 @@ type Store struct {
 	// closeWait bounds Close's wait for the connection; Open sets BusyTimeout.
 	closeWait time.Duration
 	closed    atomic.Bool
+	// wake is woken at each post on the board (A60).
+	wake boardWake
 }
 
 // Pragmas are the connection settings Open sets and verifies.
