@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/abanna/herdr-agentisan/internal/cli"
 	"github.com/abanna/herdr-agentisan/internal/report"
+	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
 // TestACallerOnTheSharedAppServer (A64, NERD-5506): under Codex's shared
@@ -31,17 +33,18 @@ func TestACallerOnTheSharedAppServer(t *testing.T) {
 	env := map[string]string{"HERDR_PANE_ID": "w14:p1", "HERDR_AGENTISAN_WORKER": "ha-coder-1", "CODEX_THREAD_ID": "019a"}
 	shared, own := codexLineage(true), codexLineage(false)
 	tests := map[string]struct {
-		args    []string
-		lineage func() *report.Lineage
-		sent    string // "" when the daemon is never asked
+		args        []string
+		lineage     func() *report.Lineage
+		sent        string // "" when the daemon is never asked
+		workerReads int32
 	}{
 		"send":                                 {args: []string{"send", "boss", "hi"}, lineage: shared},
 		"handoff ready":                        {args: []string{"handoff", "ready"}, lineage: shared},
 		"send, the starting TUI gone":          {args: []string{"send", "boss", "hi"}, lineage: appServerAlone},
 		"handoff ready, the starting TUI gone": {args: []string{"handoff", "ready"}, lineage: appServerAlone},
 		"team status":                          {args: []string{"team", "status"}, lineage: shared, sent: `{"v":1,"op":"team.status","args":{}}`},
-		"send, the pane's own Codex":           {args: []string{"send", "boss", "hi"}, lineage: own, sent: `{"v":1,"op":"send","args":{"to":"boss","body":"hi","caller_pane":"w14:p1","worker":"ha-coder-1"}}`},
-		"handoff ready, its own":               {args: []string{"handoff", "ready"}, lineage: own, sent: `{"v":1,"op":"handoff.ready","args":{"caller_pane":"w14:p1","worker":"ha-coder-1"}}`},
+		"send, the pane's own Codex":           {args: []string{"send", "boss", "hi"}, lineage: own, workerReads: 1, sent: `{"v":1,"op":"send","args":{"to":"boss","body":"hi","caller_pane":"w14:p1","worker":"ha-coder-1"}}`},
+		"handoff ready, its own":               {args: []string{"handoff", "ready"}, lineage: own, workerReads: 1, sent: `{"v":1,"op":"handoff.ready","args":{"caller_pane":"w14:p1","worker":"ha-coder-1"}}`},
 		"team status, its own Codex":           {args: []string{"team", "status"}, lineage: own, sent: `{"v":1,"op":"team.status","args":{"caller_pane":"w14:p1"}}`},
 	}
 	for name, tc := range tests {
@@ -54,8 +57,17 @@ func TestACallerOnTheSharedAppServer(t *testing.T) {
 			root.SetOut(&out)
 			root.SetErr(io.Discard)
 			root.SetArgs(tc.args)
-			err := root.ExecuteContext(cli.WithLookupEnv(cli.WithLineage(t.Context(), tc.lineage), e.lookup(env)))
+			var workerReads atomic.Int32
+			baseLookup := e.lookup(env)
+			lookup := func(k string) (string, bool) {
+				if k == workforce.WorkerEnv {
+					workerReads.Add(1)
+				}
+				return baseLookup(k)
+			}
+			err := root.ExecuteContext(cli.WithLookupEnv(cli.WithLineage(t.Context(), tc.lineage), lookup))
 			got := oneJSONObject(t, out.String())
+			assert.Equal(t, tc.workerReads, workerReads.Load(), "only a verified caller reads its worker")
 			if tc.sent == "" {
 				require.Error(t, err, "a refusal exits 1")
 				var refusal struct {
@@ -112,8 +124,17 @@ func TestACallerInTheSandboxNamespace(t *testing.T) {
 			root.SetOut(&out)
 			root.SetErr(io.Discard)
 			root.SetArgs(tc.args)
-			err := root.ExecuteContext(cli.WithLookupEnv(cli.WithLineage(t.Context(), tc.lineage), e.lookup(tc.env)))
+			var workerReads atomic.Int32
+			baseLookup := e.lookup(tc.env)
+			lookup := func(k string) (string, bool) {
+				if k == workforce.WorkerEnv {
+					workerReads.Add(1)
+				}
+				return baseLookup(k)
+			}
+			err := root.ExecuteContext(cli.WithLookupEnv(cli.WithLineage(t.Context(), tc.lineage), lookup))
 			got := oneJSONObject(t, out.String())
+			assert.Zero(t, workerReads.Load(), "an unverified caller never reads the inherited worker")
 			if tc.code == "" {
 				require.NoError(t, err)
 				assert.Equal(t, true, got["ok"])

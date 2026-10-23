@@ -76,12 +76,6 @@ func TestFindCallerUnderTheSharedAppServer(t *testing.T) {
 	embeddedArgv := map[int][]string{5000: daemonArgv[5000], 4998: daemonArgv[4998], 900: {"codex", "--no-daemon"}, 600: {"-zsh"}}
 	claudeArgv := map[int][]string{5000: daemonArgv[5000], 4998: daemonArgv[4998], 900: {"claude", "--name", "ha-coder-1"}, 600: {"-zsh"}}
 	w1 := paneFinder{panes: map[string]herdr.ProcessInfo{"w1:p1": {PaneID: "w1:p1", ShellPID: 600}}, listed: []herdr.PaneInfo{{PaneID: "w1:p1"}}}
-	env := func(k string) (string, bool) {
-		if k == workforce.WorkerEnv {
-			return "ha-coder-1", true
-		}
-		return "", false
-	}
 	tests := map[string]struct {
 		pane report.Pane
 		want workforce.Caller
@@ -120,15 +114,25 @@ func TestFindCallerUnderTheSharedAppServer(t *testing.T) {
 			t.Parallel()
 			h := countingFinder{paneFinder: w1, calls: &atomic.Int32{}}
 			tc.pane.SocketPath = "unused"
+			var workerReads atomic.Int32
+			env := func(k string) (string, bool) {
+				if k == workforce.WorkerEnv {
+					workerReads.Add(1)
+					return "ha-coder-1", true
+				}
+				return "", false
+			}
 			got, err := workforce.FindCaller(t.Context(), h, tc.pane, env)
 			if tc.err == nil {
 				require.NoError(t, err)
 				assert.Equal(t, tc.want, got)
+				assert.EqualValues(t, 1, workerReads.Load(), "the verified caller reads its worker once")
 				return
 			}
 			require.ErrorIs(t, err, workforce.ErrCallerUnverified)
 			require.ErrorIs(t, err, tc.err)
 			assert.Equal(t, workforce.Caller{}, got, "neither the pane nor the worker")
+			assert.Zero(t, workerReads.Load(), "a refused caller never reads the inherited worker")
 			assert.Zero(t, h.calls.Load(), "herdr is never asked")
 
 			pane, err := workforce.FindCallerPane(t.Context(), h, tc.pane)
@@ -158,12 +162,6 @@ func TestFindCallerInTheSandboxNamespace(t *testing.T) {
 	embedded := map[int]report.Stat{5000: {PPID: 4998, Start: 900}, 4998: {PPID: 900, Start: 800}, 900: {PPID: 600, Start: 500}, 600: {PPID: 1, Start: 400}}
 	embeddedArgv := map[int][]string{5000: namespaceArgv[5000], 4998: namespaceArgv[4998], 900: {"codex", "--no-daemon"}, 600: {"-zsh"}}
 	w1 := paneFinder{panes: map[string]herdr.ProcessInfo{"w1:p1": {PaneID: "w1:p1", ShellPID: 600}}, listed: []herdr.PaneInfo{{PaneID: "w1:p1"}}}
-	env := func(k string) (string, bool) {
-		if k == workforce.WorkerEnv {
-			return "ha-coder-1", true
-		}
-		return "", false
-	}
 	tests := map[string]struct {
 		pane      report.Pane
 		want      workforce.Caller
@@ -192,10 +190,19 @@ func TestFindCallerInTheSandboxNamespace(t *testing.T) {
 			t.Parallel()
 			h := countingFinder{paneFinder: w1, calls: &atomic.Int32{}}
 			tc.pane.SocketPath = "unused"
+			var workerReads atomic.Int32
+			env := func(k string) (string, bool) {
+				if k == workforce.WorkerEnv {
+					workerReads.Add(1)
+					return "ha-coder-1", true
+				}
+				return "", false
+			}
 			got, err := workforce.FindCaller(t.Context(), h, tc.pane, env)
 			if tc.err == nil {
 				require.NoError(t, err)
 				assert.Equal(t, tc.want, got)
+				assert.EqualValues(t, 1, workerReads.Load(), "the verified caller reads its worker once")
 				return
 			}
 			require.ErrorIs(t, err, workforce.ErrCallerUnverified)
@@ -203,6 +210,7 @@ func TestFindCallerInTheSandboxNamespace(t *testing.T) {
 			assert.Equal(t, tc.sandboxed, errors.Is(err, report.ErrCodexSandboxed), "told the sandbox is why: %v", err)
 			assert.Equal(t, tc.sandboxed, !strings.Contains(err.Error(), "--no-daemon"), "told to start Codex with --no-daemon: %v", err)
 			assert.Equal(t, workforce.Caller{}, got, "neither the pane nor the worker")
+			assert.Zero(t, workerReads.Load(), "a refused caller never reads the inherited worker")
 
 			sel, err := workforce.SelectorFor(t.Context(), h, "", tc.pane)
 			require.NoError(t, err)
@@ -230,4 +238,34 @@ func TestSelectorForAnUnverifiedCaller(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, workforce.Selector{Project: "ha"}, got)
 	assert.Zero(t, h.calls.Load(), "herdr is never asked")
+}
+
+// TestFindCallerAfterAFailedPaneLookup: a verified host whose pane lookup
+// fails preserves the cause and ErrHerdr, without reading its worker.
+func TestFindCallerAfterAFailedPaneLookup(t *testing.T) {
+	t.Parallel()
+	procs := map[int]report.Stat{5000: {PPID: 900, Start: 900}, 900: {PPID: 600, Start: 500}, 600: {PPID: 1, Start: 400}}
+	cmds := map[int][]string{5000: {"herdr-agentisan", "send", "boss", "hi"}, 900: {"codex", "--no-daemon"}, 600: {"-zsh"}}
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			t.Parallel()
+			h := countingFinder{paneFinder: paneFinder{failing: cause}, calls: &atomic.Int32{}}
+			pane := report.Pane{SocketPath: "unused", PaneID: "w1:p1", CodexThread: "019a", Lineage: callerLineage(procs, cmds)}
+			var workerReads atomic.Int32
+			lookup := func(k string) (string, bool) {
+				if k == workforce.WorkerEnv {
+					workerReads.Add(1)
+					return "ha-coder-1", true
+				}
+				return "", false
+			}
+			got, err := workforce.FindCaller(t.Context(), h, pane, lookup)
+			require.ErrorIs(t, err, workforce.ErrHerdr)
+			require.ErrorIs(t, err, cause)
+			assert.NotErrorIs(t, err, workforce.ErrCallerUnverified, "the host passed verification")
+			assert.Equal(t, workforce.Caller{}, got)
+			assert.EqualValues(t, 1, h.calls.Load(), "the verified host reached the pane lookup")
+			assert.Zero(t, workerReads.Load(), "a failed pane lookup never reads the worker")
+		})
+	}
 }
