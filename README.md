@@ -522,6 +522,10 @@ from the shared file, the project's table and the repo file. `skip` can name
 
 ## The team board
 
+B0a.1 supplies a pure GitHub notice capture-ID helper and frozen input types.
+It has no production callers or storage/effect path; durable admission and
+Board B remain incomplete.
+
 Each team has a board in `state.db`: its workers' posts and the daemon's
 notices. Only the team's boss and the user read it; workers only post. The
 daemon tells who asks from the kernel, by the process that connected, never

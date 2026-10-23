@@ -76,6 +76,39 @@ validates. No secret has a default; when one is added, `config.Load()` must
 fail at startup rather than fall back. Failing early is the design, not a
 rough edge.
 
+## GitHub notice capture IDs (B0a.1)
+
+`store.GitHubNoticeCaptureID` is a pure operation over frozen `NoticeEnvelope`
+and `NoticeReceipt` values. It preserves inputs, ignores the caller's CaptureID
+entirely and returns `gh1:` plus lowercase SHA256 hex, or a wrapped ErrInvalid
+without input contents. It reads no state, clock or environment and has no
+production callers. It allocates no capture identity, admits no record and
+performs no board, seen, acknowledgement, delivery or wake effect.
+
+Version 1 accepts only source github and merged/ci_failed/ci_passed/dirty/
+approved/review, with a matching version-1 receipt and PR 1..2^31-1. Project,
+subject and worker allow empty, otherwise UTF-8 without control/format characters,
+at most 256 bytes. Text is nonempty UTF-8, at most 512 bytes, without NUL/CR/LF.
+Repo has two nonempty components and one slash, at most 256 bytes, with the same
+Unicode restrictions. OIDs are full 40/64 hex characters, preserving case;
+approved keys are empty, and merge keys may be empty. Review keys are a nonempty
+login (at most 128 bytes, no whitespace/control/format) plus one ASCII space and
+a canonical UTC RFC3339Nano timestamp, together at most 256 bytes.
+
+Encoding is four unsigned 64-bit big-endian words: envelope version, receipt
+version, PR, then the signed nanosecond instant's two's-complement bits. The instant
+uses the existing representable nanosecond range (1677..2262), rejecting Go zero
+time, with UTC normalization. Next come unsigned 32-bit big-endian lengths and
+bytes for project/source/kind/subject/worker/repo/key/text in that exact order.
+CaptureID and result/retry/disposition data are absent. No text is rendered,
+truncated or normalized. Length guards precede variable decoding/error allocation.
+The 2-KiB encoding ceiling is enforced; a conservative valid bound is 32 numeric
+bytes + 32 prefixes + five 256-byte fields + 512 text + 6 source + 9 kind = 1871,
+so fully valid inputs cannot reach 2048. Tests cover reachable field boundaries.
+
+Durable admission, supplied capture-ID validation, metadata and schema changes
+remain B0a.2, after human merge and separate authorization. Board B is incomplete.
+
 ## Deliberate limits
 
 - **Tracing exports only when told to.** `HERDR_AGENTISAN_OTLP_ENDPOINT` is empty by
