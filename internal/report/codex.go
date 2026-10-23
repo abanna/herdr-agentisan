@@ -143,9 +143,7 @@ func (l *Lineage) CheckCodexHost() error {
 		if s, err := l.stat(p.PID); err != nil || s.Start != p.Start {
 			return fmt.Errorf("%w: pid %d is no longer the process the lineage read", ErrHostUnverified, p.PID)
 		}
-		// The daemon runs `codex app-server ...`; an IDE's server may run it
-		// through the node launcher, one argument later.
-		if len(argv) > 1 && slices.Contains(argv[1:], "app-server") {
+		if isAppServer(argv) {
 			return fmt.Errorf("%w: pid %d runs %q", ErrCodexDaemon, p.PID, strings.Join(argv, " "))
 		}
 		hosted = hosted || isCodex(argv)
@@ -154,6 +152,13 @@ func (l *Lineage) CheckCodexHost() error {
 		return fmt.Errorf("%w: lineage %v", ErrNoCodexHost, l.PIDs())
 	}
 	return nil
+}
+
+// isAppServer reports whether argv runs a Codex app-server: the daemon runs
+// `codex app-server ...`, and an IDE's server may run it through the node
+// launcher, one argument later.
+func isAppServer(argv []string) bool {
+	return len(argv) > 1 && slices.Contains(argv[1:], "app-server")
 }
 
 // isCodex reports whether argv runs Codex: its native binary, named codex,
@@ -180,6 +185,51 @@ func (p Pane) checkCodex() error {
 		return fmt.Errorf("%w: thread %s", ErrCodexSandboxed, p.CodexThread)
 	}
 	return p.Lineage.CheckCodexHost()
+}
+
+// CheckCallerHost is the check a command must pass before it takes its
+// pane's environment, HERDR_PANE_ID and HERDR_AGENTISAN_WORKER, for its own
+// (A64). Under the shared app-server both are the session's that started
+// the daemon, and while that TUI lives the command's parents run through its
+// pane too. So a command run under Codex, one with CODEX_THREAD_ID or whose
+// parents run Codex or an app-server, must be run by the pane's own Codex:
+// CheckCodexHost over its parents. Any other passes.
+//
+// The command's own process is left out: its arguments are its caller's
+// words, and `send boss app-server` runs no app-server. A parent whose
+// arguments cannot be read does not count as Codex, so a lineage with no
+// Codex in it, Claude's, is never refused for one another user owns. Codex's
+// network sandbox is not refused, as it is for a report (checkCodex): it says
+// nothing about which process runs the command, and an escalation Codex
+// approved still carries it.
+func (p Pane) CheckCallerHost() error {
+	parents := p.Lineage.parents()
+	if p.CodexThread == "" && !parents.runsCodex() {
+		return nil
+	}
+	return parents.CheckCodexHost()
+}
+
+// parents is l without its first process, the one it was read from; nil and
+// an empty l stay as they are.
+func (l *Lineage) parents() *Lineage {
+	if l == nil || len(l.Procs) == 0 {
+		return l
+	}
+	return &Lineage{Procs: l.Procs[1:], stat: l.stat, cmdline: l.cmdline}
+}
+
+// runsCodex reports whether a process of l whose arguments can be read runs
+// Codex or an app-server. One that cannot be read, or a lineage with no
+// reader for them, does not count.
+func (l *Lineage) runsCodex() bool {
+	if l == nil || l.cmdline == nil {
+		return false
+	}
+	return slices.ContainsFunc(l.Procs, func(p Proc) bool {
+		argv, err := l.cmdline(p.PID)
+		return err == nil && (isCodex(argv) || isAppServer(argv))
+	})
 }
 
 // TranscriptContext returns the context use Codex's TUI shows as "Context

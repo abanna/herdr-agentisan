@@ -33,6 +33,10 @@ const codeDaemonUnavailable = "daemon_unavailable"
 // gave no answer: it may have run the op (A52).
 const codeDaemonNoAnswer = "daemon_no_answer"
 
+// codeCallerUnverified answers a command run under Codex but not by its
+// pane's own Codex, whose pane and worker may be another session's (A64).
+const codeCallerUnverified = "caller_unverified"
+
 // errRefused is the error a refused workforce command returns, after
 // printing its refusal, so the process exits 1.
 var errRefused = errors.New("refused")
@@ -120,8 +124,9 @@ func (f *opFlags) selector(ctx context.Context) (workforce.Selector, error) {
 }
 
 // runOp asks the daemon to run op with the request req builds once the
-// daemon's socket is known, and prints its answer. req fails only when
-// herdr does, finding the team (herdr_failed).
+// daemon's socket is known, and prints its answer. req fails when herdr
+// does, finding the team (herdr_failed), or when the caller it would name
+// cannot be verified (caller_unverified, A64): the daemon is never asked.
 func (f *opFlags) runOp(cmd *cobra.Command, args []string, op string, req func() (any, error)) error {
 	if len(args) > 0 {
 		return badRequest(cmd, fmt.Errorf("%s takes no arguments, got %s", cmd.CommandPath(), strings.Join(args, " ")))
@@ -138,7 +143,10 @@ func (f *opFlags) runOp(cmd *cobra.Command, args []string, op string, req func()
 		return refuseWith(cmd, codeDaemonUnavailable, noHerdr(err).Error())
 	}
 	r, err := req()
-	if err != nil {
+	switch {
+	case errors.Is(err, workforce.ErrCallerUnverified):
+		return refuseWith(cmd, codeCallerUnverified, err.Error())
+	case err != nil:
 		return refuseWith(cmd, "herdr_failed", err.Error())
 	}
 	data, err := daemon.Workforce(ctx, paths.Socket, op, r)

@@ -31,6 +31,7 @@ refusal exits 1:
 | --- | --- |
 | `unknown_recipient` | No live worker has the id and no team's boss has the name, or `boss` came from a pane in no team |
 | `unknown_sender` | The command runs in no herdr pane it can confirm, and `HERDR_AGENTISAN_WORKER` names no live worker |
+| `caller_unverified` | The command runs under Codex, but not in its pane's own Codex, so its pane and `HERDR_AGENTISAN_WORKER` may be another session's: start Codex with `--no-daemon`, and run `send` outside its sandbox (A64). Nothing was queued, and the daemon was never asked |
 | `too_large` | The body is over 8 KiB |
 | `bad_request` | No body, an empty one, one with a NUL, or one that is not UTF-8. Quote a body with spaces, put one starting with `-` after `--`, or pass `-` |
 | `config_invalid`, `bypasses_agentisan` | The daemon could not read the shared config, or it starts an agent that skips the Agentisan bundle. Nothing was queued: fix the config, then send again |
@@ -56,6 +57,11 @@ confirms it, and the daemon reads who that pane is from herdr and
 
 `HERDR_AGENTISAN_WORKER` counts only when the command's own pane can't be
 confirmed, and only for a worker with a live row.
+
+Under Codex, the pane and `HERDR_AGENTISAN_WORKER` count only from the pane's
+own Codex, `codex --no-daemon` as spawned workers run. On the shared
+app-server both are the session's that started the daemon, so `send` is
+refused `caller_unverified` there (A64).
 
 Any pane in the boss's place sends as the boss: a shell split in the
 `<short>-boss` tab, or a second tab of that name. The boss can also
