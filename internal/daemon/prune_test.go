@@ -82,3 +82,29 @@ func TestRunPrunesGitHubNoticeRows(t *testing.T) {
 		return assert.ObjectsAreEqual([]string{"recent", "recent", "recent"}, query(t, p.DB, "SELECT project FROM github_seen UNION ALL SELECT project FROM github_open UNION ALL SELECT project FROM github_seeded"))
 	}, ready, 10*time.Millisecond)
 }
+
+// TestRunPrunesTheBoard (A60): the daemon's prune at start, the one it runs
+// every PruneInterval, also removes the board posts past 30 days, beside the
+// finished messages.
+func TestRunPrunesTheBoard(t *testing.T) {
+	t.Parallel()
+	t0 := time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
+	day := 24 * time.Hour
+	h := newHerdr(t, 22)
+	dir := shortDir(t)
+	p := paths(t, dir, h)
+	require.NoError(t, os.MkdirAll(p.Dir, 0o700))
+	st, err := store.Open(t.Context(), p.DB)
+	require.NoError(t, err)
+	for body, at := range map[string]time.Time{"old": t0.Add(-31 * day), "recent": t0.Add(-29 * day)} {
+		_, err := st.Post(t.Context(), store.BoardPost{Project: "ha", Channel: store.ChannelTeam, Author: store.Address{Kind: store.KindWorker, ID: "w"}, Kind: "post", Body: body, At: at})
+		require.NoError(t, err)
+	}
+	require.NoError(t, st.Close())
+	o := opts(t, dir, h)
+	o.Now = func() time.Time { return t0 }
+	serving(t, o, h)
+	require.Eventually(t, func() bool {
+		return assert.ObjectsAreEqual([]string{"recent"}, query(t, p.DB, "SELECT body FROM board_posts ORDER BY seq"))
+	}, ready, 10*time.Millisecond, "the prune at start removes the board posts past 30 days")
+}

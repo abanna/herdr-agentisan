@@ -99,8 +99,14 @@ func TestSampleConfigResolves(t *testing.T) {
 			assert.True(t, op, "the sample shows an op:// reference")
 			// The workforce keys (A23): a group's own model, review on
 			// codex, and a shell prompt to wait for, with no keys typed.
-			assert.Equal(t, "sonnet", p.AgentFor("precheck").Model)
-			assert.Equal(t, []string{"codex", "--no-daemon", "--sandbox", "read-only"}, p.AgentFor("review").Command)
+			assert.Equal(t, "sonnet", agentFor(t, *p, "precheck").Model)
+			assert.Equal(t, []string{"codex", "--no-daemon", "--sandbox", "read-only"}, agentFor(t, *p, "review").Command)
+			// A62: [agent.codex], a group on codex, and models that fit.
+			assert.Equal(t, settings.Agent{Command: []string{"codex", "--no-daemon"}, Model: "gpt-6.1-sol"}, p.Providers["codex"])
+			if name == "agentisan" {
+				assert.Equal(t, settings.Agent{Command: []string{"codex", "--no-daemon"}, Model: "gpt-6.1-sol"}, agentFor(t, *p, "research"))
+			}
+			require.NoError(t, p.CheckModelProviders())
 			assert.Equal(t, settings.Spawn{ShellPrompt: `❯\s*$`, ShellReadyAfter: settings.DefaultShellReadyAfter}, p.Spawn)
 			// The rotation thresholds (A33): the project's, and one role's.
 			assert.Equal(t, []int{55, 65, 75}, p.Rotation.Thresholds)
@@ -138,7 +144,7 @@ func TestSampleCodexGroupResolves(t *testing.T) {
 		got, err := settings.Load(settings.LoadOptions{ConfigDir: dir, LookupEnv: envOf(map[string]string{"HOME": home}), Stat: stat, Project: project})
 		require.NoError(t, err, project)
 		require.NotNil(t, got.Profile, project)
-		assert.Equal(t, settings.Agent{Command: []string{"codex"}, Model: "gpt-6.1-sol"}, got.Profile.AgentFor("qa"), project)
+		assert.Equal(t, settings.Agent{Command: []string{"codex"}, Model: "gpt-6.1-sol"}, agentFor(t, *got.Profile, "qa"), project)
 	}
 	assert.Equal(t, settings.SandboxFullAccess, settings.SandboxFor("qa"), "the sample's comment says qa runs with full access")
 	assert.Contains(t, string(sample), "#   codex --no-daemon --sandbox "+settings.SandboxFor("qa")+" --model gpt-6.1-sol\n", "the launch the comment shows")

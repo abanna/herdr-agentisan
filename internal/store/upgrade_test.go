@@ -14,8 +14,8 @@ import (
 
 // TestUpgradeFromTheFirstSchema is the live state.db's path: a database at
 // schema 1, with workers, handoffs and focus history in it, opened by this
-// build is migrated in place to the newest schema. Every row survives, and
-// the inbox is there and takes a message. The worker has no terminal (A35),
+// build is migrated in place to the newest schema. Every row survives, the
+// inbox is there and takes a message, and the board a post. The worker has no terminal (A35),
 // so it binds nothing until the team poll judges it, and its pending
 // handoff, which has no generation, cannot complete: it can only fail.
 func TestUpgradeFromTheFirstSchema(t *testing.T) {
@@ -37,7 +37,7 @@ func TestUpgradeFromTheFirstSchema(t *testing.T) {
 
 	s := open(t, path)
 	assert.Equal(t, store.SchemaVersion(), s.UserVersion())
-	assert.Equal(t, 6, s.UserVersion())
+	assert.Equal(t, 7, s.UserVersion())
 	row, err := s.WorkerRow(t.Context(), "w")
 	require.NoError(t, err)
 	assert.Nil(t, row.Routing, "a worker bound before 0005 was not launched by routing")
@@ -53,6 +53,10 @@ func TestUpgradeFromTheFirstSchema(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, focus, 1)
 	assert.Equal(t, int64(2), send(t, s, worker("w"), boss, "after the upgrade").Generation)
+	board, err := s.BoardStatus(t.Context(), "agentisan", store.ReaderBoss)
+	require.NoError(t, err)
+	assert.Equal(t, store.BoardState{}, board, "0007's board starts empty")
+	assert.Equal(t, int64(1), post(t, s, teamPost("agentisan", "w", "after the upgrade")).Seq)
 }
 
 // TestUpgradeKeepsTheGitHubSeed is the live state.db's path into 0006: a

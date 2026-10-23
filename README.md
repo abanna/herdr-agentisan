@@ -511,6 +511,28 @@ project and the boss. A role can set its own with
 from the shared file, the project's table and the repo file. `skip` can name
 `ctx_soft` and `ctx_hard`, but never `ctx_ceiling`.
 
+## The team board
+
+Each team has a board in `state.db`: its workers' posts and the daemon's
+notices. Only the team's boss and the user read it; workers only post. The
+daemon tells who asks from the kernel, by the process that connected, never
+from the request: a command run in the boss's tab (or ◆ boss) reads as the
+boss, the plugin's dashboard there as the user, and anything else is refused
+with `not_allowed`. That is a policy, not a security boundary: workers run as
+your user (ADR-001 A60).
+
+```bash
+herdr-agentisan board read            # your unread posts, oldest first; marks them read
+herdr-agentisan board read --all      # the newest posts, newest first, marking nothing
+herdr-agentisan board wait            # run in the background: ends at the next post (exit 3 at its timeout, 30 min)
+```
+
+The boss and the user each have a read mark, so the boss reading never
+moves the user's. Posts are kept 30 days, at most 2,000 a team. Nothing
+posts to the board yet: until part 1a B of NERD-5533 the boss's messages
+and notices are still typed into its pane, and the dashboard's board panel
+comes with part 1b.
+
 ## The debugger
 
 A read-only Claude agent that answers "what happened to worker X in the last
@@ -529,7 +551,8 @@ of the team's workers, in a group of its own. See
 A `review` worker reviews one pull request at a time, read-only, by
 agentisan-skills' review guidelines, which `roles/review.md` vendors byte
 for byte (ADR-001 A55). The review type starts `codex --no-daemon --sandbox
-read-only` unless its group names a command. For each review, prepare a
+read-only` unless its group names a codex command; for now a review
+worker runs codex only (ADR-001 A62). For each review, prepare a
 worktree at the PR's head, then send the role whole and the inputs alone,
 from the plugin's checkout. `report turn` reads the inputs' `item:` line
 on any line: on the first, it reads behind the `[msg <id> from <sender>]`
@@ -590,12 +613,46 @@ Just after the daemon starts, the command waits for its first poll.
 
 Each command resolves the project's profile with its repo's committed
 `.herdr-agentisan.toml`. So that file sets only `color`, `github`, a
-group's `workers` and `slots`, models and the rotation thresholds, the
-project's and a group's (ADR-001 A46, A33). Agent commands, `[spawn]`,
+group's `workers` and `slots`, models (each provider's too) and the rotation
+thresholds, the project's and a group's (ADR-001 A46, A33, A62). Agent commands, `[spawn]`,
 `verify`, `[integrations]` and every other key belong in
 `herdr-agentisan.toml` or `--set`. A repo file that sets one
 is refused, and names the key. A model, from any layer, is a letter or
 digit, then letters, digits and `. _ - : / @ [ ]`, such as `opus[1m]`.
+
+### Claude or Codex per type
+
+Every worker runs claude or codex, its provider (ADR-001 A62). A type runs
+its default provider: its group's `agent.provider`, else its group's own
+command's, else codex for `review`, else `[agent]`'s command's. Each
+provider has a command and a model of its own, for every type
+(`[agent.claude]`, `[agent.codex]`) and per type
+(`[groups.<g>.agent.codex]`), so a group can move to Codex with one line:
+
+```toml
+[agent.codex]
+command = ["codex", "--no-daemon"]
+model = "gpt-6.1-sol"
+
+[groups.research]
+workers = 1
+slots = 2
+agent = { provider = "codex" }
+```
+
+A provider's command names it bare, then flags only: herdr starts the
+agent by kind from the shell's PATH with arguments alone, so a worker gets
+no path, no other program and no environment of its own, such as
+`CODEX_HOME`; Codex's `-c key=value` is the only per-worker Codex setting.
+`review`'s built-in read-only codex outranks `[agent.codex]`, and a type
+with a command of its own never takes a top-level model. A model belongs to
+its provider: `config resolve --project` refuses a Claude model in a Codex
+table and the other way round, by the names it knows (`claude-…`, the
+Claude Code aliases, `gpt-…`, `codex-…`, the o-series), and spawn refuses
+any launch whose model the other provider runs. For now `review` runs
+codex only and the debugger claude only: each is a gap, which routing v2
+with a read-only Claude review launch (NERD-5529), and Codex's read fence
+(NERD-5530), close. Choosing the provider per spawn is NERD-5519.
 
 ### Model routing
 
@@ -604,7 +661,8 @@ The user's routing rules, built in byte for byte
 reasoning effort each worker starts with, by its type's role (ADR-001 A50).
 `[routing]` in the shared `herdr-agentisan.toml` holds what they leave to
 the deployment: `enabled` (off by default, and while it is on no
-`agent.model` key nor codex `--profile` may be set), each binding's real
+model key, `agent.model`, `agent.<provider>.model` or a group's, nor a codex
+`--profile` may be set), each binding's real
 `model_id`, efforts its client takes and `enabled`, and
 `[routing.overrides]`, the user's standing choice for a role and the only
 way to a premium binding (ADR-001 A63). An override is a binding's name,
@@ -614,7 +672,9 @@ one per provider, such as `coder = ["claude_strong", "codex_strong"]`.
 `config resolve` shows each key with its layer, then `routing policy:`, the
 version a decision records; with `--project` it also refuses an override
 a worker type's spawns under its provider would be refused for at the
-role's effort, such as a binding switched off in `[routing.bindings]`.
+role's effort, such as a binding switched off in `[routing.bindings]`, and
+a model in another provider's table. Routing routes within the provider the
+worker runs, never across.
 
 `[routing.jev]` is for Jev's complexity answer about a coder's assignment
 (ADR-001 A57): `enabled` (off by default, and Jev is asked only while
