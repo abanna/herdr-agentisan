@@ -2,6 +2,7 @@ package testtmp_test
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"strings"
 	"syscall"
@@ -95,9 +96,7 @@ func TestUseStaysOffABaseItCannotUse(t *testing.T) {
 		for dir, env := range map[string]string{"/tmp": "", "/scratch": "/scratch"} {
 			h := tc.host
 			h.env = map[string]string{"TMPDIR": env}
-			for k, v := range tc.host.env {
-				h.env[k] = v
-			}
+			maps.Copy(h.env, tc.host.env)
 			require.NoError(t, h.use(testtmp.Base), name)
 			assert.Empty(t, h.set, "%s: TMPDIR is left alone", name)
 			assert.Equal(t, "testtmp: the tests' state stays in "+dir+": "+tc.why+"\n", h.stderr.String(), name)
