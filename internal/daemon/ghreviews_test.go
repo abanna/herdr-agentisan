@@ -55,6 +55,22 @@ func withReviews(t *testing.T, list string, by map[int][]ghRev) string {
 	return string(raw)
 }
 
+// byAuthor is list, `gh pr list --json` output, with each PR's author as
+// by names it, in gh's form.
+func byAuthor(t *testing.T, list string, by map[int]string) string {
+	t.Helper()
+	var prs []map[string]any
+	require.NoError(t, json.Unmarshal([]byte(list), &prs))
+	for _, p := range prs {
+		n, ok := p["number"].(float64)
+		require.True(t, ok)
+		p["author"] = map[string]any{"id": "", "is_bot": false, "login": by[int(n)], "name": ""}
+	}
+	raw, err := json.Marshal(prs)
+	require.NoError(t, err)
+	return string(raw)
+}
+
 // ghReviewAnswer is the review query's answer: login's review at at, of
 // oid, under the bot's form for Codex and the user's otherwise, with one
 // inline finding per level given, each starting with its badge.
@@ -136,6 +152,27 @@ func TestGitHubReviewNoticesReachTheLog(t *testing.T) {
 	g.tick(t, 0)
 	assert.Len(t, g.told(), 3, "nothing is told twice, and nothing is looked up again")
 	assert.NotContains(t, g.logs.String(), "merge it now", "no body or comment")
+}
+
+// TestGitHubReviewByThePRAuthorIsNotTold: a review by the PR's own author
+// is neither looked up, told nor recorded, while another reviewer's on that
+// PR is, and so is the same login's on a PR someone else opened.
+func TestGitHubReviewByThePRAuthorIsNotTold(t *testing.T) {
+	t.Parallel()
+	g := newGHNotices(t, "")
+	open := byAuthor(t, ghList(t, ghOpen{50, headA, "CLEAN", 0, nil}, ghOpen{51, headA, "CLEAN", 0, nil}), map[int]string{50: "abanna", 51: "alice"})
+	g.f.Answer(t, open, noIssues)
+	g.start(t, 0)
+
+	g.f.Answer(t, withReviews(t, open, map[int][]ghRev{50: {{"abanna", "COMMENTED", reviewT2}, {"alice", "APPROVED", reviewT3}}, 51: {{"abanna", "COMMENTED", reviewT3}}}), noIssues)
+	g.f.Review(t, 50, ghReviewAnswer(t, "alice", "APPROVED", reviewT3, headA))
+	g.f.Review(t, 51, ghReviewAnswer(t, "abanna", "COMMENTED", reviewT3, headB, 1))
+	g.tick(t, 2)
+	assert.Equal(t, []string{
+		"#50 review by alice at 1e0fb1b: approved, no P-badges",
+		"#51 review by abanna at 38926d5: commented, P1 ×1",
+	}, g.told())
+	assert.Equal(t, []string{"50 review alice 2", "51 review abanna "}, g.seen(t))
 }
 
 // TestGitHubReviewNoticesAcrossARestart: a review that came while the

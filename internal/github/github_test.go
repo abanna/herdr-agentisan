@@ -53,7 +53,7 @@ func TestRunnerPRs(t *testing.T) {
 	assert.Len(t, prs, 5)
 	assert.Equal(t, []string{
 		"pr", "list", "--repo=abanna/herdr-agentisan", "--state=open", "--limit=100",
-		"--json=number,headRefName,headRefOid,latestReviews,mergeStateStatus,reactionGroups,statusCheckRollup",
+		"--json=number,author,headRefName,headRefOid,latestReviews,mergeStateStatus,reactionGroups,statusCheckRollup",
 	}, f.Args(t, "pr"))
 	assert.Equal(t, []string{"pr"}, f.Calls(t), "one call, and no issue count")
 }

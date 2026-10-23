@@ -21,6 +21,7 @@ var oidPattern = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
 // ghPR is one PR as `gh pr list --json` prints it.
 type ghPR struct {
 	Number            int        `json:"number"`
+	Author            *ghAuthor  `json:"author"`
 	HeadRefName       string     `json:"headRefName"`
 	HeadRefOid        string     `json:"headRefOid"`
 	LatestReviews     []ghReview `json:"latestReviews"`
@@ -61,7 +62,8 @@ type OpenPR struct {
 	Head string
 	// Checks counts the rollup's checks, and Failed those that failed.
 	Checks, Failed int
-	// Reviews are each reviewer's latest review, by submission, then login.
+	// Reviews are each reviewer's latest review, less the PR author's own, by
+	// submission, then login.
 	Reviews []Review
 }
 
@@ -95,7 +97,7 @@ func ParsePRs(raw []byte) ([]snapshot.PR, error) {
 }
 
 // ParseOpenPRs reads `gh pr list --json` output as ParsePRs does, keeping
-// each PR's head and check counts.
+// each PR's head, check counts and reviews.
 func ParseOpenPRs(raw []byte) (Open, error) {
 	var list *[]ghPR
 	if err := decodeOne(raw, &list); err != nil {
@@ -119,9 +121,13 @@ func ParseOpenPRs(raw []byte) (Open, error) {
 		if !oidPattern.MatchString(head) {
 			head = ""
 		}
+		author := ""
+		if p.Author != nil {
+			author = p.Author.Login
+		}
 		out.PRs = append(out.PRs, OpenPR{
 			PR:   snapshot.PR{Number: p.Number, CI: state, Codex: codex(p.ReactionGroups), Merge: merge(p.MergeStateStatus)},
-			Head: head, Checks: len(p.StatusCheckRollup), Failed: failed, Reviews: reviews(p.LatestReviews),
+			Head: head, Checks: len(p.StatusCheckRollup), Failed: failed, Reviews: reviews(p.LatestReviews, author),
 		})
 	}
 	slices.SortFunc(out.PRs, func(a, b OpenPR) int { return a.Number - b.Number })

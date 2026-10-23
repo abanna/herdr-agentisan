@@ -115,7 +115,7 @@ func TestSnapshotHeaderWithoutAColour(t *testing.T) {
 	assert.Equal(t, &snapshot.Project{PRs: []snapshot.PR{}, Issues: new(0)}, got.Project, "none open is reported as none, not left out")
 	assert.Equal(t, []string{
 		"pr", "list", "--repo=acme/app", "--state=open", "--limit=100",
-		"--json=number,headRefName,headRefOid,latestReviews,mergeStateStatus,reactionGroups,statusCheckRollup",
+		"--json=number,author,headRefName,headRefOid,latestReviews,mergeStateStatus,reactionGroups,statusCheckRollup",
 	}, f.Args(t, "pr"))
 }
 

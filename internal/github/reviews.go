@@ -111,12 +111,13 @@ func (r ghReview) review() (Review, bool) {
 	return out, true
 }
 
-// reviews are the reviews list holds, by submission, then login; nil for
-// none.
-func reviews(list []ghReview) []Review {
+// reviews are the reviews list holds, less those by author, the PR's
+// author's login, by submission, then login; nil for none. An author of ""
+// leaves none out: a review whose login is not one reads as "" too.
+func reviews(list []ghReview, author string) []Review {
 	var out []Review
 	for _, r := range list {
-		if rv, ok := r.review(); ok {
+		if rv, ok := r.review(); ok && (author == "" || rv.Login != author) {
 			out = append(out, rv)
 		}
 	}

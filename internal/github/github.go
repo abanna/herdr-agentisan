@@ -39,10 +39,10 @@ const waitDelay = 2 * time.Second
 // maxReason bounds how much of gh's stderr an error carries.
 const maxReason = 200
 
-// The fields `gh pr list` is asked for: what herdr-status.sh asked for, and
-// the head commit and each reviewer's latest review the boss's notices are
-// keyed by (A45).
-const prFields = "number,headRefName,headRefOid,latestReviews,mergeStateStatus,reactionGroups,statusCheckRollup"
+// The fields `gh pr list` is asked for: what herdr-status.sh asked for, the
+// head commit and each reviewer's latest review the boss's notices are keyed
+// by, and the PR's author, whose own reviews they leave out (A45).
+const prFields = "number,author,headRefName,headRefOid,latestReviews,mergeStateStatus,reactionGroups,statusCheckRollup"
 
 // issuesQuery counts a repo's open issues exactly; `gh issue list` caps
 // what it lists.

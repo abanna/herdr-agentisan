@@ -164,23 +164,28 @@ func TestParseReviewsBadOutput(t *testing.T) {
 
 // TestParseOpenPRsReviews: each PR's latest reviews, by submission and then
 // login, a pending one or one with no time left out, a login that is not
-// one and a state GitHub does not document read as "".
+// one and a state GitHub does not document read as "". The PR author's own
+// review is left out; a PR with no author leaves none out, a deleted
+// account's among them.
 func TestParseOpenPRsReviews(t *testing.T) {
 	t.Parallel()
 	latest := `[` + strings.Join([]string{
 		`{"author":{"login":"chatgpt-codex-connector"},"state":"COMMENTED","submittedAt":"2026-10-22T23:20:14Z","body":"x","id":"","commit":{"oid":""}}`,
 		`{"author":{"login":"bob"},"state":"APPROVED","submittedAt":"2026-10-22T23:20:14Z"}`,
+		`{"author":{"login":"abanna"},"state":"COMMENTED","submittedAt":"2026-10-22T21:00:00Z"}`,
 		`{"author":{"login":"alice"},"state":"PENDING","submittedAt":null}`,
 		`{"author":{"login":"carol"},"state":"COMMENTED","submittedAt":null}`,
 		`{"author":{"login":"-dash"},"state":"NEW_STATE","submittedAt":"2026-10-22T20:00:00Z"}`,
 		`{"author":{"login":"ålice"},"state":"COMMENTED","submittedAt":"2026-10-22T19:00:00Z"}`,
 		`{"author":null,"state":"DISMISSED","submittedAt":"2026-10-22T19:30:00-03:00"}`,
 	}, ",") + `]`
-	raw := `[{"number":7,"headRefName":"b","headRefOid":"` + oid1 + `","mergeStateStatus":"CLEAN","latestReviews":` + latest + `},` +
-		`{"number":8,"headRefName":"b","latestReviews":[]}]`
+	ghost := `[{"author":null,"state":"APPROVED","submittedAt":"2026-10-22T18:00:00Z"},{"author":{"login":"bob"},"state":"COMMENTED","submittedAt":"2026-10-22T18:30:00Z"}]`
+	raw := `[{"number":7,"author":{"id":"MDQ6VXNlcjE=","is_bot":false,"login":"abanna","name":""},"headRefName":"b","headRefOid":"` + oid1 + `","mergeStateStatus":"CLEAN","latestReviews":` + latest + `},` +
+		`{"number":8,"headRefName":"b","latestReviews":[]},` +
+		`{"number":9,"author":null,"headRefName":"b","latestReviews":` + ghost + `}]`
 	got, err := github.ParseOpenPRs([]byte(raw))
 	require.NoError(t, err)
-	require.Len(t, got.PRs, 2)
+	require.Len(t, got.PRs, 3)
 	at := func(h, m, s int) time.Time { return time.Date(2026, 10, 22, h, m, s, 0, time.UTC) }
 	assert.Equal(t, []github.Review{
 		{State: github.ReviewCommented, Submitted: at(19, 0, 0)},
@@ -188,8 +193,12 @@ func TestParseOpenPRsReviews(t *testing.T) {
 		{State: github.ReviewDismissed, Submitted: at(22, 30, 0)},
 		{Login: "bob", State: github.ReviewApproved, Submitted: at(23, 20, 14)},
 		{Login: "chatgpt-codex-connector", State: github.ReviewCommented, Submitted: at(23, 20, 14)},
-	}, got.PRs[0].Reviews)
+	}, got.PRs[0].Reviews, "abanna's own review is left out")
 	assert.Nil(t, got.PRs[1].Reviews)
+	assert.Equal(t, []github.Review{
+		{State: github.ReviewApproved, Submitted: at(18, 0, 0)},
+		{Login: "bob", State: github.ReviewCommented, Submitted: at(18, 30, 0)},
+	}, got.PRs[2].Reviews, "no author: a deleted account's review is kept")
 }
 
 // TestRunnerReview reads one review's counts with one GraphQL call: the
