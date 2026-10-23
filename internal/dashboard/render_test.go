@@ -911,12 +911,15 @@ func TestShortModel(t *testing.T) {
 		"gpt-":    "gpt",
 		// Too wide for the column: the word gives way first, to one cell,
 		// then the version.
-		"gpt-4.1-mini":       "min4.1",
-		"gpt-6.1-luna":       "lun6.1",
-		"gpt-6-luna2":        "g6-lun",
-		"gpt-123456789":      "g12345",
-		"gpt-6-日本":           "日本6",
-		"gpt-6.1-日本語":        "日6.1",
+		"gpt-4.1-mini":  "min4.1",
+		"gpt-6.1-luna":  "lun6.1",
+		"gpt-6-luna2":   "g6-lun",
+		"gpt-123456789": "g12345",
+		"gpt-6-日本":      "日本6",
+		"gpt-6.1-日本語":   "日6.1",
+		// A wide character does not fit one cell, so beside a five-cell
+		// version a word that starts with one goes whole.
+		"gpt-10.25-日本":       "10.25",
 		"gpt-6.1-sol\x1b[2J": "sol6.1",
 		// A version as wide as the column keeps five cells of it, after a
 		// one-cell word; a name that nests gpt- is still cut to six.
@@ -1023,7 +1026,7 @@ func TestShortModelTellsTheBindingsApart(t *testing.T) {
 // TestTheModelColumnWidensIntoTheStage: on the user's portrait pane, 97
 // cells wide, on a narrow 80 and wider, a team running gpt- models keeps
 // every column: the model column's two extra cells come out of the stage,
-// which takes what is left, and no other column moves or drops.
+// which takes what is left, and every other column keeps its width.
 func TestTheModelColumnWidensIntoTheStage(t *testing.T) {
 	t.Parallel()
 
@@ -1052,6 +1055,48 @@ func TestTheModelColumnWidensIntoTheStage(t *testing.T) {
 				assert.Equal(t, cols4[c], cols[c], "column %d keeps its width", c)
 			}
 		})
+	}
+}
+
+// TestTheModelColumnAtTheCaps: with every name and item past its cap, the
+// user's 97-cell pane and a 120 still keep every column beside a six-cell
+// model, the stage giving up the two cells. At 80 such a row has no two
+// cells to spare, so the time column, the first the renderer drops, gives
+// way, where a team of four-cell models keeps it (A58).
+func TestTheModelColumnAtTheCaps(t *testing.T) {
+	t.Parallel()
+
+	capped := func(model string) []snapshot.Group {
+		groups := fixture(t, "codex").Groups
+		for i := range groups {
+			for j := range groups[i].Agents {
+				a := &groups[i].Agents[j]
+				a.Name, a.Item = strings.Repeat("n", 20), strings.Repeat("i", 20)
+				if model != "" {
+					a.Model = model
+				}
+			}
+		}
+		return groups
+	}
+	gpt, four := capped(""), capped("claude-opus-5-5")
+	const state, model, item, stage, clock = 0, 1, 2, 3, 4
+	for _, w := range []int{97, 120} {
+		name, cols := dashboard.ColumnWidths(gpt, at, w)
+		name4, cols4 := dashboard.ColumnWidths(four, at, w)
+		require.Equal(t, dashboard.ModelCells, cols[model], "at %d the column is as wide as sol6.1", w)
+		for _, c := range []int{state, item, stage, clock} {
+			assert.Positive(t, cols[c], "at %d column %d drops", w, c)
+		}
+		assert.Equal(t, name4, name, "at %d the name keeps its width", w)
+		assert.Equal(t, cols4[stage]-2, cols[stage], "at %d the stage gives up the two cells", w)
+	}
+	_, cols := dashboard.ColumnWidths(gpt, at, 80)
+	_, cols4 := dashboard.ColumnWidths(four, at, 80)
+	assert.Positive(t, cols4[clock], "four-cell models keep the time at 80")
+	assert.Zero(t, cols[clock], "a six-cell model's row drops the time at 80")
+	for _, c := range []int{state, model, item, stage} {
+		assert.Positive(t, cols[c], "at 80 column %d drops", c)
 	}
 }
 
