@@ -57,6 +57,9 @@ const (
 	codeEventsLost = "events_lost"
 )
 
+// typePaneInfo is the result type of every call that answers one pane.
+const typePaneInfo = "pane_info"
+
 // maxResponseBytes bounds one response line. The largest response this client
 // asks for is pane.list, which the daemon's team poll reads every 3 s: about
 // 20 KB for a realistic layout, and up to about 12 KB per pane at herdr's
@@ -550,7 +553,7 @@ func (c Client) paneCall(ctx context.Context, method, paneID string) (PaneInfo, 
 	if err := c.Call(ctx, method, params, &out); err != nil {
 		return PaneInfo{}, err
 	}
-	if out.Type != "pane_info" {
+	if out.Type != typePaneInfo {
 		return PaneInfo{}, fmt.Errorf("%w: %s: result type %q, want \"pane_info\"", ErrProtocol, method, out.Type)
 	}
 	if out.Pane == nil || out.Pane.PaneID == "" {

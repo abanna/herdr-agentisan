@@ -184,6 +184,38 @@ func TestWorkforceCallsSendTheSchemaShape(t *testing.T) {
 			method: "pane.rename",
 			params: `{"pane_id":"w14:p9","label":"ha-dashboard"}`,
 		},
+		"pane.split": {
+			result: map[string]any{"type": "pane_info", "pane": rootPaneOf("w14:p8", "w14")},
+			call: func(c herdr.Client) (any, error) {
+				return c.SplitPane(t.Context(), herdr.PaneSplit{TargetPaneID: "w14:p7", Direction: "right", Ratio: 0.5, Cwd: "/repo", Env: map[string]string{"HERDR_AGENTISAN_WORKER": "ha-coder-2"}})
+			},
+			method: "pane.split",
+			params: `{"target_pane_id":"w14:p7","direction":"right","ratio":0.5,"cwd":"/repo","focus":false,"env":{"HERDR_AGENTISAN_WORKER":"ha-coder-2"}}`,
+			want:   herdr.PaneInfo{PaneID: "w14:p8", TerminalID: "term-w14:p8", WorkspaceID: "w14", TabID: "w14:t2", AgentStatus: "unknown"},
+		},
+		"pane.split, nothing optional": {
+			result: map[string]any{"type": "pane_info", "pane": rootPaneOf("w14:p8", "w14")},
+			call: func(c herdr.Client) (any, error) {
+				return c.SplitPane(t.Context(), herdr.PaneSplit{TargetPaneID: "w14:p7", Direction: "down"})
+			},
+			method: "pane.split",
+			params: `{"target_pane_id":"w14:p7","direction":"down","focus":false}`,
+			want:   herdr.PaneInfo{PaneID: "w14:p8", TerminalID: "term-w14:p8", WorkspaceID: "w14", TabID: "w14:t2", AgentStatus: "unknown"},
+		},
+		"agent.rename": {
+			result: map[string]any{"type": "agent_info", "agent": agentOf("w14:p8", "ha-coder-2", "idle", true)},
+			call:   func(c herdr.Client) (any, error) { return c.RenameAgent(t.Context(), "w14:p8", "ha-coder-2") },
+			method: "agent.rename",
+			params: `{"target":"w14:p8","name":"ha-coder-2"}`,
+			want:   herdr.Agent{PaneID: "w14:p8", TerminalID: "term-w14:p8", Name: "ha-coder-2", AgentStatus: "idle", InteractiveReady: true},
+		},
+		"agent.rename, clearing the name": {
+			result: map[string]any{"type": "agent_info", "agent": agentOf("w14:p7", "", "idle", true)},
+			call:   func(c herdr.Client) (any, error) { return c.RenameAgent(t.Context(), "w14:p7", "") },
+			method: "agent.rename",
+			params: `{"target":"w14:p7"}`,
+			want:   herdr.Agent{PaneID: "w14:p7", TerminalID: "term-w14:p7", AgentStatus: "idle", InteractiveReady: true},
+		},
 		"pane.wait_for_output, no time at all": {
 			result: map[string]any{"type": "output_matched", "pane_id": "w14:p7", "revision": 4, "matched_line": "$"},
 			call:   func(c herdr.Client) (any, error) { return c.WaitForOutput(t.Context(), "w14:p7", `\$$`, 0) },
@@ -283,6 +315,11 @@ func TestWorkforceCallFailureClasses(t *testing.T) {
 		return map[string]any{"type": "pane_swap", "swap": sw}
 	}
 	renamePane := func(c herdr.Client) error { return c.RenamePane(t.Context(), "w14:p9", "x") }
+	splitPane := func(c herdr.Client) error {
+		_, err := c.SplitPane(t.Context(), herdr.PaneSplit{TargetPaneID: "w14:p7", Direction: "right"})
+		return err
+	}
+	renameAgent := func(c herdr.Client) error { _, err := c.RenameAgent(t.Context(), "w14:p8", "ha-coder-1"); return err }
 
 	tests := map[string]struct {
 		handler herdrtest.Handler
@@ -337,6 +374,20 @@ func TestWorkforceCallFailureClasses(t *testing.T) {
 		"pane.rename: wrong type":                      {handler: reply(map[string]any{"type": "tab_info", "pane": rootPaneOf("w14:p9", "w14")}), call: renamePane, want: []error{herdr.ErrProtocol}},
 		"pane.rename: no pane":                         {handler: reply(map[string]any{"type": "pane_info"}), call: renamePane, want: []error{herdr.ErrProtocol}},
 		"pane.rename: a pane with no id":               {handler: reply(map[string]any{"type": "pane_info", "pane": map[string]any{"terminal_id": "t"}}), call: renamePane, want: []error{herdr.ErrProtocol}},
+		"pane.split: pane not found":                   {handler: apiErr("pane_not_found"), call: splitPane, want: []error{herdr.ErrPaneNotFound, herdr.ErrAPI}},
+		"pane.split: failed":                           {handler: apiErr("pane_split_failed"), call: splitPane, want: []error{herdr.ErrAPI}, not: []error{herdr.ErrPaneNotFound}},
+		"pane.split: invalid env":                      {handler: apiErr("invalid_env"), call: splitPane, want: []error{herdr.ErrAPI}, not: []error{herdr.ErrPaneNotFound}},
+		"pane.split: wrong type":                       {handler: reply(map[string]any{"type": "pane_list", "pane": rootPaneOf("w14:p8", "w14")}), call: splitPane, want: []error{herdr.ErrProtocol}},
+		"pane.split: no pane":                          {handler: reply(map[string]any{"type": "pane_info"}), call: splitPane, want: []error{herdr.ErrProtocol}},
+		"pane.split: a pane with no terminal":          {handler: reply(map[string]any{"type": "pane_info", "pane": map[string]any{"pane_id": "w14:p8"}}), call: splitPane, want: []error{herdr.ErrProtocol}},
+		"pane.split: a pane with no id":                {handler: reply(map[string]any{"type": "pane_info", "pane": map[string]any{"terminal_id": "t"}}), call: splitPane, want: []error{herdr.ErrProtocol}},
+		"agent.rename: name taken":                     {handler: apiErr("agent_name_taken"), call: renameAgent, want: []error{herdr.ErrNameTaken, herdr.ErrAPI}, not: []error{herdr.ErrLaunchPending}},
+		"agent.rename: launch pending":                 {handler: apiErr("agent_launch_pending"), call: renameAgent, want: []error{herdr.ErrLaunchPending, herdr.ErrAPI}, not: []error{herdr.ErrNameTaken}},
+		"agent.rename: no agent":                       {handler: apiErr("agent_not_found"), call: renameAgent, want: []error{herdr.ErrAgentNotFound, herdr.ErrAPI}},
+		"agent.rename: invalid name":                   {handler: apiErr("invalid_agent_name"), call: renameAgent, want: []error{herdr.ErrAPI}, not: []error{herdr.ErrNameTaken, herdr.ErrLaunchPending}},
+		"agent.rename: ambiguous":                      {handler: apiErr("agent_target_ambiguous"), call: renameAgent, want: []error{herdr.ErrAPI}, not: []error{herdr.ErrAgentNotFound}},
+		"agent.rename: wrong type":                     {handler: reply(map[string]any{"type": "agent_started", "agent": agentOf("w14:p8", "ha-coder-1", "idle", true)}), call: renameAgent, want: []error{herdr.ErrProtocol}},
+		"agent.rename: no agent in the reply":          {handler: reply(map[string]any{"type": "agent_info"}), call: renameAgent, want: []error{herdr.ErrProtocol}},
 		"closed without a reply":                       {handler: silent, call: closePane, want: []error{herdr.ErrUnavailable}},
 	}
 	for name, tc := range tests {
@@ -406,12 +457,13 @@ func TestWaitForOutputEndsWithTheCallersDeadline(t *testing.T) {
 // matches its own sentinel and ErrAPI, and no other sentinel.
 func TestWorkforceCodesMatchOneSentinel(t *testing.T) {
 	t.Parallel()
-	sentinels := []error{herdr.ErrPaneBusy, herdr.ErrNameTaken, herdr.ErrAgentNotFound, herdr.ErrWaitTimeout, herdr.ErrPaneNotFound, herdr.ErrEventsLost}
+	sentinels := []error{herdr.ErrPaneBusy, herdr.ErrNameTaken, herdr.ErrAgentNotFound, herdr.ErrLaunchPending, herdr.ErrWaitTimeout, herdr.ErrPaneNotFound, herdr.ErrEventsLost}
 	for code, want := range map[string]error{
-		"agent_pane_busy":  herdr.ErrPaneBusy,
-		"agent_name_taken": herdr.ErrNameTaken,
-		"agent_not_found":  herdr.ErrAgentNotFound,
-		"timeout":          herdr.ErrWaitTimeout,
+		"agent_pane_busy":      herdr.ErrPaneBusy,
+		"agent_name_taken":     herdr.ErrNameTaken,
+		"agent_not_found":      herdr.ErrAgentNotFound,
+		"agent_launch_pending": herdr.ErrLaunchPending,
+		"timeout":              herdr.ErrWaitTimeout,
 	} {
 		t.Run(code, func(t *testing.T) {
 			t.Parallel()

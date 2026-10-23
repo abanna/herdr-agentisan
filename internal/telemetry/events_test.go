@@ -178,9 +178,10 @@ func TestNilEventsEmitNothing(t *testing.T) {
 	})
 }
 
-// TestWorkerRoutedEmitsTheSchema is A50's audit as the debugger queries it:
-// every audit field under agentisan.routing, present even when the decision
-// has none of it, spelled out by hand so a renamed key fails here.
+// TestWorkerRoutedEmitsTheSchema is A50's audit as the debugger queries it,
+// A57's jev_error included: every audit field under agentisan.routing,
+// present even when the decision has none of it, spelled out by hand so a
+// renamed key fails here.
 func TestWorkerRoutedEmitsTheSchema(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 10, 21, 12, 0, 0, 5, time.FixedZone("CDT", -5*3600))
@@ -190,7 +191,7 @@ func TestWorkerRoutedEmitsTheSchema(t *testing.T) {
 		"agentisan.routing.role": "coder", "agentisan.routing.provider": "claude",
 		"agentisan.routing.selected_binding": "claude_mid", "agentisan.routing.model_id": "claude-sonnet-5-5",
 		"agentisan.routing.effort": "high", "agentisan.routing.policy_version": "v1-0123456789ab",
-		"agentisan.routing.jev_model_returned": "", "agentisan.routing.selection": "jev_complexity",
+		"agentisan.routing.selection": "jev_complexity",
 		"agentisan.routing.timestamp": "2026-10-21T17:00:00.000000005Z",
 		"agentisan.routing.unchecked": []string{"tool_compatibility", "context_headroom", "availability", "spending_limits"},
 	}
@@ -210,20 +211,40 @@ func TestWorkerRoutedEmitsTheSchema(t *testing.T) {
 	overridden.TaskID, overridden.TaskLookupStatus, overridden.AssignmentDigest = &id, routing.LookupFound, "sha256:ab"
 	overridden.Override, overridden.FallbackReason, overridden.Applied = &routing.Override{Binding: "claude_mid", By: "boss", Effort: "high"}, routing.ReasonNone, true
 	overridden.Answers = json.RawMessage(`{"complexity":"bounded"}`)
+	jevFailed := decision
+	jevFailed.TaskID, jevFailed.TaskLookupStatus, jevFailed.AssignmentDigest, jevFailed.Applied = &id, routing.LookupFound, "sha256:ab", true
+	jevFailed.FallbackReason, jevFailed.JevError = routing.ReasonJevFailure, "TypeSafe refused the request: 429 Too Many Requests"
+	jevAnswered := jevFailed
+	jevAnswered.FallbackReason, jevAnswered.JevError, jevAnswered.JevModelReturned = routing.ReasonJevLowConfidence, "", "jev-1.13.0"
+	jevAnswered.Answers = json.RawMessage(`{"complexity":{"type":"choice","choice":"demanding","confidence":0.5}}`)
 	tests := map[string]struct {
 		in   routing.Decision
 		want map[string]any
 	}{
 		"would have, with nothing to name": {in: decision, want: with(map[string]any{
 			"agentisan.routing.task_id": "", "agentisan.routing.task_lookup_status": "not_found", "agentisan.routing.assignment_digest": "",
-			"agentisan.routing.answers": "", "agentisan.routing.fallback_reason": "task_not_found",
+			"agentisan.routing.jev_model_returned": "", "agentisan.routing.answers": "", "agentisan.routing.fallback_reason": "task_not_found", "agentisan.routing.jev_error": "",
 			"agentisan.routing.override.binding": "", "agentisan.routing.override.by": "", "agentisan.routing.override.effort": "",
 			"agentisan.routing.applied": false,
 		})},
 		"applied, with a task and an override": {in: overridden, want: with(map[string]any{
 			"agentisan.routing.task_id": id, "agentisan.routing.task_lookup_status": "found", "agentisan.routing.assignment_digest": "sha256:ab",
-			"agentisan.routing.answers": `{"complexity":"bounded"}`, "agentisan.routing.fallback_reason": "",
+			"agentisan.routing.jev_model_returned": "", "agentisan.routing.answers": `{"complexity":"bounded"}`, "agentisan.routing.fallback_reason": "", "agentisan.routing.jev_error": "",
 			"agentisan.routing.override.binding": "claude_mid", "agentisan.routing.override.by": "boss", "agentisan.routing.override.effort": "high",
+			"agentisan.routing.applied": true,
+		})},
+		"Jev failed, with its error": {in: jevFailed, want: with(map[string]any{
+			"agentisan.routing.task_id": id, "agentisan.routing.task_lookup_status": "found", "agentisan.routing.assignment_digest": "sha256:ab",
+			"agentisan.routing.jev_model_returned": "", "agentisan.routing.answers": "", "agentisan.routing.fallback_reason": "jev_failure",
+			"agentisan.routing.jev_error":        "TypeSafe refused the request: 429 Too Many Requests",
+			"agentisan.routing.override.binding": "", "agentisan.routing.override.by": "", "agentisan.routing.override.effort": "",
+			"agentisan.routing.applied": true,
+		})},
+		"Jev answered": {in: jevAnswered, want: with(map[string]any{
+			"agentisan.routing.task_id": id, "agentisan.routing.task_lookup_status": "found", "agentisan.routing.assignment_digest": "sha256:ab",
+			"agentisan.routing.jev_model_returned": "jev-1.13.0", "agentisan.routing.answers": `{"complexity":{"type":"choice","choice":"demanding","confidence":0.5}}`,
+			"agentisan.routing.fallback_reason": "jev_low_confidence", "agentisan.routing.jev_error": "",
+			"agentisan.routing.override.binding": "", "agentisan.routing.override.by": "", "agentisan.routing.override.effort": "",
 			"agentisan.routing.applied": true,
 		})},
 	}

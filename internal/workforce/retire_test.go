@@ -120,10 +120,15 @@ func TestRetireARowBoundToNoPane(t *testing.T) {
 	f.bindRow(t, "ha-qa-1", "qa", "w10:p99")
 	f.exec(t, "UPDATE workers SET terminal_id = 'term_closed' WHERE logical_id = 'ha-qa-1'")
 
-	for _, id := range []string{lost.ID, "ha-coder-2", "ha-qa-1"} {
-		res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: id})
+	f.bindRow(t, "ha-qa-2", "qa", "w10:p97")
+	// A pane herdr lists with no terminal, its handoff written: a row with
+	// no pane waits on nothing, so it never takes this one for its own.
+	blank := f.h.addTab(f.ws, "notes", "", "unknown")
+	f.h.setPane(blank, func(p *fakePane) { p.terminal, p.tokens = "", map[string]string{team.HandoffKey: "⟳ READY"} })
+	for id, after := range map[string]bool{lost.ID: false, "ha-coder-2": false, "ha-qa-1": false, "ha-qa-2": true} {
+		res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: id, AfterHandoff: after})
 		require.NoError(t, err)
-		assert.Equal(t, workforce.RetireResult{ID: id, Changed: true, Outcome: workforce.OutcomeUnbound}, res)
+		assert.Equal(t, workforce.RetireResult{ID: id, Changed: true, Outcome: workforce.OutcomeUnbound}, res, "%s, after its handoff: %t, with no pane to wait on", id, after)
 		assert.Equal(t, store.StatusRetired, f.row(t, id).Status)
 	}
 	assert.Empty(t, f.h.params("pane.close"))
@@ -447,4 +452,310 @@ func TestRetireAfterHandoff(t *testing.T) {
 		assert.NotNil(t, f.h.tabByLabel(w.ID), "its pane stays open")
 		assert.Equal(t, store.StatusActive, f.row(t, w.ID).Status)
 	})
+}
+
+// replacing opens a replacement pane in w's tab and begins w's handoff onto
+// it, as 2b's spawn --replaces will, and returns the pane and the handoff.
+func replacing(t *testing.T, f *fixture, w worker) (string, int64) {
+	t.Helper()
+	next := f.h.addPane(w.PaneID, "claude", "idle")
+	f.h.mu.Lock()
+	terminal := f.h.pane(next).terminal
+	f.h.mu.Unlock()
+	h, err := f.st.BeginHandoff(t.Context(), w.ID, next, terminal, time.Now())
+	require.NoError(t, err)
+	return next, h
+}
+
+// handoffState is the state the handoffs row h is in.
+func handoffState(t *testing.T, f *fixture, h int64) string {
+	t.Helper()
+	pending, err := f.st.PendingHandoffs(t.Context())
+	require.NoError(t, err)
+	if slices.ContainsFunc(pending, func(p store.Handoff) bool { return p.ID == h }) {
+		return "pending"
+	}
+	return "ended"
+}
+
+// TestRetireRefusesWhileAHandoffIsPending: a worker whose handoff is
+// pending is retired by no path, by logical id, by pane id or after its
+// handoff, which is refused at once rather than after a wait: each answers
+// ErrHandoffPending, naming the replacement, and closes nothing (A33 part
+// 2a).
+func TestRetireRefusesWhileAHandoffIsPending(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	w := f.worker(t, "ha-coder-1", "coder")
+	next, h := replacing(t, f, w)
+
+	for name, req := range map[string]workforce.RetireRequest{
+		"by logical id": {Target: w.ID},
+		"by pane id":    {Target: w.PaneID},
+		"after handoff": {Target: w.ID, AfterHandoff: true},
+	} {
+		// A wait would end in ErrHandoffTimeout first.
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		_, err := f.svc.Retire(ctx, req)
+		cancel()
+		require.ErrorIs(t, err, workforce.ErrHandoffPending, name)
+		assert.Contains(t, err.Error(), next, "%s: it names the replacement", name)
+	}
+	assert.Empty(t, f.h.params("pane.close"))
+	assert.Equal(t, store.StatusActive, f.row(t, w.ID).Status)
+	assert.Equal(t, "pending", handoffState(t, f, h))
+}
+
+// TestRetireChecksTheHandoffUnderTheLock: a handoff begun once retire has
+// read the rows, while it waits for the worker's handoff token, is seen under
+// the workforce lock, where a handoff begins, before anything closes or
+// ends: whether the pane is still there or gone, the row stays live.
+func TestRetireChecksTheHandoffUnderTheLock(t *testing.T) {
+	t.Parallel()
+	for name, paneGoes := range map[string]bool{"pane still there": false, "pane gone": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, teamConfig)
+			w := f.worker(t, "ha-coder-1", "coder")
+			lists := 0
+			f.h.onCall = func(method string) { // under the fake's lock
+				if method != "pane.list" {
+					return
+				}
+				if lists++; lists == 2 { // the wait's first poll
+					_, err := f.st.BeginHandoff(context.Background(), w.ID, "w10:p50", "term_next", time.Now())
+					assert.NoError(t, err)
+					if paneGoes {
+						f.h.dropPane(w.PaneID)
+					} else {
+						f.h.pane(w.PaneID).tokens = map[string]string{team.HandoffKey: "⟳ READY"}
+					}
+				}
+			}
+
+			_, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID, AfterHandoff: true})
+			require.ErrorIs(t, err, workforce.ErrHandoffPending)
+			assert.Empty(t, f.h.params("pane.close"))
+			row := f.row(t, w.ID)
+			assert.Equal(t, store.StatusActive, row.Status, "never retired, never gone: the ack completes it onto the replacement")
+			assert.True(t, row.RetiredAt.IsZero())
+		})
+	}
+}
+
+// TestRetireMeetsTheStoresBackstop: a handoff begun outside the workforce
+// lock, after retire's check, as no op does, still never strands: state.db
+// refuses to end the row, and retire answers ErrHandoffPending with the row
+// live, as the old pane gone mid-rotation leaves it.
+func TestRetireMeetsTheStoresBackstop(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	w := f.worker(t, "ha-coder-1", "coder")
+	f.h.onCall = func(method string) {
+		if method == "pane.close" {
+			_, err := f.st.BeginHandoff(context.Background(), w.ID, "w10:p50", "term_next", time.Now())
+			assert.NoError(t, err)
+		}
+	}
+
+	_, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID})
+	require.ErrorIs(t, err, workforce.ErrHandoffPending)
+	assert.Equal(t, store.StatusActive, f.row(t, w.ID).Status)
+}
+
+// TestRetireAbandonsARotation: retiring a pending handoff's replacement pane
+// fails the handoff, then closes the pane: the worker keeps its row and its
+// pane, its inbox is released there, and it can be retired again. The
+// replacement is matched by its terminal, else by its pane id while herdr
+// lists the recorded terminal nowhere (a herdr live handoff renews it), and
+// one herdr lists nowhere has nothing to close. A pane id herdr reissued,
+// whose recorded terminal is listed elsewhere, is no replacement.
+func TestRetireAbandonsARotation(t *testing.T) {
+	t.Parallel()
+	t.Run("by its terminal", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t, teamConfig)
+		w := f.worker(t, "ha-coder-1", "coder")
+		next, h := replacing(t, f, w)
+		to := store.Address{Kind: store.KindWorker, ID: w.ID}
+		_, err := f.st.Send(t.Context(), to, store.Address{Kind: store.KindBoss, ID: "ha-boss"}, "held during the handoff", time.Now())
+		require.NoError(t, err)
+
+		res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: next})
+		require.NoError(t, err)
+		assert.Equal(t, workforce.RetireResult{PaneID: next, Changed: true, Outcome: workforce.OutcomeRetired, HandoffFailed: w.ID}, res)
+		assert.Equal(t, "ended", handoffState(t, f, h))
+		f.h.mu.Lock()
+		assert.Nil(t, f.h.pane(next), "the replacement closed")
+		assert.NotNil(t, f.h.pane(w.PaneID), "the worker's own pane stays")
+		f.h.mu.Unlock()
+		row := f.row(t, w.ID)
+		assert.Equal(t, store.StatusActive, row.Status)
+		assert.Equal(t, w.PaneID, row.PaneID)
+		m, ok, err := f.st.Claim(t.Context(), to, time.Now())
+		require.NoError(t, err)
+		require.True(t, ok, "the inbox is released")
+		assert.Equal(t, "held during the handoff", m.Body)
+
+		res, err = f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID})
+		require.NoError(t, err)
+		assert.Equal(t, workforce.OutcomeRetired, res.Outcome, "with no handoff pending the worker retires")
+	})
+	t.Run("by its pane id, its terminal renewed", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t, teamConfig)
+		w := f.worker(t, "ha-coder-1", "coder")
+		next, h := replacing(t, f, w)
+		f.h.setPane(next, func(p *fakePane) { p.terminal = "term_renewed" })
+
+		res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: next})
+		require.NoError(t, err)
+		assert.Equal(t, workforce.RetireResult{PaneID: next, Changed: true, Outcome: workforce.OutcomeRetired, HandoffFailed: w.ID}, res)
+		assert.Equal(t, "ended", handoffState(t, f, h))
+	})
+	t.Run("herdr fails before the handoff does", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t, teamConfig)
+		w := f.worker(t, "ha-coder-1", "coder")
+		next, h := replacing(t, f, w)
+		f.h.setPane(next, func(p *fakePane) { p.terminal = "term_renewed" })
+		f.h.mu.Lock()
+		f.h.fail["pane.list"], f.h.failAfter["pane.list"] = "internal_error", 1 // the read under the lock, after the layout's
+		f.h.mu.Unlock()
+
+		_, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: next})
+		require.ErrorIs(t, err, workforce.ErrHerdr)
+		assert.Equal(t, "pending", handoffState(t, f, h), "nothing failed")
+		assert.Empty(t, f.h.params("pane.close"), "nothing closed")
+	})
+	t.Run("listed nowhere", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t, teamConfig)
+		w := f.worker(t, "ha-coder-1", "coder")
+		h, err := f.st.BeginHandoff(t.Context(), w.ID, "w10:p77", "term_closed", time.Now())
+		require.NoError(t, err)
+
+		res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: "w10:p77"})
+		require.NoError(t, err)
+		assert.Equal(t, workforce.RetireResult{PaneID: "w10:p77", Changed: true, Outcome: workforce.OutcomeGone, HandoffFailed: w.ID}, res)
+		assert.Equal(t, "ended", handoffState(t, f, h))
+		assert.Empty(t, f.h.params("pane.close"))
+		assert.Equal(t, store.StatusActive, f.row(t, w.ID).Status)
+
+		_, err = f.svc.Retire(t.Context(), workforce.RetireRequest{Target: "w10:p77"})
+		require.ErrorIs(t, err, workforce.ErrUnknownWorker, "once failed, the id names nothing")
+	})
+	t.Run("listed nowhere, then found under another id", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t, teamConfig)
+		w := f.worker(t, "ha-coder-1", "coder")
+		h, err := f.st.BeginHandoff(t.Context(), w.ID, "w10:p77", "term_moved", time.Now())
+		require.NoError(t, err)
+		lists := 0
+		f.h.onCall = func(method string) { // under the fake's lock
+			if method == "pane.list" {
+				if lists++; lists == 2 { // under the workforce lock: it moved meanwhile
+					p := f.h.newPane(f.ws, f.h.pane(w.PaneID).tab)
+					p.terminal = "term_moved"
+				}
+			}
+		}
+
+		_, err = f.svc.Retire(t.Context(), workforce.RetireRequest{Target: "w10:p77"})
+		require.ErrorIs(t, err, workforce.ErrUnknownWorker, "the replacement is the pane with its terminal now")
+		assert.Equal(t, "pending", handoffState(t, f, h))
+	})
+	t.Run("a reissued pane id", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t, teamConfig)
+		w := f.worker(t, "ha-coder-1", "coder")
+		stranger := f.h.addPane(w.PaneID, "", "unknown")
+		elsewhere := f.h.addTab(f.ws, "notes", "", "unknown")
+		f.h.mu.Lock()
+		moved := f.h.pane(elsewhere).terminal
+		f.h.mu.Unlock()
+		h, err := f.st.BeginHandoff(t.Context(), w.ID, stranger, moved, time.Now())
+		require.NoError(t, err)
+
+		res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: stranger})
+		require.NoError(t, err)
+		assert.Equal(t, workforce.RetireResult{PaneID: stranger, Changed: true, Outcome: workforce.OutcomeRetired}, res)
+		assert.Equal(t, "pending", handoffState(t, f, h), "the replacement is the pane with its terminal")
+	})
+	t.Run("the close fails after the fail", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t, teamConfig)
+		w := f.worker(t, "ha-coder-1", "coder")
+		next, h := replacing(t, f, w)
+		f.h.mu.Lock()
+		f.h.fail["pane.close"] = "internal_error"
+		f.h.mu.Unlock()
+
+		_, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: next})
+		require.ErrorIs(t, err, workforce.ErrHerdr)
+		assert.Equal(t, "ended", handoffState(t, f, h), "failed first: no close error holds the inbox")
+
+		f.h.mu.Lock()
+		delete(f.h.fail, "pane.close")
+		f.h.mu.Unlock()
+		res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: next})
+		require.NoError(t, err)
+		assert.Equal(t, workforce.RetireResult{PaneID: next, Changed: true, Outcome: workforce.OutcomeRetired}, res, "the retry closes an ordinary pane")
+	})
+}
+
+// TestRetireRereadsTheRowUnderTheLock: a worker rebound while retire waited
+// for its handoff, by a handoff completed meanwhile or by the team poll's
+// re-key after a herdr live handoff, is another session's now: retire
+// closes nothing and ends nothing (ErrPaneChanged), and a retry reads it
+// afresh.
+func TestRetireRereadsTheRowUnderTheLock(t *testing.T) {
+	t.Parallel()
+	for name, rebind := range map[string]func(f *fixture, w worker, row store.Worker) error{
+		"a handoff completed meanwhile": func(f *fixture, w worker, _ store.Worker) error {
+			h, err := f.st.BeginHandoff(context.Background(), w.ID, "w10:p50", "term_next", time.Now())
+			if err != nil {
+				return err
+			}
+			f.h.pane(w.PaneID).tokens = map[string]string{team.HandoffKey: "⟳ READY"}
+			return f.st.CompleteHandoff(context.Background(), h, time.Now())
+		},
+		"re-keyed by the poll meanwhile": func(f *fixture, w worker, row store.Worker) error {
+			f.h.dropPane(w.PaneID) // a live handoff renews its terminal: the old one is listed nowhere
+			return f.st.RekeyWorker(context.Background(), row, "w10:p51", "term_renewed")
+		},
+		"bound again at a new generation meanwhile": func(f *fixture, w worker, row store.Worker) error {
+			if err := f.st.SetWorkerStatus(context.Background(), row, store.StatusRetired, time.Now()); err != nil {
+				return err
+			}
+			again := store.Worker{LogicalID: w.ID, Project: "herdr-agentisan", Group: "coder", PaneID: w.PaneID, TerminalID: row.TerminalID}
+			if _, err := f.st.BindWorker(context.Background(), again, time.Now()); err != nil {
+				return err
+			}
+			f.h.pane(w.PaneID).tokens = map[string]string{team.HandoffKey: "⟳ READY"}
+			return nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, teamConfig)
+			w := f.worker(t, "ha-coder-1", "coder")
+			row := f.row(t, w.ID).Worker
+			lists := 0
+			f.h.onCall = func(method string) { // under the fake's lock
+				if method == "pane.list" {
+					if lists++; lists == 2 { // the wait's first poll
+						assert.NoError(t, rebind(f, w, row))
+					}
+				}
+			}
+
+			_, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID, AfterHandoff: true})
+			require.ErrorIs(t, err, workforce.ErrPaneChanged)
+			assert.Empty(t, f.h.params("pane.close"))
+			now := f.row(t, w.ID)
+			assert.True(t, now.RetiredAt.IsZero(), "still live")
+			assert.NotEqual(t, []any{row.Generation, row.TerminalID}, []any{now.Generation, now.TerminalID}, "bound anew")
+		})
+	}
 }
