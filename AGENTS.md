@@ -254,7 +254,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   embedded byte for byte from `rules/jev-routing-v1.json` and decoded
   strictly, and the deployment facts from `[routing]` (`internal/settings`).
   `Policy.Resolve` maps a worker type's role and provider, the boss's task
-  packet (`DecodeTask`, bounded) and overrides onto a binding. It returns a
+  packet (`DecodeTask`, bounded) and overrides onto a binding, the user's
+  override binding only workers of its own provider, one binding per
+  provider (`RoleOverride`, A63). It returns a
   `Decision` that is also the audit record. `worker spawn` asks it once per
   spawn, and `team up` once per group it fills, before anything opens; each
   records it on each worker's row and sends it as an

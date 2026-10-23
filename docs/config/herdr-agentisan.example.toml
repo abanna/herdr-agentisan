@@ -210,6 +210,10 @@ locks = ["/run/user/1000/agentisan/gate.0.lock"]
 #            enabled, e.g. [routing.bindings.claude_mid] model_id = "…".
 #   [routing.overrides]  <role> = "<binding>": your standing choice, and the
 #            only way to a premium binding (Fable, Astra). This file only.
+#            A binding binds only workers of its provider (ADR-001 A63), so
+#            coder = "claude_strong" leaves a Codex coder on codex_strong;
+#            a list sets one per provider:
+#            coder = ["claude_strong", "codex_strong"].
 #   [routing.jev]  Jev's complexity answer for a coder spawned with a task
 #            packet (ADR-001 A57). enabled false (the default) never asks
 #            Jev, and Jev is asked only while routing is enabled too;

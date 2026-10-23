@@ -53,7 +53,7 @@ func TestRoutingResolves(t *testing.T) {
 				"claude_small":  {},
 				"codex_premium": {ModelID: new("")},
 			},
-			Overrides: map[string]string{"alex_debugger": "claude_premium"},
+			Overrides: map[string]routing.RoleOverride{"alex_debugger": {"claude_premium"}},
 		}, res.Routing())
 		for path, layer := range map[string]string{
 			"routing.enabled":                         settings.LayerShared,
@@ -102,6 +102,14 @@ func TestRoutingRefuses(t *testing.T) {
 		"a premium override for the boss":           {file: "[routing.overrides]\nboss = \"claude_premium\"\n", wantErr: settings.ErrInvalid},
 		"an override from --set":                    {set: []string{"routing.overrides.alex_debugger=claude_premium"}, wantErr: settings.ErrInvalid, wantIn: []string{"never by --set"}},
 		"an empty overrides table from --set":       {set: []string{"routing.overrides={}"}, wantErr: settings.ErrInvalid, wantIn: []string{"never by --set"}},
+		"two claude bindings in a list":             {file: "[routing.overrides]\ncoder = [\"claude_mid\", \"claude_strong\"]\n", wantErr: routing.ErrOverrideRefused, wantIn: []string{"routing.overrides.coder (shared, ", "one binding per provider"}},
+		"one binding twice in a list":               {file: "[routing.overrides]\ncoder = [\"codex_strong\", \"codex_strong\"]\n", wantErr: routing.ErrOverrideRefused, wantIn: []string{"routing.overrides.coder (shared, "}},
+		"an empty list":                             {file: "[routing.overrides]\ncoder = []\n", wantErr: routing.ErrOverrideRefused, wantIn: []string{"routing.overrides.coder (shared, ", "names no binding"}},
+		"a list with a binding the role refuses":    {file: "[routing.overrides]\nclerk = [\"claude_small\", \"codex_strong\"]\n", wantErr: routing.ErrOverrideRefused, wantIn: []string{"routing.overrides.clerk (shared, ", "codex_strong"}},
+		"a list of numbers":                         {file: "[routing.overrides]\ncoder = [1]\n", wantErr: settings.ErrInvalid, wantIn: []string{"routing.overrides.coder (shared, ", "a string or a list of strings"}},
+		"an override as a table":                    {file: "[routing.overrides]\ncoder = { claude = \"claude_strong\" }\n", wantErr: settings.ErrInvalid, wantIn: []string{"a string or a list of strings"}},
+		"a list override from --set":                {set: []string{`routing.overrides.coder=["claude_strong", "codex_strong"]`}, wantErr: settings.ErrInvalid, wantIn: []string{"never by --set"}},
+		"a list override in a repo file":            {repoFile: "[routing.overrides]\ncoder = [\"claude_strong\", \"codex_strong\"]\n", project: true, wantErr: settings.ErrUnknownKey},
 		"[routing] in a project table":              {file: "[projects.other]\nrepo = \"REPO\"\n[projects.other.routing]\nenabled = true\n", wantErr: settings.ErrUnknownKey},
 		"[routing] in a repo file":                  {repoFile: "[routing]\nenabled = true\n", project: true, wantErr: settings.ErrUnknownKey},
 		"an override in a repo file":                {repoFile: "[routing.overrides]\nalex_debugger = \"claude_premium\"\n", project: true, wantErr: settings.ErrUnknownKey},
@@ -224,7 +232,7 @@ func TestResolvedPolicy(t *testing.T) {
 	_, err = settings.Resolved{Values: map[string]any{"routing": map[string]any{"overrides": map[string]any{"boss": "claude_premium"}}}}.Policy()
 	require.ErrorIs(t, err, settings.ErrInvalid)
 	require.ErrorIs(t, err, routing.ErrOverrideRefused)
-	_, err = settings.Profile{Routing: routing.Deployment{Overrides: map[string]string{"boss": "claude_premium"}}}.Policy()
+	_, err = settings.Profile{Routing: routing.Deployment{Overrides: map[string]routing.RoleOverride{"boss": {"claude_premium"}}}}.Policy()
 	require.ErrorIs(t, err, settings.ErrInvalid)
 	require.ErrorIs(t, err, routing.ErrOverrideRefused)
 }
@@ -248,43 +256,101 @@ func TestProfilePolicyIsTheResolvedOne(t *testing.T) {
 }
 
 // TestCheckRoutingProviders: config resolve --project refuses a user
-// override a worker type with its role cannot run, naming the override,
-// the type and both providers, whether or not routing is on; a type whose
-// agent runs the binding's provider, a type with no role, one that only
-// describes and a role with no override pass, and Load alone never refuses.
+// override that every spawn of a worker type under its provider would be
+// refused for, naming the override, the type, the provider and why, whether
+// or not routing is on (A63). An override binds only workers of its
+// binding's provider, so a type of another provider passes, as do a type
+// whose override runs, a type with no role, one that only describes and a
+// role with no override; Load alone never refuses.
 func TestCheckRoutingProviders(t *testing.T) {
 	t.Parallel()
 	qa := "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"codex\"] }\n"
 	precheck := "[groups.precheck]\nworkers = 0\nslots = 1\n"
 	override := "[routing.overrides]\npre_check = \"claude_mid\"\n"
+	both := "[routing.overrides]\npre_check = [\"claude_mid\", \"codex_strong\"]\n"
+	coder := "[groups.coder]\nworkers = 0\nslots = 1\nagent = { command = [\"codex\"] }\n"
 	for name, routingOn := range map[string]string{"routing off": "", "routing on": "[routing]\nenabled = true\n"} {
-		res, err := loadRouting(t, routingOn+precheck+qa+override, "", nil, true)
-		require.NoError(t, err, "%s: Load leaves the check to config resolve", name)
-		err = res.Profile.CheckRoutingProviders()
-		require.ErrorIs(t, err, settings.ErrInvalid, name)
-		require.ErrorIs(t, err, routing.ErrProviderMismatch, name)
-		assert.Equal(t, "routing.overrides.pre_check: invalid config: provider mismatch: claude_mid is a claude binding, and the worker type qa runs codex", err.Error(), name)
+		for row, tc := range map[string]struct {
+			file, want string
+		}{
+			"a disabled binding": {
+				file: precheck + qa + override + "[routing.bindings.claude_mid]\nenabled = false\n",
+				want: "routing.overrides.pre_check: invalid config: the worker type precheck under claude: override refused: claude_mid, which the user's [routing.overrides] chose for pre_check, is disabled in [routing.bindings]",
+			},
+			"an unresolved binding": {
+				file: precheck + override + "[routing.bindings.claude_mid]\nmodel_id = \"\"\n",
+				want: "routing.overrides.pre_check: invalid config: the worker type precheck under claude: override refused: claude_mid, which the user's [routing.overrides] chose for pre_check, has no model_id (unresolved)",
+			},
+			"a binding without the role's effort": {
+				file: precheck + override + "[routing.bindings.claude_mid]\nefforts = [\"medium\"]\n",
+				want: "routing.overrides.pre_check: invalid config: the worker type precheck under claude: override refused: claude_mid, which the user's [routing.overrides] chose for pre_check, does not take effort high (it takes medium)",
+			},
+			"the list's codex binding disabled": {
+				file: precheck + qa + both + "[routing.bindings.codex_strong]\nenabled = false\n",
+				want: "routing.overrides.pre_check: invalid config: the worker type qa under codex: override refused: codex_strong, which the user's [routing.overrides] chose for pre_check, is disabled in [routing.bindings]",
+			},
+		} {
+			res, err := loadRouting(t, routingOn+tc.file, "", nil, true)
+			require.NoError(t, err, "%s, %s: Load leaves the check to config resolve", name, row)
+			err = res.Profile.CheckRoutingProviders()
+			require.ErrorIs(t, err, settings.ErrInvalid, "%s, %s", name, row)
+			require.ErrorIs(t, err, routing.ErrOverrideRefused, "%s, %s", name, row)
+			assert.Equal(t, tc.want, err.Error(), "%s, %s", name, row)
+		}
 	}
-	res, err := loadRouting(t, precheck+strings.Replace(qa, `["codex"]`, `["/usr/local/bin/codex"]`, 1)+override, "", nil, true)
-	require.NoError(t, err)
-	err = res.Profile.CheckRoutingProviders()
-	require.ErrorIs(t, err, routing.ErrProviderMismatch, "codex by its path runs codex")
-	assert.Contains(t, err.Error(), "and the worker type qa runs codex")
-	res, err = loadRouting(t, "[groups.precheck]\nworkers = 0\nslots = 1\nagent = { command = [\"/usr/local/bin/claude\"] }\n"+override, "", nil, true)
-	require.NoError(t, err)
-	require.NoError(t, res.Profile.CheckRoutingProviders(), "claude by its path runs claude")
 	for name, file := range map[string]string{
-		"a type running the binding's provider": precheck + override,
-		"no override":                           qa,
-		"another role's override":               qa + "[routing.overrides]\nresearcher = \"claude_small\"\n",
-		"a type with no role":                   "[groups.designer]\nworkers = 0\nslots = 1\nagent = { command = [\"codex\"] }\n" + override,
-		"a type that only describes":            "[agent]\ncommand = [\"codex\"]\n[groups.qa]\ndescription = \"verifies a handoff\"\n[groups.coder]\nworkers = 0\nslots = 1\nagent = { command = [\"claude\"] }\n" + override,
-		"the override's own provider":           qa + "[routing.overrides]\npre_check = \"codex_strong\"\n",
+		"a codex type under a claude override":   precheck + qa + override,
+		"codex by its path":                      precheck + strings.Replace(qa, `["codex"]`, `["/usr/local/bin/codex"]`, 1) + override,
+		"claude by its path":                     "[groups.precheck]\nworkers = 0\nslots = 1\nagent = { command = [\"/usr/local/bin/claude\"] }\n" + override,
+		"the live coder override, a codex coder": "[routing]\nenabled = true\n" + coder + "[routing.overrides]\ncoder = \"claude_strong\"\n",
+		"a list for both providers":              precheck + qa + both,
+		"a disabled binding no type runs":        precheck + "[routing.overrides]\npre_check = \"codex_strong\"\n[routing.bindings.codex_strong]\nenabled = false\n",
+		"a type running the binding's provider":  precheck + override,
+		"no override":                            qa,
+		"another role's override":                qa + "[routing.overrides]\nresearcher = \"claude_small\"\n",
+		"a type with no role":                    "[groups.designer]\nworkers = 0\nslots = 1\nagent = { command = [\"codex\"] }\n" + override,
+		"a type that only describes":             "[agent]\ncommand = [\"codex\"]\n[groups.qa]\ndescription = \"verifies a handoff\"\n[groups.coder]\nworkers = 0\nslots = 1\nagent = { command = [\"claude\"] }\n" + override,
+		"the override's own provider":            qa + "[routing.overrides]\npre_check = \"codex_strong\"\n",
+		"a default disabled under an override":   qa + "[routing.overrides]\npre_check = \"claude_mid\"\n[routing.bindings.codex_strong]\nenabled = false\n",
+		"a describer whose override is disabled": "[groups.qa]\ndescription = \"verifies a handoff\"\n" + override + "[routing.bindings.claude_mid]\nenabled = false\n",
 	} {
 		res, err := loadRouting(t, file, "", nil, true)
 		require.NoError(t, err, name)
 		require.NoError(t, res.Profile.CheckRoutingProviders(), name)
 	}
+}
+
+// TestRoutingOverrideLists: a role's override is a binding's name or a list
+// of them, kept as written, each leaf with its layer; the policy binds each
+// to its own provider, and the live string keeps its version (A63).
+func TestRoutingOverrideLists(t *testing.T) {
+	t.Parallel()
+	res, err := loadRouting(t, "[routing.overrides]\ncoder = [\"codex_strong\", \"claude_strong\"]\nalex_debugger = \"claude_premium\"\n", "", nil, true)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]routing.RoleOverride{"coder": {"codex_strong", "claude_strong"}, "alex_debugger": {"claude_premium"}}, res.Routing().Overrides)
+	l, ok := leaf(t, res, "routing.overrides.coder")
+	require.True(t, ok)
+	assert.Equal(t, []string{"codex_strong", "claude_strong"}, l.Value, "a list, as written")
+	l, ok = leaf(t, res, "routing.overrides.alex_debugger")
+	require.True(t, ok)
+	assert.Equal(t, "claude_premium", l.Value, "a string, as written")
+	assert.Equal(t, settings.LayerShared, res.Sources["routing.overrides.coder"])
+	p, err := res.Policy()
+	require.NoError(t, err)
+	assert.Equal(t, "claude_strong", p.UserOverride("coder", routing.Claude))
+	assert.Equal(t, "codex_strong", p.UserOverride("coder", routing.Codex))
+	assert.Empty(t, p.UserOverride("alex_debugger", routing.Codex))
+
+	live, err := loadRouting(t, "[routing]\nenabled = true\n[routing.overrides]\ncoder = \"claude_strong\"\n", "", nil, true)
+	require.NoError(t, err)
+	lp, err := live.Policy()
+	require.NoError(t, err)
+	assert.Equal(t, "v1-f0225362e568", lp.Version(), "the live override keeps its version")
+	one, err := loadRouting(t, "[routing]\nenabled = true\n[routing.overrides]\ncoder = [\"claude_strong\"]\n", "", nil, true)
+	require.NoError(t, err)
+	op, err := one.Policy()
+	require.NoError(t, err)
+	assert.Equal(t, lp.Version(), op.Version(), "a one-element list is the string")
 }
 
 // TestRoutingJevResolves: [routing.jev] from the shared file and --set

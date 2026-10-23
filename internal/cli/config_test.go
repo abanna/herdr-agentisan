@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -148,29 +149,37 @@ func TestConfigResolveShowsThePolicyVersion(t *testing.T) {
 }
 
 // TestConfigResolveRefusesAnOverrideATypeCannotRun: with --project, config
-// resolve refuses a user override a worker type with its role cannot run,
-// whether or not routing is on, before it prints anything; with no project
-// it names no type, so it resolves (A50).
+// resolve refuses a user override that every spawn of a worker type under
+// its provider would be refused for, whether or not routing is on, before it
+// prints anything; with no project it names no type, so it resolves (A50,
+// A63). An override of the other provider's binding is no override of the
+// type, so it resolves.
 func TestConfigResolveRefusesAnOverrideATypeCannotRun(t *testing.T) {
 	t.Parallel()
 	dir, _ := configFixture(t)
 	path := filepath.Join(dir, settings.FileName)
 	shared, err := os.ReadFile(path)
 	require.NoError(t, err)
-	mismatch := "\n[projects.app.groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"codex\"] }\n\n[routing.overrides]\npre_check = \"claude_mid\"\n"
-	require.NoError(t, os.WriteFile(path, append(shared, mismatch...), 0o600))
+	disabled := "\n[projects.app.groups.qa]\nworkers = 0\nslots = 1\n\n[routing.overrides]\npre_check = \"claude_mid\"\n\n[routing.bindings.claude_mid]\nenabled = false\n"
+	require.NoError(t, os.WriteFile(path, append(slices.Clone(shared), disabled...), 0o600))
 
 	for _, extra := range [][]string{nil, {"--set", "routing.enabled=true"}, {"--json"}} {
 		args := append([]string{"config", "resolve", "--config-dir", dir, "--project", "app"}, extra...)
 		out, err := runCtx(configCtx(t, nil, nil), args...)
 		require.ErrorIs(t, err, settings.ErrInvalid, "%v", extra)
-		require.ErrorIs(t, err, routing.ErrProviderMismatch, "%v", extra)
-		assert.Contains(t, err.Error(), "routing.overrides.pre_check: invalid config: provider mismatch: claude_mid is a claude binding, and the worker type qa runs codex")
+		require.ErrorIs(t, err, routing.ErrOverrideRefused, "%v", extra)
+		assert.Contains(t, err.Error(), "routing.overrides.pre_check: invalid config: the worker type qa under claude: override refused: claude_mid, which the user's [routing.overrides] chose for pre_check, is disabled in [routing.bindings]")
 		assert.NotContains(t, out, "routing policy", "nothing resolved is printed before the refusal")
 		assert.NotContains(t, out, `"values"`, "nothing resolved is printed before the refusal")
 	}
 	_, err = runCtx(configCtx(t, nil, nil), "config", "resolve", "--config-dir", dir)
 	require.NoError(t, err, "with no project there is no type to run it")
+
+	other := "\n[projects.app.groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"codex\"] }\n\n[routing.overrides]\npre_check = \"claude_mid\"\n"
+	require.NoError(t, os.WriteFile(path, append(slices.Clone(shared), other...), 0o600))
+	out, err := runCtx(configCtx(t, nil, nil), "config", "resolve", "--config-dir", dir, "--project", "app")
+	require.NoError(t, err, "a codex qa under a claude override takes its own default")
+	assert.Contains(t, out, "routing.overrides.pre_check = \"claude_mid\"  # shared\n")
 }
 
 // TestConfigResolveSetKeepsCommas: --set is a string array, so a TOML list
