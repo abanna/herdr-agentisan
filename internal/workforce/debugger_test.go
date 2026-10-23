@@ -331,7 +331,8 @@ func TestPlanNeedsTheDebuggersLaunch(t *testing.T) {
 
 // TestRetireADebugger: a debugger writes no handoff, so retiring one after
 // its handoff is refused at once, its pane left open; retiring it plainly
-// closes its pane.
+// closes its pane. A debugger's row bound to no pane has no pane to wait on,
+// so it is retired with nothing closed, after its handoff or not.
 func TestRetireADebugger(t *testing.T) {
 	t.Parallel()
 	f, _ := newDebuggerFixture(t, "")
@@ -346,6 +347,11 @@ func TestRetireADebugger(t *testing.T) {
 	res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID})
 	require.NoError(t, err)
 	assert.Equal(t, workforce.OutcomeRetired, res.Outcome)
+
+	f.bindRow(t, "ha-debugger-2", settings.DebuggerType, "w10:p99")
+	res, err = f.svc.Retire(t.Context(), workforce.RetireRequest{Target: "ha-debugger-2", AfterHandoff: true})
+	require.NoError(t, err)
+	assert.Equal(t, workforce.RetireResult{ID: "ha-debugger-2", Changed: true, Outcome: workforce.OutcomeUnbound}, res)
 }
 
 // TestSpawnPutsTheTurnHooksInTheDebuggersFence: a spawned debugger's one

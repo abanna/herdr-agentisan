@@ -645,6 +645,17 @@ func TestDispatcherDeliversToAPaneByItsTerminal(t *testing.T) {
 	assert.Equal(t, typed{Target: "w2:p7", Pane: "w2:p7", Text: "[agentisan] second"}, p.all()[1], "the pane that shows the terminal now")
 }
 
+// failedEvents are rec's message failed events.
+func failedEvents(rec *telemetrytest.Recorder) []telemetrytest.Event {
+	var out []telemetrytest.Event
+	for _, e := range rec.Events() {
+		if e.Name == telemetry.EventMessageFailed {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // movePane gives the pane showing terminal the id pane, as herdr reissuing
 // pane ids does.
 func movePane(th *teamHerdr, terminal, pane string) {
@@ -697,14 +708,14 @@ func TestDispatcherFailsAPaneMessageItCannotType(t *testing.T) {
 			if tc.failed {
 				got := eventuallyState(t, st, m.ID, store.MessageFailed)
 				assert.Equal(t, tc.reason, got.Reason)
+				// The dispatcher emits the event on its own goroutine once its
+				// Fail has returned, and another connection can read the
+				// commit before that: wait for the event, then two polls, so
+				// a second one would be seen too (NERD-5535).
+				require.Eventually(t, func() bool { return len(failedEvents(rec)) > 0 }, ready, 10*time.Millisecond, "no failed event")
 				polled(t, th.srv, 2)
 				assert.Equal(t, []string{m.ID}, messageIDs(t, dir, th)(), "a message the daemon sent gets no notice")
-				var failed []telemetrytest.Event
-				for _, e := range rec.Events() {
-					if e.Name == telemetry.EventMessageFailed {
-						failed = append(failed, e)
-					}
-				}
+				failed := failedEvents(rec)
 				require.Len(t, failed, 1)
 				assert.Equal(t, m.ID, failed[0].Attrs["agentisan.message.id"])
 				assert.Equal(t, tc.reason, failed[0].Attrs["agentisan.message.reason"])

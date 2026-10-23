@@ -382,6 +382,9 @@ func TestAHandoffKeepsTheRouting(t *testing.T) {
 	routed := &store.Routing{Role: "coder", Provider: "claude", Binding: "claude_mid", ModelID: "claude-sonnet-5-5", Effort: "high", PolicyVersion: "v1-0123456789ab", RoutedAt: t0}
 	_, err := s.BindWorker(ctx, store.Worker{LogicalID: "w", Project: "agentisan", Group: "coder", PaneID: "w14:p2", TerminalID: "term_a", Routing: routed}, t0)
 	require.NoError(t, err)
+	// Active, as spawn marks it once its agent is up: a starting worker
+	// hands off nothing.
+	require.NoError(t, s.SetWorkerStatus(ctx, store.Worker{LogicalID: "w"}, store.StatusActive, t0))
 
 	h, err := s.BeginHandoff(ctx, "w", "w14:p7", "term_b", t0)
 	require.NoError(t, err)
@@ -515,6 +518,40 @@ func TestSetWorkerStatusEndings(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, status, row.Status)
 			assert.True(t, row.RetiredAt.Equal(t0), "retired at its creation, not before it")
+		})
+	}
+}
+
+// TestNoEndingWhileAHandoffIsPending: a row whose handoff is pending is
+// never ended, whichever ending is asked (ErrHandoffPending), so the handoff
+// can't outlive its row and hold an inbox no session will drain (A33 part
+// 2a); a status that keeps it live still applies, and once the handoff
+// fails the row ends. A generation the row is not at is still ErrNoWorker.
+func TestNoEndingWhileAHandoffIsPending(t *testing.T) {
+	t.Parallel()
+	for _, status := range []string{store.StatusRetired, store.StatusFailed, store.StatusGone} {
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+			s := open(t, dbPath(t))
+			ctx := t.Context()
+			seedWorker(t, s, "w", "w14:p2", 3)
+			h, err := s.BeginHandoff(ctx, "w", "w14:p7", terminal("w14:p7"), t1)
+			require.NoError(t, err)
+			w := store.Worker{LogicalID: "w", Generation: 3}
+
+			require.ErrorIs(t, s.SetWorkerStatus(ctx, w, status, t1), store.ErrHandoffPending)
+			row := liveRow(t, s, "w")
+			assert.Equal(t, store.StatusActive, row.Status, "the row stays live")
+			assert.True(t, row.HandoffPending)
+			require.ErrorIs(t, s.SetWorkerStatus(ctx, store.Worker{LogicalID: "w", Generation: 9}, status, t1), store.ErrNoWorker,
+				"another generation is no live row, pending or not")
+			require.NoError(t, s.SetWorkerStatus(ctx, w, store.StatusActive, t1), "a status that keeps it live")
+
+			require.NoError(t, s.FailHandoff(ctx, h, t1))
+			require.NoError(t, s.SetWorkerStatus(ctx, w, status, t1))
+			ended, err := s.WorkerRow(ctx, "w")
+			require.NoError(t, err)
+			assert.Equal(t, status, ended.Status, "ended once the handoff failed")
 		})
 	}
 }
