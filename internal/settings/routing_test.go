@@ -1,6 +1,7 @@
 package settings_test
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -200,7 +201,11 @@ func escape(args []string) []string {
 func codexCommandAt(args ...string) map[string]string {
 	command := `["codex"]`
 	if len(args) > 0 {
-		command = `["codex", "` + strings.Join(escape(args), `", "`) + `"]`
+		quoted := make([]string, len(args))
+		for i, arg := range args {
+			quoted[i] = strconv.Quote(arg)
+		}
+		command = `["codex", ` + strings.Join(quoted, `, `) + `]`
 	}
 	return map[string]string{
 		"agent.command":                    "[agent]\ncommand = " + command + "\n",

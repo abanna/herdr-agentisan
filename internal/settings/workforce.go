@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
+
 	"github.com/abanna/herdr-agentisan/internal/routing"
 )
 
@@ -184,7 +186,8 @@ const (
 // whether as -m o3, -m=o3 or -mo3: a short flag's value can be attached. A
 // codex command is also refused a -c or --config that sets one of
 // codexConfigKeys, in any of its forms, and the hook-trust bypass, by its flag
-// or its key. The error names the flag or key, never its value.
+// or its key, or hook trust state. The error names the flag or key, never
+// its value.
 func checkLaunchFlags(argv []string) error {
 	codex := len(argv) > 0 && filepath.Base(argv[0]) == routing.Codex
 	for i := 1; i < len(argv); i++ {
@@ -209,13 +212,34 @@ func checkLaunchFlags(argv []string) error {
 // codexHookTrustBypass is how argv[i] runs a codex command's hooks without
 // their trust: codexHookTrustFlag by its name before any =, or a -c or
 // --config setting codexHookTrustKey in any form; "" when it is neither. It
-// names the flag or key, never a value.
+// also covers hook state set directly or through an inline hooks table. It
+// names the flag or a fixed key, never a value or a hook identifier.
 func codexHookTrustBypass(argv []string, i int) string {
 	if name, _, _ := strings.Cut(argv[i], "="); name == codexHookTrustFlag {
 		return name
 	}
-	if codexConfigKey(argv, i) == codexHookTrustKey {
+	key, value := codexConfigOverride(argv, i)
+	if key == codexHookTrustKey {
 		return codexHookTrustKey + " key"
+	}
+	// State supplied in argv grants the same trust as a human accepting the
+	// hook's hash. Refuse the namespace, including entry/leaf assignments,
+	// without returning a caller-controlled hook key or value in the error.
+	if key == "hooks.state" || strings.HasPrefix(key, "hooks.state.") {
+		return "hooks.state key"
+	}
+	if key == "hooks" {
+		// Codex parses the value as TOML, falling back to a string on error.
+		// Inspect only the effective table's root state field: hook definitions,
+		// look-alikes and a string containing "state" do not supply trust state.
+		var doc map[string]any
+		if err := toml.Unmarshal([]byte("v = "+value), &doc); err == nil {
+			if hooks, ok := doc["v"].(map[string]any); ok {
+				if _, state := hooks["state"]; state {
+					return "hooks.state key"
+				}
+			}
+		}
 	}
 	return ""
 }
@@ -224,6 +248,14 @@ func codexHookTrustBypass(argv []string, i int) string {
 // with its key=value separate (-c k=v), joined (--config=k=v, -c=k=v) or
 // attached (-ck=v); "" when it is not one. A key may be quoted.
 func codexConfigKey(argv []string, i int) string {
+	key, _ := codexConfigOverride(argv, i)
+	return key
+}
+
+// codexConfigOverride extracts the key and raw TOML value from every form
+// codexConfigKey accepts. Split only at the first equals: an inline table
+// contains its own equals signs. Values are inspected, never echoed.
+func codexConfigOverride(argv []string, i int) (string, string) {
 	arg, kv := argv[i], ""
 	switch {
 	case arg == "-c" || arg == "--config":
@@ -235,10 +267,10 @@ func codexConfigKey(argv []string, i int) string {
 	case strings.HasPrefix(arg, "-c"):
 		kv = strings.TrimPrefix(arg[2:], "=")
 	default:
-		return ""
+		return "", ""
 	}
-	key, _, _ := strings.Cut(kv, "=")
-	return strings.Trim(strings.TrimSpace(key), `"'`)
+	key, value, _ := strings.Cut(kv, "=")
+	return strings.Trim(strings.TrimSpace(key), `"'`), value
 }
 
 // codexProfileFlag is how a codex command chooses a profile: -p or

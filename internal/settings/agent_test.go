@@ -57,6 +57,8 @@ func TestCheckAgentCommand(t *testing.T) {
 		"codex -c model_provider (refused: TestRoutingRefusesACodexProvider)":                  {argv: []string{"codex", "-c", "model_provider=oss"}, ok: true},
 		"codex's hook-trust bypass (refused: TestLoadRefusesWorkforceKeys)":                    {argv: []string{"codex", "--dangerously-bypass-hook-trust"}, ok: true},
 		"codex -c bypass_hook_trust (refused: TestLoadRefusesWorkforceKeys)":                   {argv: []string{"codex", "-c", "bypass_hook_trust=true"}, ok: true},
+		"codex -c hooks.state (refused: TestLoadRefusesCodexHookState)":                        {argv: []string{"codex", "-c", `hooks.state={simple={trusted_hash="x"}}`}, ok: true},
+		"codex -c hooks (refused: TestLoadRefusesCodexHookState)":                              {argv: []string{"codex", "-c", `hooks={state={simple={trusted_hash="x"}}}`}, ok: true},
 		"codex -s (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":                     {argv: []string{"codex", "-s", "read-only"}, ok: true},
 		"codex --sandbox (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":              {argv: []string{"codex", "--sandbox=workspace-write"}, ok: true},
 		"codex --approve-for-me (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":       {argv: []string{"codex", "--approve-for-me"}, ok: true},

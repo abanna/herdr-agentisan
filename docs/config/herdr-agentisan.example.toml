@@ -120,8 +120,12 @@ repeat = 300
 # runs claude or codex (D12) and carries no --model, -m, --name, -n or
 # --effort, nor a codex -c setting model or model_reasoning_effort: the
 # workforce sets them; nor --dangerously-bypass-hook-trust or -c
-# bypass_hook_trust in a codex command, since trusting hooks stays a
-# one-time human step (A43). A codex -p profile or a claude --settings file can
+# bypass_hook_trust or hook trust state in a codex command: hooks.state,
+# hooks.state.* and an inline hooks={state={...}} are refused, routing on or
+# off. Other hook settings stay allowed. Trusting hooks stays a one-time
+# human step (A43). For example, this argv pair is refused:
+# -c 'hooks.state={"file:/tmp/qa145/hooks.json:stop:0:0"={trusted_hash="<current_hash>"}}'
+# A codex -p profile or a claude --settings file can
 # still name a model: the --model the workforce passes outranks both, by each
 # CLI's own precedence, and with no model set the command's configuration
 # decides (A53). An abbreviation such as --mod is no --model to either:
