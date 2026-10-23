@@ -237,11 +237,11 @@ func statusStyle(s snapshot.Status) lipgloss.Style {
 	}
 }
 
-// ShortModel is the model as a row shows it, four cells at most: opus, son,
-// hai or fab for Claude's families wherever they appear in the name, cdx for
-// a Codex model, the variant of a gpt- model whose name ends in one (luna for
-// gpt-6-luna), otherwise the first word, lower-cased, cut to four cells (two
-// wide characters).
+// ShortModel is the model as a row shows it, modelCells cells at most: opus,
+// son, hai or fab for Claude's families wherever they appear in the name, a
+// gpt- model as its word and its version (gptLabel: sol6.1 for gpt-6.1-sol),
+// cdx for any other model whose name says codex, otherwise the first word,
+// lower-cased, cut to wordCells cells (two wide characters).
 func ShortModel(model string) string {
 	m := strings.ToLower(clean(model))
 	switch {
@@ -253,32 +253,41 @@ func ShortModel(model string) string {
 		return "hai"
 	case strings.Contains(m, "fable"):
 		return "fab"
-	case strings.Contains(m, "codex"):
-		return "cdx"
 	}
 	words := strings.Fields(m)
 	if len(words) == 0 {
 		return ""
 	}
-	if v, ok := gptVariant(words[0]); ok {
-		return ansi.Truncate(v, modelCells, "")
+	if rest, ok := strings.CutPrefix(words[0], "gpt-"); ok {
+		return gptLabel(rest, strings.Contains(m, "codex"))
 	}
-	return ansi.Truncate(words[0], modelCells, "")
+	if strings.Contains(m, "codex") {
+		return "cdx"
+	}
+	return ansi.Truncate(words[0], wordCells, "")
 }
 
-// gptVariant is the last part of a gpt- name when that part is a word, such
-// as sol in gpt-6.1-sol: every such name starts gpt-, so its first four
-// cells would draw gpt-6-luna, gpt-6.1-sol and gpt-6-astra alike.
-func gptVariant(name string) (string, bool) {
-	rest, ok := strings.CutPrefix(name, "gpt-")
-	if !ok {
-		return "", false
+// gptLabel is a gpt- model, rest being its name after gpt-, as a word and the
+// version in front of it: cdx and what comes before codex when the name says
+// codex (cdx5.5 for gpt-5.5-codex); else the last part, when it is letters
+// only, and what comes before it (sol6.1 for gpt-6.1-sol); else gpt and all
+// of rest (gpt5.5 for gpt-5.5). Every such name starts gpt-, and the version
+// is what tells gpt-6-sol from gpt-6.1-sol, so a label too wide for its
+// column loses its word first, down to one cell, and its version only then.
+func gptLabel(rest string, codex bool) string {
+	word, version := "gpt", rest
+	last := rest[strings.LastIndexByte(rest, '-')+1:]
+	switch {
+	case codex:
+		version, _, _ = strings.Cut(rest, "codex")
+		word, version = "cdx", strings.Trim(version, "-")
+	case last != "" && !strings.ContainsFunc(last, func(r rune) bool { return !unicode.IsLetter(r) }):
+		word, version = last, strings.TrimSuffix(strings.TrimSuffix(rest, last), "-")
 	}
-	v := rest[strings.LastIndexByte(rest, '-')+1:]
-	if v == "" || strings.ContainsFunc(v, func(r rune) bool { return !unicode.IsLetter(r) }) {
-		return "", false
+	if room := modelCells - ansi.StringWidth(version); ansi.StringWidth(word) > room {
+		word = ansi.Truncate(word, max(room, 1), "")
 	}
-	return v, true
+	return ansi.Truncate(word+version, modelCells, "")
 }
 
 // clean makes snapshot text safe to draw: control characters, escape
