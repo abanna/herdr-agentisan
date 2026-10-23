@@ -318,6 +318,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   posts and two read marks, the boss's and the user's; every post wakes
   each `board wait`. Tests open a fresh database in a temp
   dir; the store is never mocked.
+  `boardnotice.go` also provides the pure version-1 GitHub capture-ID helper
+  and its frozen envelope/receipt types (B0a.1), with no production callers
+  or storage/effect API; durable notice admission remains incomplete.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real
