@@ -583,7 +583,8 @@ where `dashboard-tab.sh` jumped to the one it had made, so close a dashboard
 with `q`. Add `--direction down` to split below the focused pane instead.
 `team up` opens one for you, above the boss, labelled `<short>-dashboard`,
 when the team's workspace has none, and leaves one prefix+d opened there as
-it is.
+it is. Either is no member of the team: `team status` does not list it as the
+boss's (ADR-001 A19's addendum).
 See [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml).
 
 `herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json`

@@ -27,7 +27,8 @@ const (
 	// prompt it waited on was answered.
 	Unblocked Kind = "unblocked"
 	// Unknown is a worker whose status herdr cannot tell, for two polls in
-	// a row.
+	// a row (an agent pane never seen known: at its 20th poll, A44's
+	// addendum).
 	Unknown Kind = "unknown"
 	// Gone is a worker leaving the team: its pane closed, or moved out of
 	// every place the team's resolver knows.

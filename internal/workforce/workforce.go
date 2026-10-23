@@ -216,9 +216,12 @@ func SelectorFor(ctx context.Context, h report.PaneFinder, project string, pane 
 	return Selector{CallerPane: caller}, err
 }
 
-// layout is herdr's answers one op works from.
+// layout is herdr's answers one op works from, with the title herdr gives
+// the plugin's dashboard pane when prefix+d opens it, which a tabs team
+// leaves out (resolverOf).
 type layout struct {
 	team.Layout
+	dashboardTitle string
 }
 
 // readLayout lists everything an op needs from herdr.
@@ -239,7 +242,7 @@ func (s *Service) readLayout(ctx context.Context) (layout, error) {
 	if err != nil {
 		return layout{}, herdrFailed("list agents", err)
 	}
-	return layout{team.Layout{Workspaces: workspaces, Panes: panes, Tabs: tabs, Agents: agents}}, nil
+	return layout{Layout: team.Layout{Workspaces: workspaces, Panes: panes, Tabs: tabs, Agents: agents}, dashboardTitle: s.Dashboard.Title}, nil
 }
 
 func herdrFailed(what string, err error) error {

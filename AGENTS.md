@@ -180,8 +180,9 @@ exempts whatever is later added under that name.
   `stage_old`).
 - `internal/notice/` — boss notices (ADR-001 A44): the team poll's source
   (`Watch`: a turn's end from `agent.list`'s `completion_seq`, blocked and
-  its end, unknown for two polls, gone (a pane closed or moved, or its agent
-  exited), and the daemon's start), the context levels' source (`CtxWatch`: each
+  its end, unknown for two polls (a new agent's for 20), gone (a pane closed
+  or moved, or its agent exited), and the daemon's start), the context
+  levels' source (`CtxWatch`: each
   agent pane's ctx crossing its rotation thresholds, the boss's included,
   remembered by terminal and re-armed 5 under, A33), GitHub's events
   (`github.go`, A45: merged, CI failed or passed, a conflict, a 👍, each
