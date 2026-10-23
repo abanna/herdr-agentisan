@@ -60,9 +60,6 @@ func TestSendOverTheSocket(t *testing.T) {
 		"agentisan.message.to.kind": "boss", "agentisan.message.to.id": "ha-boss",
 		"agentisan.message.returned_from": "", "agentisan.message.attempts": int64(0), "agentisan.message.reason": "",
 	}}}, queued)
-	for _, r := range rec.Records() {
-		assert.NotContains(t, r.Body().AsString(), "secret")
-	}
 	// .queued's time is the message's own queued time: the commit comes
 	// before the event, and a pass may deliver the message in between, so
 	// a trail sorted by time still puts .queued first (QA #75, N9).
@@ -85,6 +82,11 @@ func TestSendOverTheSocket(t *testing.T) {
 	queuedAt, deliveredAt := at(telemetry.EventMessageQueued), at(telemetry.EventMessageDelivered)
 	assert.True(t, queuedAt.Equal(stateOf(t, st, res.ID).CreatedAt), "stamped %v, queued %v", queuedAt, stateOf(t, st, res.ID).CreatedAt)
 	assert.True(t, queuedAt.Before(deliveredAt), "queued %v, delivered %v", queuedAt, deliveredAt)
+	// No record carries the body: read once the delivered record, which the
+	// dispatcher emits after its commit, is there too (NERD-5535).
+	for _, r := range rec.Records() {
+		assert.NotContains(t, r.Body().AsString(), "secret")
+	}
 
 	res = send(t, workforce.SendRequest{To: "ha-coder-1", Body: "next", CallerPane: "w14:p1"})
 	assert.Equal(t, workforce.Party{Kind: store.KindBoss, ID: "ha-boss"}, res.From, "the boss's pane sends as the boss")
