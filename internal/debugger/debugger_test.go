@@ -325,7 +325,7 @@ func TestCommandDeniesLinearsWrites(t *testing.T) {
 		return m
 	}
 	used := map[string]bool{}
-	for _, name := range strings.Fields(linearTools) {
+	for name := range strings.FieldsSeq(linearTools) {
 		tool := prefix + name
 		if slices.ContainsFunc([]string{"get_", "list_", "search_", "extract_"}, func(v string) bool { return strings.HasPrefix(name, v) }) {
 			assert.Empty(t, denying(tool), "%s reads", tool)
