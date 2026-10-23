@@ -330,6 +330,93 @@ func TestHandoffAckProvesThePane(t *testing.T) {
 	require.ErrorIs(t, err, workforce.ErrNotAWorker)
 }
 
+// TestHandoffAckGatesOnTheFreshRead (QA #140 F1): I2's gate reads the
+// replacement's item and stage from the pane.get that proves its terminal,
+// never from the pane.list before it. A stage that changes between the two
+// reads is refused if the fresh one differs, and passes if the fresh one
+// matches.
+func TestHandoffAckGatesOnTheFreshRead(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		listed, fresh string
+		want          error
+	}{
+		"the fresh stage differs": {"BOSS: handoff written", "STATUS: reading another task", workforce.ErrStageMismatch},
+		"the fresh stage matches": {"STATUS: reading the handoff", "BOSS: handoff written", nil},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, teamConfig)
+			w := f.worker(t, "ha-coder-1", "coder")
+			next, h := rotating(t, f, w)
+			f.stated(w.PaneID, "NERD-5261", "BOSS: handoff written")
+			f.stated(next, "NERD-5261", tc.listed)
+			f.h.onCall = func(method string) {
+				if method == "pane.get" {
+					f.h.pane(next).tokens["stage"] = tc.fresh
+				}
+			}
+
+			res, err := f.svc.HandoffAck(t.Context(), workforce.HandoffAckRequest{Target: next})
+			if tc.want != nil {
+				require.ErrorIs(t, err, tc.want)
+				assert.Contains(t, err.Error(), `new item "NERD-5261", stage "`+tc.fresh+`"`)
+				assert.Empty(t, f.h.params("agent.rename"), "nothing renamed")
+				assert.Equal(t, "pending", handoffState(t, f, h))
+				assert.Equal(t, w.PaneID, f.row(t, w.ID).PaneID)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tc.fresh, res.Stage)
+			assert.Equal(t, workforce.OldMatched, res.Old)
+			assert.Equal(t, "ended", handoffState(t, f, h))
+		})
+	}
+}
+
+// TestHandoffAckSerializesRepeatedAcks (QA #140 F2): the whole ack runs
+// under the workforce lock, so two acks of one replacement at once complete
+// the handoff once: one changes it, the other finds it completed and changes
+// nothing, and the names move once.
+func TestHandoffAckSerializesRepeatedAcks(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	rec := &steps{}
+	f.svc.HandoffSteps = rec.record
+	w := f.worker(t, "ha-coder-1", "coder")
+	next, h := rotating(t, f, w)
+	f.stated(w.PaneID, "NERD-5261", "BOSS: handoff written")
+	f.stated(next, "NERD-5261", "BOSS: handoff written")
+
+	type answer struct {
+		res workforce.HandoffAckResult
+		err error
+	}
+	answers, start := make(chan answer, 2), make(chan struct{})
+	for range 2 {
+		go func() {
+			<-start
+			res, err := f.svc.HandoffAck(t.Context(), workforce.HandoffAckRequest{Target: next})
+			answers <- answer{res, err}
+		}()
+	}
+	close(start)
+	changed := 0
+	for range 2 {
+		a := <-answers
+		require.NoError(t, a.err)
+		assert.Equal(t, w.ID, a.res.ID)
+		assert.Equal(t, next, a.res.NewPane)
+		if a.res.Changed {
+			changed++
+		}
+	}
+	assert.Equal(t, 1, changed, "one ack completes the handoff, the other finds it completed")
+	assert.Len(t, rec.all(), 1, "one completion reported")
+	assert.Len(t, f.h.params("agent.rename"), 2, "the names moved once: the clear, then the rename")
+	assert.Equal(t, "ended", handoffState(t, f, h))
+}
+
 // TestHandoffAckMovesTheNamesSafely: a replacement's terminal some live row
 // binds, or the id's herdr name held by a third pane, is refused before any
 // rename (ErrPaneChanged), so a retry is never stuck past it; a rename that fails

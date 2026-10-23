@@ -305,7 +305,8 @@ func TestBeginHandoffRefusesAStartingWorker(t *testing.T) {
 // can have renewed since the handoff began. The worker keeps its id and
 // generation, binds the new pane at that terminal, and its inbox is
 // released. A terminal a live row binds already, the worker's own included,
-// is refused with nothing changed.
+// is refused with nothing changed; one a retired row held is free (QA #140
+// F5).
 func TestCompleteHandoffOnto(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
@@ -339,6 +340,14 @@ func TestCompleteHandoffOnto(t *testing.T) {
 	require.True(t, ok, "released")
 	assert.Equal(t, sent, claimed.ID)
 	require.ErrorIs(t, s.CompleteHandoffOnto(ctx, h, "term_other", t1), store.ErrNoHandoff, "completed once")
+
+	again, err := s.BeginHandoff(ctx, "w", "w14:p8", terminal("w14:p8"), t1)
+	require.NoError(t, err)
+	retire(t, s, "v")
+	require.NoError(t, s.CompleteHandoffOnto(ctx, again, terminal("w14:p3"), t1), "a retired row binds no terminal")
+	row, err = s.WorkerRow(ctx, "w")
+	require.NoError(t, err)
+	assert.Equal(t, terminal("w14:p3"), row.TerminalID)
 }
 
 // TestPendingHandoffsNameTheWorkersPlace: a pending handoff carries the
