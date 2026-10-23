@@ -9,6 +9,10 @@
 # - Start Codex with `codex --no-daemon`. A hook run by the shared app-server
 #   daemon carries the daemon's environment, not the pane's, so it reports
 #   nothing.
+# - Like `report codex`, a Codex `report turn` needs Linux or macOS: it tells
+#   the pane's own Codex from a shared server by the process table, which it
+#   reads only there (ADR-001 A26). Anywhere else the hooks run and report
+#   nothing; HERDR_AGENTISAN_LOG_LEVEL=debug says why.
 # - `report turn` reports only what a turn states: an `item: <id>` line in the
 #   prompt or in the final message's closing paragraph, and a final
 #   `BOSS: <status>` or `STATUS: <status>` line. Tell your agents to write

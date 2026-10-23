@@ -115,6 +115,27 @@ func TestReportCodexDoesNothing(t *testing.T) {
 	}
 }
 
+// TestCodexDocsSayCtxNeedsLinuxOrMacOS: a Codex report proves which process
+// hosts the session from the process table, which the report reads only on
+// Linux and darwin (lineage_other.go, ADR-001 A26); anywhere else `report
+// codex` and a Codex `report turn` report nothing. The README and both Codex
+// hook samples say so, and the build line ties that sentence to the code: a
+// process table reader for another OS fails this until the docs follow.
+func TestCodexDocsSayCtxNeedsLinuxOrMacOS(t *testing.T) {
+	t.Parallel()
+	other, err := os.ReadFile(filepath.Join("..", "report", "lineage_other.go"))
+	require.NoError(t, err)
+	build, _, _ := strings.Cut(string(other), "\n")
+	require.Equal(t, "//go:build !linux && !darwin", build, "the OSes with no process table reader; the docs name the others")
+	for _, doc := range []string{"README.md", "docs/config/codex-hooks.example.toml", "docs/config/codex-turn-hooks.example.toml"} {
+		text, err := os.ReadFile(filepath.Join("..", "..", filepath.FromSlash(doc)))
+		require.NoError(t, err)
+		// The sentence may wrap, in a TOML comment too.
+		prose := strings.Join(strings.Fields(strings.ReplaceAll(string(text), "\n#", "\n")), " ")
+		assert.True(t, strings.Contains(prose, "needs Linux or macOS"), "%s says Codex's reports need Linux or macOS", doc)
+	}
+}
+
 // TestCodexHookSnippetRunsReportCodex keeps the documented Codex hooks
 // (sample and README) runnable: all three events run the real `report codex`
 // command, asynchronously, under a timeout.
