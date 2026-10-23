@@ -520,6 +520,10 @@ func TestWatchHoldsABlockItCannotJudge(t *testing.T) {
 			[]poll{none, failed(blocked), answered(blocked, nil), answered(blocked, named)},
 			[]string{"", "", ""},
 		},
+		"judged on another failed poll": {
+			[]poll{none, failed(blocked), failed(paneOn("t1", "claude", "blocked")), answered(paneOn("t1", "claude", "blocked"), named)},
+			[]string{"", "pane wN:p1 is blocked", ""},
+		},
 		"an agent herdr detects is told at once": {
 			[]poll{none, failed(paneOn("t1", "claude", "blocked")), answered(paneOn("t1", "claude", "blocked"), named)},
 			[]string{"pane wN:p1 is blocked", ""},
