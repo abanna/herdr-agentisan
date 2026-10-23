@@ -174,8 +174,9 @@ type Decision struct {
 	JevModelReturned string          `json:"jev_model_returned"`
 	Answers          json.RawMessage `json:"answers"`
 	FallbackReason   Reason          `json:"fallback_reason"`
-	// JevError is why Jev gave no usable answer: its error, which never
-	// carries the key; "" unless the reason is jev_failure.
+	// JevError is why Jev gave no usable answer, or was not asked for want
+	// of a key: its error, which never carries the key; "" unless the reason
+	// is jev_failure or jev_key_unavailable.
 	JevError  string    `json:"jev_error"`
 	Override  *Override `json:"override"`
 	Timestamp time.Time `json:"timestamp"`

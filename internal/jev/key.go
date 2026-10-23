@@ -31,7 +31,7 @@ const (
 
 // noBound is the timeout of a read Keys starts: none to speak of. The read
 // ends when the file answers, so it is never abandoned mid-open, and a
-// file that never answers holds one goroutine, not one per ask.
+// file that never answers holds one read, not one per ask.
 const noBound = time.Duration(math.MaxInt64)
 
 // ReadKey reads the key from the env file at path within timeout. Any
@@ -59,8 +59,9 @@ func CheckKeyFile(ctx context.Context, path string) error {
 // Keys reads the key for a long-lived caller, the daemon. A key read is kept
 // KeyTTL. At most one read of a file is in flight, and it is left to finish
 // however long the file takes, while each ask waits at most Wait for it: a
-// locked 1Password costs an ask a second, and the daemon one goroutine for
-// as long as it stays locked. Failures are not kept. The zero Keys is ready.
+// locked 1Password costs an ask a second, and the daemon one read (two
+// goroutines with the default reader: the read and trail's open) for as
+// long as it stays locked. Failures are not kept. The zero Keys is ready.
 type Keys struct {
 	// Read reads the key from the file at path; nil is ReadKey with no
 	// bound. An error it returns is wrapped in ErrNoKey.
