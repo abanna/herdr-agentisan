@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -420,16 +421,42 @@ func TestNoticesTellAnAgentExiting(t *testing.T) {
 }
 
 // TestNoticesTellAFreshUnknownAtTheTwentiethPoll: an agent pane unknown from
-// the daemon's first poll is told at the 20th poll, once, so the poll
-// observes each model once (A44's addendum). The upper bound leaves the
-// sampler ten polls of lag; an Observe on every other poll tells it at 40.
+// the daemon's first poll is told at the 20th Observe the poll makes, not the
+// 19th or the 21st, and once (A44's addendum). The poll is held at its
+// workspace.list, which only the poll asks, once a poll, before it observes,
+// so the count is exact at any load: held at the 20th poll, 19 Observes ran
+// and nothing was told; held at the 21st, 20 ran and exactly one notice was.
 func TestNoticesTellAFreshUnknownAtTheTwentiethPoll(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
 	th.setAgents(turned("wN:p1", "pee01", nil))
 	th.setPane("wN:p1", "agent_status", "unknown")
+	var calls atomic.Int32
+	holds := map[int32]chan struct{}{20: make(chan struct{}), 21: make(chan struct{})}
+	reached := make(chan int32, 2)
+	th.mu.Lock()
+	th.onCall = func(method string) {
+		if method != "workspace.list" {
+			return
+		}
+		n := calls.Add(1)
+		if hold, ok := holds[n]; ok {
+			reached <- n
+			<-hold
+		}
+	}
+	th.mu.Unlock()
 	var logs lockedLog
 	noticeRun(t, th, noticesConfig(t, "gap = 0\n"), &logs)
+	t.Cleanup(func() { // lets a held poll go, before the daemon stops
+		for _, hold := range holds {
+			select {
+			case <-hold:
+			default:
+				close(hold)
+			}
+		}
+	})
 	unknown := func() int {
 		n := 0
 		for _, l := range noticeLines(&logs) {
@@ -439,37 +466,97 @@ func TestNoticesTellAFreshUnknownAtTheTwentiethPoll(t *testing.T) {
 		}
 		return n
 	}
-	var before, after int
-	require.Eventually(t, func() bool {
-		before = lists(th.srv)
-		if unknown() == 0 {
-			return false
+	wait := func() int32 {
+		select {
+		case n := <-reached:
+			return n
+		case <-time.After(30 * time.Second):
+			t.Fatal("the poll never reached its hold")
+			return 0
 		}
-		after = lists(th.srv)
-		return true
-	}, 30*time.Second, 5*time.Millisecond, "never told unknown: %v", noticeLines(&logs))
-	assert.GreaterOrEqual(t, after, 20, "told before the 20th poll")
-	assert.LessOrEqual(t, before, 30, "told long after the 20th poll")
+	}
+	require.Equal(t, int32(20), wait())
+	assert.Zero(t, unknown(), "19 polls observed: nothing told yet")
+	close(holds[20])
+	require.Equal(t, int32(21), wait())
+	assert.Equal(t, 1, unknown(), "the 20th poll told it")
+	close(holds[21])
 	polled(t, th.srv, 30)
 	assert.Equal(t, 1, unknown(), "told once")
 }
 
 // TestNoticesKeepTheTwoPollRuleForAKnownAgent: an agent pane seen idle that
-// turns unknown is told at its second unknown poll, A44's rule, not at the
-// 20th; the bound leaves the sampler room for lag.
+// turns unknown is told at its second unknown poll, A44's rule, not its first
+// or the 20th, and once. Held at workspace.list, a poll has read its panes
+// already, so a status set there is the next poll's: the count is exact at
+// any load.
 func TestNoticesKeepTheTwoPollRuleForAKnownAgent(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
 	th.setAgents(turned("wN:p1", "pee01", nil))
 	th.setPane("wN:p1", "agent_status", "idle")
+	var calls atomic.Int32
+	var armed atomic.Bool
+	reached := make(chan int32, 2)
+	release := make(chan struct{})
+	th.mu.Lock()
+	th.onCall = func(method string) {
+		if method != "workspace.list" {
+			return
+		}
+		n := calls.Add(1)
+		if armed.Load() {
+			reached <- n
+			<-release
+		}
+	}
+	th.mu.Unlock()
 	var logs lockedLog
 	noticeRun(t, th, noticesConfig(t, "gap = 0\n"), &logs)
+	t.Cleanup(func() { // lets a held poll go, before the daemon stops
+		armed.Store(false)
+		close(release)
+	})
+	unknown := func() int {
+		n := 0
+		for _, l := range noticeLines(&logs) {
+			if strings.Contains(l, "status is unknown") {
+				n++
+			}
+		}
+		return n
+	}
+	wait := func() int32 {
+		select {
+		case n := <-reached:
+			return n
+		case <-time.After(30 * time.Second):
+			t.Fatal("the poll never reached its hold")
+			return 0
+		}
+	}
 	waitLine(t, &logs, "the daemon started")
 	polled(t, th.srv, 3)
+	armed.Store(true)
+	held := wait() // this poll read the pane idle
 	th.setPane("wN:p1", "agent_status", "unknown")
-	start := lists(th.srv)
-	waitLine(t, &logs, "status is unknown")
-	assert.Less(t, lists(th.srv)-start, 15, "told by the two-poll rule, not the twenty-poll one")
+	for _, step := range []struct {
+		told int
+		why  string
+	}{
+		{0, "the idle poll observed"},
+		{0, "one unknown poll observed: nothing told yet"},
+		{1, "the second unknown poll told it"},
+	} {
+		release <- struct{}{}
+		held++
+		require.Equal(t, held, wait())
+		assert.Equal(t, step.told, unknown(), step.why)
+	}
+	armed.Store(false)
+	release <- struct{}{}
+	polled(t, th.srv, 5)
+	assert.Equal(t, 1, unknown(), "told once")
 }
 
 // TestNoticesTellNoExitForAFailedAgentList: a live worker herdr knows only
