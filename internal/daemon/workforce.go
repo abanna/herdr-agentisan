@@ -16,6 +16,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
+	"github.com/abanna/herdr-agentisan/internal/telemetry"
 	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
@@ -28,6 +29,8 @@ const (
 	OpWorkerRetire = "worker.retire"
 	// OpSend queues a message (A30).
 	OpSend = "send"
+	// OpHandoffReady writes a worker's handoff token (A33).
+	OpHandoffReady = "handoff.ready"
 )
 
 // The workforce ops' budgets. A command waits at most NotReadyWindow, its
@@ -42,6 +45,8 @@ const (
 	RetireBudget  = 10 * time.Second
 	HandoffBudget = 1500 * time.Second
 	SendBudget    = 10 * time.Second
+	// HandoffReadyBudget is handoff ready's, which waits for nothing.
+	HandoffReadyBudget = 10 * time.Second
 )
 
 // notReadyRetry is how long Workforce waits before asking again a daemon
@@ -61,6 +66,7 @@ var opBudgets = map[string]func(json.RawMessage) time.Duration{
 	OpWorkerSpawn:  fixed(SpawnBudget),
 	OpWorkerRetire: retireBudget,
 	OpSend:         fixed(SendBudget),
+	OpHandoffReady: fixed(HandoffReadyBudget),
 	// The notices ops (A44), which the daemon serves beside the workforce's.
 	OpNoticesMute:   fixed(NoticesBudget),
 	OpNoticesUnmute: fixed(NoticesBudget),
@@ -119,11 +125,12 @@ func workforceCode(err error) string {
 }
 
 // workforceOps are the workforce ops on svc, and send, which calls queued
-// with each message it queues. Each refuses not_ready until ready is set,
+// with each message it queues, and handoff ready, which calls marked with
+// each mark it changes. Each refuses not_ready until ready is set,
 // once the team poll has reconciled the workers rows since the daemon
 // started (A35): before that, a worker a live handoff re-keyed reads as a
 // pane no row binds, and would send as one.
-func workforceOps(svc *workforce.Service, ready *atomic.Bool, queued func(context.Context, workforce.SendResult)) map[string]op {
+func workforceOps(svc *workforce.Service, ready *atomic.Bool, queued func(context.Context, workforce.SendResult), marked func(context.Context, workforce.HandoffReadyResult)) map[string]op {
 	ops := map[string]op{
 		OpTeamStatus: {code: workforceCode, run: func(ctx context.Context, args json.RawMessage) (any, error) {
 			var req workforce.StatusRequest
@@ -170,6 +177,20 @@ func workforceOps(svc *workforce.Service, ready *atomic.Bool, queued func(contex
 			queued(ctx, res)
 			return res, nil
 		}},
+		OpHandoffReady: {code: workforceCode, run: func(ctx context.Context, args json.RawMessage) (any, error) {
+			var req workforce.HandoffReadyRequest
+			if err := decodeArgs(args, &req); err != nil {
+				return nil, err
+			}
+			res, err := svc.HandoffReady(ctx, req)
+			if err != nil {
+				return nil, err //nolint:wrapcheck // workforce wraps it, and workforceCode maps its sentinel
+			}
+			if res.Changed {
+				marked(ctx, res)
+			}
+			return res, nil
+		}},
 	}
 	for name, o := range ops {
 		o.budget = opBudgets[name]
@@ -183,6 +204,17 @@ func workforceOps(svc *workforce.Service, ready *atomic.Bool, queued func(contex
 		ops[name] = o
 	}
 	return ops
+}
+
+// marked records a handoff mark handoff ready set or cleared as the worker's
+// handoff event (A33). o runs the team poll, since only then is there a
+// handoff ready op.
+func (o Options) marked(ctx context.Context, r workforce.HandoffReadyResult) {
+	step := telemetry.HandoffCleared
+	if r.Ready {
+		step = telemetry.HandoffReady
+	}
+	o.Team.Events.HandoffStep(ctx, telemetry.Handoff{WorkerID: r.ID, Bound: r.Bound, Project: r.Project, Group: r.Group, PaneID: r.PaneID, Step: step})
 }
 
 // retireBudget is a retire's budget: a handoff wait gets HandoffBudget.

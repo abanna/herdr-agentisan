@@ -305,7 +305,7 @@ func Run(ctx context.Context, o Options) (err error) {
 	mutes := notice.NewMutes()
 	var ops map[string]op
 	if svc := o.newWorkforce(st, ident, idle, paths.Dir); svc != nil {
-		ops = workforceOps(svc, ready, o.queued(in))
+		ops = workforceOps(svc, ready, o.queued(in), o.marked)
 		maps.Copy(ops, o.noticeOps(in, mutes))
 	}
 	opsCtx, stopOps := context.WithCancel(ctx)

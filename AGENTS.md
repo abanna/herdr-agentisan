@@ -198,10 +198,12 @@ exempts whatever is later added under that name.
   pane is bound to (A35); opening a tab per worker and waiting for its agent,
   after `internal/preflight`'s check, each group up to its count for
   `team up`, which also opens the team's dashboard above the boss
-  (`dashboard.go`); and closing the pane a worker's row is bound to, after
-  its handoff when asked, with the row retired. The daemon runs them, with
-  the plugin's dashboard pane and the Codex hooks check `internal/cli` gives
-  it; `internal/cli` only asks it.
+  (`dashboard.go`); closing the pane a worker's row is bound to, after its
+  handoff when asked, with the row retired; and `handoff ready`
+  (`handoff.go`, A33), the daemon writing the `handoff` token on a worker's
+  agent pane once `pane.get` proves its terminal, with no row changed. The
+  daemon runs them, with the plugin's dashboard pane and the Codex hooks
+  check `internal/cli` gives it; `internal/cli` only asks it.
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
