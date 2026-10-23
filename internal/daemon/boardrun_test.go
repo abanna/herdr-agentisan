@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"os/exec"
@@ -75,9 +76,7 @@ func boardTeam(t *testing.T, body string, extra ...map[string]any) (th *teamHerd
 		for pane := range th.shells {
 			th.shells[pane] = 1
 		}
-		for pane, pid := range shells {
-			th.shells[pane] = pid
-		}
+		maps.Copy(th.shells, shells)
 	}
 	return th, sock, place
 }
