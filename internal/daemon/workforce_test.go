@@ -21,6 +21,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/debugger"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/jev"
 	"github.com/abanna/herdr-agentisan/internal/preflight"
 	"github.com/abanna/herdr-agentisan/internal/routing"
 	"github.com/abanna/herdr-agentisan/internal/settings"
@@ -614,6 +615,21 @@ func TestTheWorkforceGetsThePreflightHook(t *testing.T) {
 	_, err = svc.CodexTurnHooks()
 	require.ErrorIs(t, err, turnErr)
 	assert.Nil(t, daemon.WorkforceOf(daemon.Options{Team: &daemon.TeamOptions{}}, daemon.Identity{}).Preflight)
+}
+
+// TestTheWorkforceAsksJevThroughOneKeyCache: a daemon's spawns ask Jev
+// through jev.Asker, at System One's own endpoint, with the one key cache the
+// service holds for the daemon's life (A57), ready to read a key: a nil
+// cache would panic at the first ask.
+func TestTheWorkforceAsksJevThroughOneKeyCache(t *testing.T) {
+	t.Parallel()
+	svc := daemon.WorkforceOf(daemon.Options{Team: &daemon.TeamOptions{}}, daemon.Identity{})
+	a, ok := svc.Jev.(jev.Asker)
+	require.True(t, ok, "a jev.Asker, not %T", svc.Jev)
+	require.NotNil(t, a.Keys)
+	assert.Equal(t, jev.Client{}, a.Client, "System One's endpoint and Go's transport, with no key of its own")
+	_, err := a.Keys.Key(t.Context(), filepath.Join(t.TempDir(), "typesafe.env"))
+	require.ErrorIs(t, err, jev.ErrNoKey, "a missing env file is no key")
 }
 
 // TestTheWorkforceGetsTheDebuggerLaunch: a debugger worker's launch names

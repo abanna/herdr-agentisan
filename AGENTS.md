@@ -225,7 +225,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   or the ◆ spaces, with idle times from the daemon's clock and the rows no
   pane is bound to (A35); opening a tab per worker and waiting for its agent,
   a Claude one launched with A42's turn hooks as `--settings`,
-  after `internal/preflight`'s check, each group up to its count for
+  after `internal/preflight`'s check and, for a coder with a task packet,
+  Jev's answer (`jev.go`, A57), each group up to its count for
   `team up`, which also opens the team's dashboard above the boss
   (`dashboard.go`); closing the pane a worker's row is bound to, after its
   handoff when asked, with the row retired; and `handoff ready`
@@ -262,14 +263,16 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   be asked (`AsksJev`), and `ApplyJev` maps Jev's answer onto it (A57): the
   request is `JevRequest`'s, and the caller makes the call, so routing never
   sees the key; `[routing.jev]` switches it (`JevEnabled`) and sets its
-  thresholds. Nothing asks Jev yet.
+  thresholds. `worker spawn` asks Jev (`internal/workforce/jev.go`), through
+  the daemon's `jev.Asker`; `team up` never does.
 - `internal/jev/` — the client of TypeSafe's System One (ADR-001 A57): one
   POST of the body routing built, with the key as the Bearer token, within
   the rules' timeout, never retried or redirected; no error carries the key,
   the request or TypeSafe's body. `Keys` reads the key, `TYPESAFE_API_KEY`,
   from `[routing.jev] env_file`: kept 10 minutes, one read of a file in
   flight, each ask waiting at most a second, so a locked 1Password costs a
-  spawn a second; `Asker` drops a key TypeSafe refuses. Tests run an
+  spawn a second; `Asker` drops a key TypeSafe refuses. The daemon holds
+  one `Keys` for its life. Tests run an
   httptest TypeSafe, never the real one, and a FIFO for a locked file.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations

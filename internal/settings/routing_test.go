@@ -289,7 +289,8 @@ func TestCheckRoutingProviders(t *testing.T) {
 
 // TestRoutingJevResolves: [routing.jev] from the shared file and --set
 // resolves into the deployment's Jev facts, each leaf with its layer; the
-// env file is no routing fact, and expands ~/ with HOME. A [routing.jev]
+// env file is no routing fact, and expands ~/ with HOME, from the resolved
+// values and the project's profile alike. A [routing.jev]
 // that sets no fact leaves the deployment's version as it was, and Jev
 // enabled while routing is off asks nothing.
 func TestRoutingJevResolves(t *testing.T) {
@@ -311,6 +312,11 @@ func TestRoutingJevResolves(t *testing.T) {
 	assert.Equal(t, "/home/u/.config/typesafe.env", envFile)
 	_, err = res.JevEnvFile(envOf(nil))
 	require.ErrorIs(t, err, settings.ErrInvalid, "~/ with no HOME")
+	envFile, err = res.Profile.JevEnvFile(envOf(map[string]string{"HOME": "/home/v"}))
+	require.NoError(t, err)
+	assert.Equal(t, "/home/v/.config/typesafe.env", envFile, "the profile's, with the HOME it is given")
+	_, err = res.Profile.JevEnvFile(envOf(nil))
+	require.ErrorIs(t, err, settings.ErrInvalid, "the profile's ~/ with no HOME")
 	p, err := res.Policy()
 	require.NoError(t, err)
 	assert.True(t, p.JevEnabled())
@@ -325,9 +331,15 @@ func TestRoutingJevResolves(t *testing.T) {
 	envFile, err = fileOnly.JevEnvFile(envOf(nil))
 	require.NoError(t, err)
 	assert.Equal(t, "/run/typesafe.env", envFile)
+	envFile, err = fileOnly.Profile.JevEnvFile(envOf(nil))
+	require.NoError(t, err)
+	assert.Equal(t, "/run/typesafe.env", envFile, "the profile's")
 	envFile, err = base.JevEnvFile(envOf(nil))
 	require.NoError(t, err)
 	assert.Empty(t, envFile, "no env file")
+	envFile, err = base.Profile.JevEnvFile(envOf(nil))
+	require.NoError(t, err)
+	assert.Empty(t, envFile, "no env file in the profile")
 
 	routingOff, err := loadRouting(t, "", "", []string{"routing.jev.enabled=true", "routing.jev.env_file=/run/typesafe.env"}, false)
 	require.NoError(t, err, "Jev enabled while routing is off resolves")
