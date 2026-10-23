@@ -228,18 +228,22 @@ func codexHookTrustBypass(argv []string, i int) string {
 	if key == "hooks.state" || strings.HasPrefix(key, "hooks.state.") {
 		return "hooks.state key"
 	}
-	if key == "hooks" {
-		// Codex parses the value as TOML, falling back to a string on error.
-		// Inspect only the effective table's root state field: hook definitions,
-		// look-alikes and a string containing "state" do not supply trust state.
-		var doc map[string]any
-		if err := toml.Unmarshal([]byte("v = "+value), &doc); err == nil {
-			if hooks, ok := doc["v"].(map[string]any); ok {
-				if _, state := hooks["state"]; state {
-					return "hooks.state key"
-				}
-			}
-		}
+	if key != "hooks" {
+		return ""
+	}
+	// Codex parses the value as TOML, falling back to a string on error.
+	// Inspect only the effective table's root state field: hook definitions,
+	// look-alikes and a string containing "state" do not supply trust state.
+	var doc map[string]any
+	if err := toml.Unmarshal([]byte("v = "+value), &doc); err != nil {
+		return ""
+	}
+	hooks, ok := doc["v"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	if _, state := hooks["state"]; state {
+		return "hooks.state key"
 	}
 	return ""
 }
