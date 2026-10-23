@@ -173,6 +173,27 @@ func TestConfigResolveRefusesAnOverrideATypeCannotRun(t *testing.T) {
 	require.NoError(t, err, "with no project there is no type to run it")
 }
 
+// TestConfigResolveRefusesAModelOfTheOtherProvider: with --project, config
+// resolve refuses a model whose name says the other provider runs it than its
+// table is for, naming the key and never the model, before it prints
+// anything; with no project it resolves (A62).
+func TestConfigResolveRefusesAModelOfTheOtherProvider(t *testing.T) {
+	t.Parallel()
+	dir, _ := configFixture(t)
+
+	for _, extra := range [][]string{nil, {"--json"}} {
+		args := append([]string{"config", "resolve", "--config-dir", dir, "--project", "app", "--set", `agent.codex.model="claude-opus-5-5"`}, extra...)
+		out, err := runCtx(configCtx(t, nil, nil), args...)
+		require.ErrorIs(t, err, settings.ErrInvalid, "%v", extra)
+		assert.Contains(t, err.Error(), "agent.codex.model: invalid config: a claude model, and the agent it is for runs codex")
+		assert.NotContains(t, err.Error(), "opus-5-5")
+		assert.NotContains(t, out, "routing policy", "nothing resolved is printed before the refusal")
+		assert.NotContains(t, out, `"values"`, "nothing resolved is printed before the refusal")
+	}
+	_, err := runCtx(configCtx(t, nil, nil), "config", "resolve", "--config-dir", dir, "--set", `agent.codex.model="claude-opus-5-5"`)
+	require.NoError(t, err, "with no project, Load alone never refuses a model's family")
+}
+
 // TestConfigResolveSetKeepsCommas: --set is a string array, so a TOML list
 // with commas arrives whole rather than split into three flags.
 func TestConfigResolveSetKeepsCommas(t *testing.T) {

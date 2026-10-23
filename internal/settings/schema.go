@@ -48,13 +48,13 @@ var profileSchema = &node{kind: kindTable, fields: map[string]*node{
 	"repo":   leafOf(kindString),
 	"color":  leafOf(kindString),
 	"github": leafOf(kindString),
-	"agent":  agentSchema(),
+	"agent":  agentSchema(false),
 	"groups": {kind: kindNames, elem: &node{kind: kindTable, fields: map[string]*node{
 		"workers":     leafOf(kindInt),
 		"slots":       leafOf(kindInt),
 		"description": leafOf(kindString),
 		// agent is the group's own agent (A23, Profile.AgentFor).
-		agentKey: agentSchema(),
+		agentKey: agentSchema(true),
 		// rotation is the group's own thresholds (A33, Thresholds.For).
 		rotationKey: rotationSchema(),
 	}}},

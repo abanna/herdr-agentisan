@@ -91,7 +91,11 @@ func (s *Service) Up(ctx context.Context, req UpRequest) (UpResult, error) {
 				if err != nil {
 					return nil, err
 				}
-				ps, err := planRouted(st.profile, name, choice{model: st.profile.AgentFor(name).Model}, d, ids, dbg)
+				agent, err := agentOf(st.profile, name)
+				if err != nil {
+					return nil, err
+				}
+				ps, err := planRouted(st.profile, name, choice{model: agent.Model}, d, ids, dbg)
 				if err != nil {
 					return nil, err
 				}

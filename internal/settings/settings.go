@@ -90,6 +90,9 @@ type Profile struct {
 	GitHub string
 	// Agent is how sessions are launched.
 	Agent Agent
+	// Providers are [agent.claude] and [agent.codex], keyed by provider: a
+	// provider's own command and model for every type (ADR-001 A62).
+	Providers map[string]Agent
 	// Groups are the worker groups, keyed by group name.
 	Groups map[string]Group
 	// Verify holds the verification commands, each an argv list.
@@ -119,6 +122,12 @@ type Group struct {
 	Workers int
 	Slots   int
 	Agent   Agent
+	// Provider is the type's default provider, its agent.provider; "" when
+	// no layer sets it (ADR-001 A62, Profile.DefaultProvider).
+	Provider string
+	// Providers are the group's [agent.claude] and [agent.codex], keyed by
+	// provider (A62).
+	Providers map[string]Agent
 	// Description is the group's one-line purpose, drawn under its title on
 	// the dashboard; "" when unset.
 	Description string

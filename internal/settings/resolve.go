@@ -123,7 +123,7 @@ func lookup(tree map[string]any, path string) (any, bool) {
 // checkFields runs the field rules and the D12 command checks on whatever
 // the merged layers set. None of them needs a selected project.
 func (m merged) checkFields() error {
-	for _, check := range []func() error{m.checkColor, m.checkGitHub, m.checkAgent, m.checkGroups, m.checkGroupAgents, m.checkModels, m.checkSpawn, m.checkVerify, m.checkRotation, m.checkNotices, m.checkTelemetry, m.checkTests, m.checkDebugger, m.checkRouting} {
+	for _, check := range []func() error{m.checkColor, m.checkGitHub, m.checkAgent, m.checkGroups, m.checkGroupAgents, m.checkProviderAgents, m.checkModels, m.checkSpawn, m.checkVerify, m.checkRotation, m.checkNotices, m.checkTelemetry, m.checkTests, m.checkDebugger, m.checkRouting} {
 		if err := check(); err != nil {
 			return err
 		}
@@ -369,6 +369,10 @@ func buildProfile(name string, values map[string]any) *Profile {
 	if v, ok := lookup(values, "agent.command"); ok {
 		p.Agent.Command, _ = v.([]string)
 	}
+	if v, ok := lookup(values, agentKey); ok {
+		a, _ := v.(map[string]any)
+		p.Providers = providerAgents(a)
+	}
 	if v, ok := lookup(values, "verify"); ok {
 		p.Verify, _ = v.([][]string)
 	}
@@ -387,7 +391,8 @@ func buildProfile(name string, values map[string]any) *Profile {
 			description, _ := g["description"].(string)
 			rotation, _ := lookup(g, rotationPath)
 			thresholds, _ := rotation.([]int)
-			p.Groups[n] = Group{Workers: workers, Slots: slots, Agent: groupAgent(g), Description: description, DescribesOnly: describesOnly(g), Rotation: Rotation{Thresholds: thresholds}}
+			agent, provider, byProvider := groupAgent(g)
+			p.Groups[n] = Group{Workers: workers, Slots: slots, Agent: agent, Provider: provider, Providers: byProvider, Description: description, DescribesOnly: describesOnly(g), Rotation: Rotation{Thresholds: thresholds}}
 		}
 	}
 	if v, ok := lookup(values, "integrations"); ok {

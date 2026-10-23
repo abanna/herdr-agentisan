@@ -138,7 +138,11 @@ func (s *Service) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 		if err != nil {
 			return nil, err
 		}
-		c := choice{model: cmp.Or(req.Model, st.profile.AgentFor(req.Group).Model), effort: req.Effort}
+		agent, err := agentOf(st.profile, req.Group)
+		if err != nil {
+			return nil, err
+		}
+		c := choice{model: cmp.Or(req.Model, agent.Model), effort: req.Effort}
 		return planRouted(st.profile, req.Group, c, d, ids, dbg)
 	})
 	if err != nil {
@@ -165,10 +169,14 @@ func (s *Service) route(p *settings.Profile, req SpawnRequest) (d *routing.Decis
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %w", ErrConfig, err)
 	}
+	agent, err := agentOf(p, req.Group)
+	if err != nil {
+		return nil, nil, err
+	}
 	role, err := routing.RoleFor(req.Group)
 	var dec routing.Decision
 	if err == nil {
-		r := routing.Request{Role: role, Provider: kindOf(p.AgentFor(req.Group)), Task: req.Task, Type: req.Group}
+		r := routing.Request{Role: role, Provider: kindOf(agent), Task: req.Task, Type: req.Group}
 		if policy.Enabled() {
 			r.Model, r.Effort = req.Model, req.Effort
 		}
@@ -590,7 +598,10 @@ var effortPattern = regexp.MustCompile(`^[a-z]{1,16}$`)
 // own; the debugger's go into its launch's one --settings object instead
 // (withTurnHooks). A debugger's tab also gets its launch's environment.
 func plan(p *settings.Profile, typ string, c choice, ids []string, dbg *debugger.Command) ([]planned, error) {
-	agent := p.AgentFor(typ)
+	agent, err := agentOf(p, typ)
+	if err != nil {
+		return nil, err
+	}
 	var env map[string]string
 	if typ == settings.DebuggerType {
 		if dbg == nil {
@@ -623,6 +634,9 @@ func plan(p *settings.Profile, typ string, c choice, ids []string, dbg *debugger
 	}
 	if c.provider != "" && kind != c.provider {
 		return nil, fmt.Errorf("%w: %s's agent changed from %s to %s while routing chose its model; spawn again", ErrConfig, typ, c.provider, kind)
+	}
+	if err := checkFamily(typ, c.model, kind); err != nil {
+		return nil, err
 	}
 	// own is a command passing a --settings of the user's, which starts
 	// without the turn hooks; the debugger's is the plugin's fence, which

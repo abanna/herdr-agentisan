@@ -252,8 +252,14 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   an agent
   (`CheckModel`), and the sandbox each worker type's Codex starts in when
   its command chooses none (`sandbox.go`, A59: read-only for review, full
-  access for coder, qa and precheck), which spawn adds.
-  Sample in `docs/config/herdr-agentisan.example.toml`.
+  access for coder, qa and precheck), which spawn adds. Each type runs
+  claude or codex, its default provider, with a command and a model per
+  provider (`[agent.<provider>]`, `AgentFor(type, provider)`, flags only,
+  A62); nothing chooses the other provider yet (NERD-5519). The debugger
+  refuses codex and review claude, as gaps, and a model whose name says the
+  other provider runs it is refused by `config resolve --project`
+  (`CheckModelProviders`) and at spawn. Sample in
+  `docs/config/herdr-agentisan.example.toml`.
 - `internal/routing/` — the model and effort each spawned worker starts
   with (ADR-001 A50, NERD-5289). It reads the user's routing rules,
   embedded byte for byte from `rules/jev-routing-v1.json` and decoded

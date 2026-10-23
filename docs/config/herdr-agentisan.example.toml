@@ -51,6 +51,19 @@ schema_version = 1
 command = ["claude"]
 model = "opus"
 
+# Each provider's own command and model, for every type that runs it
+# (ADR-001 A62): [agent.claude] and [agent.codex]. A type runs its default
+# provider: [agent]'s command's, unless its group says otherwise (below).
+# A provider's command names it bare, then flags only: herdr starts the agent
+# by kind from the shell's PATH with arguments alone, so no path, no other
+# program and no per-worker environment such as CODEX_HOME; codex's
+# -c key=value is the only per-worker Codex setting. A model here belongs to
+# its provider: `config resolve --project` refuses a claude model in
+# [agent.codex], and spawn any launch whose model the other provider runs.
+[agent.codex]
+command = ["codex", "--no-daemon"]
+model = "gpt-6.1-sol"
+
 # The context percentages at which the daemon tells a team's boss a pane is
 # due to rotate (ADR-001 D7, A33): soft, hard and the ceiling, which also
 # alerts you with a toast. Three whole numbers from 1 to 100, ascending, each
@@ -90,11 +103,19 @@ repeat = 300
 # below). The daemon reads descriptions again whenever this file changes, so
 # an edit needs no restart; a repo's .herdr-agentisan.toml cannot set one.
 #
-# A group's own agent (ADR-001 A23), which `worker spawn` launches: with a
-# command of its own, a type runs that command and that model only, never the
-# [agent] model above. Without one, review runs codex --no-daemon --sandbox
-# read-only (A22, A55), and every other type [agent]'s command, with the
-# group's model or [agent]'s.
+# A group's own agent (ADR-001 A23, A62), which `worker spawn` launches.
+# provider = "claude" or "codex" is the type's default provider; without it,
+# the type runs its own command's provider, review codex, and every other type
+# [agent]'s command's. Under a provider, a type runs its group's [agent.<p>]
+# command, else its own command when it is that provider's, else for review
+# codex --no-daemon --sandbox read-only (A22, A55), which outranks
+# [agent.codex], else [agent.<p>]'s command, else [agent]'s when it is that
+# provider's, else the provider bare. Its model is its group's [agent.<p>]
+# model, else its group's model for its default provider, else, with a
+# top-level command, [agent.<p>]'s or [agent]'s. So a type with a command of
+# its own never takes a top-level model. For now review runs codex only and
+# the debugger claude only: each is a gap that routing v2 with a read-only
+# Claude review launch (NERD-5529), and Codex's read fence (NERD-5530), close.
 # Spawn adds --no-daemon to any codex command that lacks it (A22). The command
 # runs claude or codex (D12) and carries no --model, -m, --name, -n or
 # --effort, nor a codex -c setting model or model_reasoning_effort: the
@@ -220,8 +241,9 @@ locks = ["/run/user/1000/agentisan/gate.0.lock"]
 # effort by its type's role; this table holds what they leave to you. Shared
 # file and --set only. `worker spawn` asks routing once per spawn.
 #   enabled  false (the default) launches as configured above; true lets
-#            routing decide, and then no agent.model key, nor a codex
-#            command's -p/--profile, may be set.
+#            routing decide, and then no model key may be set: agent.model,
+#            agent.<provider>.model, or a group's (so drop [agent.codex]'s
+#            model above), nor a codex command's -p/--profile.
 #   [routing.bindings.<binding>]  model_id ("" is unresolved), efforts its
 #            client takes (claude: low to max, codex: minimal to xhigh) and
 #            enabled, e.g. [routing.bindings.claude_mid] model_id = "…".
@@ -290,9 +312,11 @@ description = "write fixes + new code · run their own review loop"
 workers = 1
 slots = 1
 
+# research runs codex, [agent.codex]'s command and model (A62).
 [projects.agentisan.groups.research]
 workers = 0
 slots = 1
+agent = { provider = "codex" }
 
 # Overrides one key of the shared group; its slots still come from above.
 [projects.agentisan.groups.librarian]

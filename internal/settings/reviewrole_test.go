@@ -250,7 +250,7 @@ func TestReviewRoleEndsOnAStage(t *testing.T) {
 // under (A55, refining A43's no sandbox flag for this default only).
 func TestReviewRoleRunsReadOnly(t *testing.T) {
 	t.Parallel()
-	command := (&settings.Profile{}).AgentFor(settings.ReviewType).Command
+	command := agentFor(t, settings.Profile{}, settings.ReviewType).Command
 	i := slices.Index(command, "--sandbox")
 	require.GreaterOrEqual(t, i, 0, "%v has a sandbox", command)
 	require.Less(t, i+1, len(command))

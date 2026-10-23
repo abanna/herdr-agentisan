@@ -102,6 +102,12 @@ func (m merged) checkRouting() error {
 	for _, name := range slices.Sorted(maps.Keys(groups)) {
 		agents = append(agents, "groups."+name+"."+agentKey)
 	}
+	tables := len(agents)
+	for _, prov := range providers {
+		for _, agent := range agents[:tables] {
+			agents = append(agents, agent+"."+prov)
+		}
+	}
 	for _, agent := range agents {
 		if _, set := m.get(agent + ".model"); set {
 			return m.invalidf(agent+".model", "routing decides the model while %s is true: remove it, and name a binding with worker spawn --model or in [routing.overrides]", routingEnabledPath)
@@ -198,7 +204,11 @@ func (p Profile) CheckRoutingProviders() error {
 			continue
 		}
 		binding, ok := p.Routing.Overrides[role]
-		cmd := p.AgentFor(typ).Command
+		agent, err := p.AgentFor(typ, "")
+		if err != nil {
+			return fmt.Errorf("groups.%s: %w", typ, err)
+		}
+		cmd := agent.Command
 		if !ok || len(cmd) == 0 {
 			continue
 		}
