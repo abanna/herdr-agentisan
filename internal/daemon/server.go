@@ -21,8 +21,10 @@ import (
 // {"ok":false,"error":{"code","message"}}.
 const (
 	protocolVersion = 1
-	// maxMessage caps a request or response line.
+	// maxMessage caps requests and ordinary replies.
 	maxMessage = 1 << 20
+	// maxBoardReply fits 200 8-KiB bodies and metadata even at 6x JSON escaping.
+	maxBoardReply = 12 << 20
 	// ioTimeout bounds one exchange on either side.
 	ioTimeout = 5 * time.Second
 )
@@ -80,6 +82,8 @@ func (e *RequestError) Is(target error) bool {
 		return target == ErrNotReady
 	case codeNoTeam:
 		return target == ErrNoTeam
+	case codeNotAllowed:
+		return target == ErrNotAllowed
 	}
 	return false
 }
@@ -188,7 +192,7 @@ func (s *server) close() {
 func (s *server) handle(conn net.Conn) {
 	defer conn.Close() //nolint:errcheck // one-shot connection; the answer is written or the client is gone
 	_ = conn.SetDeadline(time.Now().Add(ioTimeout))
-	line, err := readMessage(conn)
+	line, err := readMessage(conn, maxMessage)
 	// An op with a budget of its own gets it, and an exchange more to
 	// answer in; reading the request keeps the 5 s. It is told its caller
 	// as the kernel knows it (A60).
@@ -286,12 +290,12 @@ func refuse(code, message string) response {
 	return response{Error: &errorBody{Code: code, Message: message}}
 }
 
-// readMessage reads one line of at most maxMessage bytes. The peer may close
+// readMessage reads one line of at most limit bytes. The peer may close
 // its write side instead of sending a newline.
-func readMessage(r io.Reader) ([]byte, error) {
-	line, err := bufio.NewReader(io.LimitReader(r, maxMessage+1)).ReadBytes('\n')
-	if len(line) > maxMessage {
-		return nil, fmt.Errorf("message exceeds %d bytes", maxMessage)
+func readMessage(r io.Reader, limit int) ([]byte, error) {
+	line, err := bufio.NewReader(io.LimitReader(r, int64(limit)+1)).ReadBytes('\n')
+	if len(line) > limit {
+		return nil, fmt.Errorf("message exceeds %d bytes", limit)
 	}
 	if err != nil && (!errors.Is(err, io.EOF) || len(line) == 0) {
 		return line, err //nolint:wrapcheck // callers wrap with their own sentinel
@@ -367,7 +371,11 @@ func callWith(ctx context.Context, socket, op string, args json.RawMessage, time
 	if _, err := conn.Write(append(raw, '\n')); err != nil {
 		return nil, exchangeFailed(ctx, op, err)
 	}
-	line, err := readMessage(conn)
+	limit := maxMessage
+	if op == OpBoardRead {
+		limit = maxBoardReply
+	}
+	line, err := readMessage(conn, limit)
 	if err != nil {
 		return nil, exchangeFailed(ctx, op, err)
 	}

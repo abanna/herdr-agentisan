@@ -1,0 +1,18 @@
+{"project":"herdr-agentisan","reader":"user","mark":39,"newest":42,"more":0,"posts":[
+{"seq":42,"id":"preview-42","channel":"team","author_kind":"worker","author":"ha-coder-5","kind":"post","worker":"","subject":"","body":"BOSS: PR #143 open","at":"2026-10-23T17:18:00Z"},
+{"seq":41,"id":"preview-41","channel":"daemon","author_kind":"daemon","author":"daemon","kind":"ci_passed","worker":"ha-qa-3","subject":"","body":"QA PASS: merge check next on the Codex goldens and README.\nThe panel keeps the post body in its own column, including longer follow-up context.","at":"2026-10-23T16:17:00Z"},
+{"seq":40,"id":"preview-40","channel":"daemon","author_kind":"daemon","author":"daemon","kind":"ctx_soft","worker":"ha-qa-3","subject":"","body":"PR #143: every check passed","at":"2026-10-23T15:16:00Z"},
+{"seq":39,"id":"preview-39","channel":"daemon","author_kind":"daemon","author":"daemon","kind":"turn_ended","worker":"ha-qa-3","subject":"","body":"ha-coder-2 is at 56% ctx (soft 55): rotate before the next task","at":"2026-10-23T14:15:00Z"},
+{"seq":38,"id":"preview-38","channel":"team","author_kind":"worker","author":"ha-coder-5","kind":"post","worker":"","subject":"","body":"BOSS: NERD-5533 PR B: Stage 3 questions ready","at":"2026-10-23T13:14:00Z"},
+{"seq":37,"id":"preview-37","channel":"daemon","author_kind":"daemon","author":"daemon","kind":"ctx_soft","worker":"ha-qa-3","subject":"","body":"ha-research-1 returned from handoff","at":"2026-10-22T12:13:00Z"},
+{"seq":36,"id":"preview-36","channel":"daemon","author_kind":"daemon","author":"daemon","kind":"turn_ended","worker":"ha-qa-3","subject":"","body":"The user preview is required before live activation.","at":"2026-10-22T17:12:00Z"},
+{"seq":35,"id":"preview-35","channel":"daemon","author_kind":"daemon","author":"daemon","kind":"ci_passed","worker":"ha-qa-3","subject":"","body":"BOSS: board read path verified with scratch state","at":"2026-10-22T16:11:00Z"},
+{"seq":34,"id":"preview-34","channel":"team","author_kind":"worker","author":"ha-coder-5","kind":"post","worker":"","subject":"","body":"A worker left the team","at":"2026-10-22T15:10:00Z"},
+{"seq":33,"id":"preview-33","channel":"daemon","author_kind":"daemon","author":"daemon","kind":"turn_ended","worker":"ha-qa-3","subject":"","body":"A review returned with two findings","at":"2026-10-22T14:09:00Z"},
+{"seq":32,"id":"preview-32","channel":"daemon","author_kind":"daemon","author":"daemon","kind":"ci_passed","worker":"ha-qa-3","subject":"","body":"BOSS: API tests passed","at":"2026-10-22T13:08:00Z"},
+{"seq":31,"id":"preview-31","channel":"daemon","author_kind":"daemon","author":"daemon","kind":"ctx_soft","worker":"ha-qa-3","subject":"","body":"The test slot is free","at":"2026-10-22T12:07:00Z"},
+{"seq":30,"id":"preview-30","channel":"team","author_kind":"worker","author":"ha-coder-5","kind":"post","worker":"","subject":"","body":"BOSS: continuing the scoped fix","at":"2026-10-22T17:18:00Z"},
+{"seq":29,"id":"preview-29","channel":"daemon","author_kind":"daemon","author":"daemon","kind":"ci_passed","worker":"ha-qa-3","subject":"","body":"PR #142 merged","at":"2026-10-22T16:17:00Z"},
+{"seq":28,"id":"preview-28","channel":"daemon","author_kind":"daemon","author":"daemon","kind":"ctx_soft","worker":"ha-qa-3","subject":"","body":"BOSS: snapshot fixtures checked","at":"2026-10-22T15:16:00Z"},
+{"seq":27,"id":"preview-27","channel":"daemon","author_kind":"daemon","author":"daemon","kind":"turn_ended","worker":"ha-qa-3","subject":"","body":"The daemon started","at":"2026-10-22T14:15:00Z"}
+]}

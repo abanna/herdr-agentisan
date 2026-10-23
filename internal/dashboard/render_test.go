@@ -1260,7 +1260,7 @@ func TestRenderSelectionIsReverseVideo(t *testing.T) {
 func TestRenderFooter(t *testing.T) {
 	t.Parallel()
 
-	const hints = "enter jump · ↑↓ move · ? help · q quit"
+	const hints = "enter jump · ↑↓ move · b board · ? help · q quit"
 	// one is a board with an agent to jump to.
 	one := &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "g", Agents: []snapshot.Agent{{Name: "a", Status: snapshot.StatusIdle}}}}}
 	tests := map[string]struct {
@@ -1270,7 +1270,7 @@ func TestRenderFooter(t *testing.T) {
 		"hints alone": {frame: dashboard.Frame{Snapshot: one, Now: at}, want: " " + hints},
 		// ctrl-b m is herdr's popup key for btop in this setup; it is only
 		// advertised where herdr is reachable.
-		"the btop hint with herdr": {frame: dashboard.Frame{Snapshot: one, Now: at, Btop: true}, want: " enter jump · ↑↓ move · ctrl-b m btop · ? help · q quit"},
+		"the btop hint with herdr": {frame: dashboard.Frame{Snapshot: one, Now: at, Btop: true}, want: " enter jump · ↑↓ move · b board · ctrl-b m btop · ? help · q quit"},
 		"a note leads the hints": {
 			frame: dashboard.Frame{Snapshot: one, Now: at, Note: "focus off"},
 			want:  " focus off · " + hints,
@@ -1295,15 +1295,15 @@ func TestRenderFooter(t *testing.T) {
 		},
 		// Enter and the arrows act on an agent: with none on the screen they
 		// do nothing, and are not offered, so help and quit fit.
-		"no board yet":   {frame: dashboard.Frame{Now: at}, want: " ? help · q quit"},
-		"no board, btop": {frame: dashboard.Frame{Now: at, Btop: true}, want: " ctrl-b m btop · ? help · q quit"},
+		"no board yet":   {frame: dashboard.Frame{Now: at}, want: " b board · ? help · q quit"},
+		"no board, btop": {frame: dashboard.Frame{Now: at, Btop: true}, want: " b board · ctrl-b m btop · ? help · q quit"},
 		"no team here": {
 			frame: dashboard.Frame{Now: at, NoTeam: dashboard.ErrNotATeamsWorkspace, Errors: []error{errors.New("this workspace (w9) is not a team's; pass --project")}},
-			want:  " ✖ this workspace (w9) is not a team's; pass --project · ? help · q quit",
+			want:  " ✖ this workspace (w9) is not a team's; pass --project · b board · ? help · q …",
 		},
 		"a team with no agents": {
 			frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "g"}}}, Now: at},
-			want:  " ? help · q quit",
+			want:  " b board · ? help · q quit",
 		},
 		"a query that matches no agent": {
 			frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t"}, Now: at, Search: true, Query: "zz"},
@@ -1315,11 +1315,11 @@ func TestRenderFooter(t *testing.T) {
 		},
 		"a group's view with no agents": {
 			frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "g"}}}, Now: at, Group: "g"},
-			want:  " esc back · ? help · q quit",
+			want:  " b board · esc back · ? help · q quit",
 		},
 		"a group's view with one": {
 			frame: dashboard.Frame{Snapshot: one, Now: at, Group: "g"},
-			want:  " enter jump · ↑↓ move · esc back · ? help · q quit",
+			want:  " enter jump · ↑↓ move · b board · esc back · ? help · q quit",
 		},
 		"the agents out of view, on the right": {
 			frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "g", Agents: slices.Repeat([]snapshot.Agent{{Name: "a", Status: snapshot.StatusIdle}}, 40)}}}, Now: at},

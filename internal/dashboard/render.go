@@ -136,6 +136,8 @@ type Frame struct {
 	// overview. A name no group of Snapshot has, or a query being typed,
 	// draws the overview.
 	Group string
+	// Board is the open board panel, replacing the agent rows.
+	Board BoardFrame
 }
 
 // Render draws f for a w x h terminal: exactly h lines, none wider than w,
@@ -156,6 +158,8 @@ func Render(f Frame, w, h int, opts Options) string {
 	l.drawHeader(canvas, f, th)
 	switch {
 	case l.avail == 0:
+	case l.board != nil:
+		l.drawBoard(canvas)
 	case f.Snapshot == nil && f.NoTeam != nil:
 		body := noTeamToShow
 		if errors.Is(f.NoTeam, ErrNotATeamsWorkspace) {
@@ -252,9 +256,13 @@ type layout struct {
 	cols         columns
 	now          time.Time
 	btop         span
+	// badge is the board's unread badge on the header's first line (A60),
+	// "" when nothing is unread.
+	badge string
 	// view is the open group's view, nil on the overview. offset is then
 	// its first line.
-	view *groupView
+	view  *groupView
+	board *boardView
 }
 
 // plan lays f out on a w x h terminal. The header gives way as h shrinks:
@@ -278,8 +286,15 @@ func plan(f Frame, w, h int) layout {
 		l.footer, footerLines = h-1, 1
 	}
 	l.avail = max(0, h-l.top-footerLines)
+	if f.Snapshot != nil {
+		l.badge = boardBadge(f.Snapshot.Project)
+	}
 	if f.Btop {
 		l.btop = l.btopSpan()
+	}
+	if f.Board.Open {
+		l.board = planBoard(l, f.Board)
+		return l
 	}
 	if f.Snapshot == nil {
 		return l
@@ -343,7 +358,8 @@ func (l layout) scroll(prev, sel, groupTop, groupBottom int) int {
 
 // btopSpan is where the button goes: the right end of the header's first
 // line, inside the box when there is one. It is not drawn when the project
-// line beside it would be narrower than btopMinText.
+// line beside it, and beside the board's badge when there is one, would be
+// narrower than btopMinText: the button gives way before the badge (A60).
 func (l layout) btopSpan() span {
 	right := 1 // the bare lines' right margin
 	if l.boxed {
@@ -351,7 +367,11 @@ func (l layout) btopSpan() span {
 	}
 	x1 := l.w - right
 	x0 := x1 - ansi.StringWidth(btopButton)
-	if x0-colGap-(l.w-x1) < btopMinText {
+	room := x0 - colGap - right
+	if l.badge != "" {
+		room -= ansi.StringWidth(l.badge) + colGap
+	}
+	if room < btopMinText {
 		return span{}
 	}
 	return span{x0: x0, x1: x1, y: l.line1, ok: true}
@@ -364,6 +384,7 @@ const (
 	hitNothing target = iota
 	hitAgent
 	hitBtop
+	hitBoard
 	// hitGroup is a group's title on the overview; its Selection names the
 	// group alone.
 	hitGroup
@@ -377,6 +398,9 @@ const (
 func (l layout) hit(x, y int) (target, Selection) {
 	if l.btop.ok && y == l.btop.y && x >= l.btop.x0 && x < l.btop.x1 {
 		return hitBtop, Selection{}
+	}
+	if l.board != nil {
+		return l.boardHit(x, y)
 	}
 	if l.view != nil {
 		return l.view.hit(x, y)
@@ -445,13 +469,29 @@ func (l layout) drawHeader(canvas []line, f Frame, th Thresholds) {
 		margin = 2
 	}
 	text := max(0, l.w-2*margin)
-	oneW := text
+	// What sits at the right of the first line, the board's badge and then
+	// the button, starts at right; the project line has the rest but a gap.
+	// The badge is never dropped for width: the PRs shorten first, then the
+	// button gives way (btopSpan), then the project line is cut.
+	var tail line
+	right := l.w - margin
 	if l.btop.ok {
-		oneW = l.btop.x0 - colGap - margin
+		right, tail = l.btop.x0, line{{btopButton, buttonStyle}}
+	}
+	if l.badge != "" {
+		if tail != nil {
+			tail = append(line{{strings.Repeat(" ", colGap), plainStyle}}, tail...)
+		}
+		tail = append(line{{l.badge, badgeStyle}}, tail...)
+		right = l.w - margin - tail.width()
+	}
+	oneW := text
+	if tail != nil {
+		oneW = max(0, right-colGap-margin)
 	}
 	one := projectLine(f.Snapshot, oneW)
-	if l.btop.ok {
-		one = slices.Concat(one.pad(oneW), line{{strings.Repeat(" ", colGap), plainStyle}, {btopButton, buttonStyle}})
+	if tail != nil {
+		one = slices.Concat(one.pad(max(0, right-margin)), tail)
 	}
 	two := bossLine(f, text, th)
 
@@ -466,6 +506,18 @@ func (l layout) drawHeader(canvas []line, f Frame, th Thresholds) {
 	if l.line2 >= 0 {
 		canvas[l.line2] = slices.Concat(line{{" ", plainStyle}}, two)
 	}
+}
+
+// badgeStyle is the board's unread badge: the note colour, in bold.
+var badgeStyle = noteStyle.Bold(true)
+
+// boardBadge is the unread badge the header and the tab bar show for p,
+// "board 3", or "" when nothing is unread (A60).
+func boardBadge(p *snapshot.Project) string {
+	if p == nil || p.BoardUnread <= 0 {
+		return ""
+	}
+	return "board " + strconv.Itoa(p.BoardUnread)
 }
 
 // projectColour is the project's colour, or nil when it has none the
@@ -1003,9 +1055,9 @@ func searchHints(act bool) string {
 // viewHints are the keys that work in a group's view, as hints names them.
 func viewHints(btop, act bool) string {
 	if btop {
-		return keyHints(act, "esc back", "ctrl-b m btop", "? help", "q quit")
+		return keyHints(act, "b board", "esc back", "ctrl-b m btop", "? help", "q quit")
 	}
-	return keyHints(act, "esc back", "? help", "q quit")
+	return keyHints(act, "b board", "esc back", "? help", "q quit")
 }
 
 // hints are the keys that work, as the footer names them. ctrl-b m is
@@ -1013,9 +1065,9 @@ func viewHints(btop, act bool) string {
 // reachable.
 func hints(btop, act bool) string {
 	if btop {
-		return keyHints(act, "ctrl-b m btop", "? help", "q quit")
+		return keyHints(act, "b board", "ctrl-b m btop", "? help", "q quit")
 	}
-	return keyHints(act, "? help", "q quit")
+	return keyHints(act, "b board", "? help", "q quit")
 }
 
 // onAgent reports whether f draws an agent for Enter and the arrows to act
@@ -1077,6 +1129,8 @@ func footerParts(f Frame, view bool) []seg {
 	}
 	act := onAgent(f, view)
 	switch {
+	case f.Board.Open:
+		return append(parts, seg{"↑↓ move · enter expand · t team · d daemon · esc back · ? help · q quit", dimStyle})
 	case f.Search:
 		return append(parts, seg{searchHints(act), dimStyle})
 	case view:
@@ -1091,11 +1145,13 @@ func footerParts(f Frame, view bool) []seg {
 func helpRows(btop bool) [][2]string {
 	rows := [][2]string{
 		{"↑ ↓", "move through the agents"},
-		{keyEnter, "jump: focus and zoom"},
+		{keyEnter, "jump; on board, expand post"},
 		{"click", "jump; a title opens its group"},
 		{"1-9", "open that group's view"},
 		{"esc ←", "back from a group's view"},
 		{"/", "search name, group, item, stage"},
+		{"b", "open or close the board"},
+		{"t / d", "board: team / daemon filter"},
 	}
 	if btop {
 		rows = append(rows, [2]string{btopButton, "btop in a herdr popup"})

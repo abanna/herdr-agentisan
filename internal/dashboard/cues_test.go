@@ -115,8 +115,8 @@ func TestDataAge(t *testing.T) {
 	// hints are the footer's keys with an agent to act on, bare its keys
 	// with none, as a frame with no snapshot has.
 	const (
-		hints = "enter jump · ↑↓ move · ? help · q quit"
-		bare  = "? help · q quit"
+		hints = "enter jump · ↑↓ move · b board · ? help · q quit"
+		bare  = "b board · ? help · q quit"
 	)
 	// aged has one agent, so its frames' hints are the full ones.
 	aged := func(d time.Duration) *snapshot.Snapshot {
@@ -139,7 +139,7 @@ func TestDataAge(t *testing.T) {
 		"a snapshot that reports no at": {frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t"}, Now: at}, want: " " + bare},
 		"before the errors and the note": {
 			frame: dashboard.Frame{Snapshot: aged(20 * time.Second), Now: at, Note: "focus off", Errors: []error{errors.New("e1")}},
-			want:  " data 20s old · ✖ e1 · focus off · " + hints,
+			want:  " data 20s old · ✖ e1 · focus off · enter jump · ↑↓ move · b board · ? help · q…",
 		},
 		"after the search query": {
 			frame: dashboard.Frame{Snapshot: aged(20 * time.Second), Now: at, Search: true, Query: "x"},

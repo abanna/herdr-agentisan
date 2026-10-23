@@ -128,6 +128,8 @@ func TestDecodeAcceptsEveryContractValue(t *testing.T) {
 		"merge blocked":              pr(`"merge":"blocked"`),
 		"merge behind":               pr(`"merge":"behind"`),
 		"merge dirty":                pr(`"merge":"dirty"`),
+		"board unread":               project(`"board_unread":3`),
+		"board unread 0":             project(`"board_unread":0`),
 		"merge draft":                pr(`"merge":"draft"`),
 		"merge unstable":             pr(`"merge":"unstable"`),
 		"merge has_hooks":            pr(`"merge":"has_hooks"`),
@@ -307,6 +309,9 @@ func TestDecodeRefuses(t *testing.T) {
 		"a pr key in another case":        {in: project(`"prs":[{"Number":1,"ci":"success","codex":"approved","merge":"clean"}]`), want: snapshot.ErrInvalid, contains: []string{`"Number"`}},
 		"a duplicate pr key":              {in: project(`"prs":[{"number":1,"number":2,"ci":"success","codex":"approved","merge":"clean"}]`), want: snapshot.ErrInvalid, contains: []string{"twice"}},
 		"issues -1":                       {in: project(`"issues":-1`), want: snapshot.ErrInvalid, contains: []string{"issues -1"}},
+		"board unread -1":                 {in: project(`"board_unread":-1`), want: snapshot.ErrInvalid, contains: []string{"board_unread -1"}},
+		"board unread fractional":         {in: project(`"board_unread":1.5`), want: snapshot.ErrInvalid},
+		"board unread, not a number":      {in: project(`"board_unread":"3"`), want: snapshot.ErrInvalid},
 		"issues fractional":               {in: project(`"issues":1.5`), want: snapshot.ErrInvalid},
 		"issues past int64":               {in: project(`"issues":1e30`), want: snapshot.ErrInvalid},
 		"slots used -1":                   {in: project(`"slots":{"used":-1,"total":2}`), want: snapshot.ErrInvalid},
@@ -761,4 +766,24 @@ func TestHeldIsLeftOutUnlessSet(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, got.Project)
 	assert.Equal(t, &snapshot.Slots{Used: 1, Total: 3, Held: 1}, got.Project.Slots)
+}
+
+// TestBoardUnreadIsLeftOutUnlessSet: a writer leaves board_unread out when
+// nothing is unread (ADR-001 A60), so a snapshot with none reads as one
+// written before the key existed; set, it survives a round trip, on a
+// project that reports nothing else too, as the poll writes it.
+func TestBoardUnreadIsLeftOutUnlessSet(t *testing.T) {
+	t.Parallel()
+
+	none, err := json.Marshal(snapshot.Project{Color: "#336699"})
+	require.NoError(t, err)
+	assert.NotContains(t, string(none), "board_unread")
+
+	doc := snapshot.Snapshot{V: snapshot.Version, Team: "t", Groups: []snapshot.Group{}, Project: &snapshot.Project{BoardUnread: 7}}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	got, err := snapshot.Decode(bytes.NewReader(raw))
+	require.NoError(t, err)
+	require.NotNil(t, got.Project)
+	assert.Equal(t, snapshot.Project{BoardUnread: 7}, *got.Project, "no PRs reported stays not reported")
 }

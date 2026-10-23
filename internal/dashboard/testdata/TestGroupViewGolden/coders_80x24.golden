@@ -21,4 +21,4 @@
 │ in stage 4m · idle 3m                                                        │
 │ pane w2:p2 · tab w2:t2                                                       │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- enter jump · ↑↓ move · esc back · ctrl-b m btop · ? help · q quit           ↓4
+ enter jump · ↑↓ move · b board · esc back · ctrl-b m btop · ? help · q quit ↓4

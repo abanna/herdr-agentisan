@@ -11,7 +11,7 @@ import (
 )
 
 func newDashboardCmd() *cobra.Command {
-	var fixture, stateDir, project string
+	var fixture, boardFixture, stateDir, project string
 
 	c := &cobra.Command{
 		Use:   "dashboard",
@@ -34,6 +34,9 @@ func newDashboardCmd() *cobra.Command {
 			"  herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if boardFixture != "" && fixture == "" {
+				return fmt.Errorf("%w: --board-fixture requires --fixture", dashboard.ErrBoard)
+			}
 			ctx := cmd.Context()
 			env, err := plugin.EnvFrom(lookupEnvFrom(ctx))
 			if err != nil {
@@ -41,7 +44,7 @@ func newDashboardCmd() *cobra.Command {
 			}
 			var cfg dashboard.Config
 			if fixture != "" {
-				cfg, err = dashboard.FixtureConfig(ctx, fixture, env.SocketPath)
+				cfg, err = dashboard.FixtureConfig(ctx, fixture, boardFixture, env.SocketPath)
 			} else {
 				lookup := lookupEnvFrom(ctx)
 				dir, _ := plugin.StateDir(stateDir, lookup)
@@ -64,6 +67,8 @@ func newDashboardCmd() *cobra.Command {
 		},
 	}
 	c.Flags().StringVar(&fixture, "fixture", "", "read snapshots from this JSON file instead of the daemon")
+	c.Flags().StringVar(&boardFixture, "board-fixture", "", "preview board posts from this JSON file (requires --fixture)")
+
 	c.Flags().StringVar(&stateDir, "state-dir", "", "plugin state directory the daemon runs under (default: HERDR_PLUGIN_STATE_DIR, else herdr's state directory for this plugin)")
 	c.Flags().StringVar(&project, "project", "", "show this project's team (default: the team of the workspace the dashboard runs in)")
 	c.MarkFlagsMutuallyExclusive("fixture", "project")

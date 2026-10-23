@@ -21,4 +21,4 @@
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ QA · 1 ✔1 ──────────────────────────────────────────────────────────────────╮
 │ ✔ qa         done     son   ▓░░░░  12%             queue empty         3h19m │
- enter jump · ↑↓ move · ctrl-b m btop · ? help · q quit                      ↓3
+ enter jump · ↑↓ move · b board · ctrl-b m btop · ? help · q quit            ↓3
