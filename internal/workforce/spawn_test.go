@@ -102,7 +102,8 @@ func TestSpawnTakesAModelFromTheRepoFile(t *testing.T) {
 
 // TestPlanChecksTheProfilesModel: the model spawn passes after --model is
 // checked where it is used, even from a profile Load did not build, which
-// would have refused it first (A46). The error never holds the model.
+// would have refused it first (A46). The error never holds the model. The
+// request's model is one the agent's provider runs (A62).
 func TestPlanChecksTheProfilesModel(t *testing.T) {
 	t.Parallel()
 	const bad = "opus'; touch pwned; '"
@@ -110,11 +111,13 @@ func TestPlanChecksTheProfilesModel(t *testing.T) {
 	tests := map[string]struct {
 		profile *settings.Profile
 		typ     string
+		// model is the request's, "sonnet" when empty.
+		model string
 	}{
 		"the top-level model":                  {profile: &settings.Profile{Agent: settings.Agent{Command: claude, Model: bad}}, typ: "coder"},
 		"a group's model":                      {profile: &settings.Profile{Agent: settings.Agent{Command: claude}, Groups: map[string]settings.Group{"coder": {Agent: settings.Agent{Model: bad}}}}, typ: "coder"},
-		"a group's model with its own command": {profile: &settings.Profile{Agent: settings.Agent{Command: claude}, Groups: map[string]settings.Group{"qa": {Agent: settings.Agent{Command: []string{"codex"}, Model: bad}}}}, typ: "qa"},
-		"the review group's model":             {profile: &settings.Profile{Agent: settings.Agent{Command: claude}, Groups: map[string]settings.Group{settings.ReviewType: {Agent: settings.Agent{Model: bad}}}}, typ: settings.ReviewType},
+		"a group's model with its own command": {profile: &settings.Profile{Agent: settings.Agent{Command: claude}, Groups: map[string]settings.Group{"qa": {Agent: settings.Agent{Command: []string{"codex"}, Model: bad}}}}, typ: "qa", model: "gpt-5"},
+		"the review group's model":             {profile: &settings.Profile{Agent: settings.Agent{Command: claude}, Groups: map[string]settings.Group{settings.ReviewType: {Agent: settings.Agent{Model: bad}}}}, typ: settings.ReviewType, model: "gpt-5"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -125,9 +128,10 @@ func TestPlanChecksTheProfilesModel(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.typ+"'s agent model: ")
 			assert.NotContains(t, err.Error(), "pwned")
 
-			_, args, err := workforce.Plan(tc.profile, tc.typ, "sonnet", "")
+			model := cmp.Or(tc.model, "sonnet")
+			_, args, err := workforce.Plan(tc.profile, tc.typ, model, "")
 			require.NoError(t, err, "the request's model is the one passed")
-			assert.Contains(t, args, "sonnet")
+			assert.Contains(t, args, model)
 		})
 	}
 }

@@ -231,9 +231,11 @@ func TestSpawnRoutingRefusals(t *testing.T) {
 		},
 		"claude by its path":        {config: strings.Replace(routingOn, "groups.qa]\n", "groups.qa]\nagent = { command = [\"/usr/local/bin/claude\"] }\n", 1), req: workforce.SpawnRequest{Group: "qa", Count: 1}, want: workforce.ErrConfig, says: "names the path /usr/local/bin/claude"},
 		"claude by a relative path": {config: strings.Replace(routingOn, "groups.qa]\n", "groups.qa]\nagent = { command = [\"bin/claude\"] }\n", 1), req: workforce.SpawnRequest{Group: "qa", Count: 1}, want: workforce.ErrConfig, says: "names the path bin/claude"},
-		"review under claude, which code_review never runs": {
+		// Load refuses it before routing would block it (A62): a gap until
+		// routing v2 and a read-only Claude review launch.
+		"review under claude, a gap until routing v2": {
 			config: strings.Replace(routingOn, "groups.review]\nworkers = 0\nslots = 1\n", "groups.review]\nworkers = 0\nslots = 1\nagent = { command = [\"claude\"] }\n", 1),
-			req:    workforce.SpawnRequest{Group: "review", Count: 1}, want: routing.ErrBlocked, says: "it allows only codex_strong, none under claude",
+			req:    workforce.SpawnRequest{Group: "review", Count: 1}, want: settings.ErrProviderRefused, says: "NERD-5529",
 		},
 		"the user's override, disabled": {
 			config: routingOn + "\n[routing.overrides]\npre_check = \"claude_mid\"\n\n[routing.bindings.claude_mid]\nenabled = false\n",
