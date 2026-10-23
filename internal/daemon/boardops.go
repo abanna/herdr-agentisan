@@ -333,7 +333,8 @@ func (o Options) newBoardOps(st *store.Store, view func() (*team.Model, map[stri
 	return boardOps(st, placeBoardCaller(view, c, report.SystemStat(), os.Getuid()))
 }
 
-// placeBoardCaller places a caller (A60): in a team's boss place, it reads
+// placeBoardCaller places a caller (A60): in a team's boss place, for a tabs
+// team every pane of the boss's tab but the dashboard's split, it reads
 // that team's board as the boss; in a pane of that place or of the boss's
 // tab whose foreground runs the plugin's dashboard, as the user, since a ◆
 // boss space holds its dashboard among the boss's panes. Anything else is

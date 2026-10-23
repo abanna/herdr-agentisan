@@ -514,9 +514,9 @@ from the shared file, the project's table and the repo file. `skip` can name
 Each team has a board in `state.db`: its workers' posts and the daemon's
 notices. Only the team's boss and the user read it; workers only post. The
 daemon tells who asks from the kernel, by the process that connected, never
-from the request: a command run in the boss's pane reads as the boss, the
-dashboard in the boss's tab as the user, and anything else is refused with
-`not_allowed`. That is a policy, not a security boundary: workers run as
+from the request: a command run in the boss's tab (or ◆ boss) reads as the
+boss, the plugin's dashboard there as the user, and anything else is refused
+with `not_allowed`. That is a policy, not a security boundary: workers run as
 your user (ADR-001 A60).
 
 ```bash

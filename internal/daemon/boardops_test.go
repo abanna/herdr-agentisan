@@ -284,7 +284,9 @@ func placeHerdr(t *testing.T, failing bool) herdr.Client {
 	shells := map[string]uint32{"w1:pB": 100, "w1:pD": 200, "w1:pE": 500, "w1:pF": 600, "w1:p2": 300, "w1:pX": 400, "w1:pS": 700}
 	dashboard := []string{"bin/herdr-agentisan", "dashboard"}
 	// pE runs another of the plugin's commands, pF another program's
-	// dashboard: neither is the plugin's dashboard.
+	// dashboard: neither is the plugin's dashboard. The model below leaves
+	// them out of the boss's place, as the tabs resolver leaves out only the
+	// dashboard's split, so they stand for that split running something else.
 	argv := map[string][]string{"w1:pD": dashboard, "w1:pE": {"/opt/bin/herdr-agentisan", "board", "read"}, "w1:pF": {"other-tool", "dashboard"}, "w1:pX": dashboard, "w1:pS": dashboard}
 	srv := herdrtest.Start(t, func(r herdrtest.Request) herdrtest.Reply {
 		switch r.Method {
@@ -335,7 +337,8 @@ func boardStat(pid int) (report.Stat, error) {
 // TestPlaceBoardCaller (A60): a caller whose process runs in its team's
 // boss place reads as the boss; one in the dashboard in the boss's tab as
 // the user; any other is not allowed, a worker, an orphan, a dashboard in a
-// worker's tab, another program in the boss's tab, another user, or one the
+// worker's tab, a pane of the boss's tab left out of the boss's place (the
+// dashboard's split) that runs no plugin dashboard, another user, or one the
 // kernel told nothing of, and the check fails closed.
 func TestPlaceBoardCaller(t *testing.T) {
 	t.Parallel()
@@ -372,8 +375,8 @@ func TestPlaceBoardCaller(t *testing.T) {
 	refused := map[string]daemon.Peer{
 		"a worker":                      me(301),
 		"a dashboard in a worker's tab": me(401),
-		"another of the plugin's commands in the boss's tab": me(501),
-		"another program's dashboard in the boss's tab":      me(601),
+		"another of the plugin's commands in the dashboard's split": me(501),
+		"another program's dashboard in the dashboard's split":      me(601),
 		"an orphan":                      me(999),
 		"a process that is gone":         me(12345),
 		"another user":                   {PID: 101, UID: uint32(uid) + 1, Known: true}, //nolint:gosec // G115: a test's uid fits
@@ -392,4 +395,142 @@ func TestPlaceBoardCaller(t *testing.T) {
 	require.ErrorIs(t, err, daemon.ErrNotReady, "before the first poll's model")
 	_, err = daemon.PlaceBoardCaller(view, placeHerdr(t, true), boardStat, uid)(t.Context(), me(101))
 	require.ErrorIs(t, err, daemon.ErrCannotPlace, "herdr failing is not a refusal of the caller")
+}
+
+// TestBoardWaitsNeverStack (A60, QA #133 F3): each later wait from the same
+// pane ends the one in force, however many times: a superseded wait leaving
+// never forgets the wait that replaced it.
+func TestBoardWaitsNeverStack(t *testing.T) {
+	t.Parallel()
+	socket, _, waiting := daemon.ServeBoard(t, shortDir(t), boardStore(t), as(theBoss))
+	ask := func() <-chan error {
+		ch := make(chan error, 1)
+		go func() {
+			_, err := daemon.Workforce(context.Background(), socket, daemon.OpBoardWait, daemon.BoardWaitRequest{Timeout: time.Minute})
+			ch <- err
+		}()
+		return ch
+	}
+	superseded := func(ch <-chan error, what string) {
+		select {
+		case err := <-ch:
+			assert.Equal(t, "superseded", refusedWith(t, err), what)
+		case <-time.After(10 * time.Second):
+			t.Fatal(what + ": not superseded, so waits stacked")
+		}
+	}
+	a := ask()
+	require.Eventually(t, func() bool { return waiting(theBoss.Pane) }, 10*time.Second, 5*time.Millisecond)
+	b := ask()
+	superseded(a, "B ends A")
+	// A has left; B must still be the wait in force, so C ends it.
+	require.Eventually(t, func() bool { return waiting(theBoss.Pane) }, 10*time.Second, 5*time.Millisecond)
+	c := ask()
+	superseded(b, "C ends B")
+	d := ask()
+	superseded(c, "D ends C")
+	_ = d
+}
+
+// TestBoardReadAsTheUser (A60, QA #133 F4): the dashboard reads through
+// board.read as the user, with its own mark: the boss's read left the user's
+// posts unread, and the user's read moves only the user's mark.
+func TestBoardReadAsTheUser(t *testing.T) {
+	t.Parallel()
+	st := boardStore(t)
+	boardPost(t, st, "ha", "one")
+	boardPost(t, st, "ha", "two")
+	_, err := st.ReadBoard(t.Context(), "ha", store.ReaderBoss, 10)
+	require.NoError(t, err)
+	socket, _, _ := daemon.ServeBoard(t, shortDir(t), st, as(theUser))
+
+	got, err := boardOp[daemon.BoardReadResult](t, socket, daemon.OpBoardRead, daemon.BoardReadRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, store.ReaderUser, got.Reader)
+	assert.Len(t, got.Posts, 2, "the boss's read left the user's two unread")
+	user, err := st.BoardStatus(t.Context(), "ha", store.ReaderUser)
+	require.NoError(t, err)
+	assert.Zero(t, user.Unread)
+	assert.Equal(t, got.Newest, user.Mark)
+}
+
+// TestBoardWaitIsOnTheCallersTeam (A60, QA #133 F4): a wait answers a post on
+// its own team's board, whichever team that is, and never another team's.
+func TestBoardWaitIsOnTheCallersTeam(t *testing.T) {
+	t.Parallel()
+	st := boardStore(t)
+	web := daemon.BoardCaller{Project: "web", Reader: store.ReaderBoss, Pane: "w9:p1"}
+	socket, _, waiting := daemon.ServeBoard(t, shortDir(t), st, as(web))
+	done := make(chan daemon.BoardStateResult, 1)
+	go func() {
+		r, _ := boardOp[daemon.BoardStateResult](t, socket, daemon.OpBoardWait, daemon.BoardWaitRequest{Timeout: time.Minute})
+		done <- r
+	}()
+	require.Eventually(t, func() bool { return waiting(web.Pane) }, 10*time.Second, 5*time.Millisecond)
+	boardPost(t, st, "ha", "not web's")
+	select {
+	case r := <-done:
+		t.Fatalf("ha's post ended web's wait: %+v", r)
+	case <-time.After(300 * time.Millisecond):
+	}
+	p := boardPost(t, st, "web", "web's")
+	select {
+	case r := <-done:
+		assert.Equal(t, "web", r.Project)
+		assert.Equal(t, p.Seq, r.Newest)
+	case <-time.After(10 * time.Second):
+		t.Fatal("web's post did not end web's wait")
+	}
+}
+
+// edgeHerdr is a herdr with the boss's pane w1:pB and a second pane w1:pD,
+// both in tab, w1:pD's foreground running argv as pid 200.
+func edgeHerdr(t *testing.T, tab string, argv []string) herdr.Client {
+	t.Helper()
+	srv := herdrtest.Start(t, func(r herdrtest.Request) herdrtest.Reply {
+		switch r.Method {
+		case "pane.list":
+			return herdrtest.Reply{Result: map[string]any{"type": "pane_list", "panes": []map[string]any{
+				{"pane_id": "w1:pB", "workspace_id": "w1", "tab_id": tab, "terminal_id": "term_B"},
+				{"pane_id": "w1:pD", "workspace_id": "w1", "tab_id": tab, "terminal_id": "term_D"},
+			}}}
+		case "pane.process_info":
+			var params struct {
+				PaneID string `json:"pane_id"`
+			}
+			_ = json.Unmarshal(r.Params, &params)
+			procs, shell := []map[string]any{}, 100
+			if params.PaneID == "w1:pD" {
+				shell = 200
+				procs = append(procs, map[string]any{"pid": 200, "name": argv[0], "argv": argv})
+			}
+			return herdrtest.Reply{Result: map[string]any{"type": "pane_process_info", "process_info": map[string]any{
+				"pane_id": params.PaneID, "shell_pid": shell, "foreground_process_group_id": 0, "foreground_processes": procs,
+			}}}
+		}
+		return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "unknown_method", Message: r.Method}}
+	})
+	return herdr.Client{SocketPath: srv.Path}
+}
+
+// TestPlaceBoardCallerEdges (A60, QA #133 F4): a foreground of the plugin's
+// binary alone is no dashboard, and is refused rather than read past its end;
+// a boss whose pane shows no tab matches no pane by tab.
+func TestPlaceBoardCallerEdges(t *testing.T) {
+	t.Parallel()
+	uid := os.Getuid()
+	me := daemon.Peer{PID: 200, UID: uint32(uid), Known: true} //nolint:gosec // G115: a test's uid fits
+	bossIn := func(tab string) func() (*team.Model, map[string]string) {
+		m := &team.Model{Projects: []team.Project{{Name: "ha", Boss: []team.Worker{{ID: "ha-boss", Pane: team.Pane{ID: "w1:pB", TabID: tab}}}}}}
+		return func() (*team.Model, map[string]string) { return m, nil }
+	}
+	dashboard := []string{"herdr-agentisan", "dashboard"}
+
+	_, err := daemon.PlaceBoardCaller(bossIn("t1"), edgeHerdr(t, "t1", []string{"herdr-agentisan"}), boardStat, uid)(t.Context(), me)
+	require.ErrorIs(t, err, daemon.ErrNotAllowed, "the binary alone is no dashboard")
+	got, err := daemon.PlaceBoardCaller(bossIn("t1"), edgeHerdr(t, "t1", dashboard), boardStat, uid)(t.Context(), me)
+	require.NoError(t, err, "the dashboard in the boss's tab")
+	assert.Equal(t, daemon.BoardCaller{Project: "ha", Reader: store.ReaderUser, Pane: "w1:pD"}, got)
+	_, err = daemon.PlaceBoardCaller(bossIn(""), edgeHerdr(t, "", dashboard), boardStat, uid)(t.Context(), me)
+	require.ErrorIs(t, err, daemon.ErrNotAllowed, "a boss that shows no tab matches no pane by tab")
 }
