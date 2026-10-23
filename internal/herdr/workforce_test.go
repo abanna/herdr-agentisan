@@ -36,7 +36,7 @@ func agentOf(paneID, name, status string, ready bool) map[string]any {
 	return a
 }
 
-// pending is a as agent.start answers it: herdr reports the launch it has
+// pending marks a as agent.start answers it: herdr reports the launch it has
 // just begun as pending (src/app/agents.rs:217, 228-231).
 func pending(a map[string]any) map[string]any {
 	a["launch_pending"] = true
@@ -155,7 +155,7 @@ func TestWorkforceCallsSendTheSchemaShape(t *testing.T) {
 			params: `{"pane_id":"w14:p7","keys":["enter"]}`,
 		},
 		"pane.wait_for_output": {
-			result: map[string]any{"type": "output_matched", "pane_id": "w14:p7", "revision": 4, "matched_line": "~/repo ❯", "read": map[string]any{}},
+			result: map[string]any{"type": "output_matched", "pane_id": "w14:p7", "revision": 4, "matched_line": "~/repo ❯"},
 			call: func(c herdr.Client) (any, error) {
 				return c.WaitForOutput(t.Context(), "w14:p7", `❯\s*$`, 2*time.Second)
 			},
@@ -185,7 +185,7 @@ func TestWorkforceCallsSendTheSchemaShape(t *testing.T) {
 			params: `{"pane_id":"w14:p9","label":"ha-dashboard"}`,
 		},
 		"pane.wait_for_output, no time at all": {
-			result: map[string]any{"type": "output_matched", "pane_id": "w14:p7", "revision": 4, "matched_line": "$", "read": map[string]any{}},
+			result: map[string]any{"type": "output_matched", "pane_id": "w14:p7", "revision": 4, "matched_line": "$"},
 			call:   func(c herdr.Client) (any, error) { return c.WaitForOutput(t.Context(), "w14:p7", `\$$`, 0) },
 			method: "pane.wait_for_output",
 			params: `{"pane_id":"w14:p7","source":"visible","match":{"type":"regex","value":"\\$$"},"timeout_ms":1}`,
@@ -217,7 +217,7 @@ func TestWaitForOutputOutlivesTheCallTimeout(t *testing.T) {
 	t.Parallel()
 	srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
 		time.Sleep(300 * time.Millisecond)
-		return herdrtest.Reply{Result: map[string]any{"type": "output_matched", "matched_line": "$", "pane_id": "w1:p1", "revision": 1, "read": map[string]any{}}}
+		return herdrtest.Reply{Result: map[string]any{"type": "output_matched", "matched_line": "$", "pane_id": "w1:p1", "revision": 1}}
 	})
 
 	c := herdr.Client{SocketPath: srv.Path, Timeout: 100 * time.Millisecond}
@@ -304,6 +304,8 @@ func TestWorkforceCallFailureClasses(t *testing.T) {
 		"tab.rename: wrong type with a tab":            {handler: reply(map[string]any{"type": "tab_created", "tab": tab}), call: renameTab, want: []error{herdr.ErrProtocol}},
 		"agent.start: busy":                            {handler: apiErr("agent_pane_busy"), call: start, want: []error{herdr.ErrPaneBusy, herdr.ErrAPI}, not: []error{herdr.ErrNameTaken}},
 		"agent.start: name taken":                      {handler: apiErr("agent_name_taken"), call: start, want: []error{herdr.ErrNameTaken, herdr.ErrAPI}, not: []error{herdr.ErrPaneBusy}},
+		"agent.start: pane gone":                       {handler: apiErr("agent_pane_not_found"), call: start, want: []error{herdr.ErrAPI}, not: []error{herdr.ErrPaneNotFound, herdr.ErrPaneBusy, herdr.ErrNameTaken}},
+		"agent.start: pane unavailable":                {handler: apiErr("agent_pane_unavailable"), call: start, want: []error{herdr.ErrAPI}, not: []error{herdr.ErrPaneNotFound, herdr.ErrPaneBusy, herdr.ErrNameTaken}},
 		"agent.start: invalid name":                    {handler: apiErr("invalid_agent_name"), call: start, want: []error{herdr.ErrAPI}, not: []error{herdr.ErrPaneBusy, herdr.ErrNameTaken}},
 		"agent.start: wrong type":                      {handler: reply(map[string]any{"type": "agent_info", "agent": agentOf("w14:p7", "x", "idle", true)}), call: start, want: []error{herdr.ErrProtocol}},
 		"agent.start: no terminal":                     {handler: reply(map[string]any{"type": "agent_started", "agent": map[string]any{"pane_id": "w14:p7"}}), call: start, want: []error{herdr.ErrProtocol}},
@@ -391,7 +393,7 @@ func TestWaitForOutputEndsWithTheCallersDeadline(t *testing.T) {
 	t.Parallel()
 	srv := herdrtest.Start(t, func(herdrtest.Request) herdrtest.Reply {
 		time.Sleep(time.Second)
-		return herdrtest.Reply{Result: map[string]any{"type": "output_matched", "matched_line": "~/repo ❯", "pane_id": "w1:p1", "revision": 1, "read": map[string]any{}}}
+		return herdrtest.Reply{Result: map[string]any{"type": "output_matched", "matched_line": "~/repo ❯", "pane_id": "w1:p1", "revision": 1}}
 	})
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()

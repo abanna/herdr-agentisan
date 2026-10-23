@@ -335,7 +335,7 @@ func TestWorkforceOpsWaitForTheFirstReconcile(t *testing.T) {
 	polled(t, th.srv, 1)
 	sock := socketPath(t, dir, th.path)
 
-	for op, args := range map[string]string{daemon.OpTeamStatus: `{"project":"ha"}`, daemon.OpWorkerSpawn: `{"group":"coder","count":1}`, daemon.OpWorkerRetire: `{"target":"ha-coder-1"}`} {
+	for op, args := range map[string]string{daemon.OpTeamStatus: `{"project":"ha"}`, daemon.OpWorkerSpawn: `{"group":"coder","count":1}`, daemon.OpWorkerRetire: `{"target":"ha-coder-1"}`, daemon.OpHandoffReady: `{"target":"ha-coder-1"}`} {
 		_, err := daemon.CallWith(t.Context(), sock, op, json.RawMessage(args), 10*time.Second)
 		var re *daemon.RequestError
 		require.ErrorAs(t, err, &re, op)

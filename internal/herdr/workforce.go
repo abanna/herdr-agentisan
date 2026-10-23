@@ -27,8 +27,12 @@ var (
 	// ErrAgentNotFound means no agent answers to the target
 	// (agent_not_found).
 	ErrAgentNotFound = errors.New("herdr agent not found")
-	// ErrWaitTimeout means pane.wait_for_output saw no match in time
-	// (timeout, src/api/wait.rs:114-126).
+	// ErrWaitTimeout is herdr's timeout code. pane.wait_for_output answers it
+	// when it saw no match in time (src/api/wait.rs:114-126), but agent.prompt
+	// answers it too when typing its text timed out (0.9.5
+	// src/app/api/agents.rs:111-112), as do agent.wait, agent.prompt's wait
+	// and events.wait (src/api/wait.rs:657, :747), so it means no match only
+	// straight after WaitForOutput.
 	ErrWaitTimeout = errors.New("herdr wait timed out")
 )
 
@@ -190,7 +194,10 @@ type AgentStart struct {
 // StartAgent types the agent's command line into the pane's shell and
 // returns at once, before the agent is up: agent.start, answered with
 // agent_started {agent, argv}, with the launch pending. ErrPaneBusy means the
-// pane was taken (see ErrPaneBusy).
+// pane was taken (see ErrPaneBusy). A pane that is gone (agent_pane_not_found)
+// or has no live terminal (agent_pane_unavailable, 0.9.5
+// src/app/agents.rs:258-269) is a plain ErrAPI, never ErrPaneNotFound or
+// ErrPaneBusy: a caller that waits out a busy pane must not wait for these.
 func (c Client) StartAgent(ctx context.Context, a AgentStart) (Agent, error) {
 	params := struct {
 		Name      string   `json:"name"`
