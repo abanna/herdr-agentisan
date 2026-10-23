@@ -20,6 +20,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/dashboard"
+	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/stretchr/testify/require"
 )
 
@@ -404,4 +405,21 @@ func TestBoardFixturePostCount(t *testing.T) {
 			require.NoError(t, err)
 		}
 	}
+}
+
+func TestDaemonBoardLargeReply(t *testing.T) {
+	r := daemon.BoardReadResult{Posts: make([]daemon.BoardPostView, 200)}
+	for i := range r.Posts {
+		r.Posts[i] = daemon.BoardPostView{Seq: int64(200 - i), Body: strings.Repeat("<", store.MaxBody)}
+	}
+	raw, err := json.Marshal(r)
+	require.NoError(t, err)
+	require.Greater(t, len(raw), 1<<20)
+	sock := filepath.Join(shortDir(t), "board.sock")
+	fakeDaemon(t, sock, `{"ok":true,"data":`+string(raw)+"}\n")
+	got, err := (dashboard.DaemonBoard{Socket: sock}).Board(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, r.Posts, got.Posts)
+	_, err = daemon.Health(t.Context(), sock)
+	require.ErrorIs(t, err, daemon.ErrUnavailable)
 }
