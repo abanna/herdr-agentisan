@@ -604,8 +604,9 @@ The user's routing rules, built in byte for byte
 reasoning effort each worker starts with, by its type's role (ADR-001 A50).
 `[routing]` in the shared `herdr-agentisan.toml` holds what they leave to
 the deployment: `enabled` (off by default, and while it is on no
-`agent.model` key nor codex `--profile` may be set), each binding's real
-`model_id`, efforts its client takes and `enabled`, and
+`agent.model` key nor a codex `--profile`, `--oss`, `--local-provider` or
+`-c model_provider` may be set), each binding's real `model_id`, efforts its
+client takes and `enabled`, and
 `[routing.overrides]`, the user's standing choice for a role and the only
 way to a premium binding (ADR-001 A63). An override is a binding's name,
 which binds only workers of that binding's provider, so `coder =

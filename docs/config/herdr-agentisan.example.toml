@@ -98,7 +98,9 @@ repeat = 300
 # Spawn adds --no-daemon to any codex command that lacks it (A22). The command
 # runs claude or codex (D12) and carries no --model, -m, --name, -n or
 # --effort, nor a codex -c setting model or model_reasoning_effort: the
-# workforce sets them. A codex -p profile or a claude --settings file can
+# workforce sets them; nor --dangerously-bypass-hook-trust or -c
+# bypass_hook_trust in a codex command, since trusting hooks stays a
+# one-time human step (A43). A codex -p profile or a claude --settings file can
 # still name a model: the --model the workforce passes outranks both, by each
 # CLI's own precedence, and with no model set the command's configuration
 # decides (A53). An abbreviation such as --mod is no --model to either:
@@ -221,7 +223,8 @@ locks = ["/run/user/1000/agentisan/gate.0.lock"]
 # file and --set only. `worker spawn` asks routing once per spawn.
 #   enabled  false (the default) launches as configured above; true lets
 #            routing decide, and then no agent.model key, nor a codex
-#            command's -p/--profile, may be set.
+#            command's -p/--profile, --oss, --local-provider or -c
+#            model_provider, may be set.
 #   [routing.bindings.<binding>]  model_id ("" is unresolved), efforts its
 #            client takes (claude: low to max, codex: minimal to xhigh) and
 #            enabled, e.g. [routing.bindings.claude_mid] model_id = "…".

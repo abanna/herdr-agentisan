@@ -140,9 +140,10 @@ const earlierGroups = "[groups.coder]\nworkers = 1\nslots = 1\nagent = { command
 	"[groups.librarian]\nworkers = 0\nslots = 1\nagent = { model = \"sonnet\" }\n"
 
 // TestLoadRefusesWorkforceKeys: a group's command bypassing Agentisan, any
-// command carrying a flag the workforce sets, and a [spawn] value that cannot
-// work are each refused with the key that holds them and its layer, and a
-// launch flag's refusal never shows the flag's value.
+// command carrying a flag the workforce sets, a codex command running its
+// hooks without their trust, routing on or off (the user's Q9), and a [spawn]
+// value that cannot work are each refused with the key that holds them and its
+// layer, and a launch flag's refusal never shows the flag's value.
 func TestLoadRefusesWorkforceKeys(t *testing.T) {
 	t.Parallel()
 	tests := map[string]struct {
@@ -152,6 +153,8 @@ func TestLoadRefusesWorkforceKeys(t *testing.T) {
 		// wantNot is part of a value the error must never show: a launch
 		// flag's refusal names the flag only.
 		wantNot string
+		// wantIn is the refusal's own text, where a row pins it.
+		wantIn string
 	}{
 		"a group command that is not claude or codex": {body: "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"aider\"] }\n", wantErr: settings.ErrBypassesAgentisan, wantAt: "groups.qa.agent.command"},
 		"a group command with --bare":                 {body: "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"claude\", \"--bare\"] }\n", wantErr: settings.ErrBypassesAgentisan, wantAt: "groups.qa.agent.command"},
@@ -182,6 +185,16 @@ func TestLoadRefusesWorkforceKeys(t *testing.T) {
 		"codex's -c with a quoted, spaced key": {body: "[agent]\ncommand = [\"codex\", \"-c\", ' \"model\" = o3']\n", wantErr: settings.ErrInvalid, wantAt: "agent.command"},
 		"codex by path in a group, with -c":    {body: "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"/opt/bin/codex\", \"--no-daemon\", \"-c\", \"model=o3\"] }\n", wantErr: settings.ErrInvalid, wantAt: "groups.qa.agent.command"},
 		"a group agent key it does not know":   {body: "[groups.qa]\nworkers = 0\nslots = 1\nagent = { kind = \"codex\" }\n", wantErr: settings.ErrUnknownKey},
+		// Hook trust stays a one-time human step (A43): a codex command never
+		// runs its hooks without it, by the flag or the key, routing on or off.
+		"codex's hook-trust bypass":               {body: "[agent]\ncommand = [\"codex\", \"--dangerously-bypass-hook-trust\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command", wantIn: bypassRefusal},
+		"the hook-trust bypass in a group":        {body: "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"/opt/bin/codex\", \"--no-daemon\", \"--dangerously-bypass-hook-trust\"] }\n", wantErr: settings.ErrInvalid, wantAt: "groups.qa.agent.command", wantIn: bypassRefusal},
+		"the hook-trust bypass with a value":      {body: "[agent]\ncommand = [\"codex\", \"--dangerously-bypass-hook-trust=hunter2\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command", wantNot: "hunter2", wantIn: bypassRefusal},
+		"the hook-trust bypass with routing on":   {body: "[agent]\ncommand = [\"codex\", \"--search\", \"--dangerously-bypass-hook-trust\"]\n[routing]\nenabled = true\n", wantErr: settings.ErrInvalid, wantAt: "agent.command", wantIn: bypassRefusal},
+		"the hook-trust bypass as a value":        {body: "[agent]\ncommand = [\"codex\", \"--add-dir\", \"--dangerously-bypass-hook-trust\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command", wantIn: bypassRefusal},
+		"codex's -c bypass_hook_trust":            {body: "[agent]\ncommand = [\"codex\", \"-c\", \"bypass_hook_trust=true\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command", wantIn: bypassKeyRefusal},
+		"--config= bypass_hook_trust joined":      {body: "[agent]\ncommand = [\"codex\", \"--config=bypass_hook_trust=true\"]\n", wantErr: settings.ErrInvalid, wantAt: "agent.command", wantIn: bypassKeyRefusal},
+		"a group's -c bypass_hook_trust attached": {body: "[groups.qa]\nworkers = 0\nslots = 1\nagent = { command = [\"codex\", \"-cbypass_hook_trust=true\"] }\n", wantErr: settings.ErrInvalid, wantAt: "groups.qa.agent.command", wantIn: bypassKeyRefusal},
 		// The debugger runs the plugin's launch (A32): its group sets no
 		// command, not even claude alone.
 		"a debugger group's command":           {body: "[groups.debugger]\nworkers = 0\nslots = 1\nagent = { command = [\"claude\"] }\n", wantErr: settings.ErrInvalid, wantAt: "groups.debugger.agent.command"},
@@ -209,13 +222,24 @@ func TestLoadRefusesWorkforceKeys(t *testing.T) {
 			if tc.wantNot != "" {
 				assert.NotContains(t, err.Error(), tc.wantNot)
 			}
+			if tc.wantIn != "" {
+				assert.Contains(t, err.Error(), tc.wantIn)
+			}
 		})
 	}
 }
 
+// bypassRefusal and bypassKeyRefusal are the hook-trust bypass's refusals,
+// by the flag and by the -c key.
+const (
+	bypassRefusal    = "codex's --dangerously-bypass-hook-trust runs enabled hooks without the trust a person gives Codex once (ADR-001 A43): remove it"
+	bypassKeyRefusal = "codex's bypass_hook_trust key runs enabled hooks without the trust a person gives Codex once (ADR-001 A43): remove it"
+)
+
 // TestLoadAcceptsTheWorkforceEdges: the bounds of the wait, a shell prompt
-// of any regular expression, flags that only look like the launch flags and
-// a path to codex all resolve.
+// of any regular expression, flags that only look like the launch flags or
+// codex's hook-trust bypass, codex's flags on a claude command and a path to
+// codex all resolve.
 func TestLoadAcceptsTheWorkforceEdges(t *testing.T) {
 	t.Parallel()
 	for name, body := range map[string]string{
@@ -232,6 +256,10 @@ func TestLoadAcceptsTheWorkforceEdges(t *testing.T) {
 		"a look-alike of --effort":    "[agent]\ncommand = [\"claude\", \"--efforts\", \"--effort-x\"]\n",
 		"another of codex's settings": "[agent]\ncommand = [\"codex\", \"-c\", \"model_provider=oss\", \"--config=profiles.x.model=y\", \"-cmodel_verbosity=low\"]\n",
 		"codex's -c with no value":    "[agent]\ncommand = [\"codex\", \"-c\"]\n",
+		// The hook-trust refusal is codex's only, and matches the flag and the
+		// key whole.
+		"claude with codex's hook-trust bypass": "[agent]\ncommand = [\"claude\", \"--dangerously-bypass-hook-trust\", \"-c\", \"bypass_hook_trust=true\"]\n",
+		"a look-alike of the hook-trust bypass": "[agent]\ncommand = [\"codex\", \"--dangerously-bypass-hook-trusts\", \"--dangerously-bypass-hook\", \"--Dangerously-Bypass-Hook-Trust\", \"-c\", \"bypass_hook_trust_x=1\"]\n",
 		// claude's -c is --continue, which takes no value.
 		"claude's own -c": "[agent]\ncommand = [\"claude\", \"-c\", \"model=x\"]\n",
 		// A command named by a path resolves, and spawn refuses it before it

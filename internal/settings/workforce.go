@@ -181,11 +181,20 @@ var launchFlags = []string{"--model", "-m", "--name", "-n", "--effort"}
 // setting one with -c or --config would fight the routed model or effort.
 var codexConfigKeys = []string{"model", "model_reasoning_effort"}
 
+// codexHookTrustFlag runs a codex command's enabled hooks without the trust
+// a person gives Codex once (A43), and codexHookTrustKey is the setting it
+// sets. The user's Q9 keeps that trust a human step, so a worker's command
+// carries neither, routing on or off.
+const (
+	codexHookTrustFlag = "--dangerously-bypass-hook-trust"
+	codexHookTrustKey  = "bypass_hook_trust"
+)
+
 // checkLaunchFlags refuses a command carrying a flag the workforce sets,
 // whether as -m o3, -m=o3 or -mo3: a short flag's value can be attached. A
 // codex command is also refused a -c or --config that sets one of
-// codexConfigKeys, in any of its forms. The error names the flag or key,
-// never its value.
+// codexConfigKeys, in any of its forms, and the hook-trust bypass, by its flag
+// or its key. The error names the flag or key, never its value.
 func checkLaunchFlags(argv []string) error {
 	codex := len(argv) > 0 && filepath.Base(argv[0]) == routing.Codex
 	for i := 1; i < len(argv); i++ {
@@ -200,8 +209,25 @@ func checkLaunchFlags(argv []string) error {
 		if key := codexConfigKey(argv, i); codex && slices.Contains(codexConfigKeys, key) {
 			return fmt.Errorf("%w: codex's %s is set by the workforce: use the model key or [routing]", ErrInvalid, key)
 		}
+		if bypass := codexHookTrustBypass(argv, i); codex && bypass != "" {
+			return fmt.Errorf("%w: codex's %s runs enabled hooks without the trust a person gives Codex once (ADR-001 A43): remove it", ErrInvalid, bypass)
+		}
 	}
 	return nil
+}
+
+// codexHookTrustBypass is how argv[i] runs a codex command's hooks without
+// their trust: codexHookTrustFlag by its name before any =, or a -c or
+// --config setting codexHookTrustKey in any form; "" when it is neither. It
+// names the flag or key, never a value.
+func codexHookTrustBypass(argv []string, i int) string {
+	if name, _, _ := strings.Cut(argv[i], "="); name == codexHookTrustFlag {
+		return name
+	}
+	if codexConfigKey(argv, i) == codexHookTrustKey {
+		return codexHookTrustKey + " key"
+	}
+	return ""
 }
 
 // codexConfigKey is the key argv[i] sets when it is Codex's -c or --config,
@@ -243,6 +269,30 @@ func codexProfileFlag(argv []string) string {
 		}
 		if codexConfigKey(argv, i) == "profile" {
 			return "profile key"
+		}
+	}
+	return ""
+}
+
+// codexProviderFlags choose a codex command's model provider: --oss a local
+// one, and --local-provider which, lmstudio or ollama, which Codex reads only
+// under --oss and is refused with it.
+var codexProviderFlags = []string{"--oss", "--local-provider"}
+
+// codexProviderFlag is how a codex command chooses its model provider: one
+// of codexProviderFlags, by its name before any =, or a -c or --config
+// setting model_provider in any form; "" when it chooses none or is not
+// codex. It names the flag or key, never the provider.
+func codexProviderFlag(argv []string) string {
+	if len(argv) == 0 || filepath.Base(argv[0]) != routing.Codex {
+		return ""
+	}
+	for i := 1; i < len(argv); i++ {
+		if name, _, _ := strings.Cut(argv[i], "="); slices.Contains(codexProviderFlags, name) {
+			return name
+		}
+		if codexConfigKey(argv, i) == "model_provider" {
+			return "model_provider key"
 		}
 	}
 	return ""
