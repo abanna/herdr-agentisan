@@ -279,9 +279,7 @@ func gptLabel(rest string, codex bool) string {
 	last := rest[strings.LastIndexByte(rest, '-')+1:]
 	switch {
 	case codex:
-		if i := strings.Index(rest, "codex"); i >= 0 {
-			version = rest[:i]
-		}
+		version, _, _ = strings.Cut(rest, "codex")
 		word, version = "cdx", strings.Trim(version, "-")
 	case last != "" && !strings.ContainsFunc(last, func(r rune) bool { return !unicode.IsLetter(r) }):
 		word, version = last, strings.TrimSuffix(strings.TrimSuffix(rest, last), "-")

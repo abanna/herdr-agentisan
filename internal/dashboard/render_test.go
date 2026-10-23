@@ -1060,9 +1060,9 @@ func TestTheModelColumnWidensIntoTheStage(t *testing.T) {
 
 // TestTheModelColumnAtTheCaps: with every name and item past its cap, the
 // user's 97-cell pane and a 120 still keep every column beside a six-cell
-// model, the stage giving up the two cells. At 80 such a row has no two
-// cells to spare, so the time column, the first the renderer drops, gives
-// way, where a team of four-cell models keeps it (A58).
+// model, the stage giving up the two cells (A58). At 80 this team's row has
+// no two cells to spare, so the time column, the first the renderer drops,
+// gives way, where the same team on four-cell models keeps it.
 func TestTheModelColumnAtTheCaps(t *testing.T) {
 	t.Parallel()
 
