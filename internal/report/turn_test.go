@@ -73,6 +73,8 @@ func TestStatedClasses(t *testing.T) {
 		"a header with no id":               {event: prompt, text: "[msg  from ha-boss] item: NERD-1"},
 		"a header that never closes":        {event: prompt, text: "[msg 01J from ha-boss item: NERD-1"},
 		"the daemon's header, unclosed":     {event: prompt, text: "[agentisan] originally to ha-coder-1 item: NERD-1"},
+		"unclosed, the sender opens item:":  {event: prompt, text: "[msg 01J from item: M"},
+		"unclosed, the worker opens item:":  {event: prompt, text: "[agentisan] originally to item:N"},
 		"a sender holding a bracket":        {event: prompt, text: "[msg 01J from a] b] item: NERD-1"},
 		"a sender holding a bare bracket":   {event: prompt, text: "[msg 01J from a]b] item: NERD-1", item: "NERD-1"},
 		"a final message keeps its header":  {event: stop, text: "[msg 01J from ha-boss] item: NERD-1"},

@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/abanna/herdr-agentisan/internal/debugger"
 	"github.com/abanna/herdr-agentisan/internal/routing"
+	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/team"
 )
 
@@ -37,7 +39,8 @@ type UpResult struct {
 // Up fills every configured group of a tabs team up to its workers count,
 // filling empty slots only, so a run on a full team spawns nothing (I9), and
 // opens the team's dashboard above the boss when none is open. It is refused
-// whole, before anything opens, on a failed preflight (A34), as Spawn is.
+// whole, before anything opens, on a failed preflight (A34) or a debugger it
+// is to open but cannot launch (A32), as Spawn is.
 // Groups fill in the team model's order; every worker's tab opens first, then
 // the dashboard, then all the agents start at once. A worker that does not
 // come up fails the op with ErrSpawnFailed, as in Spawn; the others stay.
@@ -48,6 +51,18 @@ func (s *Service) Up(ctx context.Context, req UpRequest) (UpResult, error) {
 	_, p, _, err := s.resolve(ctx, req.Selector)
 	if err != nil {
 		return UpResult{}, err
+	}
+	// A debugger's launch is built as Spawn builds it, before the preflight
+	// and the lock (A32), when its group fills to any worker; a failure
+	// refuses the team only if a debugger is to open, which the fill knows.
+	var dbg *debugger.Command
+	var dbgErr error
+	if g, ok := p.Groups[settings.DebuggerType]; ok && !g.DescribesOnly && g.Workers > 0 {
+		if c, err := s.debuggerLaunch(p.Repo); err != nil {
+			dbgErr = configFailed(err)
+		} else {
+			dbg = &c
+		}
 	}
 	if err := s.preflight(ctx, p.Repo); err != nil {
 		return UpResult{}, err
@@ -65,6 +80,9 @@ func (s *Service) Up(ctx context.Context, req UpRequest) (UpResult, error) {
 			g := st.profile.Groups[name]
 			fill := GroupFill{Name: name, Workers: g.Workers, Occupied: st.occupied(name)}
 			if want := g.Workers - fill.Occupied; want > 0 {
+				if name == settings.DebuggerType && dbgErr != nil {
+					return nil, dbgErr
+				}
 				ids, err := nextIDs(st.team.Short, name, want, taken)
 				if err != nil {
 					return nil, err
@@ -73,7 +91,7 @@ func (s *Service) Up(ctx context.Context, req UpRequest) (UpResult, error) {
 				if err != nil {
 					return nil, err
 				}
-				ps, err := planRouted(st.profile, name, choice{model: st.profile.AgentFor(name).Model}, d, ids)
+				ps, err := planRouted(st.profile, name, choice{model: st.profile.AgentFor(name).Model}, d, ids, dbg)
 				if err != nil {
 					return nil, err
 				}

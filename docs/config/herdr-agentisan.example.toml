@@ -105,7 +105,9 @@ repeat = 300
 # claude matches long flags whole, and codex refuses it. A claude command
 # with a --settings of its own starts without the turn hooks spawn passes
 # every other Claude worker, since Claude Code applies only one --settings;
-# spawn warns of it (A42).
+# spawn warns of it (A42). The debugger runs the plugin's read-only launch
+# (docs/debugger.md, [debugger] below): its group sets a model only, never a
+# command, and [agent]'s command never applies to it.
 [groups.precheck]
 workers = 1
 slots = 1

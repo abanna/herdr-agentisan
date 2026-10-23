@@ -208,12 +208,12 @@ func DefaultStartedAt() func(start uint64) (time.Time, error) {
 // ServedBudget is the budget the daemon's own op map gives op with args,
 // which the server enforces; OpBudget is the client's copy.
 func ServedBudget(op string, args json.RawMessage) time.Duration {
-	return workforceOps(&workforce.Service{}, new(atomic.Bool), nil)[op].budget(args)
+	return workforceOps(&workforce.Service{}, new(atomic.Bool), nil, nil)[op].budget(args)
 }
 
 // WorkforceOpNames is every op the daemon's workforce op map serves.
 func WorkforceOpNames() []string {
-	return slices.Sorted(maps.Keys(workforceOps(&workforce.Service{}, new(atomic.Bool), nil)))
+	return slices.Sorted(maps.Keys(workforceOps(&workforce.Service{}, new(atomic.Bool), nil, nil)))
 }
 
 // IOTimeout is the exchange, which a client waits past an op's budget.
@@ -266,9 +266,11 @@ func ServeOp(ctx context.Context, path, name, code string, budget time.Duration,
 var CallWith = callWith
 
 // WorkforceOf is the workforce service a daemon run with o builds, for the
-// herdr server ident names.
+// herdr server ident names, in o's directory for that server when o names
+// one.
 func WorkforceOf(o Options, ident Identity) *workforce.Service {
-	return o.newWorkforce(nil, ident, &team.IdleClock{})
+	paths, _ := PathsFor(o.StateDir, o.HerdrSocket)
+	return o.newWorkforce(nil, ident, &team.IdleClock{}, paths.Dir)
 }
 
 // FlushNotices flushes b into s as the poll does.

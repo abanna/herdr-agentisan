@@ -27,6 +27,19 @@ const ReviewType = "review"
 // group without workers.
 var reviewCommand = []string{"codex", "--no-daemon", "--sandbox", "read-only"}
 
+// DebuggerType is the worker type that runs the debugger that ships with the
+// plugin (ADR-001 A32): claude with the plugin's read-only launch, which
+// the workforce builds. Its group may set a model, never a command, and the
+// top-level command never applies to it: a flag there, such as a
+// permission mode, would lift the launch's fence. The top-level model
+// applies only when the top-level command is claude's: a codex model is no
+// claude one.
+const DebuggerType = "debugger"
+
+// debuggerCommand is the debugger type's executable; the workforce adds the
+// launch's arguments.
+var debuggerCommand = []string{routing.Claude}
+
 // DefaultShellReadyAfter is how long spawn waits for a new tab's shell before
 // it sends shell_ready_keys, when the profile does not say.
 const DefaultShellReadyAfter = 3 * time.Second
@@ -78,14 +91,22 @@ type Spawn struct {
 	ShellReadyAfter time.Duration
 }
 
-// AgentFor is the agent a worker of type typ launches: its group's own
-// command and model when its group sets a command, without the top-level
-// model, which belongs to the top-level command; else codex for the review
-// type; else the top-level command, with the group's model or the
-// top-level one.
+// AgentFor is the agent a worker of type typ launches: for the debugger
+// type, claude, whose arguments the workforce builds, with the group's model,
+// else the top-level one when the top-level command is claude's; else its
+// group's own command and model when its
+// group sets a command, without the top-level model, which belongs to the
+// top-level command; else codex for the review type; else the top-level
+// command, with the group's model or the top-level one.
 func (p Profile) AgentFor(typ string) Agent {
 	g := p.Groups[typ]
 	switch {
+	case typ == DebuggerType:
+		model := g.Agent.Model
+		if model == "" && len(p.Agent.Command) > 0 && filepath.Base(p.Agent.Command[0]) == routing.Claude {
+			model = p.Agent.Model
+		}
+		return Agent{Command: slices.Clone(debuggerCommand), Model: model}
 	case len(g.Agent.Command) > 0:
 		return Agent{Command: slices.Clone(g.Agent.Command), Model: g.Agent.Model}
 	case typ == ReviewType:
@@ -228,7 +249,8 @@ func codexProfileFlag(argv []string) string {
 }
 
 // checkGroupAgents runs D12 and the launch-flag check on every group's own
-// command.
+// command, and refuses one for the debugger type, whose launch is the
+// plugin's.
 func (m merged) checkGroupAgents() error {
 	v, _ := m.get("groups")
 	groups, _ := v.(map[string]any)
@@ -237,6 +259,9 @@ func (m merged) checkGroupAgents() error {
 		raw, set := m.get(path)
 		if !set {
 			continue
+		}
+		if name == DebuggerType {
+			return m.invalidf(path, "the debugger runs the plugin's read-only launch (ADR-001 A32), so its group sets no command; set agent.model alone")
 		}
 		argv, _ := raw.([]string)
 		if err := CheckAgentCommand(argv); err != nil {

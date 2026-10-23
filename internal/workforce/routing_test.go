@@ -241,7 +241,7 @@ func TestSpawnRoutingRefusals(t *testing.T) {
 		},
 		"a binding the role refuses":  {req: workforce.SpawnRequest{Group: "coder", Count: 1, Model: "claude_small"}, want: routing.ErrOverrideRefused, says: "claude_mid, claude_strong, codex_strong"},
 		"an alias, not a binding":     {req: workforce.SpawnRequest{Group: "coder", Count: 1, Model: "opus"}, want: routing.ErrOverrideRefused},
-		"a premium binding":           {req: workforce.SpawnRequest{Group: "debugger", Count: 1, Model: "claude_premium"}, config: strings.Replace(routingOn, opsGroup, "\n[projects.herdr-agentisan.groups.debugger]\nworkers = 0\nslots = 1\n", 1), want: routing.ErrOverrideRefused, says: "premium"},
+		"a premium binding":           {req: workforce.SpawnRequest{Group: "debugger", Count: 1, Model: "claude_premium"}, config: strings.Replace(routingOn, opsGroup, "\n[projects.herdr-agentisan.groups.debugger]\nworkers = 0\nslots = 1\n", 1) + debuggerEnvFile, want: routing.ErrOverrideRefused, says: "premium"},
 		"the other provider's model":  {req: workforce.SpawnRequest{Group: "coder", Count: 1, Model: "codex_strong"}, want: routing.ErrProviderMismatch, says: "and the worker type coder runs claude"},
 		"an effort the binding lacks": {req: workforce.SpawnRequest{Group: "coder", Count: 1, Effort: "low"}, want: routing.ErrOverrideRefused, says: "--effort"},
 		"a packet asking for codex":   {req: workforce.SpawnRequest{Group: "coder", Count: 1, Task: &routing.Task{LookupStatus: routing.LookupFound, ProviderPreference: "codex"}}, want: routing.ErrProviderMismatch},
@@ -262,6 +262,9 @@ func TestSpawnRoutingRefusals(t *testing.T) {
 				cfg = routingOn
 			}
 			f, rec := routedFixture(t, cfg)
+			if tc.req.Group == settings.DebuggerType {
+				f.svc.Debugger = pluginLaunch(t) // its launch is built before routing (A32)
+			}
 
 			_, err := f.svc.Spawn(t.Context(), tc.req)
 			require.ErrorIs(t, err, tc.want)

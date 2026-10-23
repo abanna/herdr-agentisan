@@ -1,6 +1,7 @@
 package workforce_test
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -630,28 +631,42 @@ func (c edgeCtx) Deadline() (time.Time, bool) { return c.deadline, true }
 
 // TestSpawnAtTheDeadlineEdge: a herdr call the op's deadline ends, in the
 // instant before the context's timer marks it done, is out of time, never a
-// herdr failure (QA #78 R1): the prompt wait, and agent.start.
+// herdr failure (QA #78 R1): the prompt wait, agent.start, a busy pane's
+// re-read and a Codex's hook review (QA #96 N4).
 func TestSpawnAtTheDeadlineEdge(t *testing.T) {
 	t.Parallel()
 	withPrompt := strings.Replace(teamConfig, "layout = \"tabs\"\n", "layout = \"tabs\"\n\n[projects.herdr-agentisan.spawn]\nshell_prompt = '❯\\s*$'\n", 1)
-	tests := map[string]struct{ config, held, says string }{
-		"the prompt wait": {config: withPrompt, held: "pane.wait_for_output", says: "matched spawn.shell_prompt \"❯\\\\s*$\" in time: context deadline exceeded"},
-		"agent.start":     {config: teamConfig, held: "agent.start", says: "start ha-coder-1: out of time: context deadline exceeded"},
+	tests := map[string]struct {
+		config, group, held, says string
+		knobs                     func(*fakeHerdr)
+	}{
+		"the prompt wait":  {config: withPrompt, held: "pane.wait_for_output", says: "matched spawn.shell_prompt \"❯\\\\s*$\" in time: context deadline exceeded"},
+		"agent.start":      {config: teamConfig, held: "agent.start", says: "start ha-coder-1: out of time: context deadline exceeded"},
+		"the busy re-read": {config: teamConfig, held: "pane.get", knobs: func(h *fakeHerdr) { h.busy = 1 }, says: "re-read ha-coder-1's pane: out of time: context deadline exceeded"},
+		"the hook review":  {config: teamConfig, group: "review", held: "pane.wait_for_output", says: "read ha-review-1's screen: out of time: context deadline exceeded"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			f := newFixture(t, tc.config)
 			f.h.promptAfter = 1 << 30
+			if tc.knobs != nil {
+				tc.knobs(f.h)
+			}
+			var held atomic.Bool
 			wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
-				if r.Method == tc.held {
+				if r.Method == tc.held && held.CompareAndSwap(false, true) {
 					time.Sleep(3 * time.Second) // herdr holding the call past the op's deadline
 				}
 				return next()
 			})
-			ctx := edgeCtx{Context: t.Context(), deadline: time.Now().Add(1500 * time.Millisecond)}
+			// The parent ends a row whose held call never came: edgeCtx never
+			// reports itself done, and agent.get is polled again past it.
+			parent, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+			defer cancel()
+			ctx := edgeCtx{Context: parent, deadline: time.Now().Add(1500 * time.Millisecond)}
 
-			_, err := f.svc.Spawn(ctx, workforce.SpawnRequest{Group: "coder", Count: 1})
+			_, err := f.svc.Spawn(ctx, workforce.SpawnRequest{Group: cmp.Or(tc.group, "coder"), Count: 1})
 			require.ErrorIs(t, err, workforce.ErrSpawnFailed)
 			require.ErrorIs(t, err, context.DeadlineExceeded)
 			assert.NotErrorIs(t, err, workforce.ErrHerdr, "%v", err)

@@ -186,7 +186,7 @@ verify = [["task", "check"]]
 [agent]
 command = ["claude", "--verbose"]
 [spawn]
-shell_prompt = "\\$ $"
+shell_prompt = "\\$$"
 [integrations.github]
 url = "https://github.com"
 token = { env = "GH_TOKEN" }
@@ -207,7 +207,7 @@ agent = { command = ["codex", "--search"] }
 	for path, w := range map[string]want{
 		"agent.command":             {[]string{"claude", "--verbose"}, settings.LayerShared},
 		"verify":                    {[][]string{{"task", "check"}}, settings.LayerShared},
-		"spawn.shell_prompt":        {`\$ $`, settings.LayerShared},
+		"spawn.shell_prompt":        {`\$$`, settings.LayerShared},
 		"integrations.github.url":   {"https://github.com", settings.LayerShared},
 		"integrations.github.token": {settings.SecretRef{Env: "GH_TOKEN"}, settings.LayerShared},
 		"groups.qa.agent.command":   {[]string{"codex", "--search"}, settings.LayerProject},

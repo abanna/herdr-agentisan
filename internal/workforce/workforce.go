@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/abanna/herdr-agentisan/internal/debugger"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/preflight"
 	"github.com/abanna/herdr-agentisan/internal/report"
@@ -39,13 +40,15 @@ var (
 	ErrUnknownProject = errors.New("no such project")
 	// ErrConfig means herdr-agentisan.toml does not resolve for the project.
 	ErrConfig = errors.New("the configuration does not resolve")
-	// ErrUnknownWorker means retire's target names no worker or pane.
+	// ErrUnknownWorker means retire's or handoff ready's target names no
+	// worker or pane.
 	ErrUnknownWorker = errors.New("no such worker")
-	// ErrNotAWorker means retire's target is the boss's, not a worker's.
+	// ErrNotAWorker means retire's target is the boss's, not a worker's, or
+	// handoff ready's is no agent pane in a team's group.
 	ErrNotAWorker = errors.New("not a worker")
 	// ErrPaneChanged means retire's pane no longer shows the terminal it
-	// read, which herdr lists elsewhere: nothing was closed, and a retry
-	// reads the panes afresh.
+	// read, which herdr lists elsewhere, or handoff ready's no longer does:
+	// nothing was closed or written, and a retry reads the panes afresh.
 	ErrPaneChanged = errors.New("the pane changed since it was read")
 	// ErrHandoffPending means retire would end a row whose handoff is still
 	// pending, which would strand the handoff and hold the worker's inbox.
@@ -112,6 +115,11 @@ type Service struct {
 	// CodexTurnHooks reports whether Codex's turn hooks are installed; nil
 	// checks nothing. A Codex spawn without them warns (A42, A43).
 	CodexTurnHooks func() (bool, error)
+	// Debugger is what a debugger worker's launch names besides the
+	// project's repo, the config dir and the env file it names (A32): the
+	// plugin's checkout and binary, and the daemon's directory. Without a
+	// checkout and a binary, a debugger spawn is refused.
+	Debugger debugger.Launch
 	// Routed records each routing decision a spawn opens workers on,
 	// applied or not (A50); nil records nothing. The daemon sends it as a
 	// workflow event and logs it.

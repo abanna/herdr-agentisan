@@ -200,10 +200,12 @@ exempts whatever is later added under that name.
   a Claude one launched with A42's turn hooks as `--settings`,
   after `internal/preflight`'s check, each group up to its count for
   `team up`, which also opens the team's dashboard above the boss
-  (`dashboard.go`); and closing the pane a worker's row is bound to, after
-  its handoff when asked, with the row retired. The daemon runs them, with
-  the plugin's dashboard pane and the Codex hooks check `internal/cli` gives
-  it; `internal/cli` only asks it.
+  (`dashboard.go`); closing the pane a worker's row is bound to, after its
+  handoff when asked, with the row retired; and `handoff ready`
+  (`handoff.go`, A33), the daemon writing the `handoff` token on a worker's
+  agent pane once `pane.get` proves its terminal, with no row changed. The
+  daemon runs them, with the plugin's dashboard pane and the Codex hooks
+  check `internal/cli` gives it; `internal/cli` only asks it.
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
@@ -316,8 +318,11 @@ exempts whatever is later added under that name.
   ships with the plugin (item 12, A32): its role, and its launch as data,
   claude with `--permission-mode dontAsk`, a read-only allow list and its
   reads fenced to the repo it starts in and the daemon's directory.
-  `herdr-agentisan events` and `debugger args` are its commands;
-  `TestRoleMatchesTheLaunch` keeps the role, the CLI and the launch in step.
+  `herdr-agentisan events` and `debugger args` are its commands, and
+  `worker spawn --group debugger` starts it as a team worker (A32 part 2),
+  the launch's inputs looked up by `Root`, `CheckRoot` and `KeyFiles` for
+  both; `TestRoleMatchesTheLaunch` keeps the role, the CLI and the launch in
+  step.
 - `roles/review.md` — the Codex review worker's role (ADR-001 A55):
   agentisan-skills' `## Review guidelines`, vendored byte for byte, with the
   reviewer's read-only rules, its report's fields and its final line. The

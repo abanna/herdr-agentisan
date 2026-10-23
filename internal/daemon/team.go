@@ -39,6 +39,10 @@ type TeamOptions struct {
 	// GitHub is the header's GitHub collection (A29), for every project
 	// the same file gives a github repo.
 	GitHub GitHubOptions
+	// PluginRoot and Binary are the plugin's checkout and binary, which a
+	// debugger worker's launch names (A32); `daemon run` sets them. Without
+	// both, a debugger spawn is refused.
+	PluginRoot, Binary string
 	// Dashboard is the plugin pane team up opens as a team's dashboard
 	// (A18, A23): internal/plugin's, which this package cannot import.
 	Dashboard workforce.DashboardPane
