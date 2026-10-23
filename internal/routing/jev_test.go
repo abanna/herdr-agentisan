@@ -200,7 +200,7 @@ func TestWhoAsksJev(t *testing.T) {
 		}
 	}
 	// The user's override names the binding, so Jev is never asked.
-	d, err := policy(t, routing.Deployment{Overrides: map[string]string{"coder": "claude_strong"}}).Resolve(routing.Request{Role: "coder", Provider: routing.Claude, Task: coderTask()}, now)
+	d, err := policy(t, routing.Deployment{Overrides: map[string]routing.RoleOverride{"coder": {"claude_strong"}}}).Resolve(routing.Request{Role: "coder", Provider: routing.Claude, Task: coderTask()}, now)
 	require.NoError(t, err)
 	assert.False(t, d.AsksJev())
 	// A coder whose strong binding the rules took away has nothing to move
@@ -534,7 +534,7 @@ func TestJevLeavesEarlierVersionsAlone(t *testing.T) {
 	off := false
 	for want, d := range map[string]routing.Deployment{
 		"v1-51d7b6fdd14c": {},
-		"v1-f0225362e568": {Enabled: true, Overrides: map[string]string{"coder": "claude_strong"}},
+		"v1-f0225362e568": {Enabled: true, Overrides: map[string]routing.RoleOverride{"coder": {"claude_strong"}}},
 		"v1-75a1580a7d6a": {Enabled: true, Bindings: map[string]routing.Facts{"claude_strong": {Enabled: &off}}},
 	} {
 		assert.Equal(t, want, policy(t, d).Version())

@@ -83,7 +83,8 @@ func OrderKey(pr Project) string {
 	return orderKeyPrefix + pr.Short
 }
 
-// SidebarTokens are CtxTokens, each pane also carrying its stage display at
+// SidebarTokens are CtxTokens, a team's pane's from m's ctx, which the poll
+// gated (GateCtx, A61), each pane also carrying its stage display at
 // now, by the stretches idle saw (StageDisplay, A42), and each agent pane a
 // team places its place in the team under the team's OrderKey: the boss
 // first, then the groups in the order the snapshot shows them, each group's
@@ -95,12 +96,14 @@ func OrderKey(pr Project) string {
 func SidebarTokens(m Model, l Layout, idle *IdleClock, now time.Time) []PaneTokens {
 	type place struct{ key, value string }
 	places := map[string]place{}
+	ctxs := map[string]string{}
 	for _, pr := range m.Projects {
 		var panes []string
 		add := func(ws []Worker) {
 			for _, w := range ws {
 				if w.Pane.IsAgent() {
 					panes = append(panes, w.Pane.ID)
+					ctxs[w.Pane.ID] = w.Pane.Ctx
 				}
 			}
 		}
@@ -118,6 +121,9 @@ func SidebarTokens(m Model, l Layout, idle *IdleClock, now time.Time) []PaneToke
 	for _, pt := range out {
 		if p, ok := places[pt.PaneID]; ok {
 			pt.Tokens[p.key] = p.value
+		}
+		if c, ok := ctxs[pt.PaneID]; ok {
+			maps.Copy(pt.Tokens, bandTokens(c))
 		}
 		maps.Copy(pt.Tokens, stages[pt.PaneID])
 	}

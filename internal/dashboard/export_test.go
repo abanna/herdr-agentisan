@@ -1,6 +1,22 @@
 package dashboard
 
-import "strings"
+import (
+	"strings"
+	"time"
+
+	"github.com/abanna/herdr-agentisan/internal/snapshot"
+)
+
+// ModelCells is the widest model ShortModel returns.
+const ModelCells = modelCells
+
+// ColumnWidths is how a frame w cells wide lays out the agent rows of groups
+// at now: the name's width, then the state, model, item, stage and time
+// columns' widths, 0 for a column dropped.
+func ColumnWidths(groups []snapshot.Group, now time.Time, w int) (name int, cols []int) {
+	c := planColumns(groups, now, rowWidth(w))
+	return c.name, c.width[:]
+}
 
 // PlaceText draws over at column x on a line of base's segments, all plain
 // text, and returns the text drawn: the seam the tests check place's two

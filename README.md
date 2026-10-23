@@ -52,7 +52,9 @@ pinned in `go.mod` under the `tool` directive — nothing to install globally.
 ## Report `$ctx` from Claude's statusline
 
 Each Claude agent pushes its own context use to its pane as the `ctx` token:
-a bare integer from 0 to 100, source `agentisan`, with a 180 s TTL. In the
+a bare integer from 0 to 100, source `agentisan`, with a 180 s TTL, and when
+it reported it as `ctx_at`, so an agent restarted in the pane never shows the
+last one's (ADR-001 A61). In the
 same report it pushes the model it runs, the statusline's `model.id`, as the
 `model` token, with `model_at` (ADR-001 A56), so the dashboard's model column
 follows a `/model` switch. After
@@ -606,10 +608,14 @@ the deployment: `enabled` (off by default, and while it is on no
 `agent.model` key nor codex `--profile` may be set), each binding's real
 `model_id`, efforts its client takes and `enabled`, and
 `[routing.overrides]`, the user's standing choice for a role and the only
-way to a premium binding. `config resolve` shows each key with its layer,
-then `routing policy:`, the version a decision records; with `--project` it
-also refuses an override a worker type with that role cannot run, such as a
-claude binding for a type on codex.
+way to a premium binding (ADR-001 A63). An override is a binding's name,
+which binds only workers of that binding's provider, so `coder =
+"claude_strong"` leaves a Codex coder on its own default, or a list of them,
+one per provider, such as `coder = ["claude_strong", "codex_strong"]`.
+`config resolve` shows each key with its layer, then `routing policy:`, the
+version a decision records; with `--project` it also refuses an override
+a worker type's spawns under its provider would be refused for at the
+role's effort, such as a binding switched off in `[routing.bindings]`.
 
 `[routing.jev]` is for Jev's complexity answer about a coder's assignment
 (ADR-001 A57): `enabled` (off by default, and Jev is asked only while

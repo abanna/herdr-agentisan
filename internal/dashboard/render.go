@@ -25,8 +25,11 @@ const (
 	ctxCells = barCells + 1 + pctCells
 	// bossBarCells is the boss line's wider ctx bar.
 	bossBarCells = 8
-	// modelCells is the widest model ShortModel returns.
-	modelCells = 4
+	// modelCells is the widest model ShortModel returns: a gpt- model's word
+	// and version, such as sol6.1.
+	modelCells = 6
+	// wordCells is the widest model ShortModel names by its first word.
+	wordCells = 4
 	// nameCap and itemCap bound the name and item columns; longer text is
 	// cut with "…".
 	nameCap = 16

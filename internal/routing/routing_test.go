@@ -128,7 +128,7 @@ func TestEveryRoleAndProviderResolvesToItsDefault(t *testing.T) {
 // override, the only way to a premium binding, stands over the boss's.
 func TestResolveOverrides(t *testing.T) {
 	t.Parallel()
-	p := policy(t, routing.Deployment{Overrides: map[string]string{"alex_debugger": "claude_premium"}})
+	p := policy(t, routing.Deployment{Overrides: map[string]routing.RoleOverride{"alex_debugger": {"claude_premium"}}})
 	tests := map[string]struct {
 		req                    routing.Request
 		binding, model, effort string
@@ -176,7 +176,7 @@ func TestResolveOverrides(t *testing.T) {
 // sentinel, never answered with another binding.
 func TestResolveRefuses(t *testing.T) {
 	t.Parallel()
-	user := policy(t, routing.Deployment{Overrides: map[string]string{"pre_check": "claude_mid", "researcher": "codex_small"}})
+	user := policy(t, routing.Deployment{Overrides: map[string]routing.RoleOverride{"pre_check": {"claude_mid"}, "researcher": {"codex_small"}}})
 	found := func(edit func(*routing.Task)) *routing.Task {
 		task := &routing.Task{LookupStatus: routing.LookupFound, WorkerAssignment: "fix the bug"}
 		edit(task)
@@ -205,8 +205,6 @@ func TestResolveRefuses(t *testing.T) {
 		"an effort the binding does not take":       {req: routing.Request{Role: "clerk", Provider: routing.Claude, Effort: "high"}, wantErr: routing.ErrOverrideRefused, wantIn: "takes low"},
 		"an effort no client takes":                 {req: routing.Request{Role: "coder", Provider: routing.Claude, Effort: "turbo"}, wantErr: routing.ErrOverrideRefused},
 		"the boss against the user's choice":        {req: routing.Request{Role: "pre_check", Provider: routing.Claude, Model: "codex_strong"}, wantErr: routing.ErrOverrideRefused, wantIn: "sets pre_check to claude_mid"},
-		"the user's choice of the other provider":   {req: routing.Request{Role: "researcher", Provider: routing.Claude}, wantErr: routing.ErrProviderMismatch, wantIn: "user's [routing.overrides]"},
-		"the type the user's choice cannot run":     {req: routing.Request{Role: "researcher", Provider: routing.Claude, Type: "research"}, wantErr: routing.ErrProviderMismatch, wantIn: "is a codex binding, and the worker type research runs claude"},
 		"a type running neither":                    {req: routing.Request{Role: "coder", Provider: "aider", Type: "coder"}, wantErr: routing.ErrProviderMismatch, wantIn: `the worker type coder runs "aider"`},
 		"a packet's user_model_override":            {req: routing.Request{Role: "coder", Provider: routing.Claude, Task: found(func(t *routing.Task) { t.UserModelOverride = new("claude_premium") })}, wantErr: routing.ErrOverrideRefused},
 		"a packet for another role":                 {req: routing.Request{Role: "coder", Provider: routing.Claude, Task: found(func(t *routing.Task) { t.RequestedRole = "pre_check" })}, wantErr: routing.ErrInvalid},
@@ -249,7 +247,7 @@ func TestResolveFilters(t *testing.T) {
 			wantErr: routing.ErrOverrideRefused, wantIn: "boss's --model",
 		},
 		"the user's binding switched off": {
-			d: routing.Deployment{Bindings: map[string]routing.Facts{"claude_premium": {Enabled: new(false)}}, Overrides: map[string]string{"alex_debugger": "claude_premium"}}, req: routing.Request{Role: "alex_debugger", Provider: routing.Claude},
+			d: routing.Deployment{Bindings: map[string]routing.Facts{"claude_premium": {Enabled: new(false)}}, Overrides: map[string]routing.RoleOverride{"alex_debugger": {"claude_premium"}}}, req: routing.Request{Role: "alex_debugger", Provider: routing.Claude},
 			wantErr: routing.ErrOverrideRefused, wantIn: "user's [routing.overrides]",
 		},
 		"two bindings with the model id asked for": {

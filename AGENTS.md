@@ -133,8 +133,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   in a pane shell (`StateDir`, ADR-001 A51).
 - `internal/report/` — an agent pushing its own state to its pane as herdr
   tokens (ADR-001 D4), and the token contract for the keys it writes.
-  `report statusline` turns Claude's statusline JSON into `ctx` and the
-  `model` it runs, with its `model_at` (A56),
+  `report statusline` turns Claude's statusline JSON into `ctx`, with its
+  `ctx_at` (A61), and the `model` it runs, with its `model_at` (A56),
   `report codex` does the same from a Codex hook and its session's rollout
   (A22, hooks sampled in `docs/config/codex-hooks.example.toml`), with a
   24 h TTL (A27), and
@@ -167,9 +167,12 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   the current agent's (`team.CurrentModels`, A56), else its launch model from
   the pane's processes
   (`models.go`, A39; one `pane.process_info` reply per pane per poll, shared
-  with the reconcile, `processinfo.go`) and the boss with its agent process's
-  start, its runtime (A47), with the workspaces each holds, which the `snapshot`
-  op serves by project or workspace, so the op never calls herdr (A18, A24,
+  with the reconcile, `processinfo.go`), and its ctx only while the current
+  agent reported it, gated by those processes' starts before anything reads
+  it, team status included (`team.GateCtx`, A61), and the boss with its
+  agent process's start, its runtime (A47), with the workspaces each holds,
+  which the `snapshot` op serves by project or workspace, so the op never
+  calls herdr (A18, A24,
   `snapshot.go`, with `SnapshotSource`, the dashboard's client), each group
   with its description, re-read when the shared file changes
   (`descriptions.go`, A36), and sends each status change since the last
@@ -262,7 +265,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   embedded byte for byte from `rules/jev-routing-v1.json` and decoded
   strictly, and the deployment facts from `[routing]` (`internal/settings`).
   `Policy.Resolve` maps a worker type's role and provider, the boss's task
-  packet (`DecodeTask`, bounded) and overrides onto a binding. It returns a
+  packet (`DecodeTask`, bounded) and overrides onto a binding, the user's
+  override binding only workers of its own provider, one binding per
+  provider (`RoleOverride`, A63). It returns a
   `Decision` that is also the audit record. `worker spawn` asks it once per
   spawn, and `team up` once per group it fills, before anything opens; each
   records it on each worker's row and sends it as an

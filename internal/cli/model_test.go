@@ -59,6 +59,8 @@ func TestReportStatuslinePushesTheModel(t *testing.T) {
 			ctx, hasCtx := params.Tokens[report.CtxKey]
 			assert.Equal(t, tc.ctx != "", hasCtx)
 			assert.Equal(t, tc.ctx, ctx)
+			_, hasCtxAt := params.Tokens[report.CtxAtKey]
+			assert.Equal(t, hasCtx, hasCtxAt, "ctx_at rides ctx, and a model alone sets none (A61)")
 			at, ok := report.ParseModelAt(params.Tokens[report.ModelAtKey])
 			require.True(t, ok, "model_at is Unix milliseconds")
 			assert.False(t, at.Before(before.Truncate(time.Millisecond)), "stamped by the command's own clock")
