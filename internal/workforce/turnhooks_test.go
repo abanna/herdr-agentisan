@@ -197,7 +197,8 @@ func TestSpawnWarnsOnlyOfClaudesSettings(t *testing.T) {
 // TestUpWarnsOfCodexHooks: team up fills a Codex group too, and warns, never
 // refusing, of its ctx hooks and its turn hooks when either is missing,
 // as a spawn does (A42, A43). A group's own warning comes first, then the
-// machine's: a Claude group's own --settings before Codex's hooks.
+// machine's: a Claude group's own --settings before Codex's hooks. A check
+// that fails is said; a fill with no Codex asks nothing (NERD-5507).
 func TestUpWarnsOfCodexHooks(t *testing.T) {
 	t.Parallel()
 	config := strings.Replace(teamConfig, "groups.review]\nworkers = 0", "groups.review]\nworkers = 1", 1)
@@ -205,9 +206,13 @@ func TestUpWarnsOfCodexHooks(t *testing.T) {
 	for name, tc := range map[string]struct {
 		config      string
 		ctx, turned bool
+		ctxErr      error
 		want        []string
+		workers     int
 	}{
 		"neither installed":  {config: config, want: []string{"Codex's ctx hooks are not installed", "Codex's turn hooks are not installed"}},
+		"a check that fails": {config: config, ctxErr: errors.New("hooks.json is not JSON"), turned: true, want: []string{"could not check Codex's ctx hooks: hooks.json is not JSON"}},
+		"no Codex group":     {config: teamConfig, workers: 3},
 		"turn hooks missing": {config: config, ctx: true, want: []string{"Codex's turn hooks are not installed"}},
 		"both installed":     {config: config, ctx: true, turned: true},
 		"and the coders' own --settings": {config: ownSettings, want: []string{
@@ -217,12 +222,18 @@ func TestUpWarnsOfCodexHooks(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			f := upFixture(t, tc.config)
-			f.svc.CodexHooks = func() (bool, error) { return tc.ctx, nil }
-			f.svc.CodexTurnHooks = func() (bool, error) { return tc.turned, nil }
+			asked := 0
+			f.svc.CodexHooks = func() (bool, error) { asked++; return tc.ctx, tc.ctxErr }
+			f.svc.CodexTurnHooks = func() (bool, error) { asked++; return tc.turned, nil }
 
 			res, err := f.svc.Up(t.Context(), workforce.UpRequest{})
 			require.NoError(t, err)
-			require.Len(t, res.Workers, 4, "two coders, a QA and the Codex reviewer come up")
+			if tc.workers == 0 {
+				require.Len(t, res.Workers, 4, "two coders, a QA and the Codex reviewer come up")
+			} else {
+				require.Len(t, res.Workers, tc.workers, "two coders and a QA, no Codex")
+				assert.Zero(t, asked, "with no Codex in the fill, no hooks are asked about")
+			}
 			require.Len(t, res.Warnings, len(tc.want))
 			for i, w := range tc.want {
 				assert.Contains(t, res.Warnings[i], w)

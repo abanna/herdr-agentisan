@@ -62,6 +62,19 @@ func TestRetire(t *testing.T) {
 	assert.NotNil(t, f.h.pane(split), "the shell split stays")
 	f.h.mu.Unlock()
 
+	// A Codex is an agent like any other (NERD-5507): a Codex worker by its
+	// row, and a hand-started Codex's pane in its tab, past the shell.
+	cw := f.workerAs(t, "ha-coder-3", "coder", "codex")
+	res, err = f.svc.Retire(t.Context(), workforce.RetireRequest{Target: cw.ID})
+	require.NoError(t, err)
+	assert.Equal(t, workforce.RetireResult{ID: cw.ID, PaneID: cw.PaneID, Changed: true, Outcome: workforce.OutcomeRetired}, res, "a Codex worker")
+	assert.Equal(t, store.StatusRetired, f.row(t, cw.ID).Status)
+	codexSplit := f.h.addTab(f.ws, "ha-qa-5", "", "unknown")
+	codex := f.h.addPane(codexSplit, "codex", "idle")
+	res, err = f.svc.Retire(t.Context(), workforce.RetireRequest{Target: "ha-qa-5"})
+	require.NoError(t, err)
+	assert.Equal(t, workforce.RetireResult{ID: "ha-qa-5", PaneID: codex, Changed: true, Outcome: workforce.OutcomeRetired}, res, "the Codex's pane, not the shell's")
+
 	stale := f.h.addTab(f.ws, "notes-2", "", "unknown")
 	f.h.mu.Lock()
 	f.h.alias["w3:p1"] = stale

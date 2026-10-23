@@ -163,6 +163,57 @@ func TestUpRefusals(t *testing.T) {
 	}
 }
 
+// TestUpStartsACodexGroup (NERD-5507): team up starts a Codex group's
+// workers as a spawn does: kind codex, --no-daemon and their type's sandbox
+// (read-only for review, full access for a coder, A59), never --name, each
+// ready on unknown once herdr reads it interactive, and active.
+func TestUpStartsACodexGroup(t *testing.T) {
+	t.Parallel()
+	config := strings.Replace(teamConfig, "groups.review]\nworkers = 0", "groups.review]\nworkers = 1", 1)
+	config = strings.Replace(config, "[projects.herdr-agentisan.groups.coder]\n", "[projects.herdr-agentisan.groups.coder]\nagent = { command = [\"codex\"] }\n", 1)
+	require.Contains(t, config, "groups.review]\nworkers = 1")
+	require.Contains(t, config, `agent = { command = ["codex"] }`)
+	f := upFixture(t, config)
+
+	res, err := f.svc.Up(t.Context(), workforce.UpRequest{})
+	require.NoError(t, err)
+	require.Len(t, res.Workers, 4)
+	agents := map[string]string{}
+	for _, w := range res.Workers {
+		agents[w.ID] = w.Agent
+		assert.Equal(t, store.StatusActive, f.row(t, w.ID).Status, w.ID)
+	}
+	assert.Equal(t, map[string]string{"ha-coder-1": "codex", "ha-coder-2": "codex", "ha-qa-1": "claude", "ha-review-1": "codex"}, agents)
+	full, readOnly := []any{"--no-daemon", "--sandbox", "danger-full-access"}, []any{"--no-daemon", "--sandbox", "read-only"}
+	assert.Equal(t, map[string]any{
+		"ha-coder-1": full, "ha-coder-2": full, "ha-qa-1": withHooksAny("--name", "ha-qa-1"), "ha-review-1": readOnly,
+	}, startArgs(f))
+}
+
+// TestUpACodexAtItsHookReviewFailsOnlyThatWorker (NERD-5507): a Codex
+// stopped at its startup hook review fails, with Codex's hint, and only it:
+// the rest of the fill comes up and stays.
+func TestUpACodexAtItsHookReviewFailsOnlyThatWorker(t *testing.T) {
+	t.Parallel()
+	config := strings.Replace(teamConfig, "groups.review]\nworkers = 0", "groups.review]\nworkers = 1", 1)
+	require.Contains(t, config, "groups.review]\nworkers = 1")
+	f := upFixture(t, config)
+	f.h.screen = "Hooks need review"
+
+	res, err := f.svc.Up(t.Context(), workforce.UpRequest{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ha-review-1 is at Codex's hook review")
+	var up []string
+	for _, w := range res.Workers {
+		up = append(up, w.ID)
+	}
+	assert.ElementsMatch(t, []string{"ha-coder-1", "ha-coder-2", "ha-qa-1"}, up, "the Claude workers come up")
+	for _, id := range up {
+		assert.Equal(t, store.StatusActive, f.row(t, id).Status, id)
+	}
+	assert.Equal(t, store.StatusFailed, f.row(t, "ha-review-1").Status)
+}
+
 // TestUpOpensTheDashboardAboveTheBoss: with none open, team up splits the
 // boss's pane down with the plugin's dashboard, unfocused, labels it, swaps
 // it above the boss and gives focus back to the pane that had it.
@@ -330,18 +381,24 @@ func TestUpFindsTheTeamsDashboard(t *testing.T) {
 }
 
 // TestUpOpensTheDashboardAboveTheBossAgent: the boss is the first agent in
-// the boss's tab, as the snapshot names it, not a shell before it.
+// the boss's tab, as the snapshot names it, not a shell before it, a Codex
+// boss as a Claude one (NERD-5507).
 func TestUpOpensTheDashboardAboveTheBossAgent(t *testing.T) {
 	t.Parallel()
-	f := upFixture(t, teamConfig)
-	f.h.setPane(f.boss, func(p *fakePane) { p.agent, p.name = "", "" })
-	boss := f.h.addPane(f.boss, "claude", "working")
+	for _, kind := range []string{"claude", "codex"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			f := upFixture(t, teamConfig)
+			f.h.setPane(f.boss, func(p *fakePane) { p.agent, p.name = "", "" })
+			boss := f.h.addPane(f.boss, kind, "working")
 
-	_, err := f.svc.Up(t.Context(), workforce.UpRequest{})
-	require.NoError(t, err)
-	opens := f.h.params("plugin.pane.open")
-	require.Len(t, opens, 1)
-	assert.Equal(t, boss, opens[0]["target_pane_id"])
+			_, err := f.svc.Up(t.Context(), workforce.UpRequest{})
+			require.NoError(t, err)
+			opens := f.h.params("plugin.pane.open")
+			require.Len(t, opens, 1)
+			assert.Equal(t, boss, opens[0]["target_pane_id"])
+		})
+	}
 }
 
 // TestUpDashboardIsBestEffort: whatever the dashboard lacks is reported

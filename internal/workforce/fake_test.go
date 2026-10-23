@@ -1,6 +1,7 @@
 package workforce_test
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -621,14 +622,32 @@ func (f *fixture) bindRow(t *testing.T, logicalID, group, pane string) {
 }
 
 // worker is one worker as a spawn leaves it: its tab in the team's
-// workspace, an idle agent and an active row.
+// workspace, an idle agent of the kind its group launches (kindOf) and an
+// active row.
 type worker struct{ ID, PaneID string }
 
 func (f *fixture) worker(t *testing.T, id, group string) worker {
 	t.Helper()
-	pane := f.h.addTab(f.ws, id, "claude", "idle")
+	return f.workerAs(t, id, group, f.kindOf(t, group))
+}
+
+// workerAs is worker with an agent of kind, claude or codex, whichever its
+// group launches: a Codex in a Claude group, as a mixed group has
+// (NERD-5507).
+func (f *fixture) workerAs(t *testing.T, id, group, kind string) worker {
+	t.Helper()
+	pane := f.h.addTab(f.ws, id, kind, "idle")
 	f.bindRow(t, id, group, pane)
 	return worker{ID: id, PaneID: pane}
+}
+
+// kindOf is the agent kind a worker of group launches under f's
+// configuration: its DefaultProvider, claude when nothing names one.
+func (f *fixture) kindOf(t *testing.T, group string) string {
+	t.Helper()
+	res, err := settings.Load(settings.LoadOptions{ConfigDir: f.config, Project: "herdr-agentisan", LookupEnv: func(string) (string, bool) { return "", false }})
+	require.NoError(t, err)
+	return cmp.Or(res.Profile.DefaultProvider(group), "claude")
 }
 
 // row reads one worker's row.
