@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -25,6 +26,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
 	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/store"
+	"github.com/abanna/herdr-agentisan/internal/testtmp"
 )
 
 // ready bounds how long a test waits for an in-process daemon to come up or
@@ -34,7 +36,9 @@ import (
 // seconds on a runner whose disk other suites keep busy: under an fsync hog a
 // fresh store.Open took a median of 2.3 s and up to 5.3 s, against 40 ms
 // idle. A daemon that is ready ends every wait at once, so the size costs
-// nothing when nothing is wrong.
+// nothing when nothing is wrong. On Linux the tests' state is on tmpfs
+// (testtmp, NERD-5503), where those fsyncs wait on no disk; ready stays for
+// a host without one, or a run that opts out.
 //
 // It covers one bounded thing at a time. The tests NERD-5354 F3 named,
 // TestBackWalksTheHistory (through backDaemon),
@@ -53,6 +57,19 @@ import (
 // failed. A timeout on a machine out of memory or swap is that, not the
 // test.
 const ready = herdr.CallTimeout + store.BusyTimeout
+
+// herdrDir is shortDir on the disk the tests had before testtmp moved them
+// to tmpfs (testtmp.Disk), for a fake herdr's socket. A herdr replaced at
+// its path is told apart by its socket's birth time when the filesystem
+// gives the new socket the old one's inode number (ADR-001 A3), and tmpfs
+// never does: there, no test would reach that check (NERD-5503).
+func herdrDir(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp(testtmp.Disk(), "hs")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	return dir
+}
 
 // shortDir returns a fresh directory with a short path: unix socket paths
 // are capped near 104 bytes, and t.TempDir embeds the whole test name.
@@ -107,7 +124,7 @@ type stream struct {
 
 func newHerdr(t *testing.T, protocol uint32) *fakeHerdr {
 	t.Helper()
-	f := &fakeHerdr{t: t, path: filepath.Join(shortDir(t), "h.sock"), streams: make(chan *stream, 64)}
+	f := &fakeHerdr{t: t, path: filepath.Join(herdrDir(t), "h.sock"), streams: make(chan *stream, 64)}
 	f.h = f.serve(protocol)
 	f.srv = herdrtest.StartAt(t, f.path, f.h)
 	return f
@@ -241,6 +258,7 @@ func ticksSinceBoot(start uint64) (time.Time, error) {
 // opts builds Options for one daemon on h, with fast polling.
 func opts(t *testing.T, stateDir string, h *fakeHerdr) daemon.Options {
 	t.Helper()
+	onDisk(t, h.path)
 	return daemon.Options{
 		StateDir:    stateDir,
 		HerdrSocket: h.path,
@@ -341,6 +359,7 @@ func (r *running) alive() bool {
 
 func mustIdentity(t *testing.T, sock string) daemon.Identity {
 	t.Helper()
+	onDisk(t, sock)
 	id, err := daemon.HerdrIdentity(sock)
 	require.NoError(t, err)
 	return id
@@ -357,11 +376,14 @@ func socketPath(t *testing.T, stateDir, herdrSocket string) string {
 func healthy(t *testing.T, stateDir string, h *fakeHerdr) daemon.HealthInfo {
 	t.Helper()
 	var info daemon.HealthInfo
-	require.Eventually(t, func() bool {
+	if !assert.Eventually(t, func() bool {
 		var err error
 		info, err = daemon.Health(t.Context(), socketPath(t, stateDir, h.path))
 		return err == nil
-	}, ready, 10*time.Millisecond, "the daemon never answered health")
+	}, ready, 10*time.Millisecond, "the daemon never answered health") {
+		logStacks(t)
+		t.FailNow()
+	}
 	return info
 }
 
@@ -384,9 +406,24 @@ func (r *running) healthy(t *testing.T, stateDir string, h *fakeHerdr) daemon.He
 		case <-time.After(10 * time.Millisecond):
 		}
 		if time.Now().After(deadline) {
+			logStacks(t)
 			t.Fatalf("the daemon never answered health within %v: %v", ready, err)
 		}
 	}
+}
+
+// logStacks logs every goroutine's stack when a daemon never answered
+// health, so the failure shows where its start waits: such dumps showed
+// the starts NERD-5503 fixed waiting in state.db's fsyncs.
+func logStacks(t *testing.T) {
+	t.Helper()
+	buf := make([]byte, 4<<20)
+	n := runtime.Stack(buf, true)
+	cut := ""
+	if n == len(buf) {
+		cut = ", cut at 4 MiB"
+	}
+	t.Logf("every goroutine when the wait ran out%s:\n%s", cut, buf[:n])
 }
 
 func TestPathsForClasses(t *testing.T) {
@@ -509,10 +546,11 @@ func TestRunExitsWhenHerdrGoes(t *testing.T) {
 
 // TestHerdrIdentityClasses: the identity tells one bound socket from every
 // later one at the same path, even when the filesystem reuses the inode
-// number, and does not change for the same socket.
+// number, and does not change for the same socket. Its socket is on the
+// disk (herdrDir), where an inode number is reused.
 func TestHerdrIdentityClasses(t *testing.T) {
 	t.Parallel()
-	path := filepath.Join(shortDir(t), "h.sock")
+	path := filepath.Join(herdrDir(t), "h.sock")
 	bind := func() {
 		ln, err := net.Listen("unix", path)
 		require.NoError(t, err)
@@ -1689,7 +1727,7 @@ func TestStillServedClasses(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			sock := filepath.Join(shortDir(t), "h.sock")
+			sock := filepath.Join(herdrDir(t), "h.sock")
 			srv := tc.setup(t, sock)
 			ctx := t.Context()
 			if tc.quiet {
@@ -1729,7 +1767,7 @@ func TestStillServedClasses(t *testing.T) {
 			if strings.Contains(name, "search") && os.Geteuid() == 0 {
 				t.Skip("root searches any directory")
 			}
-			sock := filepath.Join(shortDir(t), "h.sock")
+			sock := filepath.Join(herdrDir(t), "h.sock")
 			srv := herdrtest.StartAt(t, sock, answer(22, false))
 			ident := mustIdentity(t, sock)
 			replacement := swap(t, sock, srv)
@@ -1754,7 +1792,7 @@ func TestStillServedACrashedServer(t *testing.T) {
 	t.Parallel()
 	t.Run("gone once nothing holds its listener", func(t *testing.T) {
 		t.Parallel()
-		sock := filepath.Join(shortDir(t), "h.sock")
+		sock := filepath.Join(herdrDir(t), "h.sock")
 		srv := herdrtest.StartAt(t, sock, pong(22))
 		ident := mustIdentity(t, sock)
 		srv.Crash()
@@ -1775,7 +1813,7 @@ func TestStillServedACrashedServer(t *testing.T) {
 	// had and that descriptor.
 	heldCrash := func(t *testing.T) (string, daemon.Identity, *os.File) {
 		t.Helper()
-		sock := filepath.Join(shortDir(t), "h.sock")
+		sock := filepath.Join(herdrDir(t), "h.sock")
 		ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: sock, Net: "unix"})
 		require.NoError(t, err)
 		ln.SetUnlinkOnClose(false)
@@ -1887,7 +1925,7 @@ func TestStillServedACrashedServer(t *testing.T) {
 // must end the daemon at this poll, not the next one.
 func TestStillServedChecksTheServerAfterThePing(t *testing.T) {
 	t.Parallel()
-	sock := filepath.Join(shortDir(t), "h.sock")
+	sock := filepath.Join(herdrDir(t), "h.sock")
 	swapped := make(chan net.Listener, 1)
 	var once sync.Once
 	srv := herdrtest.StartAt(t, sock, func(r herdrtest.Request) herdrtest.Reply {

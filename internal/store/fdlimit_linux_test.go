@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/abanna/herdr-agentisan/internal/store"
+	"github.com/abanna/herdr-agentisan/internal/testtmp"
 )
 
 // fdHelperEnv switches the test binary into the descriptor-limit helper. The
@@ -27,6 +28,7 @@ func TestMain(m *testing.M) {
 		helperFDLimit(dir)
 		return
 	}
+	testtmp.Use()
 	os.Exit(m.Run())
 }
 
