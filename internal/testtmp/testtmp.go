@@ -11,7 +11,10 @@
 // its TestMain. Only _test files import it.
 package testtmp
 
-import "errors"
+import (
+	"errors"
+	"os"
+)
 
 const (
 	// Base is where the tests' temporary directories go: Linux's shared
@@ -35,3 +38,18 @@ const (
 
 // ErrBase means the base is too long for the tests' deepest unix socket.
 var ErrBase = errors.New("too long a base for the tests' unix sockets")
+
+// disk is the temporary directory Use moved the tests from, or "" when it
+// moved nothing. Use sets it in TestMain, before m.Run starts any test.
+var disk string
+
+// Disk is the temporary directory the tests had before Use moved them onto
+// Base, or os.TempDir when it moved nothing. A test that needs a disk's own
+// behaviour makes its files there: tmpfs never gives a new file an old
+// inode number, which TestHerdrIdentityClasses needs a filesystem to do.
+func Disk() string {
+	if disk != "" {
+		return disk
+	}
+	return os.TempDir()
+}

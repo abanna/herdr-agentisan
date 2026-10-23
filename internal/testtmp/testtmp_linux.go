@@ -13,14 +13,18 @@ import (
 // Base is a tmpfs this process can write, with MinFree room, and Env is not
 // "keep". Otherwise it leaves TMPDIR alone and writes one line to stderr
 // saying where the tests' state goes and why. Call it from TestMain, before
-// m.Run.
+// m.Run. Disk is then where they were.
 //
 // It panics on a Base past the tests' socket room (ErrBase): only an edit of
 // Base can cause it, and it must fail every test binary at once, not as a
 // socket error in a few tests.
 func Use() {
+	before := os.TempDir()
 	if err := use(Base, host()); err != nil {
 		panic(err)
+	}
+	if os.TempDir() != before {
+		disk = before
 	}
 }
 

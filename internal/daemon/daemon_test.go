@@ -26,6 +26,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
 	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/store"
+	"github.com/abanna/herdr-agentisan/internal/testtmp"
 )
 
 // ready bounds how long a test waits for an in-process daemon to come up or
@@ -530,10 +531,16 @@ func TestRunExitsWhenHerdrGoes(t *testing.T) {
 
 // TestHerdrIdentityClasses: the identity tells one bound socket from every
 // later one at the same path, even when the filesystem reuses the inode
-// number, and does not change for the same socket.
+// number, and does not change for the same socket. Its socket is on the
+// disk the tests had before testtmp moved them to tmpfs (testtmp.Disk):
+// tmpfs never reuses an inode number, so there the birth time that tells a
+// reused one apart would never be tested (NERD-5503).
 func TestHerdrIdentityClasses(t *testing.T) {
 	t.Parallel()
-	path := filepath.Join(shortDir(t), "h.sock")
+	dir, err := os.MkdirTemp(testtmp.Disk(), "ds")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "h.sock")
 	bind := func() {
 		ln, err := net.Listen("unix", path)
 		require.NoError(t, err)
@@ -560,7 +567,7 @@ func TestHerdrIdentityClasses(t *testing.T) {
 
 	plain := filepath.Join(shortDir(t), "f")
 	require.NoError(t, os.WriteFile(plain, nil, 0o600))
-	_, err := daemon.HerdrIdentity(plain)
+	_, err = daemon.HerdrIdentity(plain)
 	require.ErrorIs(t, err, daemon.ErrHerdrGone, "a regular file is no server")
 	_, err = daemon.HerdrIdentity(filepath.Join(shortDir(t), "absent.sock"))
 	require.ErrorIs(t, err, daemon.ErrHerdrGone)

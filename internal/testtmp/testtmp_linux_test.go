@@ -126,6 +126,18 @@ func TestUseRefusesALongBase(t *testing.T) {
 	assert.Equal(t, [][2]string{{"TMPDIR", "/run/shm"}}, h.set)
 }
 
+// TestDiskIsWhereTheTestsWere runs Use on this host: whether it moved the
+// tests onto /dev/shm or not, Disk is the temporary directory they had
+// before, never the tmpfs they were moved to.
+func TestDiskIsWhereTheTestsWere(t *testing.T) {
+	t.Setenv(testtmp.Env, "")
+	t.Setenv("TMPDIR", t.TempDir())
+	before := os.TempDir()
+	testtmp.Use()
+	assert.Equal(t, before, testtmp.Disk())
+	t.Logf("TMPDIR after Use: %s", os.Getenv("TMPDIR"))
+}
+
 // TestUseOnTheHostKeepsAnOptOut runs Use on this host with the opt-out set:
 // whatever /dev/shm is here, TMPDIR stays as it was.
 func TestUseOnTheHostKeepsAnOptOut(t *testing.T) {
