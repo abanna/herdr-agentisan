@@ -95,7 +95,9 @@ same launch, and one it cannot build refuses the whole team up only when a
 debugger is to open. Its model is `--model`, else its group's, else `[agent]`'s
 when `[agent]`'s command is claude; while `[routing] enabled` is on, routing's
 `alex_debugger` role chooses its model and effort (ADR-001 A50). A debugger
-reports no `ctx` and writes no handoff, so retire it with a plain
+reports its item and stage through A42's turn hooks, which spawn puts into
+its launch's one `--settings` object beside the read fence, but it reports
+no `ctx` and writes no handoff, so retire it with a plain
 `worker retire <id>`:
 `--after-handoff` is refused for one bound to a pane (an unbound one is
 retired with nothing closed, as any is).

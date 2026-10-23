@@ -3,6 +3,7 @@ package workforce
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -516,6 +517,46 @@ func passesSettings(args []string) bool {
 	})
 }
 
+// withTurnHooks is the debugger's launch args with A42's turn hooks put into
+// the one --settings object they pass, its read fence (A32): Claude Code
+// applies only the last --settings it is given, whole, so the hooks cannot
+// ride a second one (A42). The fence's own keys are kept, each value as it
+// was; a launch with no such object, more than one, or one with hooks of its
+// own is refused, since its fence is not the one this knows.
+func withTurnHooks(args []string) ([]string, error) {
+	i := slices.Index(args, settingsFlag)
+	n := 0
+	for _, a := range args {
+		if a == settingsFlag || strings.HasPrefix(a, settingsFlag+"=") {
+			n++
+		}
+	}
+	if i < 0 || i+1 == len(args) || n != 1 {
+		return nil, fmt.Errorf("%w: it passes %d --settings flags, not one object", ErrConfig, n)
+	}
+	var fence map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(args[i+1]), &fence); err != nil || fence == nil {
+		return nil, fmt.Errorf("%w: its --settings is not a JSON object", ErrConfig)
+	}
+	if _, ok := fence["hooks"]; ok {
+		return nil, fmt.Errorf("%w: its --settings has hooks of its own", ErrConfig)
+	}
+	var hooks struct {
+		Hooks json.RawMessage `json:"hooks"`
+	}
+	if err := json.Unmarshal([]byte(turnHooks), &hooks); err != nil {
+		return nil, fmt.Errorf("%w: the turn hooks: %w", ErrConfig, err)
+	}
+	fence["hooks"] = hooks.Hooks
+	one, err := json.Marshal(fence)
+	if err != nil {
+		return nil, fmt.Errorf("%w: the debugger's --settings: %w", ErrConfig, err)
+	}
+	out := slices.Clone(args)
+	out[i+1] = string(one)
+	return out, nil
+}
+
 // choice is the model and effort ("" for none) a spawn's agents start with,
 // chosen before plan: routing's decision while it is on, else --model or the
 // type's agent, and --effort. provider is the agent routing decided for; ""
@@ -532,8 +573,9 @@ var effortPattern = regexp.MustCompile(`^[a-z]{1,16}$`)
 // for the debugger type its launch's (dbg, A32), --no-daemon for Codex if
 // absent, c's model and effort and, for Claude only, --name with the id
 // (herdr names a Codex), then the turn hooks as --settings, unless the
-// command passes its own. A debugger's tab also gets its launch's
-// environment.
+// command passes its own; the debugger's go into its launch's one
+// --settings object instead (withTurnHooks). A debugger's tab also gets its
+// launch's environment.
 func plan(p *settings.Profile, typ string, c choice, ids []string, dbg *debugger.Command) ([]planned, error) {
 	agent := p.AgentFor(typ)
 	var env map[string]string
@@ -541,7 +583,11 @@ func plan(p *settings.Profile, typ string, c choice, ids []string, dbg *debugger
 		if dbg == nil {
 			return nil, fmt.Errorf("%w: %s: its launch was not built", ErrConfig, typ)
 		}
-		agent.Command = append(agent.Command, dbg.Args...)
+		args, err := withTurnHooks(dbg.Args)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %s's launch: %w", ErrConfig, typ, err)
+		}
+		agent.Command = append(agent.Command, args...)
 		env = dbg.Env
 	}
 	if err := settings.CheckAgentCommand(agent.Command); err != nil {
@@ -565,7 +611,11 @@ func plan(p *settings.Profile, typ string, c choice, ids []string, dbg *debugger
 	if c.provider != "" && kind != c.provider {
 		return nil, fmt.Errorf("%w: %s's agent changed from %s to %s while routing chose its model; spawn again", ErrConfig, typ, c.provider, kind)
 	}
-	own := kind == "claude" && passesSettings(agent.Command[1:])
+	// own is a command passing a --settings of the user's, which starts
+	// without the turn hooks; the debugger's is the plugin's fence, which
+	// carries them already.
+	hooked := typ == settings.DebuggerType
+	own := kind == "claude" && !hooked && passesSettings(agent.Command[1:])
 	out := make([]planned, 0, len(ids))
 	for _, id := range ids {
 		args := slices.Clone(agent.Command[1:])
@@ -584,7 +634,7 @@ func plan(p *settings.Profile, typ string, c choice, ids []string, dbg *debugger
 		}
 		if kind == "claude" {
 			args = append(args, "--name", id)
-			if !own {
+			if !own && !hooked {
 				args = append(args, settingsFlag, turnHooks)
 			}
 		}
