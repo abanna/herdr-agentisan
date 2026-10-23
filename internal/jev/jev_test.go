@@ -194,3 +194,41 @@ func TestAskEndsAtItsTimeout(t *testing.T) {
 	require.ErrorIs(t, err, jev.ErrCall)
 	assert.NotContains(t, err.Error(), testKey)
 }
+
+// TestAskNeverRetriesADroppedConnection: the rules' jev_retries is 0, and a
+// request that gets no answer at all is not sent again. The server hangs up
+// on every request and counts them; TestAskRefusals' counts cover only
+// answered statuses, and a timeout cannot show a second send (the retry would
+// share the ended context).
+func TestAskNeverRetriesADroppedConnection(t *testing.T) {
+	t.Parallel()
+	srv, hits := server(t, func(w http.ResponseWriter, _ *http.Request) {
+		c, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			_ = c.Close()
+		}
+	})
+	_, err := jev.Client{URL: srv.URL, Key: testKey}.Ask(t.Context(), []byte(`{}`), time.Second)
+	require.ErrorIs(t, err, jev.ErrCall)
+	srv.Close()
+	assert.Equal(t, int32(1), hits.Load(), "one POST, whatever the failure")
+}
+
+// TestAskReadsAnAnswerOfExactlyTheLimit: an answer of 64 KiB is read, one
+// byte more is not.
+func TestAskReadsAnAnswerOfExactlyTheLimit(t *testing.T) {
+	t.Parallel()
+	pad := func(n int) string {
+		head, tail := `{"model":"jev-1.13.0","answers":{"a":1},"pad":"`, `"}`
+		return head + strings.Repeat("x", n-len(head)-len(tail)) + tail
+	}
+	for n, ok := range map[int]bool{64 << 10: true, 64<<10 + 1: false} {
+		srv, _ := server(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, pad(n)) })
+		_, err := jev.Client{URL: srv.URL, Key: testKey}.Ask(t.Context(), []byte(`{}`), time.Second)
+		if ok {
+			require.NoError(t, err, "%d bytes", n)
+		} else {
+			require.ErrorIs(t, err, jev.ErrAnswer, "%d bytes", n)
+		}
+	}
+}

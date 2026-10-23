@@ -132,16 +132,21 @@ func TestParseRulesRefusesWhatJevCannotDo(t *testing.T) {
 		"a question key it does not know": {func(d map[string]any) {
 			at(d, "jev_request_template", "questions", "complexity")["weight"] = 2
 		}, "unknown field"},
-		"no confidence threshold":   {func(d map[string]any) { delete(at(d, "policy"), "confidence_threshold") }, "confidence_threshold"},
-		"a confidence of 0":         {func(d map[string]any) { at(d, "policy")["confidence_threshold"] = 0 }, "confidence_threshold"},
-		"a confidence above 1":      {func(d map[string]any) { at(d, "policy")["confidence_threshold"] = 1.01 }, "confidence_threshold"},
-		"a sufficiency below 0":     {func(d map[string]any) { at(d, "policy")["sufficiency_threshold"] = -0.2 }, "sufficiency_threshold"},
-		"no sufficiency threshold":  {func(d map[string]any) { delete(at(d, "policy"), "sufficiency_threshold") }, "sufficiency_threshold"},
-		"a threshold in quotes":     {func(d map[string]any) { at(d, "policy")["confidence_threshold"] = "0.75" }, "do not decode"},
-		"no timeout":                {func(d map[string]any) { delete(at(d, "policy"), "jev_timeout_ms") }, "jev_timeout_ms"},
-		"a timeout of 0":            {func(d map[string]any) { at(d, "policy")["jev_timeout_ms"] = 0 }, "jev_timeout_ms"},
-		"a timeout past a minute":   {func(d map[string]any) { at(d, "policy")["jev_timeout_ms"] = 60_001 }, "jev_timeout_ms"},
-		"a retry":                   {func(d map[string]any) { at(d, "policy")["jev_retries"] = 1 }, "jev_retries must be 0"},
+		"no confidence threshold":  {func(d map[string]any) { delete(at(d, "policy"), "confidence_threshold") }, "confidence_threshold"},
+		"a confidence of 0":        {func(d map[string]any) { at(d, "policy")["confidence_threshold"] = 0 }, "confidence_threshold"},
+		"a confidence above 1":     {func(d map[string]any) { at(d, "policy")["confidence_threshold"] = 1.01 }, "confidence_threshold"},
+		"a sufficiency below 0":    {func(d map[string]any) { at(d, "policy")["sufficiency_threshold"] = -0.2 }, "sufficiency_threshold"},
+		"a sufficiency of 0":       {func(d map[string]any) { at(d, "policy")["sufficiency_threshold"] = 0 }, "sufficiency_threshold"},
+		"no sufficiency threshold": {func(d map[string]any) { delete(at(d, "policy"), "sufficiency_threshold") }, "sufficiency_threshold"},
+		"a threshold in quotes":    {func(d map[string]any) { at(d, "policy")["confidence_threshold"] = "0.75" }, "do not decode"},
+		"no timeout":               {func(d map[string]any) { delete(at(d, "policy"), "jev_timeout_ms") }, "jev_timeout_ms"},
+		"a timeout of 0":           {func(d map[string]any) { at(d, "policy")["jev_timeout_ms"] = 0 }, "jev_timeout_ms"},
+		"a timeout past a minute":  {func(d map[string]any) { at(d, "policy")["jev_timeout_ms"] = 60_001 }, "jev_timeout_ms"},
+		"a retry":                  {func(d map[string]any) { at(d, "policy")["jev_retries"] = 1 }, "jev_retries must be 0"},
+		"retries below 0":          {func(d map[string]any) { at(d, "policy")["jev_retries"] = -1 }, "jev_retries must be 0"},
+		"a model past 64 characters": {func(d map[string]any) {
+			at(d, "jev_request_template")["model"] = "j" + strings.Repeat("1", 64)
+		}, "is not a model name"},
 		"no retries":                {func(d map[string]any) { delete(at(d, "policy"), "jev_retries") }, "jev_retries must be 0"},
 		"a template that is a list": {func(d map[string]any) { d["jev_request_template"] = []any{} }, "does not decode"},
 	}
@@ -154,9 +159,11 @@ func TestParseRulesRefusesWhatJevCannotDo(t *testing.T) {
 		require.ErrorIs(t, err, routing.ErrInvalid, name)
 		assert.Contains(t, err.Error(), tc.wantIn, name)
 	}
-	// The edges hold: a threshold of exactly 1 and a timeout of a minute.
+	// The edges hold: a threshold of exactly 1, a timeout of a minute and a
+	// model of 64 characters.
 	doc := rulesDoc(t)
 	at(doc, "policy")["confidence_threshold"], at(doc, "policy")["jev_timeout_ms"] = 1, 60_000
+	at(doc, "jev_request_template")["model"] = "j" + strings.Repeat("1", 63)
 	raw, err := json.Marshal(doc)
 	require.NoError(t, err)
 	_, err = routing.ParseRules(raw)
@@ -232,6 +239,7 @@ func TestApplyJev(t *testing.T) {
 		"demanding just under confidence":  {answers: answers(routing.ComplexityDemanding, 0.7499, 0.95), binding: "claude_mid", why: routing.ReasonJevLowConfidence},
 		"demanding just under sufficiency": {answers: answers(routing.ComplexityDemanding, 0.95, 0.7999), binding: "claude_mid", why: routing.ReasonJevInsufficient},
 		"unknown, however sure":            {answers: answers(routing.ComplexityUnknown, 1, 1), binding: "claude_mid", why: routing.ReasonJevUnknown},
+		"unknown, and unsure":              {answers: answers(routing.ComplexityUnknown, 0.1, 0.99), binding: "claude_mid", why: routing.ReasonJevUnknown},
 		"bounded but insufficient":         {answers: answers(routing.ComplexityBounded, 0.95, 0.2), binding: "claude_mid", why: routing.ReasonJevInsufficient},
 		"unknown and insufficient":         {answers: answers(routing.ComplexityUnknown, 0.95, 0.2), binding: "claude_mid", why: routing.ReasonJevInsufficient},
 		"bounded with low confidence":      {answers: answers(routing.ComplexityBounded, 0.3, 0.95), binding: "claude_mid", why: routing.ReasonJevLowConfidence},
@@ -409,6 +417,8 @@ func TestApplyJevBoundsWhatItRecords(t *testing.T) {
 	got := p.ApplyJev(asking(t, p), "", nil, errors.New(strings.Repeat("é", 150)+"\xff"))
 	assert.Len(t, got.JevError, 200)
 	assert.True(t, utf8.ValidString(got.JevError))
+	got = p.ApplyJev(asking(t, p), "", nil, errors.New(strings.Repeat("x", 300)))
+	assert.Len(t, got.JevError, 200, "an ASCII error is cut at exactly 200 bytes")
 	got = p.ApplyJev(asking(t, p), "jev-"+strings.Repeat("9", 100), answers(routing.ComplexityDemanding, 0.9, 0.9), nil)
 	assert.Len(t, got.JevModelReturned, 64)
 	assert.Equal(t, routing.ReasonJevFailure, got.FallbackReason)
