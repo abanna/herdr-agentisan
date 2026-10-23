@@ -23,12 +23,12 @@ type Facts struct {
 }
 
 // Deployment is the user's [routing]: whether routing decides a spawn's
-// model, the bindings' facts, the user's own overrides, role to binding, and
-// what [routing.jev] says of asking Jev.
+// model, the bindings' facts, the user's own overrides, role to its
+// bindings, and what [routing.jev] says of asking Jev.
 type Deployment struct {
-	Enabled   bool              `json:"enabled"`
-	Bindings  map[string]Facts  `json:"bindings,omitempty"`
-	Overrides map[string]string `json:"overrides,omitempty"`
+	Enabled   bool                    `json:"enabled"`
+	Bindings  map[string]Facts        `json:"bindings,omitempty"`
+	Overrides map[string]RoleOverride `json:"overrides,omitempty"`
 	// Jev is nil while [routing.jev] sets none of its facts, so a
 	// deployment without them keeps the version it had before them.
 	Jev *JevFacts `json:"jev,omitempty"`
@@ -42,6 +42,23 @@ type JevFacts struct {
 	Enabled        bool `json:"enabled"`
 	ConfidencePct  *int `json:"confidence_pct,omitempty"`
 	SufficiencyPct *int `json:"sufficiency_pct,omitempty"`
+}
+
+// RoleOverride is the user's override of one role (A63): at most one
+// binding per provider, each binding only workers of its own provider. A
+// role's override in [routing.overrides] is a binding's name or a list of
+// them.
+type RoleOverride []string
+
+// MarshalJSON writes one binding as its name, as an override was written
+// before it could hold one per provider, so a deployment written as then
+// keeps its policy version; a list is written sorted, so its order is no
+// fact of the version.
+func (o RoleOverride) MarshalJSON() ([]byte, error) {
+	if len(o) == 1 {
+		return json.Marshal(o[0]) //nolint:wrapcheck // a string always encodes
+	}
+	return json.Marshal(slices.Sorted(slices.Values(o))) //nolint:wrapcheck // strings always encode
 }
 
 // CheckJevPct checks a threshold the user sets in whole percents.
@@ -67,6 +84,26 @@ func (r *Rules) CheckFacts(binding string, f Facts) error {
 	return nil
 }
 
+// CheckOverrides checks the user's override of one role: at least one
+// binding, each one CheckOverride takes, and at most one per provider.
+func (r *Rules) CheckOverrides(role string, o RoleOverride) error {
+	if len(o) == 0 {
+		return fmt.Errorf("%w: the list names no binding; name one per provider, or remove the override", ErrOverrideRefused)
+	}
+	seen := map[string]string{}
+	for _, binding := range o {
+		if err := r.CheckOverride(role, binding); err != nil {
+			return err
+		}
+		provider := r.bindings[binding].Provider
+		if other, ok := seen[provider]; ok {
+			return fmt.Errorf("%w: %s and %s are both %s bindings; an override sets at most one binding per provider", ErrOverrideRefused, other, binding, provider)
+		}
+		seen[provider] = binding
+	}
+	return nil
+}
+
 // CheckOverride checks the user's override of one role: a binding the role
 // allows, and a premium one only where the rules let the user choose it.
 func (r *Rules) CheckOverride(role, binding string) error {
@@ -83,10 +120,11 @@ func (r *Rules) CheckOverride(role, binding string) error {
 // Policy is the rules with the user's deployment applied: what Resolve
 // decides by.
 type Policy struct {
-	rules     *Rules
-	enabled   bool
-	bindings  map[string]Binding
-	overrides map[string]string
+	rules    *Rules
+	enabled  bool
+	bindings map[string]Binding
+	// overrides are the user's, role to provider to binding.
+	overrides map[string]map[string]string
 	// jevOn is [routing.jev] enabled; thresholds are the rules', or the
 	// user's in their place.
 	jevOn      bool
@@ -100,7 +138,7 @@ type thresholds struct{ confidence, sufficiency float64 }
 // New applies a deployment to the rules, checking every fact and override.
 // An error names the [routing] key it is about.
 func New(r *Rules, d Deployment) (Policy, error) {
-	p := Policy{rules: r, enabled: d.Enabled, bindings: maps.Clone(r.bindings), overrides: maps.Clone(d.Overrides)}
+	p := Policy{rules: r, enabled: d.Enabled, bindings: maps.Clone(r.bindings), overrides: map[string]map[string]string{}}
 	p.thresholds = thresholds{confidence: r.jev.confidence, sufficiency: r.jev.sufficiency}
 	if j := d.Jev; j != nil {
 		p.jevOn = j.Enabled
@@ -138,8 +176,12 @@ func New(r *Rules, d Deployment) (Policy, error) {
 		p.bindings[name] = b
 	}
 	for _, role := range slices.Sorted(maps.Keys(d.Overrides)) {
-		if err := r.CheckOverride(role, d.Overrides[role]); err != nil {
+		if err := r.CheckOverrides(role, d.Overrides[role]); err != nil {
 			return Policy{}, fmt.Errorf("routing.overrides.%s: %w", role, err)
+		}
+		p.overrides[role] = map[string]string{}
+		for _, binding := range d.Overrides[role] {
+			p.overrides[role][r.bindings[binding].Provider] = binding
 		}
 	}
 	// A Deployment always encodes: its maps have string keys.
@@ -158,6 +200,10 @@ func (p Policy) Enabled() bool { return p.enabled }
 // AsksJev: only while routing decides the model and [routing.jev] enabled
 // is true, so no call is billed for a decision nobody applies (A57).
 func (p Policy) JevEnabled() bool { return p.enabled && p.jevOn }
+
+// UserOverride is the binding the user's override sets for role's workers of
+// provider; "" when it sets none for that provider (A63).
+func (p Policy) UserOverride(role, provider string) string { return p.overrides[role][provider] }
 
 // Version names the rules and the deployment a decision was made by: the
 // rules' schema version, then a digest of both.

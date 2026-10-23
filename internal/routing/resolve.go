@@ -240,10 +240,13 @@ func (p Policy) Resolve(req Request, now time.Time) (Decision, error) {
 	return d, nil
 }
 
-// choose picks the binding: the user's override, the boss's, or the role's
-// default for the provider. An override sets d.Override.
+// choose picks the binding: the user's override for the worker's provider,
+// the boss's, or the role's default for the provider. An override sets
+// d.Override. The user's override binds only its own provider's workers
+// (A63), so the boss's --model is held to the user's for that provider
+// alone.
 func (p Policy) choose(role Role, req Request, d *Decision) (string, error) {
-	user := p.overrides[role.Name]
+	user := p.UserOverride(role.Name, req.Provider)
 	name, by := user, byUser
 	if req.Model != "" {
 		boss, err := p.named(role, req.Model)
