@@ -2,6 +2,7 @@ package dashboard_test
 
 import (
 	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
@@ -129,4 +130,42 @@ func TestGroupViewNamesTheAgent(t *testing.T) {
 	colour := dashboard.Render(dashboard.Frame{Snapshot: snap, Selection: dashboard.Selection{Agent: 3}, Now: at, Group: "coder"}, 97, 60, fullColour)
 	assert.Regexp(t, dimSGR+`codex`, colour, "the agent is dim")
 	assert.NotRegexp(t, dimSGR+`sol6\.1`, colour, "the model is not")
+}
+
+// TestGroupViewModelLineStyles pins both sides of A68's separator: the dot
+// is dim like the agent, and the model retains its default foreground.
+func TestGroupViewModelLineStyles(t *testing.T) {
+	t.Parallel()
+
+	snap := &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "coder", Agents: []snapshot.Agent{
+		{Name: "a", Status: snapshot.StatusWorking, Kind: "codex", Model: "gpt-6.1-sol"},
+	}}}}
+	frame := dashboard.Render(dashboard.Frame{Snapshot: snap, Group: "coder", Now: at}, 97, 20, fullColour)
+	var modelLine string
+	for _, line := range strings.Split(frame, "\n") {
+		if strings.Contains(ansi.Strip(line), "codex · sol6.1") {
+			modelLine = line
+			break
+		}
+	}
+	require.NotEmpty(t, modelLine, "the group view draws the provider, dot and model together")
+
+	for name, tc := range map[string]struct{ text, sgr string }{
+		"the dot is dim":     {text: "·", sgr: dimSGR + `[^\x1b]*$`},
+		"the model is plain": {text: "sol6.1", sgr: `^\x1b\[(0|39)?m[^\x1b]*$`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			start := strings.Index(modelLine, tc.text)
+			require.Positive(t, start)
+			prefix := modelLine[:start]
+			last := strings.LastIndex(prefix, "\x1b[")
+			require.GreaterOrEqual(t, last, 0, "the text has an explicit style transition")
+			// Inspect the active SGR at the text, allowing adjacent equal-style
+			// segments to be coalesced. A model must follow a default-foreground
+			// reset; excluding the dim foreground alone would accept green.
+			assert.Regexp(t, tc.sgr, prefix[last:])
+		})
+	}
 }
