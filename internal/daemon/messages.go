@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog"
 
@@ -331,7 +332,7 @@ func (d *dispatcher) claim(ctx context.Context, to store.Address) (store.Message
 // write's statement (NERD-5355). It reports whether m landed.
 func (d *dispatcher) deliver(ctx context.Context, m store.Message, target string) bool {
 	ctx = context.WithoutCancel(ctx)
-	_, err := d.c.PromptAgent(ctx, target, cleanText(textOf(m)))
+	_, err := d.c.PromptAgent(ctx, target, offToken(cleanText(textOf(m))))
 	sctx, cancel := context.WithTimeout(ctx, settleTimeout)
 	defer cancel()
 	log := d.log.With().Str("message", m.ID).Str("recipient", m.To.ID).Str("kind", m.To.Kind).Int("attempts", m.Attempts).Logger()
@@ -499,6 +500,24 @@ func cleanText(text string) string {
 		}
 		return r
 	}, strings.ReplaceAll(text, "\r\n", "\n"))
+}
+
+// offToken is text, cleaned, ended off a completion token (A30): one space
+// is added when its last token, the run after its last white space, starts
+// with @ or $. Codex opens its file or mention popup on such a token once
+// the paste lands, and the popup takes the Enter herdr presses after it, so
+// the text would stay in the draft while the message is recorded delivered.
+// Claude and Codex trim the space; any other text is typed as it is.
+func offToken(text string) string {
+	last := text
+	if i := strings.LastIndexFunc(text, unicode.IsSpace); i >= 0 {
+		_, size := utf8.DecodeRuneInString(text[i:])
+		last = text[i+size:]
+	}
+	if strings.HasPrefix(last, "@") || strings.HasPrefix(last, "$") {
+		return text + " "
+	}
+	return text
 }
 
 // messageEvent is m as a message event carries it, with reason as the row

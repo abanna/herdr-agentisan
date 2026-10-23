@@ -19,8 +19,8 @@ import (
 )
 
 // The modes the stand-in answers in. The zero mode answers `pr` with the PR
-// list, `view` with what View set for that PR (and fails without it) and
-// `api` with the issue count.
+// list, `view` with what View set for that PR and `review` with what Review
+// set for it (each failing without it), and `api` with the issue count.
 const (
 	// ModeFail writes the stderr Fail set and exits 1.
 	ModeFail = "fail"
@@ -81,8 +81,15 @@ func (f *Fake) View(t testing.TB, n int, answer string) {
 	f.write(t, "view."+strconv.Itoa(n), answer)
 }
 
-// CallMode sets how one call, "pr", "view" or "api", answers from now on,
-// over Mode; "" answers as Mode says.
+// Review sets what the review query (`gh api graphql` with a user field)
+// prints for PR n from now on.
+func (f *Fake) Review(t testing.TB, n int, answer string) {
+	t.Helper()
+	f.write(t, "review."+strconv.Itoa(n), answer)
+}
+
+// CallMode sets how one call, "pr", "view", "review" or "api", answers from
+// now on, over Mode; "" answers as Mode says.
 func (f *Fake) CallMode(t testing.TB, call, mode string) {
 	t.Helper()
 	f.write(t, "mode."+call, mode)
@@ -95,8 +102,8 @@ func (f *Fake) Fail(t testing.TB, stderr string) {
 	f.Mode(t, ModeFail)
 }
 
-// Calls are every call so far, in order: "pr" (pr list), "view" (pr view)
-// or "api".
+// Calls are every call so far, in order: "pr" (pr list), "view" (pr view),
+// "review" (the review query) or "api".
 func (f *Fake) Calls(t testing.TB) []string {
 	t.Helper()
 	return f.lines(t, "calls")

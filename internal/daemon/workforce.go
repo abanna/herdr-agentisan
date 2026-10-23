@@ -260,16 +260,17 @@ func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleCl
 		return nil
 	}
 	return &workforce.Service{
-		Herdr:      herdr.Client{SocketPath: o.HerdrSocket, Dialed: o.onServer(ident)},
-		Store:      st,
-		ConfigDir:  o.Team.ConfigDir,
-		Idle:       idle,
-		Now:        o.Now,
-		Preflight:  o.Hooks.Preflight,
-		CodexHooks: o.Team.CodexHooks,
-		Dashboard:  o.Team.Dashboard,
-		Debugger:   debugger.Launch{Root: o.Team.PluginRoot, Bin: o.Team.Binary, ServerDir: serverDir},
-		Routed:     o.routed,
+		Herdr:          herdr.Client{SocketPath: o.HerdrSocket, Dialed: o.onServer(ident)},
+		Store:          st,
+		ConfigDir:      o.Team.ConfigDir,
+		Idle:           idle,
+		Now:            o.Now,
+		Preflight:      o.Hooks.Preflight,
+		CodexHooks:     o.Team.CodexHooks,
+		CodexTurnHooks: o.Team.CodexTurnHooks,
+		Dashboard:      o.Team.Dashboard,
+		Debugger:       debugger.Launch{Root: o.Team.PluginRoot, Bin: o.Team.Binary, ServerDir: serverDir},
+		Routed:         o.routed,
 	}
 }
 

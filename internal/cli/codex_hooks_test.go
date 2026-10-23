@@ -146,3 +146,68 @@ func TestCodexHooksErrors(t *testing.T) {
 		require.Error(t, err, args)
 	}
 }
+
+// TestCodexHooksTurn: --turn installs the turn hooks with the ctx hooks, and
+// names each line's report, since Stop runs both; --check --turn fails until
+// all five are in, and names --turn in its hint.
+func TestCodexHooksTurn(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	ctx := codexEnv(t, map[string]string{"CODEX_HOME": home})
+	path := filepath.Join(home, codexhooks.FileName)
+
+	_, err := runCtx(ctx, "codex", "hooks")
+	require.NoError(t, err)
+	_, err = runCtx(ctx, "codex", "hooks", "--check", "--turn")
+	require.ErrorIs(t, err, codexhooks.ErrNotInstalled, "the ctx hooks alone are not all five")
+	assert.Contains(t, err.Error(), "run herdr-agentisan codex hooks --turn")
+
+	out, err := runCtx(ctx, "codex", "hooks", "--turn")
+	require.NoError(t, err)
+	assert.Contains(t, out, path+": written")
+	for _, line := range []string{
+		"  PostToolUse      codex unchanged\n", "  Stop             codex unchanged\n", "  PostCompact      codex unchanged\n",
+		"  Stop             turn  added\n", "  UserPromptSubmit turn  added\n",
+	} {
+		assert.Contains(t, out, line)
+	}
+	assert.Contains(t, out, "Trust all and continue")
+
+	out, err = runCtx(ctx, "codex", "hooks", "--check", "--turn")
+	require.NoError(t, err)
+	assert.Contains(t, out, "  Stop             turn  present  "+path+"\n")
+
+	out, err = runCtx(ctx, "codex", "hooks", "--check")
+	require.NoError(t, err)
+	assert.Contains(t, out, "  Stop         present  "+path+"\n", "a plain check reads as before")
+	assert.NotContains(t, out, "UserPromptSubmit")
+
+	out, err = runCtx(ctx, "codex", "hooks", "--check", "--turn", "--json")
+	require.NoError(t, err)
+	var res codexhooks.Result
+	require.NoError(t, json.Unmarshal([]byte(out), &res), out)
+	assert.True(t, res.Installed())
+	assert.True(t, res.TurnInstalled())
+	var raw struct {
+		Hooks []map[string]any `json:"hooks"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &raw))
+	require.Len(t, raw.Hooks, 5)
+	assert.ElementsMatch(t, []string{"event", "report", "state", "source"}, keys(raw.Hooks[3]))
+	assert.Equal(t, "turn", raw.Hooks[3]["report"])
+}
+
+// TestCodexHooksTurnRefusesASecondCopy: --turn writes nothing while
+// config.toml already runs report turn, as the pasted sample does.
+func TestCodexHooksTurnRefusesASecondCopy(t *testing.T) {
+	t.Parallel()
+	home := t.TempDir()
+	sample, err := os.ReadFile(filepath.Join("..", "..", "docs", "config", "codex-turn-hooks.example.toml"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(filepath.Join(home, "config.toml"), sample, 0o600))
+	ctx := codexEnv(t, map[string]string{"CODEX_HOME": home})
+
+	_, err = runCtx(ctx, "codex", "hooks", "--turn")
+	require.ErrorIs(t, err, codexhooks.ErrInConfigTOML)
+	assert.NoFileExists(t, filepath.Join(home, codexhooks.FileName))
+}
