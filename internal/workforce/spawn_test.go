@@ -1339,6 +1339,64 @@ func TestSpawnSeesTheHookReviewByItsTrustLine(t *testing.T) {
 	_, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "review", Count: 1})
 	require.ErrorIs(t, err, workforce.ErrSpawnFailed)
 	assert.Contains(t, err.Error(), "is at Codex's hook review")
+	assert.Len(t, f.h.params("pane.wait_for_output"), 1, "the trust line refuses on the positive read")
+}
+
+// TestSpawnCancelsEitherCodexRead: cancellation ends either screen read and
+// fails/closes the worker before herdr releases its held reply (QA #141 L2/C1).
+// An ended operation keeps context.Canceled, with no startup-screen hint.
+func TestSpawnCancelsEitherCodexRead(t *testing.T) {
+	t.Parallel()
+	for name, which := range map[string]int32{"composer": 1, "hook review": 2} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, teamConfig)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			release := make(chan struct{})
+			var once sync.Once
+			releaseReply := func() { once.Do(func() { close(release) }) }
+			defer releaseReply()
+			entered := make(chan struct{})
+			var reads atomic.Int32
+			srv := wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+				if r.Method == "pane.wait_for_output" && reads.Add(1) == which {
+					close(entered)
+					<-release
+				}
+				return next()
+			})
+			result := make(chan error, 1)
+			go func() {
+				_, err := f.svc.Spawn(ctx, workforce.SpawnRequest{Group: "review", Count: 1})
+				result <- err
+			}()
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("screen read was not entered")
+			}
+			cancel()
+			select {
+			case err := <-result:
+				require.ErrorIs(t, err, workforce.ErrSpawnFailed)
+				require.ErrorIs(t, err, context.Canceled)
+				assert.NotErrorIs(t, err, workforce.ErrHerdr)
+				assert.NotContains(t, err.Error(), "Codex may be")
+				assert.Equal(t, store.StatusFailed, f.row(t, "ha-review-1").Status)
+				assert.Equal(t, 1, countCalls(srv, "pane.close"), "cleanup finishes before the held reply is released")
+				assert.Equal(t, []string{f.boss}, f.h.paneIDs(), "only the boss remains before reply release")
+			case <-time.After(time.Second):
+				t.Error("spawn did not end on cancellation before the screen reply")
+				releaseReply()
+				select {
+				case <-result:
+				case <-time.After(5 * time.Second):
+					t.Error("spawn did not settle after reply release")
+				}
+			}
+		})
+	}
 }
 
 // TestSpawnRefusesABadModelBeforeThePreflight: a --model A46 refuses never
