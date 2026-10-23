@@ -32,6 +32,9 @@ import (
 // store's waits (store.BusyTimeout). A fresh state.db costs ten fsyncs,
 // which take seconds on a runner whose disk other suites keep busy, so a
 // literal few seconds flakes there. A ready daemon ends every wait at once.
+// On Linux the tests' state is on tmpfs (testtmp, NERD-5503), where those
+// fsyncs wait on no disk; ready stays for a host without one, or a run that
+// opts out.
 //
 // TestDaemonRunFindsGhOnItsPATH waits for its daemon's first GitHub
 // collection after the daemon serves (awaitDaemon), so its start and that

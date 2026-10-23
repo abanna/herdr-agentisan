@@ -228,6 +228,15 @@ shows `ctx`, and an item or a stage only from the
 [turn hooks](#report-item-and-stage-from-every-turn), which run outside the
 sandbox.
 
+A command a Codex worker runs inside its network sandbox reaches neither
+herdr's socket nor the daemon's. Then `send`, `handoff ready` and the
+`team`, `worker` and `notices` commands answer `daemon_unavailable`, saying
+the sandbox is why and to ask the boss, who runs the command for the worker,
+as it marks `handoff ready <id>` (ADR-001 A25). An escalation Codex approved
+reaches both, and runs as any other; only if herdr or the daemon is really down
+does it get the same hint, where the boss's own run gets `herdr_failed` or the
+daemon-restart advice.
+
 ## Report `$item` and `$stage` from every turn
 
 Any agent, a boss, QA or research pane included, pushes its own `item` and
