@@ -38,39 +38,45 @@ func TestSandboxFor(t *testing.T) {
 }
 
 // TestChoosesSandbox: a codex command chooses its sandbox with -s or
-// --sandbox in any form, the bypass, --approve-for-me, or a -c or --config
-// setting sandbox_mode; a profile, a workspace-write detail or any other
-// flag chooses none.
+// --sandbox in any form, the bypass or --approve-for-me (or their hidden
+// aliases), or a -c or --config setting sandbox_mode or default_permissions;
+// a profile, a permissions profile defined but not picked, a workspace-write
+// detail or any other flag chooses none.
 func TestChoosesSandbox(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		args    []string
 		chooses bool
 	}{
-		"--sandbox x":                {args: []string{"--sandbox", "workspace-write"}, chooses: true},
-		"--sandbox=x":                {args: []string{"--sandbox=read-only"}, chooses: true},
-		"-s x":                       {args: []string{"--no-daemon", "-s", "workspace-write"}, chooses: true},
-		"-sx":                        {args: []string{"-sread-only"}, chooses: true},
-		"-s=x":                       {args: []string{"-s=danger-full-access"}, chooses: true},
-		"the bypass":                 {args: []string{"--dangerously-bypass-approvals-and-sandbox"}, chooses: true},
-		"--approve-for-me":           {args: []string{"--approve-for-me"}, chooses: true},
-		"-c sandbox_mode":            {args: []string{"-c", `sandbox_mode="workspace-write"`}, chooses: true},
-		"--config sandbox_mode":      {args: []string{"--config", "sandbox_mode=read-only"}, chooses: true},
-		"--config=sandbox_mode":      {args: []string{"--config=sandbox_mode=read-only"}, chooses: true},
-		"-c attached":                {args: []string{"-csandbox_mode=read-only"}, chooses: true},
-		"-c a quoted key":            {args: []string{"-c", `"sandbox_mode"="read-only"`}, chooses: true},
-		"no arguments":               {},
-		"--no-daemon alone":          {args: []string{"--no-daemon"}},
-		"a profile":                  {args: []string{"-p", "work", "--profile=home"}},
-		"a workspace-write detail":   {args: []string{"-c", "sandbox_workspace_write.network_access=true"}},
-		"another flag":               {args: []string{"--search", "--dangerously-bypass-hook-trust"}},
-		"sandbox in another's value": {args: []string{"-c", "notify=--sandbox"}},
-		"a bare -s at the end":       {args: []string{"--no-daemon", "-s"}, chooses: true},
-		"a bare -c at the end":       {args: []string{"--no-daemon", "-c"}},
-		"--Sandbox":                  {args: []string{"--Sandbox", "read-only"}},
-		"-S":                         {args: []string{"-S", "read-only"}},
-		"a non-ASCII flag":           {args: []string{"--sändbox", "read-only"}},
-		"one element with a space":   {args: []string{"--sandbox read-only"}},
+		"--sandbox x":                   {args: []string{"--sandbox", "workspace-write"}, chooses: true},
+		"--sandbox=x":                   {args: []string{"--sandbox=read-only"}, chooses: true},
+		"-s x":                          {args: []string{"--no-daemon", "-s", "workspace-write"}, chooses: true},
+		"-sx":                           {args: []string{"-sread-only"}, chooses: true},
+		"-s=x":                          {args: []string{"-s=danger-full-access"}, chooses: true},
+		"the bypass":                    {args: []string{"--dangerously-bypass-approvals-and-sandbox"}, chooses: true},
+		"--approve-for-me":              {args: []string{"--approve-for-me"}, chooses: true},
+		"-c sandbox_mode":               {args: []string{"-c", `sandbox_mode="workspace-write"`}, chooses: true},
+		"--config sandbox_mode":         {args: []string{"--config", "sandbox_mode=read-only"}, chooses: true},
+		"--config=sandbox_mode":         {args: []string{"--config=sandbox_mode=read-only"}, chooses: true},
+		"-c attached":                   {args: []string{"-csandbox_mode=read-only"}, chooses: true},
+		"-c a quoted key":               {args: []string{"-c", `"sandbox_mode"="read-only"`}, chooses: true},
+		"--not-so-yolo":                 {args: []string{"--not-so-yolo"}, chooses: true},
+		"--yolo":                        {args: []string{"--yolo"}, chooses: true},
+		"-c default_permissions":        {args: []string{"-c", `default_permissions=":workspace"`}, chooses: true},
+		"--config=default_permissions":  {args: []string{"--config=default_permissions=work"}, chooses: true},
+		"a permissions profile defined": {args: []string{"-c", "permissions.work.network=true"}},
+		"no arguments":                  {},
+		"--no-daemon alone":             {args: []string{"--no-daemon"}},
+		"a profile":                     {args: []string{"-p", "work", "--profile=home"}},
+		"a workspace-write detail":      {args: []string{"-c", "sandbox_workspace_write.network_access=true"}},
+		"another flag":                  {args: []string{"--search", "--dangerously-bypass-hook-trust"}},
+		"sandbox in another's value":    {args: []string{"-c", "notify=--sandbox"}},
+		"a bare -s at the end":          {args: []string{"--no-daemon", "-s"}, chooses: true},
+		"a bare -c at the end":          {args: []string{"--no-daemon", "-c"}},
+		"--Sandbox":                     {args: []string{"--Sandbox", "read-only"}},
+		"-S":                            {args: []string{"-S", "read-only"}},
+		"a non-ASCII flag":              {args: []string{"--sändbox", "read-only"}},
+		"one element with a space":      {args: []string{"--sandbox read-only"}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

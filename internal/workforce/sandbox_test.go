@@ -38,6 +38,8 @@ func TestSpawnGivesCodexItsTypesSandbox(t *testing.T) {
 		"a coder's bypass":                  {group: "coder", agent: `{ command = ["codex", "--dangerously-bypass-approvals-and-sandbox"] }`, want: []any{"--dangerously-bypass-approvals-and-sandbox", "--no-daemon"}},
 		"a coder's --approve-for-me":        {group: "coder", agent: `{ command = ["codex", "--approve-for-me"] }`, want: []any{"--approve-for-me", "--no-daemon"}},
 		"a coder's -c sandbox_mode":         {group: "coder", agent: `{ command = ["codex", "-c", "sandbox_mode=\"read-only\""] }`, want: []any{"-c", `sandbox_mode="read-only"`, "--no-daemon"}},
+		"a coder's --not-so-yolo":           {group: "coder", agent: `{ command = ["codex", "--not-so-yolo"] }`, want: []any{"--not-so-yolo", "--no-daemon"}},
+		"a coder's -c default_permissions":  {group: "coder", agent: `{ command = ["codex", "-c", "default_permissions=\":workspace\""] }`, want: []any{"-c", `default_permissions=":workspace"`, "--no-daemon"}},
 		"a coder's profile is no choice":    {group: "coder", agent: `{ command = ["codex", "-p", "work"] }`, want: []any{"-p", "work", "--no-daemon", "--sandbox", "danger-full-access"}},
 		"a claude coder":                    {group: "coder", agent: `{ command = ["claude"] }`, want: []any{"--name", "ha-coder-1"}},
 		"before the model and effort": {

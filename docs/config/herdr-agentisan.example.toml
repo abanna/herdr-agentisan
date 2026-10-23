@@ -108,10 +108,11 @@ repeat = 300
 # applies to it.
 #
 # To a codex command that chooses no sandbox (-s, --sandbox, --approve-for-me,
-# the bypass flag or -c sandbox_mode), spawn adds its type's: read-only for
+# the bypass flag, their aliases --not-so-yolo and --yolo, or -c setting
+# sandbox_mode or default_permissions), spawn adds its type's: read-only for
 # review, danger-full-access for coder, qa and precheck, and none for the
-# others (A59). That flag outranks a sandbox_mode in Codex's config.toml or
-# a -p profile; a sandbox in the command itself stands.
+# others (A59). That flag outranks either key in Codex's config.toml or a -p
+# profile; a sandbox in the command itself stands.
 [groups.precheck]
 workers = 1
 slots = 1

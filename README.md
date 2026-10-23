@@ -157,10 +157,12 @@ nothing (ADR-001 A25, A26).
 
 Codex workers start in their type's sandbox (ADR-001 A59), unless their
 agent command chooses one itself: `-s` or `--sandbox`, `--approve-for-me`,
-`--dangerously-bypass-approvals-and-sandbox`, or `-c sandbox_mode=…`. A choice
-in the command stands. Spawn's flag outranks a `sandbox_mode` in Codex's
-`config.toml` or a `-p` profile, so to run a type in another sandbox, put the
-sandbox in its group's command.
+`--dangerously-bypass-approvals-and-sandbox` (or their aliases
+`--not-so-yolo` and `--yolo`), `-c sandbox_mode=…` or
+`-c default_permissions=…`. A choice in the command stands. Spawn's flag
+outranks a `sandbox_mode` or `default_permissions` in Codex's `config.toml`
+or a `-p` profile, so to run a type in another sandbox, put the sandbox in its
+group's command.
 
 - **review** runs `--sandbox read-only` (A55). It writes nothing, and the
   boss reads its report from its final message.
