@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
@@ -330,6 +331,25 @@ func runReport(ctx context.Context, stdin string, args ...string) (string, error
 	return out.String(), err
 }
 
+// stampedCtx checks a report's ctx_at, the command's own clock's stamp,
+// between before and now (A61), and returns the params without it, for the
+// rest to be compared exactly.
+func stampedCtx(t *testing.T, params []byte, before time.Time) string {
+	t.Helper()
+	var m map[string]any
+	require.NoError(t, json.Unmarshal(params, &m))
+	tokens, _ := m["tokens"].(map[string]any)
+	raw, _ := tokens[report.CtxAtKey].(string)
+	at, ok := report.ParseCtxAt(raw)
+	require.True(t, ok, "ctx_at is Unix milliseconds: %q", raw)
+	assert.False(t, at.Before(before.Truncate(time.Millisecond)), "stamped during the report")
+	assert.False(t, at.After(time.Now()), "stamped during the report")
+	delete(tokens, report.CtxAtKey)
+	out, err := json.Marshal(m)
+	require.NoError(t, err)
+	return string(out)
+}
+
 const statusline426 = `{"model":{"display_name":"Opus"},"context_window":{"used_percentage":42.6}}`
 
 func TestReportStatuslinePushesCtx(t *testing.T) {
@@ -337,6 +357,7 @@ func TestReportStatuslinePushesCtx(t *testing.T) {
 	srv := herdrtest.Start(t, paneHerdr("w14:p1"))
 	var logs bytes.Buffer
 
+	before := time.Now()
 	out, err := runReport(reportCtx(t, srv.Path, "w14:p1", &logs), statusline426+"\n")
 	require.NoError(t, err)
 	assert.Empty(t, out, "the statusline runs this on every refresh: it must print nothing")
@@ -345,7 +366,7 @@ func TestReportStatuslinePushesCtx(t *testing.T) {
 	require.Len(t, reqs, 2, "check the pane runs this process, then report")
 	assert.Equal(t, "pane.process_info", reqs[0].Method)
 	assert.Equal(t, "pane.report_metadata", reqs[1].Method)
-	assert.JSONEq(t, `{"pane_id":"w14:p1","source":"agentisan","tokens":{"ctx":"43"},"ttl_ms":180000}`, string(reqs[1].Params))
+	assert.JSONEq(t, `{"pane_id":"w14:p1","source":"agentisan","tokens":{"ctx":"43"},"ttl_ms":180000}`, stampedCtx(t, reqs[1].Params, before))
 	assert.Contains(t, logs.String(), `"ctx":43`)
 }
 

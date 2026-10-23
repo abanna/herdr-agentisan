@@ -255,7 +255,7 @@ func decodeArgs(args json.RawMessage, out any) error {
 // is off: every herdr call it makes proves the server's identity first (A3).
 // A debugger it spawns may read serverDir, the daemon's own directory
 // (A32).
-func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleClock, serverDir string) *workforce.Service {
+func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleClock, starts *team.StartClock, serverDir string) *workforce.Service {
 	if o.Team == nil {
 		return nil
 	}
@@ -264,6 +264,7 @@ func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleCl
 		Store:          st,
 		ConfigDir:      o.Team.ConfigDir,
 		Idle:           idle,
+		Starts:         starts,
 		Now:            o.Now,
 		Preflight:      o.Hooks.Preflight,
 		CodexHooks:     o.Team.CodexHooks,

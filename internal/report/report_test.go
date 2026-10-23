@@ -224,13 +224,13 @@ func okReply(herdrtest.Request) herdrtest.Reply {
 }
 
 // TestStatuslinePushesTheTokenContract is the token contract for ctx: key,
-// bare rounded integer, source agentisan and a 180 s TTL, on the reporting
-// pane only. The pane has no lineage, as on an OS with no process table
+// bare rounded integer, its ctx_at from the pane's clock (A61), source
+// agentisan and a 180 s TTL, on the reporting pane only. The pane has no lineage, as on an OS with no process table
 // reader, so the report trusts HERDR_PANE_ID and costs one call.
 func TestStatuslinePushesTheTokenContract(t *testing.T) {
 	t.Parallel()
 	srv := herdrtest.Start(t, okReply)
-	pane := report.Pane{SocketPath: srv.Path, PaneID: "w14:p1"}
+	pane := report.Pane{SocketPath: srv.Path, PaneID: "w14:p1", Now: reportedAt}
 
 	got, err := report.Statusline(t.Context(), herdr.Client{SocketPath: srv.Path}, pane, strings.NewReader(statusline("42.6")))
 	require.NoError(t, err)
@@ -239,7 +239,7 @@ func TestStatuslinePushesTheTokenContract(t *testing.T) {
 	reqs := srv.Requests()
 	require.Len(t, reqs, 1)
 	assert.Equal(t, "pane.report_metadata", reqs[0].Method)
-	assert.JSONEq(t, `{"pane_id":"w14:p1","source":"agentisan","tokens":{"ctx":"43"},"ttl_ms":180000}`, string(reqs[0].Params))
+	assert.JSONEq(t, `{"pane_id":"w14:p1","source":"agentisan","tokens":{"ctx":"43","ctx_at":"1761066000900"},"ttl_ms":180000}`, string(reqs[0].Params))
 }
 
 // failReader fails the test if anything reads it: outside a pane the

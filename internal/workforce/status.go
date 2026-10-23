@@ -187,7 +187,8 @@ func (s *Service) member(w team.Worker, l layout) Member {
 			}
 		}
 	}
-	if n, ok := team.ParseCtx(w.Pane.Ctx); ok {
+	// The poll's last starts gate it as they gate the snapshot's (A61).
+	if n, ok := team.ParseCtx(team.CurrentCtx(w.Pane, s.Starts.Start(w.Pane.ID, w.Pane.TerminalID))); ok {
 		m.Ctx = &n
 	}
 	if since, ok := s.Idle.Since(w.Pane.ID); ok {

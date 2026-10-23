@@ -459,7 +459,7 @@ func codexLineage(procs map[int]report.Stat, cmds map[int][]string) *report.Line
 // TestCodexPushesTheTokenContract: from an embedded Codex, every hook sets
 // ctx on the pane the TUI runs in, under Claude's contract but for Codex's
 // 24 h TTL (A27), with the payload's model and its model_at in the same
-// report (A56). The event is never read: the count is the same whichever
+// report (A56), and ctx's ctx_at (A61). The event is never read: the count is the same whichever
 // hook read it. SessionEnd included: Codex also runs it when it unloads an
 // old thread after /new or /resume, so it must never clear ctx; it names no
 // model, so it sets none.
@@ -469,7 +469,7 @@ func TestCodexPushesTheTokenContract(t *testing.T) {
 	event := func(name string) func(string) string {
 		return func(path string) string { return eventHook(path, name) }
 	}
-	withModel := `{"ctx":"5","model":"gpt-5","model_at":"1761066000900"}`
+	withModel := `{"ctx":"5","ctx_at":"1761066000900","model":"gpt-5","model_at":"1761066000900"}`
 	for name, tc := range map[string]struct {
 		payload func(path string) string
 		model   string
@@ -479,7 +479,7 @@ func TestCodexPushesTheTokenContract(t *testing.T) {
 		"Stop":                 {payload: event("Stop"), model: "gpt-5", tokens: withModel},
 		"PostCompact":          {payload: event("PostCompact"), model: "gpt-5", tokens: withModel},
 		"no event":             {payload: event(""), model: "gpt-5", tokens: withModel},
-		"a SessionEnd payload": {payload: sessionEnd, tokens: `{"ctx":"5"}`},
+		"a SessionEnd payload": {payload: sessionEnd, tokens: `{"ctx":"5","ctx_at":"1761066000900"}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
