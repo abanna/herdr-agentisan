@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/notice"
@@ -578,4 +579,37 @@ func TestWatchFreshUnknown(t *testing.T) {
 		got := polls(w, fresh(team.StatusUnknown), 20)
 		assert.Equal(t, map[int][]string{20: {"w1:p3 unknown"}}, got, "counted from the poll that first judged it to run an agent")
 	})
+}
+
+// TestWatchFreshUnknownNamesItsTeamAndWorker: the unknown notice a
+// never-known agent pane gets at its 20th poll names its project, the team
+// whose boss gets it, and its worker, the name a mute takes, as the two-poll
+// notice does. TestWatchFreshUnknown compares Subject and Kind alone.
+func TestWatchFreshUnknownNamesItsTeamAndWorker(t *testing.T) {
+	t.Parallel()
+	fresh := teamOf(nil, agentPane("w1:p3", "c3", team.StatusUnknown))
+	w := notice.NewWatch()
+	w.Observe(teamOf(nil), nil, false)
+	var got []notice.Notice
+	for range 20 {
+		got = append(got, w.Observe(fresh, nil, false)...)
+	}
+	require.Len(t, got, 1)
+	assert.Equal(t, "ha", got[0].Project, "the notice goes to its team's boss")
+	assert.Equal(t, "w1:p3", got[0].Subject)
+	assert.Equal(t, "c3", got[0].Worker, "a mute of c3 silences it")
+	assert.Equal(t, notice.Unknown, got[0].Kind)
+	assert.Contains(t, got[0].Text, "c3's status is unknown")
+
+	// The two-poll notice for a pane seen known carries the same fields.
+	k := notice.NewWatch()
+	k.Observe(teamOf(nil), nil, false)
+	k.Observe(teamOf(nil, agentPane("w1:p3", "c3", team.StatusIdle)), nil, false)
+	var two []notice.Notice
+	for range 2 {
+		two = append(two, k.Observe(fresh, nil, false)...)
+	}
+	require.Len(t, two, 1)
+	assert.Equal(t, two[0].Project, got[0].Project)
+	assert.Equal(t, two[0].Worker, got[0].Worker)
 }

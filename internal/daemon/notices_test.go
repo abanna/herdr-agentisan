@@ -419,6 +419,59 @@ func TestNoticesTellAnAgentExiting(t *testing.T) {
 	assert.Equal(t, 1, waitLine(t, &logs, "agent exited"), "told once")
 }
 
+// TestNoticesTellAFreshUnknownAtTheTwentiethPoll: an agent pane unknown from
+// the daemon's first poll is told at the 20th poll, once, so the poll
+// observes each model once (A44's addendum). The upper bound leaves the
+// sampler ten polls of lag; an Observe on every other poll tells it at 40.
+func TestNoticesTellAFreshUnknownAtTheTwentiethPoll(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	th.setAgents(turned("wN:p1", "pee01", nil))
+	th.setPane("wN:p1", "agent_status", "unknown")
+	var logs lockedLog
+	noticeRun(t, th, noticesConfig(t, "gap = 0\n"), &logs)
+	unknown := func() int {
+		n := 0
+		for _, l := range noticeLines(&logs) {
+			if strings.Contains(l, "status is unknown") {
+				n++
+			}
+		}
+		return n
+	}
+	var before, after int
+	require.Eventually(t, func() bool {
+		before = lists(th.srv)
+		if unknown() == 0 {
+			return false
+		}
+		after = lists(th.srv)
+		return true
+	}, 30*time.Second, 5*time.Millisecond, "never told unknown: %v", noticeLines(&logs))
+	assert.GreaterOrEqual(t, after, 20, "told before the 20th poll")
+	assert.LessOrEqual(t, before, 30, "told long after the 20th poll")
+	polled(t, th.srv, 30)
+	assert.Equal(t, 1, unknown(), "told once")
+}
+
+// TestNoticesKeepTheTwoPollRuleForAKnownAgent: an agent pane seen idle that
+// turns unknown is told at its second unknown poll, A44's rule, not at the
+// 20th; the bound leaves the sampler room for lag.
+func TestNoticesKeepTheTwoPollRuleForAKnownAgent(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	th.setAgents(turned("wN:p1", "pee01", nil))
+	th.setPane("wN:p1", "agent_status", "idle")
+	var logs lockedLog
+	noticeRun(t, th, noticesConfig(t, "gap = 0\n"), &logs)
+	waitLine(t, &logs, "the daemon started")
+	polled(t, th.srv, 3)
+	th.setPane("wN:p1", "agent_status", "unknown")
+	start := lists(th.srv)
+	waitLine(t, &logs, "status is unknown")
+	assert.Less(t, lists(th.srv)-start, 15, "told by the two-poll rule, not the twenty-poll one")
+}
+
 // TestNoticesTellNoExitForAFailedAgentList: a live worker herdr knows only
 // by name reads as a shell on a poll whose agent.list failed; it is never
 // told as exited, and its pane's real close is told.
