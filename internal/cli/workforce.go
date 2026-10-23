@@ -128,7 +128,8 @@ func (f *opFlags) selector(ctx context.Context) (workforce.Selector, error) {
 // does, finding the team (herdr_failed), or when the caller it would name
 // cannot be verified (caller_unverified, A64): the daemon is never asked.
 // A command Codex ran in its network sandbox whose dial reached neither
-// herdr nor the daemon is told why, and who to ask (workforce.CheckReach);
+// herdr nor the daemon is told why, and who to ask (workforce.CheckReach),
+// as is one whose walk the sandbox hid Codex from, before any dial (A64);
 // one whose escalation Codex approved still carries the sandbox's variable,
 // and dials as any other.
 func (f *opFlags) runOp(cmd *cobra.Command, args []string, op string, req func() (any, error)) error {
@@ -155,6 +156,8 @@ func (f *opFlags) runOpThen(cmd *cobra.Command, args []string, op string, req fu
 	}
 	r, err := req()
 	switch {
+	case errors.Is(err, report.ErrCodexSandboxed):
+		return refuseWith(cmd, codeDaemonUnavailable, err.Error())
 	case errors.Is(err, workforce.ErrCallerUnverified):
 		return refuseWith(cmd, codeCallerUnverified, err.Error())
 	case err != nil:

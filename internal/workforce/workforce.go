@@ -208,9 +208,16 @@ type Selector struct {
 // First, without asking herdr, a command run under Codex must be run by the
 // pane's own Codex (report's CheckCallerHost), else it is ErrCallerUnverified
 // (A64): under the shared app-server its lineage runs through the pane that
-// started the daemon, which ResolvePane would confirm.
+// started the daemon, which ResolvePane would confirm. One in Codex's network
+// sandbox whose walk shows no Codex, as the sandbox's pid namespace hides it,
+// also wraps CheckReach's report.ErrCodexSandboxed, so it is told why and
+// who to ask, as a sandboxed dial that failed is (A25), not to start Codex
+// with --no-daemon: it could not reach herdr or the daemon anyway.
 func FindCallerPane(ctx context.Context, h report.PaneFinder, pane report.Pane) (string, error) {
 	if err := pane.CheckCallerHost(); err != nil {
+		if sandboxed := CheckReach(pane); sandboxed != nil && errors.Is(err, report.ErrNoCodexHost) {
+			return "", fmt.Errorf("%w: %w: %w", sandboxed, ErrCallerUnverified, err)
+		}
 		return "", fmt.Errorf("%w: start Codex with --no-daemon, and run the command outside its sandbox: %w", ErrCallerUnverified, err)
 	}
 	if pane.PaneID == "" || pane.Lineage == nil {

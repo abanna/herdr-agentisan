@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -71,6 +73,88 @@ func TestACallerOnTheSharedAppServer(t *testing.T) {
 			assert.JSONEq(t, tc.sent, <-sent)
 		})
 	}
+}
+
+// TestACallerInTheSandboxNamespace (A64, A25): send and handoff ready with
+// no target, in Codex's network sandbox whose pid namespace hides Codex from
+// their walk, get A25's answer before any dial: daemon_unavailable, the
+// sandbox as the cause and the boss as who to ask, ending with the gate's
+// cause, never the advice to start Codex with --no-daemon; the daemon is
+// never asked. A team op takes its fallbacks. The sandbox's variable alone
+// never makes it so: the shared app-server with it, and no Codex in a walk
+// without it, are still caller_unverified.
+func TestACallerInTheSandboxNamespace(t *testing.T) {
+	t.Parallel()
+	const ok = `{"ok":true,"data":{}}`
+	outside := map[string]string{"HERDR_PANE_ID": "w14:p1", "HERDR_AGENTISAN_WORKER": "ha-coder-1", "CODEX_THREAD_ID": "019a"}
+	inside := maps.Clone(outside)
+	inside["CODEX_SANDBOX_NETWORK_DISABLED"] = "1"
+	tests := map[string]struct {
+		args    []string
+		env     map[string]string
+		lineage func() *report.Lineage
+		code    string // "" when the daemon is asked
+		sent    string
+	}{
+		"send":                        {args: []string{"send", "boss", "hi"}, env: inside, lineage: sandboxNamespace, code: "daemon_unavailable"},
+		"handoff ready":               {args: []string{"handoff", "ready"}, env: inside, lineage: sandboxNamespace, code: "daemon_unavailable"},
+		"team status":                 {args: []string{"team", "status"}, env: inside, lineage: sandboxNamespace, sent: `{"v":1,"op":"team.status","args":{}}`},
+		"send, the shared app-server": {args: []string{"send", "boss", "hi"}, env: inside, lineage: codexLineage(true), code: "caller_unverified"},
+		"send, outside the sandbox":   {args: []string{"send", "boss", "hi"}, env: outside, lineage: sandboxNamespace, code: "caller_unverified"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newDaemonEnvWith(t, paneHerdr("w14:p1"))
+			sent := fakeDaemon(t, e, ok)
+			root := cli.Root()
+			var out bytes.Buffer
+			root.SetOut(&out)
+			root.SetErr(io.Discard)
+			root.SetArgs(tc.args)
+			err := root.ExecuteContext(cli.WithLookupEnv(cli.WithLineage(t.Context(), tc.lineage), e.lookup(tc.env)))
+			got := oneJSONObject(t, out.String())
+			if tc.code == "" {
+				require.NoError(t, err)
+				assert.Equal(t, true, got["ok"])
+				require.Len(t, sent, 1)
+				assert.JSONEq(t, tc.sent, <-sent)
+				return
+			}
+			require.Error(t, err, "a refusal exits 1")
+			var refusal struct {
+				Error struct{ Code, Message string } `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(out.Bytes(), &refusal))
+			assert.Equal(t, tc.code, refusal.Error.Code)
+			assert.Empty(t, sent, "the daemon is never asked")
+			msg := refusal.Error.Message
+			if tc.code == "caller_unverified" {
+				assert.Contains(t, msg, "--no-daemon")
+				return
+			}
+			assert.True(t, strings.HasPrefix(msg, sandboxedPrefix), msg)
+			assert.Contains(t, msg, "ask your boss")
+			assert.Contains(t, msg, report.ErrNoCodexHost.Error(), "the gate's cause ends it")
+			assert.NotContains(t, msg, "--no-daemon")
+			assert.NotContains(t, msg, "dial unix", "nothing was dialed")
+		})
+	}
+}
+
+// sandboxNamespace is a command's lineage in Codex's network sandbox, whose
+// pid namespace starts at the shell Codex runs it through: the command (5000)
+// -> bash (4999), the namespace's first process. No Codex is in it.
+func sandboxNamespace() *report.Lineage {
+	procs := map[int]report.Stat{5000: {PPID: 4999, Start: 90}, 4999: {PPID: 1, Start: 80}}
+	argv := map[int][]string{5000: {"herdr-agentisan", "send", "boss", "hi"}, 4999: {"/bin/bash", "-lc", "herdr-agentisan send boss hi"}}
+	return report.ReadLineage(5000, func(pid int) (report.Stat, error) {
+		s, ok := procs[pid]
+		if !ok {
+			return report.Stat{}, errors.New("no such process")
+		}
+		return s, nil
+	}).WithCmdline(func(pid int) ([]string, error) { return argv[pid], nil })
 }
 
 // appServerAlone is the shared app-server's lineage once the TUI that started

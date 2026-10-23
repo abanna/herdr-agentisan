@@ -3,6 +3,7 @@ package workforce_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -133,6 +134,79 @@ func TestFindCallerUnderTheSharedAppServer(t *testing.T) {
 			pane, err := workforce.FindCallerPane(t.Context(), h, tc.pane)
 			require.ErrorIs(t, err, workforce.ErrCallerUnverified)
 			assert.Empty(t, pane)
+			assert.Zero(t, h.calls.Load(), "herdr is never asked")
+		})
+	}
+}
+
+// TestFindCallerInTheSandboxNamespace (A64, A25): a command in Codex's
+// network sandbox whose walk ends in the sandbox's pid namespace, with no
+// Codex in it, is unverified and also report.ErrCodexSandboxed, so it is told
+// why and who to ask, and herdr is never asked; the team ops take their
+// fallbacks. The sandbox's variable alone never makes it so: the shared
+// app-server with it stays only unverified, as does no Codex in a walk
+// without it, and the pane's own Codex with it, an escalation, finds its pane.
+func TestFindCallerInTheSandboxNamespace(t *testing.T) {
+	t.Parallel()
+	// send (5000) -> bash (4998), the sandbox's pid namespace starting there.
+	namespace := map[int]report.Stat{5000: {PPID: 4998, Start: 900}, 4998: {PPID: 1, Start: 800}}
+	namespaceArgv := map[int][]string{5000: {"herdr-agentisan", "send", "boss", "hi"}, 4998: {"/bin/bash", "-lc", "herdr-agentisan send boss hi"}}
+	// send (5000) -> bash (4998) -> app-server (4000) -> init.
+	shared := map[int]report.Stat{5000: {PPID: 4998, Start: 900}, 4998: {PPID: 4000, Start: 800}, 4000: {PPID: 1, Start: 700}}
+	sharedArgv := map[int][]string{5000: namespaceArgv[5000], 4998: namespaceArgv[4998], 4000: {"codex", "app-server", "--listen", "unix://"}}
+	// send (5000) -> bash (4998) -> codex --no-daemon (900) -> w1:p1's shell (600).
+	embedded := map[int]report.Stat{5000: {PPID: 4998, Start: 900}, 4998: {PPID: 900, Start: 800}, 900: {PPID: 600, Start: 500}, 600: {PPID: 1, Start: 400}}
+	embeddedArgv := map[int][]string{5000: namespaceArgv[5000], 4998: namespaceArgv[4998], 900: {"codex", "--no-daemon"}, 600: {"-zsh"}}
+	w1 := paneFinder{panes: map[string]herdr.ProcessInfo{"w1:p1": {PaneID: "w1:p1", ShellPID: 600}}, listed: []herdr.PaneInfo{{PaneID: "w1:p1"}}}
+	env := func(k string) (string, bool) {
+		if k == workforce.WorkerEnv {
+			return "ha-coder-1", true
+		}
+		return "", false
+	}
+	tests := map[string]struct {
+		pane      report.Pane
+		want      workforce.Caller
+		err       error
+		sandboxed bool // the error is also report.ErrCodexSandboxed
+	}{
+		"in the sandbox's pid namespace": {
+			pane: report.Pane{PaneID: "w1:p1", CodexThread: "019a", CodexNetworkSandboxed: true, Lineage: callerLineage(namespace, namespaceArgv)},
+			err:  report.ErrNoCodexHost, sandboxed: true,
+		},
+		"the shared app-server, the sandbox's variable set": {
+			pane: report.Pane{PaneID: "w1:p1", CodexThread: "019a", CodexNetworkSandboxed: true, Lineage: callerLineage(shared, sharedArgv)},
+			err:  report.ErrCodexDaemon,
+		},
+		"no Codex in the walk, outside the sandbox": {
+			pane: report.Pane{PaneID: "w1:p1", CodexThread: "019a", Lineage: callerLineage(namespace, namespaceArgv)},
+			err:  report.ErrNoCodexHost,
+		},
+		"the pane's own Codex, the sandbox's variable set": {
+			pane: report.Pane{PaneID: "w1:p1", CodexThread: "019a", CodexNetworkSandboxed: true, Lineage: callerLineage(embedded, embeddedArgv)},
+			want: workforce.Caller{Pane: "w1:p1", Worker: "ha-coder-1"},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := countingFinder{paneFinder: w1, calls: &atomic.Int32{}}
+			tc.pane.SocketPath = "unused"
+			got, err := workforce.FindCaller(t.Context(), h, tc.pane, env)
+			if tc.err == nil {
+				require.NoError(t, err)
+				assert.Equal(t, tc.want, got)
+				return
+			}
+			require.ErrorIs(t, err, workforce.ErrCallerUnverified)
+			require.ErrorIs(t, err, tc.err)
+			assert.Equal(t, tc.sandboxed, errors.Is(err, report.ErrCodexSandboxed), "told the sandbox is why: %v", err)
+			assert.Equal(t, tc.sandboxed, !strings.Contains(err.Error(), "--no-daemon"), "told to start Codex with --no-daemon: %v", err)
+			assert.Equal(t, workforce.Caller{}, got, "neither the pane nor the worker")
+
+			sel, err := workforce.SelectorFor(t.Context(), h, "", tc.pane)
+			require.NoError(t, err)
+			assert.Equal(t, workforce.Selector{}, sel, "the team ops take their fallbacks")
 			assert.Zero(t, h.calls.Load(), "herdr is never asked")
 		})
 	}
