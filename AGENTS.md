@@ -180,7 +180,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   the poll sees, through `internal/notice` and the inbox (`notices.go`,
   A44), with the context levels each agent pane crosses and, at the
   ceiling, a toast for the user (A33), less the workers the boss muted
-  with the `notices.*` ops (`noticeops.go`). It keeps
+  with the `notices.*` ops (`noticeops.go`). It serves each team's board
+  to its boss and the user's dashboard alone (`boardops.go`, A60), each
+  caller placed by the kernel's peer credentials (`peer_linux.go`,
+  `peer_darwin.go`) and its process ancestry. It keeps
   herdr's agent view on the focused team, which focus events and the poll
   feed it, and clears it outside every team and on a clean stop (`view.go`,
   the A28 addendum, A49).
@@ -300,7 +303,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   writes are compare-and-sets on the row as it read it. The GitHub notices'
   seen-set, open PRs and seed marks, a kind's own included (`github.go`,
   migrations 0004 and 0006, A45), make each event told once across
-  restarts. Tests open a fresh database in a temp
+  restarts. Each team's board (`board.go`, migration 0007, A60) holds its
+  posts and two read marks, the boss's and the user's; every post wakes
+  each `board wait`. Tests open a fresh database in a temp
   dir; the store is never mocked.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests

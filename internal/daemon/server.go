@@ -190,15 +190,16 @@ func (s *server) handle(conn net.Conn) {
 	_ = conn.SetDeadline(time.Now().Add(ioTimeout))
 	line, err := readMessage(conn)
 	// An op with a budget of its own gets it, and an exchange more to
-	// answer in; reading the request keeps the 5 s.
-	resp := s.dispatch(line, err, func(budget time.Duration) { _ = conn.SetDeadline(time.Now().Add(budget + ioTimeout)) })
+	// answer in; reading the request keeps the 5 s. It is told its caller
+	// as the kernel knows it (A60).
+	resp := s.dispatch(line, err, peerOf(conn), func(budget time.Duration) { _ = conn.SetDeadline(time.Now().Add(budget + ioTimeout)) })
 	raw, _ := json.Marshal(resp)
 	if _, err := conn.Write(append(raw, '\n')); err != nil {
 		s.log.Debug().Err(err).Msg("daemon socket: write answer")
 	}
 }
 
-func (s *server) dispatch(line []byte, readErr error, extend func(time.Duration)) response {
+func (s *server) dispatch(line []byte, readErr error, peer Peer, extend func(time.Duration)) response {
 	if readErr != nil {
 		return refuse(codeBadRequest, readErr.Error())
 	}
@@ -217,7 +218,7 @@ func (s *server) dispatch(line []byte, readErr error, extend func(time.Duration)
 		return refuse(codeUnsupportedVersion, fmt.Sprintf("request version %d, this daemon speaks %d", req.V, protocolVersion))
 	}
 	if o, ok := s.ops[req.Op]; ok {
-		return s.run(req.Op, o, req.Args, extend)
+		return s.run(req.Op, o, req.Args, peer, extend)
 	}
 	switch req.Op {
 	case "health":
@@ -252,11 +253,11 @@ func (s *server) dispatch(line []byte, readErr error, extend func(time.Duration)
 	}
 }
 
-// run runs one op with a budget of its own.
-func (s *server) run(name string, o op, args json.RawMessage, extend func(time.Duration)) response {
+// run runs one op with a budget of its own, its context carrying peer.
+func (s *server) run(name string, o op, args json.RawMessage, peer Peer, extend func(time.Duration)) response {
 	budget := o.budget(args)
 	extend(budget)
-	ctx, cancel := context.WithTimeout(s.opsCtx, budget)
+	ctx, cancel := context.WithTimeout(withPeer(s.opsCtx, peer), budget)
 	defer cancel()
 	res, err := o.run(ctx, args)
 	if err != nil {

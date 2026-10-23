@@ -150,12 +150,12 @@ func (l *Lineage) PIDs() []int {
 	return out
 }
 
-// runsIn reports whether the pane herdr describes runs a process of the
+// RunsIn reports whether the pane herdr describes runs a process of the
 // lineage: its shell, its foreground job's group leader, or a process of that
 // job. A pid counts only if it is still the process the lineage read, so a
 // pid that exited and was reused since then never matches. herdr reports a
 // pid it does not know as 0, which no lineage holds.
-func (l *Lineage) runsIn(info herdr.ProcessInfo) bool {
+func (l *Lineage) RunsIn(info herdr.ProcessInfo) bool {
 	candidates := make([]uint32, 0, 2+len(info.ForegroundProcesses))
 	candidates = append(candidates, info.ShellPID, info.ForegroundProcessGroupID)
 	for _, p := range info.ForegroundProcesses {

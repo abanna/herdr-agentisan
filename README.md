@@ -511,6 +511,28 @@ project and the boss. A role can set its own with
 from the shared file, the project's table and the repo file. `skip` can name
 `ctx_soft` and `ctx_hard`, but never `ctx_ceiling`.
 
+## The team board
+
+Each team has a board in `state.db`: its workers' posts and the daemon's
+notices. Only the team's boss and the user read it; workers only post. The
+daemon tells who asks from the kernel, by the process that connected, never
+from the request: a command run in the boss's tab (or ◆ boss) reads as the
+boss, the plugin's dashboard there as the user, and anything else is refused
+with `not_allowed`. That is a policy, not a security boundary: workers run as
+your user (ADR-001 A60).
+
+```bash
+herdr-agentisan board read            # your unread posts, oldest first; marks them read
+herdr-agentisan board read --all      # the newest posts, newest first, marking nothing
+herdr-agentisan board wait            # run in the background: ends at the next post (exit 3 at its timeout, 30 min)
+```
+
+The boss and the user each have a read mark, so the boss reading never
+moves the user's. Posts are kept 30 days, at most 2,000 a team. Nothing
+posts to the board yet: until part 1a B of NERD-5533 the boss's messages
+and notices are still typed into its pane, and the dashboard's board panel
+comes with part 1b.
+
 ## The debugger
 
 A read-only Claude agent that answers "what happened to worker X in the last
