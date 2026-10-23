@@ -679,7 +679,8 @@ func plan(p *settings.Profile, typ string, c choice, ids []string, dbg *debugger
 // startAndWait brings one worker's agent up, within ctx: it waits for the
 // shell prompt when one is configured (herdr only sees which program has the
 // terminal, and a shell asking a question still has it), starts the agent,
-// retrying a busy pane, then waits for herdr to report it ready.
+// retrying a busy pane, then waits for herdr to report it ready and, for a
+// Codex, for its screen to show its composer and no hook review (A65).
 func (s *Service) startAndWait(ctx context.Context, cfg settings.Spawn, w opened) error {
 	keys := keySender{s: s, w: w, cfg: cfg, started: time.Now()}
 	if cfg.ShellPrompt != "" {
@@ -693,11 +694,15 @@ func (s *Service) startAndWait(ctx context.Context, cfg settings.Spawn, w opened
 	if err := s.waitReady(ctx, w); err != nil || w.launch.kind != codexKind {
 		return err
 	}
+	if err := s.checkComposer(ctx, w); err != nil {
+		return err
+	}
 	return s.checkHookReview(ctx, w)
 }
 
-// codexStartupHint names the startup screens a new Codex can stop at.
-const codexStartupHint = ": Codex may be at its hook review or its directory-trust prompt; start `codex --no-daemon` once in a herdr pane in the repo, trust the hooks and the folder, then spawn again"
+// codexStartupHint names the startup screens a new Codex can stop at, and the
+// one step past all three.
+const codexStartupHint = ": Codex may be at its update prompt, its hook review or its directory-trust prompt; start `codex --no-daemon` once in a herdr pane in the repo, choose \"Skip until next version\" (or update Codex), trust the hooks and the folder, then spawn again"
 
 // hookReview matches Codex's startup hook review, which herdr does not report
 // as blocked: a worker there looks ready, and a prompt typed into it picks a
@@ -707,7 +712,39 @@ const hookReview = `Hooks need review|Trust all and continue`
 // hookReviewWait is how long the screen is read for the hook review.
 const hookReviewWait = 500 * time.Millisecond
 
-// checkHookReview fails a Codex worker whose screen shows the hook review.
+// composer matches Codex's empty composer (Codex 0.163.0
+// tui/src/chatwidget.rs:2079), which a Codex at any other startup screen does
+// not show, though herdr reads most of them as idle (A65).
+const composer = `Ask Codex to do anything`
+
+// composerWait is how long the screen is read for the composer. A Codex that
+// started well shows it before herdr says it is ready, so the read answers at
+// once.
+const composerWait = 1500 * time.Millisecond
+
+// hookReviewLine is a line of the hook review.
+var hookReviewLine = regexp.MustCompile(hookReview)
+
+// checkComposer fails a Codex worker whose screen does not show its composer
+// in time, or shows the hook review. herdr answers the first matching line
+// from the top, and the review clears the whole screen, so the two are never
+// on it together.
+func (s *Service) checkComposer(ctx context.Context, w opened) error {
+	line, err := s.Herdr.WaitForOutput(ctx, w.paneID, composer+"|"+hookReview, composerWait)
+	switch {
+	case err == nil && hookReviewLine.MatchString(line):
+		return fmt.Errorf("%s is at Codex's hook review%s", w.id, codexStartupHint)
+	case err == nil:
+		return nil
+	case errors.Is(err, herdr.ErrWaitTimeout):
+		return fmt.Errorf("%s never showed Codex's composer%s", w.id, codexStartupHint)
+	}
+	return callFailed(ctx, "read "+w.id+"'s screen", err)
+}
+
+// checkHookReview fails a Codex worker whose screen shows the hook review. It
+// runs after checkComposer, since Codex's startup draft shows the same
+// composer before the review (A65).
 func (s *Service) checkHookReview(ctx context.Context, w opened) error {
 	_, err := s.Herdr.WaitForOutput(ctx, w.paneID, hookReview, hookReviewWait)
 	switch {
