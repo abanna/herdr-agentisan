@@ -245,7 +245,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   with the plugin's dashboard pane and the Codex hooks check `internal/cli`
   gives it; `internal/cli` only asks it, and asks herdr only to confirm its
   own pane (`FindCallerPane`), when no `--project` names the team, for
-  `send`'s sender and for `handoff ready` and `handoff ack` with no target.
+  `send`'s sender and for `handoff ready` and `handoff ack` with no target;
+  under Codex, only from the pane's own Codex, else no pane and no
+  `HERDR_AGENTISAN_WORKER` (`FindCaller`, `caller_unverified`, A64).
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
@@ -342,8 +344,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   their own against written lines and a stand-in `/proc`, and a
   page-at-a-time stand-in (`seqfile_test.go`) forces the skip.
 - `internal/snapshot/` — the versioned snapshot contract (ADR-001 D5/D6,
-  A18): the groups and agents, the boss, and the project's PRs, issues and
-  test slots. Decoding is strict: exact keys, closed enums, RFC 3339 times.
+  A18): the groups and agents, each with the agent herdr detects in its
+  pane (A68), the boss, and the project's PRs, issues and test slots.
+  Decoding is strict: exact keys, closed enums, RFC 3339 times.
   The daemon's `snapshot` op serves it; `FileSource` reads a fixture.
 - `internal/dashboard/` — the bubbletea team dashboard and its pure renderer:
   a header box, then the groups stacked as boxes with one dense line per

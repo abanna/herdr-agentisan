@@ -1,7 +1,7 @@
 // Package snapshot is the versioned contract between the daemon and every
 // presentation surface (ADR-001 D5/D6): one team's agents, grouped, with each
-// agent's status, model, ctx, item and stage; the boss; and the project's
-// pull requests, issues and test slots.
+// agent's status, the agent herdr detects, model, ctx, item and stage; the
+// boss; and the project's pull requests, issues and test slots.
 //
 // The daemon serves this as the `snapshot` op of its socket protocol: the
 // request {"v":1,"op":"snapshot"} is answered with {"ok":true,"data":<Snapshot>}
@@ -46,7 +46,7 @@ var (
 	// unknown or re-cased field, a value outside its domain (an unknown
 	// status or PR state, a ctx outside 0..100, a negative count, a time that
 	// is not RFC 3339), an empty agent or group name, or a shell that is
-	// named or is the boss.
+	// named, carries an agent or is the boss.
 	ErrInvalid = errors.New("invalid snapshot")
 	// ErrUnavailable means the source could not be read at all.
 	ErrUnavailable = errors.New("snapshot source is unavailable")
@@ -99,6 +99,13 @@ type Agent struct {
 	// workspace, so it is shown, never focused (ADR-001 A37).
 	TabID  string `json:"tab_id,omitempty"`
 	Status Status `json:"status"`
+	// Kind is the agent herdr detects in the pane, such as "claude" or
+	// "codex", kept as herdr sent it: a kind this build has never heard of
+	// is still a kind, and the dashboard draws it as text (ADR-001 A68). It
+	// is the pane's provider even before the agent reports a model. Empty,
+	// and left out, when herdr detects none: always for a shell, and for
+	// every row of a snapshot written before the key existed.
+	Kind string `json:"agent,omitempty"`
 	// Model is the model the agent runs, e.g. "claude-opus-5-5": the one it
 	// last reported, Claude's statusline model.id or a Codex hook's model,
 	// while that report is the current agent's (ADR-001 A56), else the one it
@@ -263,7 +270,7 @@ type Snapshot struct {
 // Validate checks the rules JSON decoding cannot: every status and PR state
 // is known, every ctx is within 0..100, no count is negative, slots never
 // exceed their total, the colour is #rrggbb, every agent and group has a
-// name, and a shell is unnamed and is not the boss. The RFC 3339 form of
+// name, and a shell is unnamed, carries no agent and is not the boss. The RFC 3339 form of
 // times is checked by Decode, on the text.
 func (s Snapshot) Validate() error {
 	if s.V != Version {
@@ -309,6 +316,8 @@ func (a Agent) validate() error {
 		return fmt.Errorf("%w: %q has ctx %d, outside 0..%d", errAgent, a.Name, *a.Ctx, MaxCtx)
 	case a.Shell && !a.Unnamed:
 		return fmt.Errorf("%w: %q is a shell with an agent name; a shell is unnamed", errAgent, a.Name)
+	case a.Shell && a.Kind != "":
+		return fmt.Errorf("%w: %q is a shell with agent %q; herdr detects no agent in a shell", errAgent, a.Name, a.Kind)
 	default:
 		return nil
 	}
@@ -425,7 +434,7 @@ type shape struct {
 var (
 	timeShape = &shape{time: true}
 	agentKeys = map[string]*shape{
-		"name": nil, "unnamed": nil, "shell": nil, "pane_id": nil, "tab_id": nil, "status": nil, "model": nil, "ctx": nil, "item": nil, "stage": nil,
+		"name": nil, "unnamed": nil, "shell": nil, "pane_id": nil, "tab_id": nil, "status": nil, "agent": nil, "model": nil, "ctx": nil, "item": nil, "stage": nil,
 		"stage_started_at": timeShape, "idle_since": timeShape, "stage_at": timeShape, "stage_stale": nil,
 	}
 	agentShape = &shape{keys: agentKeys}

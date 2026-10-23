@@ -26,7 +26,8 @@ const (
 	// bossBarCells is the boss line's wider ctx bar.
 	bossBarCells = 8
 	// modelCells is the widest model ShortModel returns: a gpt- model's word
-	// and version, such as sol6.1.
+	// and version, such as sol6.1. The agent a row draws in a model's place
+	// is cut to it too (A68).
 	modelCells = 6
 	// wordCells is the widest model ShortModel names by its first word.
 	wordCells = 4
@@ -804,7 +805,8 @@ func planColumns(groups []snapshot.Group, now time.Time, inner int) columns {
 		for _, a := range g.Agents {
 			c.name = max(c.name, ansi.StringWidth(clean(a.Name)))
 			c.width[colState] = max(c.width[colState], ansi.StringWidth(rowLabel(a)))
-			c.width[colModel] = max(c.width[colModel], ansi.StringWidth(ShortModel(a.Model)))
+			label, _ := modelLabel(a)
+			c.width[colModel] = max(c.width[colModel], ansi.StringWidth(label))
 			c.width[colItem] = max(c.width[colItem], ansi.StringWidth(clean(a.Item)))
 			c.width[colTime] = max(c.width[colTime], ansi.StringWidth(stageTime(a, now)))
 			stage = stage || clean(a.Stage) != ""
@@ -841,7 +843,8 @@ func (c columns) row(a snapshot.Agent, now time.Time, th Thresholds) line {
 		out = slices.Concat(out, line{gap}, cell(rowLabel(a), statusStyle(a.Status), w))
 	}
 	if w := c.width[colModel]; w > 0 {
-		out = slices.Concat(out, line{gap}, cell(ShortModel(a.Model), plainStyle, w))
+		label, st := modelLabel(a)
+		out = slices.Concat(out, line{gap}, cell(label, st, w))
 	}
 	out = slices.Concat(out, line{gap}, bar(a.Ctx, barCells, th), line{{" ", plainStyle}, pct(a.Ctx, pctCells, th)})
 	if w := c.width[colItem]; w > 0 {

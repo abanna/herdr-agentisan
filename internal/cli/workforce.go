@@ -33,6 +33,10 @@ const codeDaemonUnavailable = "daemon_unavailable"
 // gave no answer: it may have run the op (A52).
 const codeDaemonNoAnswer = "daemon_no_answer"
 
+// codeCallerUnverified answers a command run under Codex but not by its
+// pane's own Codex, whose pane and worker may be another session's (A64).
+const codeCallerUnverified = "caller_unverified"
+
 // errRefused is the error a refused workforce command returns, after
 // printing its refusal, so the process exits 1.
 var errRefused = errors.New("refused")
@@ -120,11 +124,14 @@ func (f *opFlags) selector(ctx context.Context) (workforce.Selector, error) {
 }
 
 // runOp asks the daemon to run op with the request req builds once the
-// daemon's socket is known, and prints its answer. req fails only when
-// herdr does, finding the team (herdr_failed). A command Codex ran in its
-// network sandbox whose dial reached neither herdr nor the daemon is told
-// why, and who to ask (workforce.CheckReach); one whose escalation Codex
-// approved still carries the sandbox's variable, and dials as any other.
+// daemon's socket is known, and prints its answer. req fails when herdr
+// does, finding the team (herdr_failed), or when the caller it would name
+// cannot be verified (caller_unverified, A64): the daemon is never asked.
+// A command Codex ran in its network sandbox whose dial reached neither
+// herdr nor the daemon is told why, and who to ask (workforce.CheckReach),
+// as is one whose walk the sandbox hid Codex from, before any dial (A64);
+// one whose escalation Codex approved still carries the sandbox's variable,
+// and dials as any other.
 func (f *opFlags) runOp(cmd *cobra.Command, args []string, op string, req func() (any, error)) error {
 	return f.runOpThen(cmd, args, op, req, nil)
 }
@@ -148,7 +155,12 @@ func (f *opFlags) runOpThen(cmd *cobra.Command, args []string, op string, req fu
 		return refuseWith(cmd, codeDaemonUnavailable, noHerdr(err).Error())
 	}
 	r, err := req()
-	if err != nil {
+	switch {
+	case errors.Is(err, report.ErrCodexSandboxed):
+		return refuseWith(cmd, codeDaemonUnavailable, err.Error())
+	case errors.Is(err, workforce.ErrCallerUnverified):
+		return refuseWith(cmd, codeCallerUnverified, err.Error())
+	case err != nil:
 		if sandboxed := workforce.CheckReach(pane); sandboxed != nil && errors.Is(err, herdr.ErrNotSent) {
 			return refuseWith(cmd, codeDaemonUnavailable, sandboxed.Error()+": "+err.Error())
 		}
