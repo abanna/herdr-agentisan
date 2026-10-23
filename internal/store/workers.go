@@ -319,14 +319,22 @@ func (s *Store) SetWorkerStatus(ctx context.Context, w Worker, status string, at
 	if endsWorker[status] {
 		retired = ns
 	}
-	res, err := s.db.ExecContext(ctx, setWorkerStatus, w.LogicalID, w.Generation, status, retired)
+	// One transaction, so the reason for a refusal is read as the refusal
+	// saw it: a handoff ending in between cannot turn ErrHandoffPending into
+	// ErrNoWorker, which retire ignores.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("%w: set worker %s %s: %w", ErrStore, w.LogicalID, status, err)
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op once committed
+	res, err := tx.ExecContext(ctx, setWorkerStatus, w.LogicalID, w.Generation, status, retired)
 	if err != nil {
 		return fmt.Errorf("%w: set worker %s %s: %w", ErrStore, w.LogicalID, status, err)
 	}
 	if n, err := res.RowsAffected(); err != nil || n == 0 {
 		var held bool
 		if retired != nil {
-			if err := s.db.QueryRowContext(ctx, heldByHandoff, w.LogicalID, w.Generation).Scan(&held); err != nil {
+			if err := tx.QueryRowContext(ctx, heldByHandoff, w.LogicalID, w.Generation).Scan(&held); err != nil {
 				return fmt.Errorf("%w: set worker %s %s: %w", ErrStore, w.LogicalID, status, err)
 			}
 		}
@@ -334,6 +342,9 @@ func (s *Store) SetWorkerStatus(ctx context.Context, w Worker, status string, at
 			return fmt.Errorf("%w: %s stays live until its handoff completes or fails", ErrHandoffPending, w.LogicalID)
 		}
 		return fmt.Errorf("%w: %s is not a live worker at generation %d", ErrNoWorker, w.LogicalID, w.Generation)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("%w: set worker %s %s: %w", ErrStore, w.LogicalID, status, err)
 	}
 	return nil
 }

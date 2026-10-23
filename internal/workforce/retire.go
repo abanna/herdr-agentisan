@@ -100,13 +100,16 @@ func (s *Service) Retire(ctx context.Context, req RetireRequest) (RetireResult, 
 // finish retires tg under the workforce lock, under which a handoff begins,
 // so the handoffs it reads afresh hold until it returns (A33 part 2a). A row
 // whose handoff is pending is never ended: ErrHandoffPending, with nothing
-// closed. A pane that is a pending handoff's replacement fails that handoff
-// first, then closes, so a close that errors leaves an ordinary pane for the
-// retry and never an inbox held. gone is the pane gone while retire waited
-// for its handoff.
+// closed; nor is one rebound since retire read it (unmoved). A pane that is a
+// pending handoff's replacement fails that handoff first, then closes, so a
+// close that errors leaves an ordinary pane for the retry and never an inbox
+// held. gone is the pane gone while retire waited for its handoff.
 func (s *Service) finish(ctx context.Context, tg target, gone bool) (RetireResult, error) {
 	h, replaced, err := s.handoffOf(ctx, tg)
 	if err != nil {
+		return RetireResult{}, err
+	}
+	if err := s.unmoved(ctx, tg.row); err != nil {
 		return RetireResult{}, err
 	}
 	if tg.unlisted && !replaced {
@@ -184,6 +187,29 @@ func (s *Service) handoffOf(ctx context.Context, tg target) (store.Handoff, bool
 		}
 	}
 	return pending[i], true, nil
+}
+
+// unmoved re-reads row, if there is one, under the workforce lock. A row
+// rebound since retire read it, while it waited without the lock, is another
+// session's now: a handoff completed meanwhile, or the team poll's re-key
+// after a herdr live handoff renewed its terminal (A35). Nothing of it is
+// closed or ended (ErrPaneChanged), and a retry reads it afresh. A row
+// retired meanwhile is left to endRow, which ignores it.
+func (s *Service) unmoved(ctx context.Context, row *store.Worker) error {
+	if row == nil {
+		return nil
+	}
+	now, err := s.Store.WorkerRow(ctx, row.LogicalID)
+	if errors.Is(err, store.ErrNoWorker) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read worker %s: %w", row.LogicalID, err)
+	}
+	if now.RetiredAt.IsZero() && (now.Generation != row.Generation || now.TerminalID != row.TerminalID) {
+		return fmt.Errorf("%w: %s moved to %s since retire read it; nothing was closed", ErrPaneChanged, row.LogicalID, now.PaneID)
+	}
+	return nil
 }
 
 // heldBy is ErrHandoffPending, naming the replacement, while id has a

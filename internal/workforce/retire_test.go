@@ -703,3 +703,59 @@ func TestRetireAbandonsARotation(t *testing.T) {
 		assert.Equal(t, workforce.RetireResult{PaneID: next, Changed: true, Outcome: workforce.OutcomeRetired}, res, "the retry closes an ordinary pane")
 	})
 }
+
+// TestRetireRereadsTheRowUnderTheLock: a worker rebound while retire waited
+// for its handoff, by a handoff completed meanwhile or by the team poll's
+// re-key after a herdr live handoff, is another session's now: retire
+// closes nothing and ends nothing (ErrPaneChanged), and a retry reads it
+// afresh.
+func TestRetireRereadsTheRowUnderTheLock(t *testing.T) {
+	t.Parallel()
+	for name, rebind := range map[string]func(f *fixture, w worker, row store.Worker) error{
+		"a handoff completed meanwhile": func(f *fixture, w worker, _ store.Worker) error {
+			h, err := f.st.BeginHandoff(context.Background(), w.ID, "w10:p50", "term_next", time.Now())
+			if err != nil {
+				return err
+			}
+			f.h.pane(w.PaneID).tokens = map[string]string{team.HandoffKey: "⟳ READY"}
+			return f.st.CompleteHandoff(context.Background(), h, time.Now())
+		},
+		"re-keyed by the poll meanwhile": func(f *fixture, w worker, row store.Worker) error {
+			f.h.dropPane(w.PaneID) // a live handoff renews its terminal: the old one is listed nowhere
+			return f.st.RekeyWorker(context.Background(), row, "w10:p51", "term_renewed")
+		},
+		"bound again at a new generation meanwhile": func(f *fixture, w worker, row store.Worker) error {
+			if err := f.st.SetWorkerStatus(context.Background(), row, store.StatusRetired, time.Now()); err != nil {
+				return err
+			}
+			again := store.Worker{LogicalID: w.ID, Project: "herdr-agentisan", Group: "coder", PaneID: w.PaneID, TerminalID: row.TerminalID}
+			if _, err := f.st.BindWorker(context.Background(), again, time.Now()); err != nil {
+				return err
+			}
+			f.h.pane(w.PaneID).tokens = map[string]string{team.HandoffKey: "⟳ READY"}
+			return nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, teamConfig)
+			w := f.worker(t, "ha-coder-1", "coder")
+			row := f.row(t, w.ID).Worker
+			lists := 0
+			f.h.onCall = func(method string) { // under the fake's lock
+				if method == "pane.list" {
+					if lists++; lists == 2 { // the wait's first poll
+						assert.NoError(t, rebind(f, w, row))
+					}
+				}
+			}
+
+			_, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID, AfterHandoff: true})
+			require.ErrorIs(t, err, workforce.ErrPaneChanged)
+			assert.Empty(t, f.h.params("pane.close"))
+			now := f.row(t, w.ID)
+			assert.True(t, now.RetiredAt.IsZero(), "still live")
+			assert.NotEqual(t, []any{row.Generation, row.TerminalID}, []any{now.Generation, now.TerminalID}, "bound anew")
+		})
+	}
+}
