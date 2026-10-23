@@ -35,9 +35,10 @@ const (
 	// transaction.
 	BoardBudget = 10 * time.Second
 	// DefaultBoardWait is how long a board wait waits when it is given no
-	// timeout, and MaxBoardWait the longest it takes.
+	// timeout.
 	DefaultBoardWait = 30 * time.Minute
-	MaxBoardWait     = 6 * time.Hour
+	// MaxBoardWait is the longest timeout a board wait takes.
+	MaxBoardWait = 6 * time.Hour
 	// DefaultBoardLimit is how many posts a read returns when it is given
 	// no limit.
 	DefaultBoardLimit = 50
@@ -140,9 +141,15 @@ type board struct {
 	waits map[string]chan struct{}
 }
 
+// newBoard serves the board ops on st, each caller placed with place.
+func newBoard(st *store.Store, place placer) *board {
+	return &board{st: st, place: place, waits: map[string]chan struct{}{}}
+}
+
 // boardOps are the board ops on st, each caller placed with place.
-func boardOps(st *store.Store, place placer) map[string]op {
-	b := &board{st: st, place: place, waits: map[string]chan struct{}{}}
+func boardOps(st *store.Store, place placer) map[string]op { return newBoard(st, place).ops() }
+
+func (b *board) ops() map[string]op {
 	ops := map[string]op{
 		OpBoardRead: {run: func(ctx context.Context, args json.RawMessage) (any, error) {
 			var req BoardReadRequest
@@ -237,9 +244,11 @@ func (b *board) state(ctx context.Context, who boardCaller) (BoardStateResult, e
 }
 
 // wait answers once a post past req.After is on the caller's board, at
-// once if one is there already, or once req's timeout passes. A later wait
-// from the same pane ends it (ErrSuperseded), and so does the daemon
-// stopping (ErrStopping): the server closes only once every op answered.
+// once if one is there already, or once req's timeout passes, counted from
+// the op's start, so a slow placement still ends inside the op's budget. A
+// later wait from the same pane ends it (ErrSuperseded), and so does the
+// daemon stopping (ErrStopping): the server closes only once every op
+// answered.
 func (b *board) wait(ctx context.Context, req BoardWaitRequest) (BoardStateResult, error) {
 	switch {
 	case req.Timeout < 0 || req.Timeout > MaxBoardWait:
@@ -247,18 +256,18 @@ func (b *board) wait(ctx context.Context, req BoardWaitRequest) (BoardStateResul
 	case req.After != nil && *req.After < 0:
 		return BoardStateResult{}, fmt.Errorf("%w: after %d", workforce.ErrBadRequest, *req.After)
 	}
-	who, err := b.place(ctx, peerFrom(ctx))
-	if err != nil {
-		return BoardStateResult{}, err
-	}
 	timeout := req.Timeout
 	if timeout == 0 {
 		timeout = DefaultBoardWait
 	}
-	gone := b.join(who.Pane)
-	defer b.leave(who.Pane, gone)
 	timer := time.NewTimer(timeout)
 	defer timer.Stop()
+	who, err := b.place(ctx, peerFrom(ctx))
+	if err != nil {
+		return BoardStateResult{}, err
+	}
+	gone := b.join(who.Pane)
+	defer b.leave(who.Pane, gone)
 	for {
 		changed := b.st.BoardChanged()
 		st, err := b.state(ctx, who)
@@ -321,8 +330,9 @@ func (o Options) newBoardOps(st *store.Store, view func() (*team.Model, map[stri
 }
 
 // placeBoardCaller places a caller (A60): in a team's boss place, it reads
-// that team's board as the boss; in a pane of that boss's tab whose
-// foreground runs the plugin's dashboard, as the user. Anything else is
+// that team's board as the boss; in a pane of that place or of the boss's
+// tab whose foreground runs the plugin's dashboard, as the user, since a ◆
+// boss space holds its dashboard among the boss's panes. Anything else is
 // ErrNotAllowed, a caller the kernel told nothing of or that runs as
 // another user included: the check fails closed. Its process is matched to
 // a pane by its lineage, read through stat with no anchors, since an
@@ -341,22 +351,27 @@ func placeBoardCaller(view func() (*team.Model, map[string]string), c paneProber
 		}
 		lineage := report.ReadLineage(p.PID, stat)
 		var failed error
-		asked := map[string]bool{}
-		probe := func(pane string) (herdr.ProcessInfo, bool) {
-			if asked[pane] {
-				return herdr.ProcessInfo{}, false
+		type probed struct{ in, dashboard bool }
+		probes := map[string]probed{}
+		probe := func(pane string) probed {
+			if got, ok := probes[pane]; ok {
+				return got
 			}
-			asked[pane] = true
-			info, err := c.PaneProcessInfo(ctx, pane)
-			if err != nil {
+			var got probed
+			if info, err := c.PaneProcessInfo(ctx, pane); err != nil {
 				failed = fmt.Errorf("%w: pane %s's processes: %w", ErrCannotPlace, pane, err)
-				return herdr.ProcessInfo{}, false
+			} else {
+				got = probed{in: lineage.RunsIn(info), dashboard: runsDashboard(info)}
 			}
-			return info, lineage.RunsIn(info)
+			probes[pane] = got
+			return got
 		}
 		for _, pr := range m.Projects {
 			for _, b := range pr.Boss {
-				if _, in := probe(b.Pane.ID); in {
+				switch got := probe(b.Pane.ID); {
+				case got.in && got.dashboard:
+					return boardCaller{Project: pr.Name, Reader: store.ReaderUser, Pane: b.Pane.ID}, nil
+				case got.in:
 					return boardCaller{Project: pr.Name, Reader: store.ReaderBoss, Pane: b.Pane.ID}, nil
 				}
 			}
@@ -371,7 +386,7 @@ func placeBoardCaller(view func() (*team.Model, map[string]string), c paneProber
 					if b.Pane.TabID == "" || pane.TabID != b.Pane.TabID {
 						continue
 					}
-					if info, in := probe(pane.PaneID); in && runsDashboard(info) {
+					if got := probe(pane.PaneID); got.in && got.dashboard {
 						return boardCaller{Project: pr.Name, Reader: store.ReaderUser, Pane: pane.PaneID}, nil
 					}
 				}

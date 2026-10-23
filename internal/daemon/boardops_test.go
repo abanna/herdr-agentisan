@@ -78,7 +78,7 @@ func TestBoardOpsPlaceTheCallerByTheKernel(t *testing.T) {
 		mu   sync.Mutex
 		seen []daemon.Peer
 	)
-	socket, _ := daemon.ServeBoard(t, shortDir(t), boardStore(t), func(_ context.Context, p daemon.Peer) (daemon.BoardCaller, error) {
+	socket, _, _ := daemon.ServeBoard(t, shortDir(t), boardStore(t), func(_ context.Context, p daemon.Peer) (daemon.BoardCaller, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		seen = append(seen, p)
@@ -102,7 +102,7 @@ func TestBoardRead(t *testing.T) {
 		boardPost(t, st, "ha", b)
 	}
 	boardPost(t, st, "web", "not ha's")
-	socket, _ := daemon.ServeBoard(t, shortDir(t), st, as(theBoss))
+	socket, _, _ := daemon.ServeBoard(t, shortDir(t), st, as(theBoss))
 
 	got, err := boardOp[daemon.BoardReadResult](t, socket, daemon.OpBoardRead, daemon.BoardReadRequest{Limit: 2})
 	require.NoError(t, err)
@@ -133,12 +133,12 @@ func TestBoardRead(t *testing.T) {
 	_, err = boardOp[daemon.BoardReadResult](t, socket, daemon.OpBoardRead, map[string]any{"reader": "boss"})
 	assert.Equal(t, "bad_request", refusedWith(t, err), "the request cannot say who reads")
 
-	refused, _ := daemon.ServeBoard(t, shortDir(t), st, func(context.Context, daemon.Peer) (daemon.BoardCaller, error) {
+	refused, _, _ := daemon.ServeBoard(t, shortDir(t), st, func(context.Context, daemon.Peer) (daemon.BoardCaller, error) {
 		return daemon.BoardCaller{}, daemon.ErrNotAllowed
 	})
 	_, err = boardOp[daemon.BoardReadResult](t, refused, daemon.OpBoardRead, daemon.BoardReadRequest{})
 	assert.Equal(t, "not_allowed", refusedWith(t, err))
-	cannot, _ := daemon.ServeBoard(t, shortDir(t), st, func(context.Context, daemon.Peer) (daemon.BoardCaller, error) {
+	cannot, _, _ := daemon.ServeBoard(t, shortDir(t), st, func(context.Context, daemon.Peer) (daemon.BoardCaller, error) {
 		return daemon.BoardCaller{}, daemon.ErrCannotPlace
 	})
 	_, err = boardOp[daemon.BoardReadResult](t, cannot, daemon.OpBoardRead, daemon.BoardReadRequest{})
@@ -152,7 +152,8 @@ func TestBoardRead(t *testing.T) {
 func TestBoardWait(t *testing.T) {
 	t.Parallel()
 	st := boardStore(t)
-	socket, _ := daemon.ServeBoard(t, shortDir(t), st, as(theBoss))
+	socket, _, waiting := daemon.ServeBoard(t, shortDir(t), st, as(theBoss))
+	inForce := func() bool { return waiting(theBoss.Pane) }
 
 	type answer struct {
 		res daemon.BoardStateResult
@@ -168,21 +169,22 @@ func TestBoardWait(t *testing.T) {
 		return ch
 	}
 
-	waiting := waitIn(daemon.BoardWaitRequest{Timeout: time.Minute})
+	blocked := waitIn(daemon.BoardWaitRequest{Timeout: time.Minute})
+	require.Eventually(t, inForce, 10*time.Second, 5*time.Millisecond, "the wait is in force")
 	select {
-	case a := <-waiting:
+	case a := <-blocked:
 		t.Fatalf("an empty board answered a wait: %+v", a)
 	case <-time.After(200 * time.Millisecond):
 	}
 	boardPost(t, st, "web", "another board's")
 	select {
-	case a := <-waiting:
+	case a := <-blocked:
 		t.Fatalf("another team's post answered the wait: %+v", a)
 	case <-time.After(200 * time.Millisecond):
 	}
 	p := boardPost(t, st, "ha", "wake")
 	select {
-	case a := <-waiting:
+	case a := <-blocked:
 		require.NoError(t, a.err)
 		assert.Equal(t, daemon.BoardStateResult{Project: "ha", Reader: store.ReaderBoss, Newest: p.Seq, Unread: 1}, a.res)
 	case <-time.After(10 * time.Second):
@@ -202,8 +204,9 @@ func TestBoardWait(t *testing.T) {
 	require.NoError(t, err, "past an after behind the mark: at once")
 	assert.False(t, got.TimedOut)
 
+	require.Eventually(t, func() bool { return !inForce() }, 10*time.Second, 5*time.Millisecond, "every earlier wait has answered")
 	first := waitIn(daemon.BoardWaitRequest{Timeout: time.Minute})
-	time.Sleep(200 * time.Millisecond)
+	require.Eventually(t, inForce, 10*time.Second, 5*time.Millisecond, "the first wait is in force before the second starts")
 	second := waitIn(daemon.BoardWaitRequest{Timeout: time.Minute})
 	select {
 	case a := <-first:
@@ -229,13 +232,13 @@ func TestBoardWait(t *testing.T) {
 // once, told daemon_gone, and the stop does not wait out its timeout.
 func TestBoardWaitEndsWhenTheDaemonStops(t *testing.T) {
 	t.Parallel()
-	socket, stop := daemon.ServeBoard(t, shortDir(t), boardStore(t), as(theBoss))
+	socket, stop, waiting := daemon.ServeBoard(t, shortDir(t), boardStore(t), as(theBoss))
 	done := make(chan error, 1)
 	go func() {
 		_, err := daemon.Workforce(context.Background(), socket, daemon.OpBoardWait, daemon.BoardWaitRequest{Timeout: daemon.MaxBoardWait})
 		done <- err
 	}()
-	time.Sleep(200 * time.Millisecond)
+	require.Eventually(t, func() bool { return waiting(theBoss.Pane) }, 10*time.Second, 5*time.Millisecond, "the wait is in force before the stop")
 	stopped := make(chan struct{})
 	go func() { stop(); close(stopped) }()
 	select {
@@ -270,12 +273,12 @@ func paneOf(id, tab string) map[string]any {
 // shell pid and foreground argv by pane. failing fails every process read.
 func placeHerdr(t *testing.T, failing bool) herdr.Client {
 	t.Helper()
-	panes := []map[string]any{paneOf("w1:pB", "t1"), paneOf("w1:pD", "t1"), paneOf("w1:pE", "t1"), paneOf("w1:pF", "t1"), paneOf("w1:p2", "t2"), paneOf("w1:pX", "t2")}
-	shells := map[string]uint32{"w1:pB": 100, "w1:pD": 200, "w1:pE": 500, "w1:pF": 600, "w1:p2": 300, "w1:pX": 400}
+	panes := []map[string]any{paneOf("w1:pB", "t1"), paneOf("w1:pD", "t1"), paneOf("w1:pE", "t1"), paneOf("w1:pF", "t1"), paneOf("w1:p2", "t2"), paneOf("w1:pX", "t2"), paneOf("w1:pS", "t3")}
+	shells := map[string]uint32{"w1:pB": 100, "w1:pD": 200, "w1:pE": 500, "w1:pF": 600, "w1:p2": 300, "w1:pX": 400, "w1:pS": 700}
 	dashboard := []string{"bin/herdr-agentisan", "dashboard"}
 	// pE runs another of the plugin's commands, pF another program's
 	// dashboard: neither is the plugin's dashboard.
-	argv := map[string][]string{"w1:pD": dashboard, "w1:pE": {"/opt/bin/herdr-agentisan", "board", "read"}, "w1:pF": {"other-tool", "dashboard"}, "w1:pX": dashboard}
+	argv := map[string][]string{"w1:pD": dashboard, "w1:pE": {"/opt/bin/herdr-agentisan", "board", "read"}, "w1:pF": {"other-tool", "dashboard"}, "w1:pX": dashboard, "w1:pS": dashboard}
 	srv := herdrtest.Start(t, func(r herdrtest.Request) herdrtest.Reply {
 		switch r.Method {
 		case "pane.list":
@@ -310,6 +313,7 @@ var boardProcs = map[int]report.Stat{
 	400: {PPID: 1, Start: 40}, 401: {PPID: 400, Start: 80},
 	500: {PPID: 1, Start: 45}, 501: {PPID: 500, Start: 85},
 	600: {PPID: 1, Start: 46}, 601: {PPID: 600, Start: 86},
+	700: {PPID: 1, Start: 47},
 	999: {PPID: 1, Start: 90},
 }
 
@@ -329,8 +333,13 @@ func boardStat(pid int) (report.Stat, error) {
 func TestPlaceBoardCaller(t *testing.T) {
 	t.Parallel()
 	model := &team.Model{Projects: []team.Project{{
-		Name:   "ha",
-		Boss:   []team.Worker{{ID: "ha-boss", Pane: team.Pane{ID: "w1:pB", TabID: "t1", Name: "ha-boss"}}},
+		Name: "ha",
+		// A ◆ boss space holds its dashboard among the boss's panes: w1:pS,
+		// in a tab of its own.
+		Boss: []team.Worker{
+			{ID: "ha-boss", Pane: team.Pane{ID: "w1:pB", TabID: "t1", Name: "ha-boss"}},
+			{ID: "w1:pS", Pane: team.Pane{ID: "w1:pS", TabID: "t3"}},
+		},
 		Groups: []team.Group{{Name: "coder", Workers: []team.Worker{{ID: "w1:p2", Pane: team.Pane{ID: "w1:p2", TabID: "t2"}}}}},
 	}}}
 	view := func() (*team.Model, map[string]string) { return model, map[string]string{"ha": "ha-boss"} }
@@ -344,6 +353,7 @@ func TestPlaceBoardCaller(t *testing.T) {
 	}{
 		"a command the boss runs":       {me(101), theBoss},
 		"the dashboard in the boss tab": {me(200), daemon.BoardCaller{Project: "ha", Reader: store.ReaderUser, Pane: "w1:pD"}},
+		"a dashboard in the boss place": {me(700), daemon.BoardCaller{Project: "ha", Reader: store.ReaderUser, Pane: "w1:pS"}},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

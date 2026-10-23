@@ -46,8 +46,9 @@ const (
 	// DefaultStopWait is how long Stop waits for the daemon to let go.
 	DefaultStopWait = 10 * time.Second
 	// PruneInterval is how often, by Options.Now, the daemon prunes finished
-	// handoffs and messages past retention (A1), and the GitHub notices' rows
-	// past theirs (A45). It also prunes once when it starts.
+	// handoffs and messages past retention (A1), the GitHub notices' rows
+	// past theirs (A45), and the board's posts past theirs (A60). It also
+	// prunes once when it starts.
 	PruneInterval = 24 * time.Hour
 )
 

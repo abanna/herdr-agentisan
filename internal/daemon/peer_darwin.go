@@ -22,11 +22,11 @@ func peerOf(conn net.Conn) Peer {
 	}
 	var p Peer
 	_ = raw.Control(func(fd uintptr) {
-		pid, err := unix.GetsockoptInt(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERPID) //nolint:gosec // G115: a descriptor always fits an int
+		pid, err := unix.GetsockoptInt(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERPID)
 		if err != nil {
 			return
 		}
-		cred, err := unix.GetsockoptXucred(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERCRED) //nolint:gosec // G115: a descriptor always fits an int
+		cred, err := unix.GetsockoptXucred(int(fd), unix.SOL_LOCAL, unix.LOCAL_PEERCRED)
 		if err == nil {
 			p = Peer{PID: pid, UID: cred.Uid, Known: true}
 		}
