@@ -65,6 +65,7 @@ const (
 	AttrRoutingJevModel         = "agentisan.routing.jev_model_returned"
 	AttrRoutingAnswers          = "agentisan.routing.answers"
 	AttrRoutingFallbackReason   = "agentisan.routing.fallback_reason"
+	AttrRoutingJevError         = "agentisan.routing.jev_error"
 	AttrRoutingOverrideBinding  = "agentisan.routing.override.binding"
 	AttrRoutingOverrideBy       = "agentisan.routing.override.by"
 	AttrRoutingOverrideEffort   = "agentisan.routing.override.effort"
@@ -331,8 +332,8 @@ func (e *Events) message(ctx context.Context, name, what string, m Message) {
 }
 
 // WorkerRouted emits d as the EventWorkerRouted of one worker of a spawn.
-// Every audit field is present: "" for a task id, an override or Jev's
-// answers d has none of.
+// Every audit field is present: "" for a task id, an override, Jev's
+// answers or Jev's error d has none of.
 func (e *Events) WorkerRouted(ctx context.Context, workerID, project, group string, d routing.Decision) {
 	if e == nil {
 		return
@@ -372,6 +373,7 @@ func (e *Events) WorkerRouted(ctx context.Context, workerID, project, group stri
 		attribute.String(AttrRoutingJevModel, d.JevModelReturned),
 		attribute.String(AttrRoutingAnswers, answers),
 		attribute.String(AttrRoutingFallbackReason, string(d.FallbackReason)),
+		attribute.String(AttrRoutingJevError, d.JevError),
 		attribute.String(AttrRoutingOverrideBinding, o.Binding),
 		attribute.String(AttrRoutingOverrideBy, o.By),
 		attribute.String(AttrRoutingOverrideEffort, o.Effort),

@@ -334,18 +334,8 @@ func TestWatchAgentExitNeedsAgentList(t *testing.T) {
 // Each model is built as the poll builds it.
 func TestWatchAcrossAFailedAgentList(t *testing.T) {
 	t.Parallel()
-	ws := []herdr.WorkspaceInfo{{WorkspaceID: "wN", Label: "◆ coders"}}
-	pane := func(kind, status string) []herdr.PaneInfo {
-		return []herdr.PaneInfo{{PaneID: "wN:p1", WorkspaceID: "wN", Agent: kind, AgentStatus: status}}
-	}
-	named := []herdr.AgentInfo{{PaneID: "wN:p1", Name: "pee01", TerminalID: "t1"}}
-	type poll struct {
-		panes  []herdr.PaneInfo
-		agents []herdr.AgentInfo
-		named  bool
-	}
-	failed := func(panes []herdr.PaneInfo) poll { return poll{panes, nil, false} }
-	answered := func(panes []herdr.PaneInfo, agents []herdr.AgentInfo) poll { return poll{panes, agents, true} }
+	pane := func(kind, status string) []herdr.PaneInfo { return paneOn("", kind, status) }
+	named := listed("wN:p1", "t1", "pee01")
 	tests := map[string]struct {
 		polls []poll
 		want  []string // each later poll's notices, joined
@@ -378,20 +368,171 @@ func TestWatchAcrossAFailedAgentList(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			w := notice.NewWatch()
-			var got []string
-			for i, p := range tc.polls {
-				ns := w.Observe(team.Build(team.Layout{Workspaces: ws, Panes: p.panes, Agents: p.agents}, team.Spaces{}, nil), p.agents, p.named)
-				if i == 0 {
-					continue
-				}
-				var texts []string
-				for _, n := range ns {
-					texts = append(texts, n.Text)
-				}
-				got = append(got, strings.Join(texts, " | "))
-			}
-			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.want, observeTexts(tc.polls))
+		})
+	}
+}
+
+// poll is one team poll's answers, for one ◆ space, wN: pane.list's, and
+// agent.list's when it answered (named).
+type poll struct {
+	panes  []herdr.PaneInfo
+	agents []herdr.AgentInfo
+	named  bool
+}
+
+// failed is a poll whose agent.list failed.
+func failed(panes []herdr.PaneInfo) poll { return poll{panes, nil, false} }
+
+// answered is a poll whose agent.list answered agents.
+func answered(panes []herdr.PaneInfo, agents []herdr.AgentInfo) poll {
+	return poll{panes, agents, true}
+}
+
+// paneOn is pane.list's answer for wN with one pane, wN:p1, showing
+// terminal term ("" for none listed), with the agent herdr detected there,
+// kind ("" for none), in status.
+func paneOn(term, kind, status string) []herdr.PaneInfo {
+	return []herdr.PaneInfo{{PaneID: "wN:p1", WorkspaceID: "wN", TerminalID: term, Agent: kind, AgentStatus: status}}
+}
+
+// listed is agent.list's answer with one agent, in pane id on terminal term,
+// named name ("" for nobody).
+func listed(id, term, name string) []herdr.AgentInfo {
+	return []herdr.AgentInfo{{PaneID: id, Name: name, TerminalID: term}}
+}
+
+// observeTexts is a new Watch's notices for polls, each model built as the
+// poll builds it: one entry per poll after the first, its texts joined.
+func observeTexts(polls []poll) []string {
+	ws := []herdr.WorkspaceInfo{{WorkspaceID: "wN", Label: "◆ coders"}}
+	w := notice.NewWatch()
+	var got []string
+	for i, p := range polls {
+		ns := w.Observe(team.Build(team.Layout{Workspaces: ws, Panes: p.panes, Agents: p.agents}, team.Spaces{}, nil), p.agents, p.named)
+		if i == 0 {
+			continue
+		}
+		var texts []string
+		for _, n := range ns {
+			texts = append(texts, n.Text)
+		}
+		got = append(got, strings.Join(texts, " | "))
+	}
+	return got
+}
+
+// TestWatchKeepsANameOnlyWhileUnnamed (NERD-5365, items 1 and 2): a pane
+// judged before keeps its last name only across a poll that cannot name
+// it: one whose agent.list failed, or answered listing neither the pane nor
+// its terminal, as when its agent exits between the poll's two reads. A
+// terminal agent.list lists with no name runs an agent nobody named, and a
+// new terminal in the pane, as a live handoff reissues it, a new agent:
+// each is told by its pane.
+func TestWatchKeepsANameOnlyWhileUnnamed(t *testing.T) {
+	t.Parallel()
+	start := answered(paneOn("t1", "claude", "working"), listed("wN:p1", "t1", "pee01"))
+	tests := map[string]struct {
+		polls []poll
+		want  []string // each later poll's notices, joined
+	}{
+		"its terminal listed with no name": {
+			[]poll{start, answered(paneOn("t1", "claude", "blocked"), listed("wN:p1", "t1", ""))},
+			[]string{"pane wN:p1 is blocked"},
+		},
+		"its terminal listed with no name under another pane": {
+			[]poll{start, answered(paneOn("t1", "claude", "blocked"), listed("wN:p9", "t1", ""))},
+			[]string{"pane wN:p1 is blocked"},
+		},
+		"a pane showing no terminal, listed with no name": {
+			[]poll{answered(paneOn("", "claude", "working"), listed("wN:p1", "t1", "pee01")), answered(paneOn("", "claude", "blocked"), listed("wN:p1", "t1", ""))},
+			[]string{"pane wN:p1 is blocked"},
+		},
+		"a new terminal agent.list does not list": {
+			[]poll{start, answered(paneOn("t2", "claude", "blocked"), nil)},
+			[]string{"pane wN:p1 is blocked"},
+		},
+		"a new terminal as agent.list fails": {
+			[]poll{start, failed(paneOn("t2", "claude", "blocked"))},
+			[]string{"pane wN:p1 is blocked"},
+		},
+		"its terminal not listed: the agent exited between the reads": {
+			[]poll{start, answered(paneOn("t1", "claude", "blocked"), nil), answered(paneOn("t1", "", "unknown"), nil)},
+			[]string{"pee01 is blocked", "pee01's agent exited (pane wN:p1)"},
+		},
+		"its terminal not listed, another agent's is": {
+			[]poll{start, answered(paneOn("t1", "claude", "blocked"), listed("wN:p9", "t9", "other"))},
+			[]string{"pee01 is blocked"},
+		},
+		"as agent.list fails": {
+			[]poll{start, failed(paneOn("t1", "claude", "blocked"))},
+			[]string{"pee01 is blocked"},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, observeTexts(tc.polls))
+		})
+	}
+}
+
+// TestWatchHoldsABlockItCannotJudge (NERD-5365, item 3, QA's W23f): a pane
+// herdr knows only by name that first shows, blocked, on a poll whose
+// agent.list failed cannot be judged to run an agent there. Its block is
+// told at the first poll that judges one there and finds it still blocked,
+// under the name that poll gives it. One no longer blocked, gone, or judged
+// a shell by then is not told, nor the end of a block never told.
+func TestWatchHoldsABlockItCannotJudge(t *testing.T) {
+	t.Parallel()
+	none := answered(nil, nil)
+	blocked := paneOn("t1", "", "blocked")
+	named := listed("wN:p1", "t1", "pee01")
+	tests := map[string]struct {
+		polls []poll
+		want  []string // each later poll's notices, joined
+	}{
+		"told once agent.list answers": {
+			[]poll{none, failed(blocked), answered(blocked, named), answered(blocked, named)},
+			[]string{"", "pee01 is blocked", ""},
+		},
+		"held across another failed poll": {
+			[]poll{none, failed(blocked), failed(blocked), answered(blocked, named)},
+			[]string{"", "", "pee01 is blocked"},
+		},
+		"no longer blocked": {
+			[]poll{none, failed(blocked), answered(paneOn("t1", "", "working"), named), answered(paneOn("t1", "", "working"), named)},
+			[]string{"", "", ""},
+		},
+		"working on another failed poll, then blocked": {
+			[]poll{none, failed(blocked), failed(paneOn("t1", "", "working")), answered(blocked, named)},
+			[]string{"", "", "pee01 is blocked"},
+		},
+		"a shell blocked as agent.list answers": {
+			[]poll{none, answered(blocked, nil), answered(blocked, named)},
+			[]string{"", ""},
+		},
+		"gone, then back blocked": {
+			[]poll{none, failed(blocked), none, answered(blocked, named)},
+			[]string{"", "", "pee01 is blocked"},
+		},
+		"judged a shell": {
+			[]poll{none, failed(blocked), answered(blocked, nil), answered(blocked, named)},
+			[]string{"", "", ""},
+		},
+		"judged on another failed poll": {
+			[]poll{none, failed(blocked), failed(paneOn("t1", "claude", "blocked")), answered(paneOn("t1", "claude", "blocked"), named)},
+			[]string{"", "pane wN:p1 is blocked", ""},
+		},
+		"an agent herdr detects is told at once": {
+			[]poll{none, failed(paneOn("t1", "claude", "blocked")), answered(paneOn("t1", "claude", "blocked"), named)},
+			[]string{"pane wN:p1 is blocked", ""},
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, observeTexts(tc.polls))
 		})
 	}
 }
@@ -507,7 +648,7 @@ func TestWorkerName(t *testing.T) {
 // it to run an agent, counted from the first, and once; a spawned agent
 // herdr has not yet classified is no news. One that shows a known status
 // first keeps the two-poll rule, and one that stops running an agent and
-// comes back starts again.
+// comes back starts again, as does one whose terminal changes (NERD-5365).
 func TestWatchFreshUnknown(t *testing.T) {
 	t.Parallel()
 	fresh := func(status team.Status) team.Model { return teamOf(nil, agentPane("w1:p3", "c3", status)) }
@@ -569,6 +710,39 @@ func TestWatchFreshUnknown(t *testing.T) {
 		assert.Equal(t, []string{"w1:p3 gone"}, kinds(w.Observe(teamOf(nil), nil, false)))
 		got := polls(w, fresh(team.StatusUnknown), 20)
 		assert.Equal(t, map[int][]string{20: {"w1:p3 unknown"}}, got, "a new agent there is not the known one")
+	})
+	// on is the pane showing terminal term, as a live handoff reissues it.
+	on := func(term string, status team.Status) team.Model {
+		w := agentPane("w1:p3", "c3", status)
+		w.Pane.TerminalID = term
+		return teamOf(nil, w)
+	}
+	t.Run("a new terminal is a new agent", func(t *testing.T) {
+		t.Parallel()
+		w := notice.NewWatch()
+		w.Observe(teamOf(nil), nil, false)
+		assert.Empty(t, polls(w, on("t1", team.StatusUnknown), 5))
+		assert.Empty(t, polls(w, on("t1", team.StatusWorking), 1))
+		got := polls(w, on("t2", team.StatusUnknown), 25)
+		assert.Equal(t, map[int][]string{20: {"w1:p3 unknown"}}, got, "counted from 1 on its new terminal, not told at its second poll")
+	})
+	t.Run("an unknown pending on the old terminal", func(t *testing.T) {
+		t.Parallel()
+		w := notice.NewWatch()
+		w.Observe(teamOf(nil), nil, false)
+		polls(w, on("t1", team.StatusWorking), 1)
+		assert.Empty(t, polls(w, on("t1", team.StatusUnknown), 1))
+		got := polls(w, on("t2", team.StatusUnknown), 25)
+		assert.Equal(t, map[int][]string{20: {"w1:p3 unknown"}}, got, "the old agent's unknown is not told for the new one")
+	})
+	t.Run("a new terminal seen known", func(t *testing.T) {
+		t.Parallel()
+		w := notice.NewWatch()
+		w.Observe(teamOf(nil), nil, false)
+		polls(w, on("t1", team.StatusWorking), 1)
+		assert.Empty(t, polls(w, on("t2", team.StatusIdle), 1))
+		got := polls(w, on("t2", team.StatusUnknown), 22)
+		assert.Equal(t, map[int][]string{2: {"w1:p3 unknown"}}, got, "known since its terminal changed: the two-poll rule")
 	})
 	t.Run("a shell's polls do not count", func(t *testing.T) {
 		t.Parallel()

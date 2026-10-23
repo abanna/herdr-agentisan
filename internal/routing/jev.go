@@ -233,11 +233,14 @@ type jevAnswers struct {
 // ApplyJev maps Jev's answer onto d, a decision that asks Jev; any other is
 // returned as it is. model and answers are what TypeSafe answered, or err
 // why it did not. In order:
+//   - no key to ask with (ErrJevKey) keeps the default: jev_key_unavailable,
+//     with jev_error;
 //   - a failure, a model other than the template's, or answers that are not
 //     the two questions' keep the default: jev_failure, with jev_error;
 //   - information not sufficient (below the sufficiency threshold), an
 //     unknown complexity and a low confidence (below the confidence
-//     threshold) keep it, each with its reason;
+//     threshold) keep it, each with its reason; each threshold is the
+//     rules', or [routing.jev]'s in its place;
 //   - bounded keeps it, with no reason;
 //   - demanding moves to the provider's strong binding at high, or at the
 //     boss's effort, unless a filter drops it: escalation_ineligible.
@@ -247,6 +250,10 @@ func (p Policy) ApplyJev(d Decision, model string, answers map[string]json.RawMe
 	}
 	fail := func(why string) Decision {
 		d.FallbackReason, d.JevError = ReasonJevFailure, clip(why, maxJevError)
+		return d
+	}
+	if errors.Is(err, ErrJevKey) {
+		d.FallbackReason, d.JevError = ReasonJevKeyUnavailable, clip(err.Error(), maxJevError)
 		return d
 	}
 	if err != nil {
@@ -262,11 +269,11 @@ func (p Policy) ApplyJev(d Decision, model string, answers map[string]json.RawMe
 	}
 	d.Answers = raw
 	switch {
-	case *a.Sufficient.Noul < p.rules.jev.sufficiency:
+	case *a.Sufficient.Noul < p.thresholds.sufficiency:
 		d.FallbackReason = ReasonJevInsufficient
 	case a.Complexity.Choice == ComplexityUnknown:
 		d.FallbackReason = ReasonJevUnknown
-	case *a.Complexity.Confidence < p.rules.jev.confidence:
+	case *a.Complexity.Confidence < p.thresholds.confidence:
 		d.FallbackReason = ReasonJevLowConfidence
 	case a.Complexity.Choice == ComplexityBounded:
 		d.FallbackReason = ReasonNone

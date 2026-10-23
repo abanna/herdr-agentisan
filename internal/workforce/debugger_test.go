@@ -2,6 +2,7 @@ package workforce_test
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -48,9 +49,44 @@ func pluginLaunch(t *testing.T) debugger.Launch {
 	return debugger.Launch{Root: root, Bin: filepath.Join(root, "bin", "herdr-agentisan"), ServerDir: t.TempDir()}
 }
 
+// assertDebuggerArgs checks got, a spawned debugger's agent.start args,
+// against want, the launch `debugger args` builds, then extra: the same
+// arguments, but its one --settings, the read fence, also holds A42's turn
+// hooks, its own keys and values as they were (A42).
+func assertDebuggerArgs(t *testing.T, want []string, got any, extra ...string) {
+	t.Helper()
+	args, ok := got.([]any)
+	require.True(t, ok, "agent.start's args are a list")
+	exp := append(slices.Clone(want), extra...)
+	require.Len(t, args, len(exp))
+	at := slices.Index(exp, "--settings")
+	require.GreaterOrEqual(t, at, 0, "the launch passes its fence")
+	n := 0
+	for i, a := range args {
+		s, _ := a.(string)
+		if s == "--settings" || strings.HasPrefix(s, "--settings=") {
+			n++
+		}
+		if i != at+1 {
+			assert.Equal(t, exp[i], s, "argument %d", i)
+		}
+	}
+	assert.Equal(t, 1, n, "one --settings: the fence")
+	var fence, hooks map[string]any
+	require.NoError(t, json.Unmarshal([]byte(exp[at+1]), &fence))
+	require.NoError(t, json.Unmarshal([]byte(workforce.TurnHooks), &hooks))
+	require.NotContains(t, fence, "hooks")
+	fence["hooks"] = hooks["hooks"]
+	one, err := json.Marshal(fence)
+	require.NoError(t, err)
+	value, _ := args[at+1].(string)
+	assert.JSONEq(t, string(one), value, "the fence's keys as they were, and the turn hooks")
+}
+
 // TestSpawnLaunchesTheDebugger: a worker of the debugger type runs the
 // plugin's read-only launch (A32), the one `debugger args` builds from the
-// same inputs, then the workforce's --model and --name: its tab starts in
+// same inputs, its fence holding the turn hooks too, then the workforce's
+// --model and --name: its tab starts in
 // the repo with the config dir in its shell's environment beside its id,
 // and the top-level command's flags never reach it. It is a worker like any
 // other: its row is bound in the debugger group, and team status lists it
@@ -75,11 +111,7 @@ func TestSpawnLaunchesTheDebugger(t *testing.T) {
 	starts := f.h.params("agent.start")
 	require.Len(t, starts, 1)
 	assert.Equal(t, "claude", starts[0]["kind"])
-	args := make([]any, 0, len(want.Args)+4)
-	for _, a := range append(slices.Clone(want.Args), "--model", "opus", "--name", "ha-debugger-1") {
-		args = append(args, a)
-	}
-	assert.Equal(t, args, starts[0]["args"])
+	assertDebuggerArgs(t, want.Args, starts[0]["args"], "--model", "opus", "--name", "ha-debugger-1")
 	assert.NotContains(t, starts[0]["args"], "acceptEdits", "the top-level command never applies to the debugger")
 
 	require.Len(t, res.Workers, 1)
@@ -135,14 +167,10 @@ func TestSpawnRoutesTheDebugger(t *testing.T) {
 	l.Repo, l.ConfigDir, l.KeyFiles = f.repo, f.config, []string{"/nonexistent/elastic.env"}
 	want, err := l.Command()
 	require.NoError(t, err)
-	args := make([]any, 0, len(want.Args)+6)
-	for _, a := range append(slices.Clone(want.Args), "--model", "claude-opus-5-5", "--effort", "high", "--name", "ha-debugger-1") {
-		args = append(args, a)
-	}
 	starts := f.h.params("agent.start")
 	require.Len(t, starts, 1)
 	assert.Equal(t, "claude", starts[0]["kind"])
-	assert.Equal(t, args, starts[0]["args"])
+	assertDebuggerArgs(t, want.Args, starts[0]["args"], "--model", "claude-opus-5-5", "--effort", "high", "--name", "ha-debugger-1")
 	require.Len(t, rec.all(), 1)
 	r := routingOf(t, f, "ha-debugger-1")
 	require.NotNil(t, r)
@@ -259,15 +287,11 @@ func TestUpOpensTheDebugger(t *testing.T) {
 	tab := f.h.params("tab.create")[i]
 	assert.Equal(t, want.Dir, tab["cwd"])
 	assert.Equal(t, map[string]any{workforce.WorkerEnv: "ha-debugger-1", trail.ConfigDirEnv: f.config}, tab["env"])
-	args := make([]any, 0, len(want.Args)+4)
-	for _, a := range append(slices.Clone(want.Args), "--model", "opus", "--name", "ha-debugger-1") {
-		args = append(args, a)
-	}
 	j := slices.IndexFunc(f.h.params("agent.start"), func(m map[string]any) bool { return m["name"] == "ha-debugger-1" })
 	require.GreaterOrEqual(t, j, 0, "the debugger's agent starts")
 	start := f.h.params("agent.start")[j]
 	assert.Equal(t, "claude", start["kind"])
-	assert.Equal(t, args, start["args"])
+	assertDebuggerArgs(t, want.Args, start["args"], "--model", "opus", "--name", "ha-debugger-1")
 	assert.Equal(t, store.StatusActive, f.row(t, "ha-debugger-1").Status)
 	assert.Equal(t, settings.DebuggerType, f.row(t, "ha-debugger-1").Group)
 
@@ -307,7 +331,8 @@ func TestPlanNeedsTheDebuggersLaunch(t *testing.T) {
 
 // TestRetireADebugger: a debugger writes no handoff, so retiring one after
 // its handoff is refused at once, its pane left open; retiring it plainly
-// closes its pane.
+// closes its pane. A debugger's row bound to no pane has no pane to wait on,
+// so it is retired with nothing closed, after its handoff or not.
 func TestRetireADebugger(t *testing.T) {
 	t.Parallel()
 	f, _ := newDebuggerFixture(t, "")
@@ -322,4 +347,90 @@ func TestRetireADebugger(t *testing.T) {
 	res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID})
 	require.NoError(t, err)
 	assert.Equal(t, workforce.OutcomeRetired, res.Outcome)
+
+	f.bindRow(t, "ha-debugger-2", settings.DebuggerType, "w10:p99")
+	res, err = f.svc.Retire(t.Context(), workforce.RetireRequest{Target: "ha-debugger-2", AfterHandoff: true})
+	require.NoError(t, err)
+	assert.Equal(t, workforce.RetireResult{ID: "ha-debugger-2", Changed: true, Outcome: workforce.OutcomeUnbound}, res)
+}
+
+// TestSpawnPutsTheTurnHooksInTheDebuggersFence: a spawned debugger's one
+// --settings, the read fence, carries A42's turn hooks beside its own keys,
+// here the MCP servers it rejects too, so it reports its turn's item and
+// stage; its fence is the plugin's own, so neither spawn nor team up warns
+// of a --settings of its own (A42).
+func TestSpawnPutsTheTurnHooksInTheDebuggersFence(t *testing.T) {
+	t.Parallel()
+	for _, op := range []string{"spawn", "up"} {
+		t.Run(op, func(t *testing.T) {
+			t.Parallel()
+			f, envFile := newDebuggerFixture(t, "")
+			require.NoError(t, os.WriteFile(filepath.Join(f.repo, ".mcp.json"), []byte(`{"mcpServers":{"agentisan":{"command":"x"}}}`), 0o600))
+			var warnings []string
+			if op == "spawn" {
+				res, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: settings.DebuggerType, Count: 1})
+				require.NoError(t, err)
+				warnings = res.Warnings
+			} else {
+				up := strings.Replace(debuggerTeam("[debugger]\nenv_file = \""+envFile+"\"\n", ""), "groups.debugger]\nworkers = 0", "groups.debugger]\nworkers = 1", 1)
+				up = strings.Replace(up, "groups.coder]\nworkers = 2", "groups.coder]\nworkers = 0", 1)
+				up = strings.Replace(up, "groups.qa]\nworkers = 1", "groups.qa]\nworkers = 0", 1)
+				require.NoError(t, os.WriteFile(filepath.Join(f.config, settings.FileName), []byte(strings.ReplaceAll(up, "REPO", f.repo)), 0o600))
+				f.svc.Dashboard = dashboard
+				res, err := f.svc.Up(t.Context(), workforce.UpRequest{})
+				require.NoError(t, err)
+				warnings = res.Warnings
+			}
+			assert.Empty(t, warnings, "the debugger's fence is the plugin's own --settings")
+
+			l := f.svc.Debugger
+			l.Repo, l.ConfigDir, l.KeyFiles = f.repo, f.config, []string{envFile}
+			want, err := l.Command()
+			require.NoError(t, err)
+			i := slices.Index(want.Args, "--settings")
+			require.GreaterOrEqual(t, i, 0)
+			assert.Contains(t, want.Args[i+1], "disabledMcpjsonServers", "the fence has more than one key")
+			starts := f.h.params("agent.start")
+			require.Len(t, starts, 1)
+			assertDebuggerArgs(t, want.Args, starts[0]["args"], "--model", "opus", "--name", "ha-debugger-1")
+		})
+	}
+}
+
+// TestWithTurnHooks: the turn hooks join the launch's one --settings object,
+// every value of its own kept as it was written, a number's form and a
+// non-ASCII letter included (encoding/json escapes <, > and &, which reads
+// the same); a launch with no such object, two, or one with hooks of its own
+// is refused, never given a second flag.
+func TestWithTurnHooks(t *testing.T) {
+	t.Parallel()
+	var hooks struct {
+		Hooks json.RawMessage `json:"hooks"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(workforce.TurnHooks), &hooks))
+
+	got, err := workforce.WithTurnHooks([]string{"--add-dir", "/d", "--settings", `{"z": 1.50, "a": {"b": [1, 2]}, "s": "<é>"}`, "--model", "opus"})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"--add-dir", "/d", "--settings", `{"a":{"b":[1,2]},"hooks":` + string(hooks.Hooks) + `,"s":"\u003cé\u003e","z":1.50}`, "--model", "opus"}, got)
+
+	for name, args := range map[string][]string{
+		"no arguments":             nil,
+		"no --settings":            {"--model", "opus"},
+		"a byte order mark":        {"--settings", "\ufeff{}"},
+		"--settings with no value": {"--model", "opus", "--settings"},
+		"two --settings":           {"--settings", `{}`, "--settings", `{}`},
+		"a --settings= beside it":  {"--settings", `{}`, `--settings={}`},
+		"only a --settings=":       {`--settings={}`},
+		"not JSON":                 {"--settings", `{`},
+		"null":                     {"--settings", `null`},
+		"an array":                 {"--settings", `[]`},
+		"a string":                 {"--settings", `"x"`},
+		"hooks of its own":         {"--settings", `{"hooks":{}}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := workforce.WithTurnHooks(args)
+			require.ErrorIs(t, err, workforce.ErrConfig)
+		})
+	}
 }

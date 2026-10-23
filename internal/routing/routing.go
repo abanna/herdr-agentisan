@@ -41,6 +41,10 @@ var (
 	// ErrInvalid means rules, deployment facts or a task packet that break
 	// a rule of their own.
 	ErrInvalid = errors.New("invalid routing")
+	// ErrJevKey means Jev was not asked for want of the TypeSafe key, such
+	// as an env file 1Password has not unlocked: a caller wraps its key's
+	// failure in it, and ApplyJev keeps the default as jev_key_unavailable.
+	ErrJevKey = errors.New("no TypeSafe key")
 )
 
 // groupRoles maps the team model's worker types (A19) onto the rules' roles.

@@ -148,8 +148,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
 - `internal/codexhooks/` — installing the `ctx` Codex hooks (ADR-001 A43):
   `codex hooks` writes them into `$CODEX_HOME/hooks.json`, after every entry
   already there, which it keeps as written, and never edits `config.toml` or
-  trusts a hook; `--check` only reports. Tests use temp Codex homes, never
-  the real `~/.codex`.
+  trusts a hook; `--check` only reports. `--turn` adds A42's two
+  `report turn` hooks, each in a group of its own. Tests use temp Codex
+  homes, never the real `~/.codex`.
 - `internal/daemon/` — the daemon's lifecycle (ADR-001 D3, A3, A4): one daemon
   per herdr server, enforced by a flock'd `daemon.lock` that records the
   server's socket inode; the protocol pin; `daemon.log` capped at 10 MB; the
@@ -226,16 +227,20 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   sender and recipient (A30): each group's counts and members on a tabs team
   or the ◆ spaces, with idle times from the daemon's clock and the rows no
   pane is bound to (A35); opening a tab per worker and waiting for its agent,
-  after `internal/preflight`'s check, each group up to its count for
+  a Claude one launched with A42's turn hooks as `--settings`,
+  after `internal/preflight`'s check and, for a coder with a task packet,
+  Jev's answer (`jev.go`, A57), each group up to its count for
   `team up`, which also opens the team's dashboard above the boss
   (`dashboard.go`); closing the pane a worker's row is bound to, after its
-  handoff when asked, with the row retired; and `handoff ready`
-  (`handoff.go`, A33), the daemon writing the `handoff` token on a worker's
-  agent pane once `pane.get` proves its terminal, with no row changed. The
-  daemon runs them, with the plugin's dashboard pane and the Codex hooks
-  check `internal/cli` gives it; `internal/cli` only asks it, and asks herdr
-  only to confirm its own pane (`FindCallerPane`), when no `--project` names
-  the team, for `send`'s sender and for `handoff ready` with no target.
+  handoff when asked, with the row retired, never while its handoff is
+  pending, and failing the handoff whose replacement pane it closes (A33);
+  and `handoff ready` (`handoff.go`, A33), the daemon writing the `handoff`
+  token on a worker's agent pane once `pane.get` proves its terminal, with no
+  row changed. The daemon runs them, with the plugin's dashboard pane and the
+  Codex hooks check `internal/cli` gives it; `internal/cli` only asks it, and
+  asks herdr only to confirm its own pane (`FindCallerPane`), when no
+  `--project` names the team, for `send`'s sender and for `handoff ready`
+  with no target.
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
@@ -249,7 +254,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   refused by default, an empty table adding an entry included, A53), and
   the merged model, whichever layer sets it, is checked as safe to pass to
   an agent
-  (`CheckModel`). Sample in `docs/config/herdr-agentisan.example.toml`.
+  (`CheckModel`), and the sandbox each worker type's Codex starts in when
+  its command chooses none (`sandbox.go`, A59: read-only for review, full
+  access for coder, qa and precheck), which spawn adds.
+  Sample in `docs/config/herdr-agentisan.example.toml`.
 - `internal/routing/` — the model and effort each spawned worker starts
   with (ADR-001 A50, NERD-5289). It reads the user's routing rules,
   embedded byte for byte from `rules/jev-routing-v1.json` and decoded
@@ -262,12 +270,18 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   `agentisan.worker.routed` event. A coder's decision says when Jev should
   be asked (`AsksJev`), and `ApplyJev` maps Jev's answer onto it (A57): the
   request is `JevRequest`'s, and the caller makes the call, so routing never
-  sees the key. Nothing asks Jev yet.
+  sees the key; `[routing.jev]` switches it (`JevEnabled`) and sets its
+  thresholds. `worker spawn` asks Jev (`internal/workforce/jev.go`), through
+  the daemon's `jev.Asker`; `team up` never does.
 - `internal/jev/` — the client of TypeSafe's System One (ADR-001 A57): one
   POST of the body routing built, with the key as the Bearer token, within
   the rules' timeout, never retried or redirected; no error carries the key,
-  the request or TypeSafe's body. Tests run an httptest TypeSafe, never the
-  real one.
+  the request or TypeSafe's body. `Keys` reads the key, `TYPESAFE_API_KEY`,
+  from `[routing.jev] env_file`: kept 10 minutes, one read of a file in
+  flight, each ask waiting at most a second, so a locked 1Password costs a
+  spawn a second; `Asker` drops a key TypeSafe refuses. The daemon holds
+  one `Keys` for its life. Tests run an
+  httptest TypeSafe, never the real one, and a FIFO for a locked file.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
   embedded from `migrations/` and tracked by `user_version`. The daemon holds
@@ -276,9 +290,11 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   claimed one at a time, oldest first; the daemon's notices to a boss are
   added to the one still queued (`notify.go`, A44); and a pending handoff
   (`handoffs.go`) holds a worker's inbox until it completes, which rebinds
-  the worker in the same transaction. A `workers` row binds its pane by
-  terminal, with the shell the team poll read (migration 0003, A35), and the
-  routing decision it was launched with (migration 0005, A50); the poll's
+  the worker in the same transaction, or fails; while it is pending no
+  ending is written to the worker's row, and a worker still starting
+  begins none (A33). A `workers` row binds its pane by terminal, with the
+  shell the team poll read (migration 0003, A35), and the routing decision
+  it was launched with (migration 0005, A50); the poll's
   writes are compare-and-sets on the row as it read it. The GitHub notices'
   seen-set, open PRs and seed marks, a kind's own included (`github.go`,
   migrations 0004 and 0006, A45), make each event told once across
@@ -354,6 +370,7 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   over `logs-agentisan.otel-*`, the debugger's recipes, and the env file its
   URL and read key come from, `[debugger] env_file` in the shared config,
   read at each query. No caller chooses the URL, the variables or the file.
+  Its reader, `ReadEnvFile`, also reads Jev's key for `internal/jev`.
   Tests run an httptest Elasticsearch on a recorded answer
   (`testdata/worker-trail.json`).
 - `internal/debugger/` and `roles/debugger.md` — the debugger agent that

@@ -50,6 +50,9 @@ type TeamOptions struct {
 	// the daemon's own environment, for the warning a Codex spawn gives
 	// without them (A22, A43); nil checks nothing.
 	CodexHooks func() (bool, error)
+	// CodexTurnHooks is CodexHooks for Codex's turn hooks, for a Codex
+	// spawn's warning that its workers report no item or stage (A42).
+	CodexTurnHooks func() (bool, error)
 	// procLocks and proc, when set, stand in for /proc/locks and /proc in
 	// counting the test slots, and readLocks for the reading of them
 	// (tests).

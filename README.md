@@ -71,6 +71,35 @@ nothing. Set
 
 ## Report `$ctx` from Codex
 
+### Onboarding a Codex worker
+
+A Codex worker needs Codex 0.161 or later, on Linux or macOS. Once per
+machine:
+
+1. Install the Agentisan plugin for Codex, which gives a Codex session the
+   Agentisan skills and the `agentisan` MCP server. From an agentisan-skills
+   checkout:
+
+   ```bash
+   CODEX_REMOTE_REF=ghcr.io/nerds-run/agentisan-codex:<version> CODEX_PROJECT_ROOT=<a scratch dir> CODEX_INSTALL_CONFIRM=1 mise run install-codex-remote
+   codex plugin add agentisan@personal
+   ```
+
+   agentisan-skills' `docs/codex-plugin.md` is the source of truth for both.
+   The install moves older Agentisan agent copies out of
+   `<CODEX_PROJECT_ROOT>/.codex/agents` (the current directory by default),
+   so a scratch directory keeps it out of your repos. A new Codex thread picks
+   the plugin up.
+2. Install the three `ctx` hooks and trust them, as below.
+3. Paste the turn hooks for `$item` and `$stage` ("Report `$item` and
+   `$stage` from every turn").
+4. Start every Codex worker with `codex --no-daemon`; `worker spawn` and
+   `team up` do.
+5. `herdr-agentisan codex hooks --check` says whether the `ctx` hooks are all
+   installed.
+
+### The `ctx` hooks
+
 Each Codex agent pushes the same `ctx` token through three Codex hooks, with
 the number Codex itself shows as "Context N% used", and the hook's `model` as
 the `model` token, as the statusline does. Install them once:
@@ -124,14 +153,26 @@ nothing. Like `report statusline`, it prints nothing and always exits 0.
 `HERDR_AGENTISAN_LOG_LEVEL=debug` logs why nothing was reported. Codex runs
 its hooks outside its sandbox, so `ctx` works whatever the sandbox.
 
+Codex's `ctx` needs Linux or macOS. To tell the pane's own Codex from a
+shared server, `report codex` checks the process running the hook against
+the process table, which it reads only on Linux (`/proc`) and macOS
+(`sysctl`) (ADR-001 A26). Anywhere else the hooks run and report nothing,
+and only the debug log says why. The turn hooks for `$item` and `$stage` do
+report there, but they trust `HERDR_PANE_ID` as given (A42), so start Codex
+with `codex --no-daemon`: a hook the shared app-server ran could otherwise
+land on another pane. Claude's statusline and turn hooks are not checked this
+way.
+
 Codex's context changes only in a turn or a compaction, and those are when
 its hooks run, so the token lasts 24 h, set again by every report: an idle
-Codex agent keeps its `ctx`. PostCompact reports after a compaction, but may
-still read the count from before it; the next turn corrects it. Nothing
-clears `ctx` when Codex exits, cleanly or not: the last value stays until the
-TTL runs out or the next Codex in the pane reports. The daemon ignores it
-meanwhile: the sidebar, the dashboard and `team status` read `ctx` only from
-a pane where herdr detects an agent. ADR-001 A22 and A27 have the details.
+Codex agent keeps its `ctx`. A fresh Codex has had neither, so it shows
+`ctx` as `--` until its first tool call or turn end (A27). PostCompact
+reports after a compaction, but may still read the count from before it; the
+next turn corrects it. Nothing clears `ctx` when Codex exits, cleanly or
+not: the last value stays until the TTL runs out or the next Codex in the
+pane reports. The daemon ignores it meanwhile: the sidebar, the dashboard
+and `team status` read `ctx` only from a pane where herdr detects an agent.
+ADR-001 A22 and A27 have the details.
 
 ## Report `$item` and `$stage` from agentisan
 
@@ -155,16 +196,35 @@ Under the shared app-server daemon, with Codex's default sandbox (even for an
 approved escalation), or on an OS other than Linux and macOS, it reports
 nothing (ADR-001 A25, A26).
 
-Codex workers run under your own Codex sandbox setting, the review type's
-built-in `--sandbox read-only` aside (ADR-001 A55), so by default their
-`report stage` commands report nothing: they show `ctx`, and an item or a
-stage only from the [turn hooks](#report-item-and-stage-from-every-turn),
-which run outside the sandbox. To have a group's Codex workers report each
-step too, add `--sandbox danger-full-access` to the agent command they
-launch with.
-That runs their commands with no sandbox and no reviewer, since Codex's
-automatic review sees only escalations, which that mode never makes: a weaker
-guard than Claude's auto mode (ADR-001 A43).
+Codex workers start in their type's sandbox (ADR-001 A59), unless their
+agent command chooses one itself: `-s` or `--sandbox`, `--approve-for-me`,
+`--dangerously-bypass-approvals-and-sandbox` (or their aliases
+`--not-so-yolo` and `--yolo`), `-c sandbox_mode=…` or
+`-c default_permissions=…`. A choice in the command stands. Spawn's flag
+outranks a `sandbox_mode` or `default_permissions` in Codex's `config.toml`
+or a `-p` profile, so to run a type in another sandbox, put the sandbox in its
+group's command.
+
+- **review** runs `--sandbox read-only` (A55). It writes nothing, and the
+  boss reads its report from its final message.
+- **coder, qa and precheck** run `--sandbox danger-full-access`. The repo's
+  tests and `task check` run, as do git (worktrees, signed commits, pushes),
+  `gh`, the `herdr` and `herdr-agentisan` CLIs and the team's files under
+  `.git/`, and `report stage` reports each pipeline step, as for a Claude
+  worker. The cost: no OS sandbox, and no reviewer, since Codex's automatic
+  review sees only escalations, which that mode never makes. That is a
+  weaker guard than Claude's auto mode (ADR-001 A43).
+- **Every other type** keeps your Codex configuration.
+
+What a coder or qa loses in another sandbox: `workspace-write`, Codex's
+default for a trusted folder, denies sockets and keeps `.git` read-only. So
+`go test ./...`, `task check`, the herdr CLIs, the 1Password SSH agent (so
+signing and pushing), `gh` and `git fetch` fail. `git worktree add`, commits
+and a handoff file under `.git/agentisan/` fail too. `read-only` also stops
+every other write. Under either, `report stage` reports nothing: the worker
+shows `ctx`, and an item or a stage only from the
+[turn hooks](#report-item-and-stage-from-every-turn), which run outside the
+sandbox.
 
 ## Report `$item` and `$stage` from every turn
 
@@ -228,12 +288,22 @@ For Claude, add the hooks to `.claude/settings.json` or
 }
 ```
 
-For Codex, paste the
-[Codex turn hooks](docs/config/codex-turn-hooks.example.toml) at the end of
-`~/.codex/config.toml`, or of a trusted project's `.codex/config.toml`, and
-trust them once. `herdr-agentisan codex hooks` installs only the `ctx` hooks
-above. Each turn hook is a group of its own, so that command never finds one
-beside `report codex`. They need `codex --no-daemon`, as `report codex`
+`worker spawn` and `team up` pass these two hooks to each Claude worker they
+start, as `--settings`, so you need them installed only for the panes you
+start yourself, such as the boss's; Claude Code runs a handler installed
+twice only once. A group whose agent command passes its own `--settings`
+gets none, since Claude Code applies only one, and spawn warns of it.
+
+For Codex, run `herdr-agentisan codex hooks --turn`. It installs the
+[Codex turn hooks](docs/config/codex-turn-hooks.example.toml) with the `ctx`
+hooks above, in `~/.codex/hooks.json`, each in a group of its own, and
+`--check --turn` says where all five are; then trust them once. Or paste
+them at the end of `~/.codex/config.toml`: `--turn` then refuses to add a
+second copy, and plain `codex hooks` installs only the `ctx` hooks. A
+trusted project's `.codex/config.toml` works too, for that repo only, but
+neither `--turn` nor spawn's check reads it: with them there, skip `--turn`,
+or each report runs twice, which is harmless. A Codex worker spawned without
+them in `~/.codex` is warned of. They need `codex --no-daemon`, as `report codex`
 does: a hook the shared app-server ran reports nothing. Codex runs hooks
 outside its sandbox, so they work under the default one, unlike `report stage`
 from a tool command. Both print nothing and always exit 0;
@@ -525,7 +595,7 @@ drives them.
 | `team status [--project p]` | Every group's counts and open slots, and each worker's status, ctx, item, stage (and whether it is old) and idle time |
 | `team up [--project p]` | Fills each group up to its `workers` count, empty slots only, so a full team gets none; opens the team's dashboard above the boss when none is open |
 | `worker spawn --group g [--count n] [--model m]` | Adds workers, refused whole past the group's `slots` or when the repo fails the tdaddy preflight |
-| `worker retire <id> [--after-handoff]` | Closes a worker's pane, by logical id or pane id; with the flag, once its handoff is written |
+| `worker retire <id> [--after-handoff]` | Closes a worker's pane, by logical id or pane id; with the flag, once its handoff is written. Refused (`handoff_pending`) while the worker is being replaced; retiring the replacement's pane abandons that rotation and answers `handoff_failed` with the worker's id (ADR-001 A33) |
 | `handoff ready [<id>] [--clear]` | Marks a worker ready to be replaced, once it has written its handoff: the daemon sets the `handoff` token on its agent pane, by logical id, tab label or pane id, or this pane with none; `--clear` takes it off (ADR-001 A33) |
 
 Each prints one JSON object and exits 1 when refused. Without `--project`
@@ -561,6 +631,21 @@ way to a premium binding. `config resolve` shows each key with its layer,
 then `routing policy:`, the version a decision records; with `--project` it
 also refuses an override a worker type with that role cannot run, such as a
 claude binding for a type on codex.
+
+`[routing.jev]` is for Jev's complexity answer about a coder's assignment
+(ADR-001 A57): `enabled` (off by default, and Jev is asked only while
+routing is enabled too), `env_file`, the env file holding `TYPESAFE_API_KEY`
+(an absolute path or one under `~/`, required while Jev is enabled; a file
+1Password mounts works), and `confidence_pct` and `sufficiency_pct`, whole
+percents in place of the rules' 75 and 80. Like the rest of `[routing]` it
+belongs to the shared file and `--set`. `config resolve --check-secrets`
+reads the key from the file, and prints only whether it is there. While
+both are enabled, `worker spawn` asks Jev once about a coder's task packet,
+before it opens anything, unless an override names the coder's binding;
+`team up` never asks. A demanding answer that meets the thresholds starts
+the coder on its strong binding. Anything else, a failure or a missing key
+included, keeps its default, and the routed event's `fallback_reason` and
+`jev_error` say why.
 
 `worker spawn` asks routing once per spawn, and `team up` once per group it
 fills, before it opens anything: while routing is on, a group it refuses
@@ -657,7 +742,7 @@ Each row shows the model its agent reports it runs (ADR-001 A56): Claude's
 statusline `model.id`, or the model a Codex hook names. A `/model` switch
 therefore shows at the agent's next report. For Claude that is within a
 minute when the statusline sets `refreshInterval: 60`, else at its next
-message. For Codex it is after the next tool use or turn end.
+message. For Codex it is after the next tool use, turn end or compaction.
 
 Until an agent has reported, or when its report is older than the agent's
 process, as a model left by an earlier agent in the pane is, the row shows
@@ -666,7 +751,11 @@ the model the agent was started with. That is Claude's `--model`, or Codex's
 
 The daemon asks herdr again only when a pane's agent restarted or changed,
 and once a minute for a pane where it finds no agent process. An agent
-started without the flag that has not reported yet shows none.
+started without the flag that has not reported yet shows none. For Codex
+that is one started without `-m` or `--model`: by hand, by the boss, or by a
+spawn with routing off and no model set for it. It shows no model until its
+first hook, since a model set with `-c model=`, a profile or `config.toml` is
+not read (A39).
 
 ### A group's view
 

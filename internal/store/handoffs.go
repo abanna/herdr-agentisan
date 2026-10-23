@@ -9,16 +9,63 @@ import (
 )
 
 var (
-	// ErrHandoffPending means the worker already has a handoff pending.
+	// ErrHandoffPending means the worker has a handoff pending: BeginHandoff
+	// starts no second one, and SetWorkerStatus ends no row while it lasts.
 	ErrHandoffPending = errors.New("the worker already has a handoff pending")
 	// ErrNoHandoff means no handoff with the id is pending.
 	ErrNoHandoff = errors.New("no such pending handoff")
+	// ErrWorkerStarting means BeginHandoff found the worker still starting:
+	// its agent is not up yet, and spawn may still mark it failed.
+	ErrWorkerStarting = errors.New("the worker is still starting")
 )
+
+// Handoff is a pending handoff: the worker it replaces, at the generation
+// it completes onto, and the session replacing it.
+type Handoff struct {
+	ID        int64
+	LogicalID string
+	// Generation is -1 for a handoff begun before migration 0003, which
+	// completes onto no row.
+	Generation int64
+	OldPane    string
+	NewPane    string
+	// NewTerminal is the new pane's terminal when the handoff began; "" for
+	// one begun before migration 0003.
+	NewTerminal string
+	CreatedAt   time.Time
+}
+
+// PendingHandoffs returns every pending handoff, oldest first. BeginHandoff
+// allows one per worker, so the list is short; the caller matches it against
+// herdr's panes.
+func (s *Store) PendingHandoffs(ctx context.Context) ([]Handoff, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id, logical_id, coalesce(generation, -1), old_pane, new_pane, new_terminal_id, created_at
+FROM handoffs WHERE state = 'pending' ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("%w: read pending handoffs: %w", ErrStore, err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only; rows.Err reports what matters
+	out := []Handoff{}
+	for rows.Next() {
+		var h Handoff
+		var created int64
+		if err := rows.Scan(&h.ID, &h.LogicalID, &h.Generation, &h.OldPane, &h.NewPane, &h.NewTerminal, &created); err != nil {
+			return nil, fmt.Errorf("%w: read pending handoffs: %w", ErrStore, err)
+		}
+		h.CreatedAt = time.Unix(0, created).UTC()
+		out = append(out, h)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("%w: read pending handoffs: %w", ErrStore, err)
+	}
+	return out, nil
+}
 
 // BeginHandoff starts replacing logicalID's session with the one in newPane,
 // whose terminal is newTerminal (D7), and returns the handoff's id. The
-// worker must be live and not lost (ErrNotBound), newPane and newTerminal not
-// the ones it is on, and no other handoff pending for it (ErrHandoffPending).
+// worker must be live and not lost (ErrNotBound), past starting
+// (ErrWorkerStarting), newPane and newTerminal not the ones it is on, and no
+// other handoff pending for it (ErrHandoffPending).
 // The handoff records the worker's generation, the binding it completes onto
 // (A35).
 //
@@ -52,6 +99,8 @@ FROM workers WHERE logical_id = ?1 AND retired_at IS NULL`, logicalID).Scan(&old
 		return 0, fmt.Errorf("%w: begin handoff: %w", ErrStore, err)
 	case status == StatusLost:
 		return 0, fmt.Errorf("%w: %s is lost: no pane is proven to hold it", ErrNotBound, logicalID)
+	case status == StatusStarting:
+		return 0, fmt.Errorf("%w: %s: its agent is not up yet", ErrWorkerStarting, logicalID)
 	case pending:
 		return 0, fmt.Errorf("%w: %s", ErrHandoffPending, logicalID)
 	case oldPane == newPane || oldTerminal == newTerminal:

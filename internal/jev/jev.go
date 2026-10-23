@@ -36,6 +36,9 @@ var (
 	ErrCall = errors.New("the TypeSafe call failed")
 	// ErrStatus means TypeSafe answered with a status other than 200.
 	ErrStatus = errors.New("TypeSafe refused the request")
+	// ErrUnauthorized is ErrStatus for a 401: TypeSafe refused the key,
+	// which Asker then reads again at the next ask.
+	ErrUnauthorized = errors.New("the key was refused")
 	// ErrAnswer means a 200 whose body is not an answer.
 	ErrAnswer = errors.New("TypeSafe's answer is malformed")
 )
@@ -67,8 +70,8 @@ func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastRe
 // a model and answers is ErrAnswer; anything that leaves no answer is
 // ErrCall.
 func (c Client) Ask(ctx context.Context, body []byte, timeout time.Duration) (Answer, error) {
-	if c.Key == "" || strings.IndexFunc(c.Key, func(r rune) bool { return r <= ' ' || r > '~' }) >= 0 {
-		return Answer{}, fmt.Errorf("%w: the key is empty or not a token", ErrNoKey)
+	if err := checkKey(c.Key); err != nil {
+		return Answer{}, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -90,10 +93,12 @@ func (c Client) Ask(ctx context.Context, body []byte, timeout time.Duration) (An
 	}
 	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxAnswer+1))
+	// A refusal's body can echo the request (a 422's detail does), so it is
+	// never kept.
 	switch {
+	case resp.StatusCode == http.StatusUnauthorized:
+		return Answer{}, fmt.Errorf("%w: %w: HTTP %d", ErrStatus, ErrUnauthorized, resp.StatusCode)
 	case resp.StatusCode != http.StatusOK:
-		// The body can echo the request (a 422's detail does), so it is
-		// never kept.
 		return Answer{}, fmt.Errorf("%w: HTTP %d", ErrStatus, resp.StatusCode)
 	case err != nil:
 		return Answer{}, fmt.Errorf("%w: reading it: %w", ErrCall, err)
@@ -111,4 +116,13 @@ func (c Client) Ask(ctx context.Context, body []byte, timeout time.Duration) (An
 		return Answer{}, fmt.Errorf("%w: it names no model or holds no answers", ErrAnswer)
 	}
 	return Answer{Model: doc.Model, Answers: doc.Answers}, nil
+}
+
+// checkKey refuses a key that cannot go out as a Bearer token: empty, or
+// holding anything but printable ASCII. The error never repeats it.
+func checkKey(key string) error {
+	if key == "" || strings.IndexFunc(key, func(r rune) bool { return r <= ' ' || r > '~' }) >= 0 {
+		return fmt.Errorf("%w: the key is empty or not a token", ErrNoKey)
+	}
+	return nil
 }

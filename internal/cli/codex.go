@@ -33,7 +33,7 @@ const trustSteps = "Next, once: start `codex --no-daemon` in a herdr pane and ch
 	"under the shared background server the hooks report nothing.\n"
 
 func newCodexHooksCmd() *cobra.Command {
-	var check, asJSON bool
+	var check, turn, asJSON bool
 
 	c := &cobra.Command{
 		Use:   "hooks",
@@ -44,39 +44,52 @@ func newCodexHooksCmd() *cobra.Command {
 			"only when that changes it. It never edits config.toml and never trusts a\n" +
 			"hook: Codex runs a hook only once you trust it, at startup or in /hooks.\n" +
 			"It refuses, changing nothing, when config.toml already runs `report codex`.\n\n" +
+			"--turn also adds the Stop and UserPromptSubmit hooks that run\n" +
+			"`herdr-agentisan report turn`, which report each turn's item and stage,\n" +
+			"each in a group of its own after any hooks already there; it refuses,\n" +
+			"changing nothing, when config.toml already runs either report.\n\n" +
 			"--check only reports where each hook is, and exits 1 unless all three are\n" +
-			"installed as this command writes them.",
+			"installed as this command writes them, or with --turn all five.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			home, err := codexhooks.Home(lookupEnvFrom(cmd.Context()))
 			if err != nil {
 				return fmt.Errorf("codex hooks: %w", err)
 			}
-			run := codexhooks.Install
-			if check {
+			run, again := codexhooks.Install, "herdr-agentisan codex hooks"
+			switch {
+			case check && turn:
+				run = codexhooks.CheckWithTurn
+			case check:
 				run = codexhooks.Check
+			case turn:
+				run = codexhooks.InstallWithTurn
+			}
+			if turn {
+				again += " --turn"
 			}
 			res, err := run(home)
 			if err != nil {
 				return fmt.Errorf("codex hooks: %w", err)
 			}
 			if err := render(cmd.OutOrStdout(), asJSON, res, func(w io.Writer) error {
-				return writeCodexHooks(w, res, check)
+				return writeCodexHooks(w, res, check, turn)
 			}); err != nil {
 				return err
 			}
-			if check && !res.Installed() {
-				return fmt.Errorf("codex hooks: %w; run herdr-agentisan codex hooks", codexhooks.ErrNotInstalled)
+			if check && (!res.Installed() || turn && !res.TurnInstalled()) {
+				return fmt.Errorf("codex hooks: %w; run %s", codexhooks.ErrNotInstalled, again)
 			}
 			return nil
 		},
 	}
 	c.Flags().BoolVar(&check, "check", false, "only report whether the hooks are installed, and exit 1 unless they are")
+	c.Flags().BoolVar(&turn, "turn", false, "also the two hooks that report each turn's item and stage (report turn)")
 	addJSONFlag(c, &asJSON)
 	return c
 }
 
-func writeCodexHooks(w io.Writer, res codexhooks.Result, check bool) error {
+func writeCodexHooks(w io.Writer, res codexhooks.Result, check, turn bool) error {
 	var b []byte
 	if !check {
 		done := "unchanged"
@@ -86,9 +99,14 @@ func writeCodexHooks(w io.Writer, res codexhooks.Result, check bool) error {
 		b = fmt.Appendf(b, "%s: %s\n", res.Path, done)
 	}
 	for _, h := range res.Hooks {
-		line := fmt.Sprintf("  %-12s %s", h.Event, h.State)
+		name := fmt.Sprintf("%-12s", h.Event)
+		if turn {
+			// Stop runs both reports, so each line names its own.
+			name = fmt.Sprintf("%-16s %-5s", h.Event, h.Report)
+		}
+		line := fmt.Sprintf("  %s %s", name, h.State)
 		if check && h.Source != "" {
-			line = fmt.Sprintf("  %-12s %-8s %s", h.Event, h.State, h.Source)
+			line = fmt.Sprintf("  %s %-8s %s", name, h.State, h.Source)
 		}
 		b = fmt.Appendf(b, "%s\n", line)
 	}

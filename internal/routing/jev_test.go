@@ -425,3 +425,132 @@ func TestApplyJevBoundsWhatItRecords(t *testing.T) {
 	got = p.ApplyJev(asking(t, p), "jev-\xff\xfe", answers(routing.ComplexityDemanding, 0.9, 0.9), nil)
 	assert.Equal(t, "jev-", got.JevModelReturned)
 }
+
+// TestJevThresholdsFromTheDeployment: [routing.jev]'s whole percents take the
+// rules' 0.75 and 0.8's places, each on its own, and a percent met exactly
+// still escalates; unset, the rules' stand.
+func TestJevThresholdsFromTheDeployment(t *testing.T) {
+	t.Parallel()
+	pct := func(confidence, sufficiency *int) routing.Policy {
+		return policy(t, routing.Deployment{Jev: &routing.JevFacts{ConfidencePct: confidence, SufficiencyPct: sufficiency}})
+	}
+	tests := map[string]struct {
+		p                routing.Policy
+		confidence, noul float64
+		binding          string
+		why              routing.Reason
+	}{
+		"60 percent confidence, met exactly":  {p: pct(new(60), nil), confidence: 0.6, noul: 0.8, binding: "claude_strong"},
+		"60 percent confidence, just under":   {p: pct(new(60), nil), confidence: 0.5999, noul: 0.8, binding: "claude_mid", why: routing.ReasonJevLowConfidence},
+		"the rules' sufficiency beside it":    {p: pct(new(60), nil), confidence: 0.9, noul: 0.7999, binding: "claude_mid", why: routing.ReasonJevInsufficient},
+		"90 percent sufficiency, met exactly": {p: pct(nil, new(90)), confidence: 0.75, noul: 0.9, binding: "claude_strong"},
+		"90 percent sufficiency, just under":  {p: pct(nil, new(90)), confidence: 0.95, noul: 0.8999, binding: "claude_mid", why: routing.ReasonJevInsufficient},
+		"the rules' confidence beside it":     {p: pct(nil, new(90)), confidence: 0.7499, noul: 0.95, binding: "claude_mid", why: routing.ReasonJevLowConfidence},
+		"both at 100, met":                    {p: pct(new(100), new(100)), confidence: 1, noul: 1, binding: "claude_strong"},
+		"both at 1, met":                      {p: pct(new(1), new(1)), confidence: 0.01, noul: 0.01, binding: "claude_strong"},
+		"both at 1, under":                    {p: pct(new(1), new(1)), confidence: 0.0099, noul: 0.5, binding: "claude_mid", why: routing.ReasonJevLowConfidence},
+		"none set: the rules' 0.75 and 0.8":   {p: pct(nil, nil), confidence: 0.75, noul: 0.8, binding: "claude_strong"},
+		"none set: just under the rules' 0.8": {p: pct(nil, nil), confidence: 0.9, noul: 0.7999, binding: "claude_mid", why: routing.ReasonJevInsufficient},
+	}
+	for name, tc := range tests {
+		got := tc.p.ApplyJev(asking(t, tc.p), "jev-1.13.0", answers(routing.ComplexityDemanding, tc.confidence, tc.noul), nil)
+		assert.Equal(t, tc.binding, got.SelectedBinding, name)
+		assert.Equal(t, tc.why, got.FallbackReason, name)
+	}
+}
+
+// TestNewRefusesAThresholdOutsideAPercent: a threshold is a whole percent
+// from 1 to 100, and the refusal names its key.
+func TestNewRefusesAThresholdOutsideAPercent(t *testing.T) {
+	t.Parallel()
+	for _, n := range []int{0, -1, 101, 1000} {
+		for key, facts := range map[string]routing.JevFacts{
+			"routing.jev.confidence_pct":  {ConfidencePct: new(n)},
+			"routing.jev.sufficiency_pct": {SufficiencyPct: new(n)},
+		} {
+			_, err := routing.New(routing.V1(), routing.Deployment{Jev: &facts})
+			require.ErrorIs(t, err, routing.ErrInvalid, "%s = %d", key, n)
+			assert.Contains(t, err.Error(), key, "%s = %d", key, n)
+			assert.ErrorIs(t, routing.CheckJevPct(n), routing.ErrInvalid, n)
+		}
+	}
+	for _, n := range []int{1, 75, 100} {
+		assert.NoError(t, routing.CheckJevPct(n), n)
+	}
+}
+
+// TestJevEnabledNeedsBothSwitches: a spawn asks Jev only while routing
+// decides the model and [routing.jev] enabled is true.
+func TestJevEnabledNeedsBothSwitches(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		routing bool
+		jev     *routing.JevFacts
+		want    bool
+	}{
+		{routing: true, jev: &routing.JevFacts{Enabled: true}, want: true},
+		{routing: false, jev: &routing.JevFacts{Enabled: true}},
+		{routing: true, jev: &routing.JevFacts{Enabled: false}},
+		{routing: true, jev: &routing.JevFacts{ConfidencePct: new(60)}},
+		{routing: true},
+		{},
+	} {
+		p := policy(t, routing.Deployment{Enabled: tc.routing, Jev: tc.jev})
+		assert.Equal(t, tc.want, p.JevEnabled(), "routing %v, jev %+v", tc.routing, tc.jev)
+	}
+}
+
+// TestApplyJevWithoutAKey: a caller with no key keeps the default as
+// jev_key_unavailable, its error recorded and bounded, and no answer; a
+// decision that does not ask Jev is returned as it is.
+func TestApplyJevWithoutAKey(t *testing.T) {
+	t.Parallel()
+	p := policy(t, routing.Deployment{})
+	locked := fmt.Errorf("%w: ~/.config/typesafe.env did not answer within 1s; is 1Password unlocked?", routing.ErrJevKey)
+	got := p.ApplyJev(asking(t, p), "", nil, locked)
+	assert.Equal(t, []string{"claude_mid", "high"}, []string{got.SelectedBinding, got.Effort})
+	assert.Equal(t, routing.ReasonJevKeyUnavailable, got.FallbackReason)
+	assert.Equal(t, locked.Error(), got.JevError)
+	assert.Empty(t, got.JevModelReturned)
+	assert.Nil(t, got.Answers)
+
+	long := fmt.Errorf("%w: %s", routing.ErrJevKey, strings.Repeat("é", 300))
+	got = p.ApplyJev(asking(t, p), "", nil, long)
+	assert.LessOrEqual(t, len(got.JevError), 200)
+	assert.True(t, utf8.ValidString(got.JevError))
+
+	codex, err := p.Resolve(routing.Request{Role: "coder", Provider: routing.Codex, Task: coderTask()}, now)
+	require.NoError(t, err)
+	require.False(t, codex.AsksJev())
+	assert.Equal(t, codex, p.ApplyJev(codex, "", nil, locked))
+}
+
+// TestJevLeavesEarlierVersionsAlone: a deployment that sets nothing of
+// [routing.jev] keeps the version it had before it (pinned from 5c51912), so
+// no decision recorded earlier changes its name; each of its facts makes
+// another version.
+func TestJevLeavesEarlierVersionsAlone(t *testing.T) {
+	t.Parallel()
+	off := false
+	for want, d := range map[string]routing.Deployment{
+		"v1-51d7b6fdd14c": {},
+		"v1-f0225362e568": {Enabled: true, Overrides: map[string]string{"coder": "claude_strong"}},
+		"v1-75a1580a7d6a": {Enabled: true, Bindings: map[string]routing.Facts{"claude_strong": {Enabled: &off}}},
+	} {
+		assert.Equal(t, want, policy(t, d).Version())
+	}
+	seen := map[string]string{}
+	for name, j := range map[string]*routing.JevFacts{
+		"none":           nil,
+		"enabled":        {Enabled: true},
+		"disabled":       {},
+		"confidence 75":  {ConfidencePct: new(75)},
+		"confidence 76":  {ConfidencePct: new(76)},
+		"sufficiency 80": {SufficiencyPct: new(80)},
+		"both, enabled":  {Enabled: true, ConfidencePct: new(75), SufficiencyPct: new(80)},
+	} {
+		v := policy(t, routing.Deployment{Enabled: true, Jev: j}).Version()
+		assert.NotContains(t, seen, v, "%s has %s's version", name, seen[v])
+		seen[v] = name
+	}
+}

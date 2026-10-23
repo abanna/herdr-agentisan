@@ -112,6 +112,9 @@ type Service struct {
 	// CodexHooks reports whether Codex's ctx hooks are installed; nil
 	// checks nothing. A Codex spawn without them warns (A22, A43).
 	CodexHooks func() (bool, error)
+	// CodexTurnHooks reports whether Codex's turn hooks are installed; nil
+	// checks nothing. A Codex spawn without them warns (A42, A43).
+	CodexTurnHooks func() (bool, error)
 	// Debugger is what a debugger worker's launch names besides the
 	// project's repo, the config dir and the env file it names (A32): the
 	// plugin's checkout and binary, and the daemon's directory. Without a
@@ -121,6 +124,10 @@ type Service struct {
 	// applied or not (A50); nil records nothing. The daemon sends it as a
 	// workflow event and logs it.
 	Routed func(context.Context, Routed)
+	// Jev is what a spawn asks Jev through, while [routing.jev] is enabled
+	// (A57); nil asks nothing, and a decision that would ask keeps
+	// jev_disabled. The daemon gives one.
+	Jev JevAsker
 	// Dashboard is the plugin pane team up opens as a team's dashboard; zero
 	// opens none (A18, A23).
 	Dashboard DashboardPane
