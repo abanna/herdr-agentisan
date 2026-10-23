@@ -150,10 +150,10 @@ func TestNewChecksTheDeployment(t *testing.T) {
 		"an effort no client takes":         {d: routing.Deployment{Bindings: map[string]routing.Facts{"claude_mid": {Efforts: []string{"High"}}}}, wantErr: routing.ErrInvalid},
 		"an effort only codex takes":        {d: routing.Deployment{Bindings: map[string]routing.Facts{"claude_mid": {Efforts: []string{"minimal"}}}}, wantErr: routing.ErrInvalid, wantIn: "not one claude takes"},
 		"an effort only claude takes":       {d: routing.Deployment{Bindings: map[string]routing.Facts{"codex_strong": {Efforts: []string{"high", "max"}}}}, wantErr: routing.ErrInvalid, wantIn: "not one codex takes"},
-		"a role the rules do not have":      {d: routing.Deployment{Overrides: map[string]string{"qa": "claude_mid"}}, wantErr: routing.ErrUnknownRole, wantIn: "routing.overrides.qa"},
-		"a binding the role does not allow": {d: routing.Deployment{Overrides: map[string]string{"clerk": "claude_strong"}}, wantErr: routing.ErrOverrideRefused, wantIn: "routing.overrides.clerk"},
-		"a premium binding for the boss":    {d: routing.Deployment{Overrides: map[string]string{"boss": "claude_premium"}}, wantErr: routing.ErrOverrideRefused},
-		"no binding at all":                 {d: routing.Deployment{Overrides: map[string]string{"coder": ""}}, wantErr: routing.ErrOverrideRefused},
+		"a role the rules do not have":      {d: routing.Deployment{Overrides: map[string]routing.RoleOverride{"qa": {"claude_mid"}}}, wantErr: routing.ErrUnknownRole, wantIn: "routing.overrides.qa"},
+		"a binding the role does not allow": {d: routing.Deployment{Overrides: map[string]routing.RoleOverride{"clerk": {"claude_strong"}}}, wantErr: routing.ErrOverrideRefused, wantIn: "routing.overrides.clerk"},
+		"a premium binding for the boss":    {d: routing.Deployment{Overrides: map[string]routing.RoleOverride{"boss": {"claude_premium"}}}, wantErr: routing.ErrOverrideRefused},
+		"no binding at all":                 {d: routing.Deployment{Overrides: map[string]routing.RoleOverride{"coder": {""}}}, wantErr: routing.ErrOverrideRefused},
 	}
 	for name, tc := range tests {
 		_, err := routing.New(routing.V1(), tc.d)
@@ -170,7 +170,7 @@ func TestNewChecksTheDeployment(t *testing.T) {
 		"a context suffix":                  {Bindings: map[string]routing.Facts{"claude_strong": {ModelID: new("claude-opus-5-5[1m]")}}},
 		"every effort codex takes":          {Bindings: map[string]routing.Facts{"codex_strong": {Efforts: []string{"minimal", "low", "medium", "high", "xhigh"}}}},
 		"every effort claude takes":         {Bindings: map[string]routing.Facts{"claude_mid": {Efforts: []string{"low", "medium", "high", "xhigh", "max"}}}},
-		"a premium choice for the debugger": {Overrides: map[string]string{"alex_debugger": "codex_premium"}},
+		"a premium choice for the debugger": {Overrides: map[string]routing.RoleOverride{"alex_debugger": {"codex_premium"}}},
 	} {
 		_, err := routing.New(routing.V1(), d)
 		require.NoError(t, err, name)
@@ -188,7 +188,7 @@ func TestPolicyVersion(t *testing.T) {
 		"routing on":      {Enabled: true},
 		"a new model id":  {Bindings: map[string]routing.Facts{"claude_mid": {ModelID: new("claude-sonnet-5-6")}}},
 		"a binding off":   {Bindings: map[string]routing.Facts{"claude_mid": {Enabled: new(false)}}},
-		"a user override": {Overrides: map[string]string{"coder": "claude_strong"}},
+		"a user override": {Overrides: map[string]routing.RoleOverride{"coder": {"claude_strong"}}},
 	} {
 		assert.NotEqual(t, base, policy(t, d).Version(), name)
 	}

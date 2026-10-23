@@ -1,10 +1,11 @@
 package settings
 
 import (
+	"errors"
 	"fmt"
 	"maps"
-	"path/filepath"
 	"slices"
+	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/routing"
 )
@@ -15,7 +16,9 @@ import (
 // [telemetry] it belongs to the shared file and --set: it is one user's, not
 // a project's, and a repo file, which whoever commits to the repo writes,
 // never chooses which models run. The overrides are the shared file's alone:
-// the user's standing choice, the only way to a premium binding.
+// the user's standing choice, the only way to a premium binding, a binding's
+// name, which binds only workers of its provider, or a list of them, one per
+// provider (A63).
 // [routing.jev] is whether a spawn asks Jev, the env file its key comes
 // from, and the thresholds in whole percents (A57); a repo file never names
 // the file a key is read from.
@@ -49,7 +52,7 @@ var routingSchema = func() *node {
 	}
 	overrides := map[string]*node{}
 	for _, name := range rules.RoleNames() {
-		overrides[name] = leafOf(kindString)
+		overrides[name] = leafOf(kindStringOrList)
 	}
 	jev := map[string]*node{
 		enabledKey: leafOf(kindBool),
@@ -86,7 +89,7 @@ func (m merged) checkRouting() error {
 		}
 	}
 	for _, role := range slices.Sorted(maps.Keys(d.Overrides)) {
-		if err := rules.CheckOverride(role, d.Overrides[role]); err != nil {
+		if err := rules.CheckOverrides(role, d.Overrides[role]); err != nil {
 			return fmt.Errorf("%s: %w: %w", m.at(routingOverridesPath+"."+role), ErrInvalid, err)
 		}
 	}
@@ -194,14 +197,19 @@ func policyOf(d routing.Deployment) (routing.Policy, error) {
 	return p, nil
 }
 
-// CheckRoutingProviders refuses a user override that a worker type with its
-// role cannot run: a binding under another provider than the type's agent
-// command, which every spawn of the type would be refused for, since routing
-// never changes the provider (A50). config resolve --project runs it whether
-// or not routing is on. Load does not, so one type's override never stops
-// the project's other commands.
+// CheckRoutingProviders refuses a user override that a spawn of a worker
+// type, under a provider it runs and at its role's own effort, would be
+// refused for (A50, A63): a binding the deployment disables, leaves
+// unresolved, or that does not take the role's effort. An override binds only workers of its binding's
+// provider, so one for another provider is no override of the pair, and a
+// role's default that fails is the spawn's to refuse. config resolve
+// --project runs it whether or not routing is on. Load does not, so one
+// type's override never stops the project's other commands.
 func (p Profile) CheckRoutingProviders() error {
-	rules := routing.V1()
+	policy, err := p.Policy()
+	if err != nil {
+		return err
+	}
 	for _, typ := range slices.Sorted(maps.Keys(p.Groups)) {
 		if p.Groups[typ].DescribesOnly {
 			continue
@@ -210,18 +218,27 @@ func (p Profile) CheckRoutingProviders() error {
 		if err != nil {
 			continue
 		}
-		binding, ok := p.Routing.Overrides[role]
-		agent, err := p.AgentFor(typ, "")
-		if err != nil {
-			return fmt.Errorf("groups.%s: %w", typ, err)
+		// Only a user override is refused here: with no --model or --effort,
+		// a pair's Resolve refuses an override only when one applies.
+		for _, provider := range p.providersOf(typ) {
+			if _, err := policy.Resolve(routing.Request{Role: role, Provider: provider, Type: typ}, time.Time{}); errors.Is(err, routing.ErrOverrideRefused) {
+				return fmt.Errorf("%s.%s: %w: the worker type %s under %s: %w", routingOverridesPath, role, ErrInvalid, typ, provider, err)
+			}
 		}
-		cmd := agent.Command
-		if !ok || len(cmd) == 0 {
-			continue
-		}
-		if provider, runs := rules.Provider(binding), filepath.Base(cmd[0]); provider != runs {
-			return fmt.Errorf("%s.%s: %w: %w: %s is a %s binding, and the worker type %s runs %s", routingOverridesPath, role, ErrInvalid, routing.ErrProviderMismatch, binding, provider, typ, runs)
-		}
+	}
+	return nil
+}
+
+// providersOf are the providers a worker of type typ runs, each a pair
+// CheckRoutingProviders checks: the provider of the agent its spawn runs,
+// AgentFor's for the type's default provider, when that is claude or codex
+// (A62). Nothing chooses another provider until P18 (NERD-5519), whose
+// --provider widens it to every provider the type may run, providers less
+// those refused.
+func (p Profile) providersOf(typ string) []string {
+	agent, err := p.AgentFor(typ, "")
+	if prov := executable(agent.Command); err == nil && slices.Contains(providers, prov) {
+		return []string{prov}
 	}
 	return nil
 }
@@ -249,9 +266,14 @@ func deploymentOf(values map[string]any) routing.Deployment {
 	}
 	v, _ = lookup(values, routingOverridesPath)
 	if overrides, _ := v.(map[string]any); len(overrides) > 0 {
-		d.Overrides = map[string]string{}
+		d.Overrides = map[string]routing.RoleOverride{}
 		for role, raw := range overrides {
-			d.Overrides[role], _ = raw.(string)
+			switch v := raw.(type) {
+			case string:
+				d.Overrides[role] = routing.RoleOverride{v}
+			case []string:
+				d.Overrides[role] = slices.Clone(v)
+			}
 		}
 	}
 	d.Jev = jevOf(values)

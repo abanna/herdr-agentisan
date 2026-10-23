@@ -138,8 +138,12 @@ type Pane struct {
 	Handoff bool
 	// Ctx, Item and Stage are the pane's ctx, item and stage tokens as
 	// their writers left them (ADR-001 token contract); "" when absent, and
-	// Ctx "" too when herdr detects no agent in the pane (A27).
+	// Ctx "" too when herdr detects no agent in the pane (A27). The poll
+	// clears a ctx an agent before the current one left (GateCtx, A61).
 	Ctx, Item, Stage string
+	// CtxAt is when the ctx was reported, from its ctx_at token (A61); zero
+	// when absent, not a value the report writes, or with no agent.
+	CtxAt time.Time
 	// StageAt is when the stage was last reported, from its stage_at token
 	// (A42); zero when absent or not a time report.ParseStageAt reads.
 	StageAt time.Time
@@ -336,6 +340,7 @@ func worker(p herdr.PaneInfo, t Target, ids, names map[string]string) Worker {
 		w.Pane.StageAt = at
 	}
 	w.Pane.Model, w.Pane.ModelAt = reportedModel(p)
+	w.Pane.CtxAt = ctxAtOf(p)
 	return w
 }
 

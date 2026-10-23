@@ -35,31 +35,33 @@ func TestValidModelClasses(t *testing.T) {
 	}
 }
 
-// TestParseModelAtClasses: a model_at is read only as FormatModelAt writes
-// it, whole milliseconds, so a damaged value is no time at all and its model
-// is never taken as current.
+// TestParseModelAtClasses: a model_at, and a ctx_at (A61), is read only as
+// FormatModelAt writes it, whole milliseconds, so a damaged value is no time
+// at all: its model is never taken as current, and its ctx is never dated.
 func TestParseModelAtClasses(t *testing.T) {
 	t.Parallel()
 	at := time.Unix(1_761_066_000, 900_999_999)
 	assert.Equal(t, "1761066000900", report.FormatModelAt(at), "milliseconds, truncated")
-	got, ok := report.ParseModelAt(report.FormatModelAt(at))
-	require.True(t, ok)
-	assert.Equal(t, time.Unix(1_761_066_000, 900_000_000), got)
-	got, ok = report.ParseModelAt("1")
-	require.True(t, ok)
-	assert.Equal(t, time.UnixMilli(1), got)
-	got, ok = report.ParseModelAt("9223372036854775807")
-	require.True(t, ok)
-	assert.Equal(t, int64(9223372036854775807), got.UnixMilli())
+	for name, parse := range map[string]func(string) (time.Time, bool){"model_at": report.ParseModelAt, "ctx_at": report.ParseCtxAt} {
+		got, ok := parse(report.FormatModelAt(at))
+		require.True(t, ok, name)
+		assert.Equal(t, time.Unix(1_761_066_000, 900_000_000), got, name)
+		got, ok = parse("1")
+		require.True(t, ok, name)
+		assert.Equal(t, time.UnixMilli(1), got, name)
+		got, ok = parse("9223372036854775807")
+		require.True(t, ok, name)
+		assert.Equal(t, int64(9223372036854775807), got.UnixMilli(), name)
 
-	for _, v := range []string{
-		"", " ", "0", "-1", "+1761066000900", "01761066000900", " 1761066000900", "1761066000900 ",
-		"1761066000.9", "1.7e12", "0x68f7", "1_761_066_000_900", "١٧٦١٠٦٦٠٠٠٩٠٠", "9223372036854775808", "claude-opus-5-5",
-		"1761066000900\n", "1761066000900\r\n", "\ufeff1761066000900", "1761066000900\x00", "\xff1761066000900", "１７６１０６６０００９００",
-		"1761066000900\xe2\x82", "\ufffd1761066000900",
-	} {
-		_, ok := report.ParseModelAt(v)
-		assert.False(t, ok, "%q", v)
+		for _, v := range []string{
+			"", " ", "0", "-1", "+1761066000900", "01761066000900", " 1761066000900", "1761066000900 ",
+			"1761066000.9", "1.7e12", "0x68f7", "1_761_066_000_900", "١٧٦١٠٦٦٠٠٠٩٠٠", "9223372036854775808", "claude-opus-5-5",
+			"1761066000900\n", "1761066000900\r\n", "\ufeff1761066000900", "1761066000900\x00", "\xff1761066000900", "１７６１０６６０００９００",
+			"1761066000900\xe2\x82", "\ufffd1761066000900",
+		} {
+			_, ok := parse(v)
+			assert.False(t, ok, "%s %q", name, v)
+		}
 	}
 }
 
@@ -146,7 +148,7 @@ func TestStatuslinePushesTheModel(t *testing.T) {
 		"beside ctx": {
 			in:     `{"model":{"id":"claude-opus-5-5","display_name":"Opus"},"context_window":{"used_percentage":42.6}}`,
 			want:   report.Result{Ctx: 43, HasCtx: true, Model: "claude-opus-5-5", PaneID: "w14:p1"},
-			tokens: `{"ctx":"43","model":"claude-opus-5-5","model_at":"1761066000900"}`,
+			tokens: `{"ctx":"43","ctx_at":"1761066000900","model":"claude-opus-5-5","model_at":"1761066000900"}`,
 		},
 		"alone": {
 			in:     `{"model":{"id":"claude-sonnet-5-5","display_name":"Sonnet"}}`,

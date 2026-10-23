@@ -519,3 +519,37 @@ func TestStatusFailsWhenHerdrDoes(t *testing.T) {
 		})
 	}
 }
+
+// TestStatusGatesALastAgentsCtx: team status gates a member's ctx by the
+// poll's last agent starts, as the snapshot is gated (A61): a ctx stamped
+// before the pane's agent started is null, one stamped since is the
+// member's, and with no starts at all it counts, as before.
+func TestStatusGatesALastAgentsCtx(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	w := f.worker(t, "ha-coder-1", "coder")
+	start := time.Date(2026, 10, 23, 5, 0, 0, 0, time.UTC)
+	f.h.mu.Lock()
+	terminal := f.h.pane(w.PaneID).terminal
+	f.h.mu.Unlock()
+	ctxAt := func(at time.Time) *int {
+		t.Helper()
+		f.h.setPane(w.PaneID, func(p *fakePane) {
+			p.tokens = map[string]string{report.CtxKey: "70", report.CtxAtKey: report.FormatModelAt(at)}
+		})
+		got, err := f.svc.Status(t.Context(), workforce.StatusRequest{})
+		require.NoError(t, err)
+		require.Len(t, got.Groups[0].Members, 1)
+		return got.Groups[0].Members[0].Ctx
+	}
+	require.NotNil(t, ctxAt(start.Add(-time.Hour)), "no starts: counted, as before")
+
+	f.svc.Starts = &team.StartClock{}
+	f.svc.Starts.Observe(team.Model{Projects: []team.Project{{Groups: []team.Group{{Workers: []team.Worker{
+		{Pane: team.Pane{ID: w.PaneID, TerminalID: terminal}},
+	}}}}}}, map[string]time.Time{w.PaneID: start})
+	assert.Nil(t, ctxAt(start.Add(-time.Hour)), "the last agent's 70%")
+	got := ctxAt(start.Add(time.Second))
+	require.NotNil(t, got)
+	assert.Equal(t, 70, *got)
+}

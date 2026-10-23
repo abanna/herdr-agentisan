@@ -22,6 +22,9 @@ const (
 	kindArgvs
 	kindSecret
 	kindBool
+	// kindStringOrList is a string or a list of strings, kept as written: a
+	// routing override's one binding, or one per provider (A63).
+	kindStringOrList
 )
 
 // node describes one key path of the profile. Tables and name maps are the
@@ -156,6 +159,11 @@ func (s *source) normalize(n *node, raw any, path string) (any, error) {
 		return listOf(s, raw, path, "a list of integers", asInt)
 	case kindBool:
 		return scalarOf(s, raw, path, "a boolean", asBool)
+	case kindStringOrList:
+		if str, ok := asString(raw); ok {
+			return str, nil
+		}
+		return listOf(s, raw, path, "a string or a list of strings", asString)
 	default: // kindArgvs
 		return listOf(s, raw, path, "a list of argv lists", asStrings)
 	}
