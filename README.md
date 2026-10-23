@@ -115,7 +115,10 @@ It adds them to Codex's hooks file, `~/.codex/hooks.json`
 else. Then trust them once: start `codex --no-daemon` and choose "Trust all
 and continue", or trust them in `/hooks`. Codex runs a hook only once you
 trust it, and asks again when one changes. Codex also trusts each folder by
-its exact path, so it asks once in every repo a Codex worker runs in.
+its exact path, so it asks once in every repo a Codex worker runs in. A
+Codex release newer than yours asks at startup whether to update; until you
+choose "Skip until next version" or update, `worker spawn` fails with a hint
+that names it.
 `herdr-agentisan codex hooks --check` says where each hook is, and exits 1
 unless all three are installed. To keep them in `config.toml` instead, paste
 them at its end ([sample](docs/config/codex-hooks.example.toml)); the command

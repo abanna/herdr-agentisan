@@ -632,18 +632,23 @@ func (c edgeCtx) Deadline() (time.Time, bool) { return c.deadline, true }
 // TestSpawnAtTheDeadlineEdge: a herdr call the op's deadline ends, in the
 // instant before the context's timer marks it done, is out of time, never a
 // herdr failure (QA #78 R1): the prompt wait, agent.start, a busy pane's
-// re-read and a Codex's hook review (QA #96 N4).
+// re-read, and a Codex's composer read and hook review (QA #96 N4), each
+// held by the pattern it waits for, since both Codex reads are
+// pane.wait_for_output.
 func TestSpawnAtTheDeadlineEdge(t *testing.T) {
 	t.Parallel()
 	withPrompt := strings.Replace(teamConfig, "layout = \"tabs\"\n", "layout = \"tabs\"\n\n[projects.herdr-agentisan.spawn]\nshell_prompt = '❯\\s*$'\n", 1)
 	tests := map[string]struct {
-		config, group, held, says string
-		knobs                     func(*fakeHerdr)
+		config, group, held, pattern, says string
+		knobs                              func(*fakeHerdr)
 	}{
-		"the prompt wait":  {config: withPrompt, held: "pane.wait_for_output", says: "matched spawn.shell_prompt \"❯\\\\s*$\" in time: context deadline exceeded"},
-		"agent.start":      {config: teamConfig, held: "agent.start", says: "start ha-coder-1: out of time: context deadline exceeded"},
-		"the busy re-read": {config: teamConfig, held: "pane.get", knobs: func(h *fakeHerdr) { h.busy = 1 }, says: "re-read ha-coder-1's pane: out of time: context deadline exceeded"},
-		"the hook review":  {config: teamConfig, group: "review", held: "pane.wait_for_output", says: "read ha-review-1's screen: out of time: context deadline exceeded"},
+		"the prompt wait":   {config: withPrompt, held: "pane.wait_for_output", says: "matched spawn.shell_prompt \"❯\\\\s*$\" in time: context deadline exceeded"},
+		"agent.start":       {config: teamConfig, held: "agent.start", says: "start ha-coder-1: out of time: context deadline exceeded"},
+		"the busy re-read":  {config: teamConfig, held: "pane.get", knobs: func(h *fakeHerdr) { h.busy = 1 }, says: "re-read ha-coder-1's pane: out of time: context deadline exceeded"},
+		"the composer read": {config: teamConfig, group: "review", held: "pane.wait_for_output", pattern: "Ask Codex to do anything", says: "read ha-review-1's screen: out of time: context deadline exceeded"},
+		// The review read's params open its pattern with a quote; the composer
+		// read's name the review after a bar.
+		"the hook review": {config: teamConfig, group: "review", held: "pane.wait_for_output", pattern: `"Hooks need review`, says: "read ha-review-1's screen: out of time: context deadline exceeded"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -655,7 +660,7 @@ func TestSpawnAtTheDeadlineEdge(t *testing.T) {
 			}
 			var held atomic.Bool
 			wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
-				if r.Method == tc.held && held.CompareAndSwap(false, true) {
+				if r.Method == tc.held && strings.Contains(string(r.Params), tc.pattern) && held.CompareAndSwap(false, true) {
 					time.Sleep(3 * time.Second) // herdr holding the call past the op's deadline
 				}
 				return next()
@@ -961,10 +966,12 @@ func TestSpawnRunsCodexOffTheDaemon(t *testing.T) {
 	}
 }
 
-// TestSpawnACodexThatStopsAtStartup: a Codex blocked at startup, or at its
-// hook review, which herdr does not report as blocked, fails with a hint
-// naming both of Codex's startup screens; a Claude blocked gets no Codex
-// hint, and a screen herdr cannot read fails the worker.
+// TestSpawnACodexThatStopsAtStartup: a Codex blocked at startup, at its
+// hook review, which herdr does not report as blocked, before or after its
+// composer, or at a screen with no composer at all fails with a hint naming
+// Codex's three startup screens and the update prompt's way past; a Claude
+// blocked gets no Codex hint, and a screen herdr cannot read fails the
+// worker, at either read (A65).
 func TestSpawnACodexThatStopsAtStartup(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
@@ -973,11 +980,26 @@ func TestSpawnACodexThatStopsAtStartup(t *testing.T) {
 		says   string
 		noHint bool
 		herdr  bool
+		// waits is how many screen reads the spawn makes; 0 checks none.
+		waits int
 	}{
 		"a Codex blocked":       {group: "review", knobs: func(h *fakeHerdr) { h.startStatus = "blocked" }, says: "blocked during startup"},
-		"a Codex at its review": {group: "review", knobs: func(h *fakeHerdr) { h.screen = "Hooks need review" }, says: "is at Codex's hook review"},
-		"a Claude blocked":      {group: "coder", knobs: func(h *fakeHerdr) { h.startStatus = "blocked" }, says: "blocked during startup", noHint: true},
-		"an unreadable screen":  {group: "review", knobs: func(h *fakeHerdr) { h.fail["pane.wait_for_output"] = "server_unavailable" }, says: "read ha-review-1's screen", noHint: true, herdr: true},
+		"a Codex at its review": {group: "review", knobs: func(h *fakeHerdr) { h.screen = "Hooks need review" }, says: "is at Codex's hook review", waits: 1},
+		"a Codex with no composer": {group: "review", knobs: func(h *fakeHerdr) {
+			h.screen = "Welcome to Codex\n\nPress enter to continue"
+		}, says: "ha-review-1 never showed Codex's composer", waits: 1},
+		"a Codex whose review follows its composer": {group: "review", knobs: func(h *fakeHerdr) {
+			h.onCall = func(method string) {
+				if method == "pane.wait_for_output" && h.calls[method] == 1 {
+					h.screen = "Hooks need review" // Codex's startup draft gave way to the review
+				}
+			}
+		}, says: "is at Codex's hook review", waits: 2},
+		"a Claude blocked":     {group: "coder", knobs: func(h *fakeHerdr) { h.startStatus = "blocked" }, says: "blocked during startup", noHint: true},
+		"an unreadable screen": {group: "review", knobs: func(h *fakeHerdr) { h.fail["pane.wait_for_output"] = "server_unavailable" }, says: "read ha-review-1's screen", noHint: true, herdr: true, waits: 1},
+		"an unreadable review read": {group: "review", knobs: func(h *fakeHerdr) {
+			h.fail["pane.wait_for_output"], h.failAfter["pane.wait_for_output"] = "server_unavailable", 1
+		}, says: "read ha-review-1's screen", noHint: true, herdr: true, waits: 2},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -987,11 +1009,64 @@ func TestSpawnACodexThatStopsAtStartup(t *testing.T) {
 			_, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: tc.group, Count: 1})
 			require.ErrorIs(t, err, workforce.ErrSpawnFailed)
 			assert.Contains(t, err.Error(), tc.says)
-			assert.Equal(t, !tc.noHint, strings.Contains(err.Error(), "hook review or its directory-trust prompt"), err.Error())
+			for _, screen := range []string{"update prompt", "hook review or its directory-trust prompt", `choose "Skip until next version" (or update Codex)`} {
+				assert.Equal(t, !tc.noHint, strings.Contains(err.Error(), screen), "%q in %v", screen, err)
+			}
 			assert.Equal(t, tc.herdr, errors.Is(err, workforce.ErrHerdr))
 			assert.Equal(t, store.StatusFailed, f.row(t, "ha-"+tc.group+"-1").Status)
+			if tc.waits > 0 {
+				assert.Len(t, f.h.params("pane.wait_for_output"), tc.waits)
+			}
 		})
 	}
+}
+
+// TestSpawnReadsACodexComposer: once herdr says a Codex worker is ready,
+// spawn reads its screen for Codex's composer, or the hook review, for at
+// most 1.5 s, then for the hook review alone for 500 ms, since Codex's
+// startup draft shows the same composer before the review (A65); a Claude
+// worker's screen is never read.
+func TestSpawnReadsACodexComposer(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+
+	res, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "review", Count: 1})
+	require.NoError(t, err)
+	require.Len(t, res.Workers, 1)
+	assert.Equal(t, store.StatusActive, f.row(t, "ha-review-1").Status)
+	reads := f.h.params("pane.wait_for_output")
+	require.Len(t, reads, 2)
+	for i, want := range []struct {
+		pattern string
+		ms      float64
+	}{
+		{"Ask Codex to do anything|Hooks need review|Trust all and continue", 1500},
+		{"Hooks need review|Trust all and continue", 500},
+	} {
+		assert.Equal(t, res.Workers[0].PaneID, reads[i]["pane_id"])
+		assert.Equal(t, "visible", reads[i]["source"])
+		assert.Equal(t, map[string]any{"type": "regex", "value": want.pattern}, reads[i]["match"])
+		assert.InDelta(t, want.ms, reads[i]["timeout_ms"], 0)
+	}
+	m := f.h.methods()
+	assert.Less(t, lastIndex(m, "agent.get"), firstIndex(m, "pane.wait_for_output"), "read once herdr says it is ready")
+
+	claude := newFixture(t, teamConfig)
+	_, err = claude.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1})
+	require.NoError(t, err)
+	assert.Empty(t, claude.h.params("pane.wait_for_output"), "a Claude worker's screen is never read")
+
+	// The read follows the launch's kind, not the type: two Codex coders,
+	// started together, each have their own screen read twice.
+	coders := newFixture(t, strings.Replace(teamConfig, "schema_version = 1\n", "schema_version = 1\n[agent]\ncommand = [\"codex\"]\n", 1))
+	res, err = coders.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 2})
+	require.NoError(t, err)
+	require.Len(t, res.Workers, 2)
+	read := map[any]int{}
+	for _, r := range coders.h.params("pane.wait_for_output") {
+		read[r["pane_id"]]++
+	}
+	assert.Equal(t, map[any]int{res.Workers[0].PaneID: 2, res.Workers[1].PaneID: 2}, read)
 }
 
 // TestSpawnWarnsOfCodexHooks: a spawn with a Codex worker warns, and never

@@ -51,7 +51,8 @@ type fakeHerdr struct {
 	// getTerminal, the one agent.get answers for once the agent settles.
 	startTerminal, getTerminal string
 	// promptAfter is how many wait_for_output calls see no prompt; the
-	// screen shows "~/repo ❯ " after that.
+	// screen shows "~/repo ❯ " after that, and a Codex agent's pane shows
+	// codexComposer once the agent has settled.
 	promptAfter int
 	// screen, when set, is what every pane's screen shows.
 	screen string
@@ -261,6 +262,11 @@ func (f *fakeHerdr) agentInfo(p *fakePane) map[string]any {
 	a["interactive_ready"] = p.ready
 	return a
 }
+
+// codexComposer is a settled Codex's screen at its empty composer, as
+// Codex 0.163.0 draws it in a herdr pane: the composer, then the status line
+// and the footer.
+const codexComposer = "› Ask Codex to do anything\n\n  gpt-6.1-sol high · Context 0% used · ~/repo\n  ? for shortcuts"
 
 // waitTimeout is how long the fake holds a pane.wait_for_output that matched
 // nothing before it answers timeout. herdr holds it for the whole timeout_ms;
@@ -483,11 +489,18 @@ func (f *fakeHerdr) answer(r herdrtest.Request) herdrtest.Reply {
 		if f.waits[id] > f.promptAfter {
 			screen = "~/repo ❯ "
 		}
+		if pane := f.pane(id); pane != nil && pane.agent == "codex" && !pane.pending {
+			screen = codexComposer
+		}
 		if f.screen != "" {
 			screen = f.screen
 		}
-		if regexp.MustCompile(pattern).MatchString(screen) {
-			return herdrtest.Reply{Result: map[string]any{"type": "output_matched", "pane_id": id, "revision": 1, "matched_line": screen, "read": map[string]any{}}}
+		// herdr answers the first line from the top that matches.
+		re := regexp.MustCompile(pattern)
+		for line := range strings.SplitSeq(screen, "\n") {
+			if re.MatchString(line) {
+				return herdrtest.Reply{Result: map[string]any{"type": "output_matched", "pane_id": id, "revision": 1, "matched_line": line, "read": map[string]any{"text": screen}}}
+			}
 		}
 		return errReply("timeout")
 	}
