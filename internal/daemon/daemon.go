@@ -307,6 +307,7 @@ func Run(ctx context.Context, o Options) (err error) {
 	if svc := o.newWorkforce(st, ident, idle, paths.Dir); svc != nil {
 		ops = workforceOps(svc, ready, o.queued(in), o.marked)
 		maps.Copy(ops, o.noticeOps(in, mutes))
+		maps.Copy(ops, o.newBoardOps(st, in.view))
 	}
 	opsCtx, stopOps := context.WithCancel(ctx)
 	srv, err := listen(opsCtx, paths.Socket, o.health(ctx, st, HealthInfo{
@@ -382,7 +383,7 @@ func (o Options) prune(ctx context.Context, st *store.Store) time.Time {
 	for _, p := range []struct {
 		what  string
 		prune func(context.Context, time.Time) (int64, error)
-	}{{"finished handoffs", st.PruneHandoffs}, {"finished messages", st.PruneMessages}, {"GitHub notice rows not observed for 30 days", st.PruneGitHub}} {
+	}{{"finished handoffs", st.PruneHandoffs}, {"finished messages", st.PruneMessages}, {"GitHub notice rows not observed for 30 days", st.PruneGitHub}, {"board posts past 30 days or 2,000 a project", st.PruneBoard}} {
 		n, err := p.prune(ctx, now)
 		switch {
 		case err != nil:
