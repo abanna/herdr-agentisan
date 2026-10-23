@@ -323,6 +323,25 @@ func TestDispatcherDeliversByName(t *testing.T) {
 	assert.Equal(t, want, p.all(), "each typed once")
 }
 
+// TestDispatcherTypesIntoAWorkingAgent is A30's working recipient (Q19,
+// NERD-5514): nothing holds a message for an agent mid-turn, so a Codex
+// worker herdr reports working is typed into on the first pass, and Codex
+// steers the message into its running turn.
+func TestDispatcherTypesIntoAWorkingAgent(t *testing.T) {
+	t.Parallel()
+	th, p, dir := haTeam(t)
+	th.setPane("w14:p2", "agent", "codex")
+	th.setPane("w14:p2", "agent_status", "working")
+	st := stateStore(t, dir, th)
+	m := sent(t, st, coder, haBoss, "stop, change of plan")
+	serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
+
+	got := eventuallyState(t, st, m.ID, store.MessageDelivered)
+	assert.Equal(t, 1, got.Attempts, "typed at once, not held for the turn's end")
+	want := []typed{{Target: "ha-coder-1", Pane: "w14:p2", Text: "[msg " + m.ID + " from ha-boss] stop, change of plan"}}
+	assert.Equal(t, want, p.all())
+}
+
 // TestDispatcherServesARecipientUntilItsQueueIsEmpty: one pass delivers
 // all of a recipient's messages, in order, not one a poll.
 func TestDispatcherServesARecipientUntilItsQueueIsEmpty(t *testing.T) {
