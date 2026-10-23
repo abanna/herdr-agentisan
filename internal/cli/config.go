@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/abanna/herdr-agentisan/internal/jev"
 	"github.com/abanna/herdr-agentisan/internal/plugin"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 )
@@ -80,7 +81,8 @@ func newConfigResolveCmd() *cobra.Command {
 			"line per value with the layer it came from: default, shared, project,\n" +
 			"repo or flag. Secrets print as their reference, never their value.\n\n" +
 			"With no --project it resolves the shared values and lists the projects.\n" +
-			"--check-secrets also resolves each secret and fails if any is missing.",
+			"--check-secrets also resolves each secret, and reads Jev's key from\n" +
+			"routing.jev.env_file when it is set, and fails if any is missing.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
@@ -114,7 +116,7 @@ func newConfigResolveCmd() *cobra.Command {
 			var statuses []settings.SecretStatus
 			var secretsErr error
 			if checkSecrets {
-				statuses, secretsErr = settings.CheckSecrets(ctx, res, lookup, opReadFrom(ctx))
+				statuses, secretsErr = settings.CheckSecrets(ctx, res, lookup, opReadFrom(ctx), jev.CheckKeyFile)
 			}
 			if err := render(cmd.OutOrStdout(), asJSON, resolveJSON(res, policy.Version(), statuses, checkSecrets), func(w io.Writer) error {
 				return writeResolved(w, res, policy.Version(), statuses)
@@ -146,7 +148,7 @@ func resolveJSON(res settings.Resolved, policy string, statuses []settings.Secre
 		out.Secrets = make([]secretOutput, 0, len(statuses))
 	}
 	for _, s := range statuses {
-		so := secretOutput{Path: s.Path, Ref: s.Ref.String(), Status: "set"}
+		so := secretOutput{Path: s.Path, Ref: s.Source(), Status: "set"}
 		if s.Err != nil {
 			so.Status, so.Reason = "missing", s.Err.Error()
 		}

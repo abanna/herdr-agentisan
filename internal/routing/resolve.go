@@ -130,6 +130,9 @@ const (
 	ReasonJevNoChange Reason = "jev_no_change"
 	// ReasonJevFailure: Jev gave no usable answer; jev_error says why.
 	ReasonJevFailure Reason = "jev_failure"
+	// ReasonJevKeyUnavailable: Jev was not asked, for want of the TypeSafe
+	// key (ErrJevKey); jev_error says why.
+	ReasonJevKeyUnavailable Reason = "jev_key_unavailable"
 	// ReasonJevInsufficient: Jev found the information insufficient to
 	// classify the assignment, below the sufficiency threshold.
 	ReasonJevInsufficient Reason = "jev_insufficient"
