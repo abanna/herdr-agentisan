@@ -258,6 +258,7 @@ func ticksSinceBoot(start uint64) (time.Time, error) {
 // opts builds Options for one daemon on h, with fast polling.
 func opts(t *testing.T, stateDir string, h *fakeHerdr) daemon.Options {
 	t.Helper()
+	onDisk(t, h.path)
 	return daemon.Options{
 		StateDir:    stateDir,
 		HerdrSocket: h.path,
@@ -358,6 +359,7 @@ func (r *running) alive() bool {
 
 func mustIdentity(t *testing.T, sock string) daemon.Identity {
 	t.Helper()
+	onDisk(t, sock)
 	id, err := daemon.HerdrIdentity(sock)
 	require.NoError(t, err)
 	return id
