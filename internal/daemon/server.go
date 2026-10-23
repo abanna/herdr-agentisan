@@ -80,6 +80,8 @@ func (e *RequestError) Is(target error) bool {
 		return target == ErrNotReady
 	case codeNoTeam:
 		return target == ErrNoTeam
+	case codeNotAllowed:
+		return target == ErrNotAllowed
 	}
 	return false
 }

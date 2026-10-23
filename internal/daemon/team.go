@@ -330,6 +330,7 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 			team.FillModels(s, models)
 			team.FillBossStart(s, started)
 			team.Describe(s, tp.descriptions.of(project))
+			o.fillBoardUnread(ctx, st, project, s)
 		}
 		if err := tp.cache.store(m, tp.cfg.spaces.Project, now, tp.stages, tp.idle, fill); err != nil {
 			o.Logger.Error().Err(err).Msg("team poll: cache the snapshots; a team too large to serve keeps its last one")

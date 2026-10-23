@@ -148,8 +148,9 @@ type Group struct {
 }
 
 // Project is the state of the project the team works on: its colour, its
-// open pull requests, its open issues and its test slots. Every field is
-// optional, and a missing one is not reported, never zero.
+// open pull requests, its open issues, its test slots and the user's unread
+// posts on its board. Every field is optional, and a missing one is not
+// reported, never zero.
 type Project struct {
 	// Color is the project's colour as "#rrggbb"; empty when it has none.
 	Color string `json:"color,omitempty"`
@@ -160,6 +161,10 @@ type Project struct {
 	Issues *int `json:"issues,omitempty"`
 	// Slots are the test slots. Nil means not reported.
 	Slots *Slots `json:"slots,omitempty"`
+	// BoardUnread counts the posts on the team's board the user has not
+	// seen (ADR-001 A60); absent when there are none. No post itself is in
+	// a snapshot, which any pane can read.
+	BoardUnread int `json:"board_unread,omitempty"`
 }
 
 // PR is one open pull request and the three states that decide whether it
@@ -343,6 +348,9 @@ func (p Project) validate() error {
 	if p.Issues != nil && *p.Issues < 0 {
 		return fmt.Errorf("%w: issues %d", errProject, *p.Issues)
 	}
+	if p.BoardUnread < 0 {
+		return fmt.Errorf("%w: board_unread %d", errProject, p.BoardUnread)
+	}
 	if sl := p.Slots; sl != nil && (sl.Used < 0 || sl.Total < 0 || sl.Held < 0 || sl.Used > sl.Total-sl.Held) {
 		return fmt.Errorf("%w: slots %d/%d, %d held: all are counts, and used and held are at most total", errProject, sl.Used, sl.Total, sl.Held)
 	}
@@ -436,7 +444,7 @@ var (
 	prShape      = &shape{keys: map[string]*shape{"number": nil, "ci": nil, "codex": nil, "merge": nil}}
 	slotsShape   = &shape{keys: map[string]*shape{"used": nil, "total": nil, "held": nil}, required: []string{"used", "total"}}
 	projectShape = &shape{keys: map[string]*shape{
-		"color": nil, "prs": {elem: prShape}, "issues": nil, "slots": slotsShape,
+		"color": nil, "prs": {elem: prShape}, "issues": nil, "slots": slotsShape, "board_unread": nil,
 	}}
 	snapshotShape = &shape{keys: map[string]*shape{
 		"v": nil, "at": timeShape, "team": nil, "project": projectShape, "boss": bossShape, "groups": {elem: groupShape},

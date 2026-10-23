@@ -85,6 +85,12 @@ func TestTabBarLine(t *testing.T) {
 		// The fills-the-width line, with a slot held: the held count's nine
 		// characters take it past the 80, so the PRs give way.
 		"a hold past the 80": {project: &snapshot.Project{PRs: prs(pending, 1001, 1002, 1003, 1004, 1005, 101, 102, 103), Slots: &snapshot.Slots{Used: 0, Total: 3, Held: 1}, Issues: new(13)}, want: "PRs 8 · slots 0/2 (1 held) · issues 13"},
+		// The board's unread badge leads, so herdr's cut never drops it
+		// (A60); a project with nothing else to report shows it alone.
+		"board unread first":        {project: &snapshot.Project{PRs: prs(ready, 886), Issues: new(14), Slots: &snapshot.Slots{Used: 2, Total: 2}, BoardUnread: 3}, want: "board 3 · PRs #886✓ · slots 2/2 · issues 14"},
+		"board unread alone":        {project: &snapshot.Project{BoardUnread: 12}, want: "board 12"},
+		"board unread, PRs a count": {project: &snapshot.Project{PRs: prs(pending, 1001, 1002, 1003, 1004, 1005, 101, 102, 103), Slots: &snapshot.Slots{Used: 0, Total: 2}, Issues: new(13), BoardUnread: 3}, want: "board 3 · PRs 8 · slots 0/2 · issues 13"},
+		"nothing unread":            {project: &snapshot.Project{PRs: prs(ready, 886), BoardUnread: 0}, want: "PRs #886✓"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -121,6 +127,20 @@ func TestTabBarLineIsCutAtTheWidth(t *testing.T) {
 	got := dashboard.TabBarLine(s)
 	assert.Equal(t, dashboard.TabBarWidth, utf8.RuneCountInString(got))
 	assert.True(t, strings.HasPrefix(got, "PRs 1 · slots 9223372036854775807/"), got)
+	assert.True(t, strings.HasSuffix(got, "…"), got)
+}
+
+// TestTabBarLineKeepsTheBadgeWhenCut: a line cut at the 80 characters keeps
+// the board's badge, which leads it (A60).
+func TestTabBarLineKeepsTheBadgeWhenCut(t *testing.T) {
+	t.Parallel()
+	s := snapshot.Snapshot{V: 1, Team: "agentisan", Project: &snapshot.Project{
+		PRs:   prs(ready, 1),
+		Slots: &snapshot.Slots{Used: math.MaxInt, Total: math.MaxInt}, Issues: new(math.MaxInt), BoardUnread: 3,
+	}}
+	got := dashboard.TabBarLine(s)
+	assert.Equal(t, dashboard.TabBarWidth, utf8.RuneCountInString(got))
+	assert.True(t, strings.HasPrefix(got, "board 3 · PRs 1 · slots 9223372036854775807/"), got)
 	assert.True(t, strings.HasSuffix(got, "…"), got)
 }
 

@@ -3,6 +3,7 @@ package dashboard
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -65,14 +66,20 @@ func TabBar(ctx context.Context, socket string, sel daemon.Selector) string {
 // issues 14", each PR with the header's one mark (prMark), at most
 // TabBarWidth characters. The slots read as the header's (slotsText), a
 // held slot included. The PRs give way first, to a count, so the slots
-// and the issues always show. What the snapshot does not report is left
-// out, never shown as zero, and a snapshot that reports nothing is "", which
-// hides the entry. The line names no team: it follows the focused
+// and the issues always show. The board's unread badge, "board 3", leads
+// when anything is unread (A60), so herdr's cut never drops it; with none
+// the line is as it was before the board. What the snapshot does not report
+// is left out, never shown as zero, and a snapshot that reports nothing is
+// "", which hides the entry. The line names no team: it follows the focused
 // workspace, whose team the tab bar already shows.
 func TabBarLine(s snapshot.Snapshot) string {
 	p := s.Project
 	if p == nil {
 		return ""
+	}
+	var head []string
+	if b := boardBadge(p); b != "" {
+		head = append(head, b)
 	}
 	var tail []string
 	if p.Slots != nil {
@@ -83,10 +90,11 @@ func TabBarLine(s snapshot.Snapshot) string {
 	}
 	var line string
 	for _, d := range []prDetail{prCompact, prCount} {
-		parts := tail
+		parts := slices.Clone(head)
 		if prs := tabBarPRs(p.PRs, d); prs != "" {
-			parts = append([]string{prs}, tail...)
+			parts = append(parts, prs)
 		}
+		parts = append(parts, tail...)
 		line = strings.Join(parts, sep)
 		if utf8.RuneCountInString(line) <= TabBarWidth {
 			return line

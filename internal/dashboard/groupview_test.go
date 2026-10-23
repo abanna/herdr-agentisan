@@ -192,13 +192,13 @@ func TestGroupViewFooter(t *testing.T) {
 
 	snap := fixture(t, "group")
 	top := lines(dashboard.Render(dashboard.Frame{Snapshot: snap, Now: at, Group: "coders"}, 80, 24, plain))
-	assert.True(t, strings.HasPrefix(top[23], " enter jump · ↑↓ move · esc back · ? help · q quit "), top[23])
+	assert.True(t, strings.HasPrefix(top[23], " enter jump · ↑↓ move · b board · esc back · ? help · q quit "), top[23])
 	assert.True(t, strings.HasSuffix(top[23], " ↓4"), "two boxes fit, four are below: %q", top[23])
 
 	bottom := lines(dashboard.Render(dashboard.Frame{
 		Snapshot: snap, Now: at, Group: "coders", Selection: dashboard.Selection{Agent: 5}, Btop: true,
 	}, 80, 24, plain))
-	assert.True(t, strings.HasPrefix(bottom[23], " enter jump · ↑↓ move · esc back · ctrl-b m btop · ? help · q quit "), bottom[23])
+	assert.True(t, strings.HasPrefix(bottom[23], " enter jump · ↑↓ move · b board · esc back · ctrl-b m btop · ? help · q quit "), bottom[23])
 	assert.True(t, strings.HasSuffix(bottom[23], " ↑4"), "the last two show, four are above: %q", bottom[23])
 }
 

@@ -101,6 +101,55 @@ func TestBoardLatest(t *testing.T) {
 	assert.Empty(t, none)
 }
 
+// TestBoardMarkSeen (A60): the user's mark moves to what the panel showed,
+// only forward, and never past the newest post, so a seq not yet handed out
+// is never marked read; it moves no other reader's mark, nor another
+// project's.
+func TestBoardMarkSeen(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	mark, err := s.MarkSeen(t.Context(), "ha", store.ReaderUser, 9)
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), mark, "an empty board marks nothing")
+
+	var seqs []int64
+	for _, b := range []string{"one", "two", "three"} {
+		seqs = append(seqs, post(t, s, teamPost("ha", "ha-coder-1", b)).Seq)
+	}
+	post(t, s, teamPost("web", "web-coder-1", "another team"))
+	mark, err = s.MarkSeen(t.Context(), "ha", store.ReaderUser, seqs[1])
+	require.NoError(t, err)
+	assert.Equal(t, seqs[1], mark)
+	mark, err = s.MarkSeen(t.Context(), "ha", store.ReaderUser, seqs[0])
+	require.NoError(t, err)
+	assert.Equal(t, seqs[1], mark, "a mark only moves forward")
+	mark, err = s.MarkSeen(t.Context(), "ha", store.ReaderUser, 0)
+	require.NoError(t, err)
+	assert.Equal(t, seqs[1], mark, "nothing shown moves nothing")
+	mark, err = s.MarkSeen(t.Context(), "ha", store.ReaderUser, seqs[2]+100)
+	require.NoError(t, err)
+	assert.Equal(t, seqs[2], mark, "never past the newest post")
+
+	next := post(t, s, teamPost("ha", "ha-coder-1", "four"))
+	user, err := s.BoardStatus(t.Context(), "ha", store.ReaderUser)
+	require.NoError(t, err)
+	assert.Equal(t, store.BoardState{Newest: next.Seq, Mark: seqs[2], Unread: 1}, user, "a post after the clamp is unread")
+	boss, err := s.BoardStatus(t.Context(), "ha", store.ReaderBoss)
+	require.NoError(t, err)
+	assert.Equal(t, 4, boss.Unread, "the user's mark leaves the boss's")
+	web, err := s.BoardStatus(t.Context(), "web", store.ReaderUser)
+	require.NoError(t, err)
+	assert.Equal(t, 1, web.Unread, "and another project's")
+	read, err := s.ReadBoard(t.Context(), "ha", store.ReaderUser, 10)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"four"}, bodies(read.Posts), "a read starts after the seen mark")
+
+	_, err = s.MarkSeen(t.Context(), "ha", "ha-coder-1", 1)
+	require.ErrorIs(t, err, store.ErrInvalid, "workers never read the board")
+	_, err = s.MarkSeen(t.Context(), "ha", store.ReaderUser, -1)
+	require.ErrorIs(t, err, store.ErrInvalid)
+}
+
 // TestBoardRefuses: what the board must not hold, and reads it cannot make,
 // are refused before anything is written.
 func TestBoardRefuses(t *testing.T) {

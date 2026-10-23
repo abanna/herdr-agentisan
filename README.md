@@ -539,8 +539,14 @@ herdr-agentisan board wait            # run in the background: ends at the next 
 The boss and the user each have a read mark, so the boss reading never
 moves the user's. Posts are kept 30 days, at most 2,000 a team. Nothing
 posts to the board yet: until part 1a B of NERD-5533 the boss's messages
-and notices are still typed into its pane, and the dashboard's board panel
-comes with part 1b.
+and notices are still typed into its pane. Press `b` in the dashboard for
+the user's board panel. `t` and `d` toggle its team and daemon filters; arrows
+move, Enter expands a post, and Escape closes help, then the expansion, then
+the panel. Closing returns to the overview or group view you opened it from.
+The `board N` badge in the header and tab bar counts the user's unread posts.
+The panel reads at most 200 newest posts every 3 seconds while open, and
+marks through the newest post under its filter. With team-only on, that
+passes older hidden daemon posts too; newer hidden daemon posts stay unread.
 
 ## The debugger
 
@@ -755,7 +761,18 @@ See [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml)
 
 `herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json`
 draws a snapshot file instead, outside herdr too. A fixture's time is fixed,
-so its footer always reads `data Ns old`.
+so its footer always reads `data Ns old`. Preview the board, then press `b`:
+
+```bash
+herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json --board-fixture docs/dashboard/sample-board.json
+```
+
+The board fixture keeps its read mark in memory; the preview badge clears
+without changing either file. Without `--board-fixture`, `b` says there is no
+board with this fixture. The user must check this preview before live board
+activation. This change performs no install or live activation. A newer
+snapshot adds `board_unread`: reopen older dashboards after installing the
+new daemon and dashboard together.
 
 The dashboard keeps v12's cues (ADR-001 A38). A stage that says READY is
 bold green, RED or blocked bold red, and waiting or queued yellow, matched

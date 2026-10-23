@@ -62,6 +62,8 @@ type noter interface {
 type Config struct {
 	// Source is polled for snapshots.
 	Source snapshot.Source
+	// Board supplies the board panel; nil means no board with this fixture.
+	Board BoardSource
 	// Focuser is called on Enter and a click. Nil turns focus off; say why
 	// in Note.
 	Focuser Focuser
@@ -127,14 +129,16 @@ func DaemonConfig(stateDir, herdrSocket string, where Where) (Config, error) {
 			PaneID: where.PaneID, WorkspaceID: where.WorkspaceID,
 		}
 	}
-	return HerdrConfig(src, herdrSocket), nil
+	cfg := HerdrConfig(src, herdrSocket)
+	cfg.Board = DaemonBoard{Socket: paths.Socket}
+	return cfg, nil
 }
 
 // FixtureConfig is HerdrConfig reading snapshots from the JSON file at path,
 // again on every poll. The file is read once first: a fixture that cannot be
 // read is the caller's mistake, reported before the terminal is taken over,
 // not a footer to squint at.
-func FixtureConfig(ctx context.Context, path, socketPath string) (Config, error) {
+func FixtureConfig(ctx context.Context, path, boardPath, socketPath string) (Config, error) {
 	if path == "" {
 		return Config{}, ErrNoSource
 	}
@@ -142,7 +146,16 @@ func FixtureConfig(ctx context.Context, path, socketPath string) (Config, error)
 	if _, err := src.Snapshot(ctx); err != nil {
 		return Config{}, fmt.Errorf("fixture: %w", err)
 	}
-	return HerdrConfig(src, socketPath), nil
+	cfg := HerdrConfig(src, socketPath)
+	if boardPath != "" {
+		board := &FileBoard{Path: boardPath}
+		if _, err := board.Board(ctx); err != nil {
+			return Config{}, err
+		}
+		cfg.Board = board
+		cfg.Source = fixtureBoardSource{Source: src, board: board}
+	}
+	return cfg, nil
 }
 
 // Model is the dashboard's bubbletea model.
@@ -186,6 +199,7 @@ type Model struct {
 	// groupNote says the open group's view closed because the group is
 	// gone. The next key or click clears it.
 	groupNote string
+	board     boardPanel
 }
 
 // The arrow keys, as tea.KeyPressMsg.String names them. Left leaves a
@@ -197,7 +211,11 @@ const (
 )
 
 // keyEnter is Enter, as tea.KeyPressMsg.String names it: the jump.
-const keyEnter = "enter"
+const (
+	keyEnter = "enter"
+	keyEsc   = "esc"
+	keyQuit  = "ctrl+c"
+)
 
 // Messages the model sends itself.
 type (
@@ -245,6 +263,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = msg.Width, msg.Height
 		m.settle()
 		return m, nil
+	case boardReply:
+		cmd := m.boardAnswer(msg)
+		return m, cmd
+	case boardTick:
+		if !m.board.Open || msg.gen != m.board.gen || msg.serial != m.board.serial {
+			return m, nil
+		}
+		cmd := m.boardRead()
+		return m, cmd
 	case snapshotMsg:
 		// Each answer schedules exactly one tick, and each tick exactly one
 		// fetch, so polls never overlap or multiply.
@@ -300,15 +327,21 @@ func (m Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.search.on {
 		return m.searchKey(msg)
 	}
+	if m.board.Open {
+		return m.boardKey(msg)
+	}
 	switch k := msg.String(); k {
-	case "q", "ctrl+c":
+	case "b":
+		cmd := m.openBoard()
+		return m, cmd
+	case "q", keyQuit:
 		return m, tea.Quit
 	case "/":
 		m.closeGroup()
 		m.startSearch()
 	case "?":
 		m.help = !m.help
-	case "esc":
+	case keyEsc:
 		// Help closes first; then the view.
 		if !m.help {
 			m.closeGroup()
@@ -358,7 +391,15 @@ func (m Model) click(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		m.endSearch()
 		m.openGroup(l.groups[sel.Group].Name)
 		return m, nil
+	case hitBoard:
+		m.board.Selected = sel.Agent
+		m.board.Expanded = false
+		return m, nil
 	case hitBack:
+		if m.board.Open {
+			m.closeBoard()
+			return m, nil
+		}
 		m.closeGroup()
 		return m, nil
 	case hitBtop:
@@ -381,7 +422,7 @@ func (m Model) View() tea.View {
 func (m Model) Frame() Frame {
 	f := Frame{
 		Snapshot: m.snap, Selection: m.sel, Scroll: m.scroll, Now: m.clock,
-		Help: m.help, Btop: m.cfg.Btop != nil, Note: m.cfg.Note, NoTeam: m.noTeam,
+		Board: m.board.BoardFrame, Help: m.help, Btop: m.cfg.Btop != nil, Note: m.cfg.Note, NoTeam: m.noTeam,
 		Search: m.search.on, Query: m.search.query, Group: m.group,
 	}
 	for _, note := range []string{m.sourceNote, m.groupNote} {
@@ -389,7 +430,7 @@ func (m Model) Frame() Frame {
 			f.Note = strings.TrimPrefix(f.Note+sep+note, sep)
 		}
 	}
-	for _, err := range []error{m.sourceErr, m.focusErr, m.btopErr} {
+	for _, err := range []error{m.sourceErr, m.focusErr, m.btopErr, m.board.Err} {
 		if err != nil {
 			f.Errors = append(f.Errors, err)
 		}
@@ -476,6 +517,9 @@ func (m Model) openBtop() tea.Cmd {
 // settle keeps the scroll Render settles on for the current frame: the
 // previous one, moved only as far as the selection needs.
 func (m *Model) settle() {
+	if m.board.Open {
+		return
+	}
 	m.scroll = plan(m.Frame(), m.Width(), m.Height()).offset
 }
 

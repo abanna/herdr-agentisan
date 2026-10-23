@@ -89,9 +89,9 @@ func Filter(s *snapshot.Snapshot, query string) *snapshot.Snapshot {
 // searchKey handles a key while a query is typed.
 func (m Model) searchKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "ctrl+c":
+	case keyQuit:
 		return m, tea.Quit
-	case "esc":
+	case keyEsc:
 		m.endSearch()
 	case keyEnter:
 		cmd := m.focus()
