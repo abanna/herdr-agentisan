@@ -284,8 +284,25 @@ crossed. The body reads `<worker id> at <n>% crossed <level> (<threshold>%)`.
 | `agentisan.ctx.alerted` | bool | Whether the daemon asked herdr to alert the user with a toast, which it does only at the ceiling |
 | `agentisan.ctx.shown` | bool | Whether herdr showed that toast; false when it was not asked for |
 
+### `agentisan.worker.handoff`
+
+A step of a worker's handoff (ADR-001 A33): `handoff ready` set its agent
+pane's `handoff` token (`ready`) or cleared it (`cleared`). A command that
+left the token as it was gives none. The body reads `<worker id> handoff
+<step>`.
+
+| Attribute | Type | Value |
+| --- | --- | --- |
+| `agentisan.worker.id` | string | As for `status_changed`: the logical worker id, or the pane id while no row binds it |
+| `agentisan.worker.bound` | bool | Whether a `workers` row binds the pane |
+| `agentisan.project` | string | The worker's project; `""` is the unnamed project |
+| `agentisan.group` | string | The worker's group |
+| `herdr.pane.id` | string | The pane the token is on |
+| `agentisan.handoff.step` | string | `ready` or `cleared` |
+
 ## Coming
 
 The same helper carries these when their items land: stage changes (fast
-follow on item 3), and handoff steps and rotations (items 5b and 6). Each
-adds a section here first.
+follow on item 3), and the rest of a rotation's handoff steps, begun,
+acknowledged, completed and failed (items 5b and 6). Each adds a section
+here first.
