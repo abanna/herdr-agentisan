@@ -376,6 +376,20 @@ func TestRoleMatchesTheLaunch(t *testing.T) {
 	}
 	assert.Contains(t, text, telemetry.EventStatusChanged)
 	assert.True(t, slices.ContainsFunc(launch.Args, func(a string) bool { return strings.HasSuffix(a, debugger.RoleFile) }))
+
+	// The role names the built-in tools the launch keeps, all and only
+	// those, and no tool the launch leaves out, such as LSP.
+	i := slices.Index(launch.Args, "--tools")
+	require.GreaterOrEqual(t, i, 0, "the launch passes --tools")
+	require.Less(t, i+1, len(launch.Args))
+	sentence := regexp.MustCompile("Your only built-in tools are ([^.]*)\\.").FindStringSubmatch(text)
+	require.NotNil(t, sentence, "the role says which built-in tools it has")
+	var named []string
+	for _, m := range regexp.MustCompile("`([A-Za-z]+)`").FindAllStringSubmatch(sentence[1], -1) {
+		named = append(named, m[1])
+	}
+	assert.ElementsMatch(t, strings.Split(launch.Args[i+1], ","), named, sentence[0])
+	assert.NotContains(t, text, "LSP", "the launch keeps no LSP tool")
 }
 
 // TestDaemonRunKnowsThePluginCheckout: `daemon run` gives the workforce the
