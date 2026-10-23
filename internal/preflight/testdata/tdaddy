@@ -13,6 +13,16 @@ delay=${FAKE_TDADDY_DELAY:-0}
 # created but not yet written.
 record_child() {
 	echo "$1" >"$d/child.tmp"
+	# Opt-in handshake for the publication regression; ordinary runs never wait.
+	if [ "${FAKE_TDADDY_HOLD:-0}" = 1 ]; then
+		: >"$d/held"
+		i=0
+		while [ ! -e "$d/release" ]; do
+			[ "$i" -lt 1000 ] || exit 4
+			i=$((i + 1))
+			sleep 0.01
+		done
+	fi
 	mv "$d/child.tmp" "$d/child"
 }
 pwd >"$d/cwd"

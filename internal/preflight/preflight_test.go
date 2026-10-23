@@ -1,14 +1,18 @@
 package preflight_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -378,6 +382,16 @@ func standIn(t *testing.T, mode string) (string, preflight.Runner, string) {
 	bin, err := filepath.Abs(filepath.Join("testdata", "tdaddy"))
 	require.NoError(t, err)
 	rec := t.TempDir()
+	t.Cleanup(func() {
+		if runtime.GOOS != "linux" {
+			return
+		}
+		for _, p := range survivors(t, rec) {
+			if start, err := processStart(p.pid); err == nil && start == p.start {
+				_ = syscall.Kill(p.pid, syscall.SIGKILL)
+			}
+		}
+	})
 	return bin, preflight.Runner{Env: []string{"FAKE_TDADDY_DIR=" + rec, "FAKE_TDADDY_MODE=" + mode, "PATH=/usr/bin:/bin"}}, rec
 }
 
@@ -490,7 +504,7 @@ func TestRunnerFollowsASymlink(t *testing.T) {
 
 // recordedChild is the pid the stand-in in rec recorded for its child, read
 // once the run has returned, so nothing writes it any more; false when it
-// recorded none, as when the run ended it before it started one. The
+// recorded none, as when the run ended before it published its child's PID. The
 // stand-in renames its record into place whole (record_child).
 func recordedChild(t *testing.T, rec string) (int, bool) {
 	t.Helper()
@@ -515,77 +529,287 @@ func childGone(t *testing.T, rec string) {
 	}, slow, 10*time.Millisecond, "tdaddy's child outlived the run")
 }
 
-// killsTheChild runs a hanging stand-in in mode, held back delay seconds
-// before it starts its child, through run, which ends the run within limit,
-// first 300 ms, until a run ends after the stand-in recorded its child, and
-// checks that child is gone. A run that ends the stand-in before it starts
-// its child, as a loaded machine can (NERD-5563), shows nothing about what
-// the kill reaches, so it is run again with the limit doubled; run checks
-// every run's own end.
-func killsTheChild(t *testing.T, mode, delay string, run func(r preflight.Runner, bin string, limit time.Duration)) {
-	t.Helper()
-	limit := 300 * time.Millisecond
-	for ; limit < slow; limit *= 2 {
-		bin, r, rec := standIn(t, mode)
-		r.Env = append(r.Env, "FAKE_TDADDY_DELAY="+delay)
-		run(r, bin, limit)
-		if _, ok := recordedChild(t, rec); ok {
-			childGone(t, rec)
-			return
-		}
-	}
-	t.Fatalf("the hanging tdaddy recorded no child before its run ended, within up to %v", limit/2)
+// recordEnd publishes the trigger time and handshake error before the caller
+// reads them. A missing record still ends the run, then fails the assertion.
+type recordEnd struct {
+	at  time.Time
+	err error
 }
 
-// TestRunnerTimeoutKillsTheGroup: a tdaddy that hangs is killed at the
-// timeout, and so is every process it started, even when they ignore
-// SIGTERM. One slow to start its child, past the first timeout, is run again
-// until it has one.
-func TestRunnerTimeoutKillsTheGroup(t *testing.T) {
+func waitForFile(ctx context.Context, path string) error {
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("record: %w", err)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("record: %w", ctx.Err())
+		case <-tick.C:
+		}
+	}
+}
+
+// afterTheRecord bounds startup separately from trigger-to-return latency.
+// Even a stand-in that never publishes cannot leave Run waiting an hour.
+func afterTheRecord(t *testing.T, rec string, bound time.Duration, end func()) <-chan recordEnd {
+	t.Helper()
+	result := make(chan recordEnd, 1)
+	ctx, cancel := context.WithTimeout(t.Context(), bound)
+	go func() {
+		defer cancel()
+		err := waitForFile(ctx, filepath.Join(rec, "child"))
+		at := time.Now()
+		end()
+		result <- recordEnd{at: at, err: err}
+	}()
+	return result
+}
+
+// TestRecordPublication holds the writer after its private PID write, proves
+// the public name is absent, then releases and observes the exact complete PID.
+func TestRecordPublication(t *testing.T) {
 	t.Parallel()
-	for name, tc := range map[string]struct{ mode, delay string }{
-		"a hang":                         {"hang", "0"},
-		"a hang that ignores SIGTERM":    {"stubborn", "0"},
-		"a hang slow to start its child": {"hang", "1"},
-	} {
+	bin, r, rec := standIn(t, "hang")
+	r.Env = append(r.Env, "FAKE_TDADDY_HOLD=1")
+	r.Timeout = time.Hour
+	ctx, cancel := context.WithTimeout(t.Context(), 3*slow)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx, rec, bin, "--version") }()
+	joined := false
+	defer func() {
+		cancel()
+		if joined {
+			return
+		}
+		select {
+		case <-done:
+		case <-time.After(slow):
+			t.Error("publication run did not stop")
+		}
+	}()
+	hold, stop := context.WithTimeout(t.Context(), slow)
+	defer stop()
+	require.NoError(t, waitForFile(hold, filepath.Join(rec, "held")), "publication hold reached")
+	private, err := os.ReadFile(filepath.Join(rec, "child.tmp"))
+	require.NoError(t, err, "private PID is complete at hold")
+	pid, err := strconv.Atoi(strings.TrimSpace(string(private)))
+	require.NoError(t, err)
+	require.Positive(t, pid)
+	_, err = os.Stat(filepath.Join(rec, "child"))
+	require.ErrorIs(t, err, fs.ErrNotExist, "public child must be absent before release")
+	require.NoError(t, os.WriteFile(filepath.Join(rec, "release"), nil, 0o600))
+	require.NoError(t, waitForFile(hold, filepath.Join(rec, "child")), "publication released")
+	public, err := os.ReadFile(filepath.Join(rec, "child"))
+	require.NoError(t, err)
+	require.Equal(t, string(private), string(public), "published PID must match the complete private PID")
+	cancel()
+	require.ErrorIs(t, <-done, context.Canceled)
+	joined = true
+	childGone(t, rec)
+}
+
+// TestRecordNeverPublished exercises the bounded failure path with a real
+// child held before publication, and verifies the caller still terminates it.
+func TestRecordNeverPublished(t *testing.T) {
+	t.Parallel()
+	bin, r, rec := standIn(t, "hang")
+	r.Env = append(r.Env, "FAKE_TDADDY_HOLD=1")
+	r.Timeout = time.Hour
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- r.Run(ctx, rec, bin, "--version") }()
+	joined := false
+	defer func() {
+		cancel()
+		if joined {
+			return
+		}
+		select {
+		case <-done:
+		case <-time.After(slow):
+			t.Error("never-record run did not stop")
+		}
+	}()
+	hold, stop := context.WithTimeout(t.Context(), slow)
+	defer stop()
+	require.NoError(t, waitForFile(hold, filepath.Join(rec, "held")), "never-record control reached private hold")
+	ended := afterTheRecord(t, rec, 300*time.Millisecond, cancel)
+	err := <-done
+	joined = true
+	returned := time.Now()
+	trigger := <-ended
+	require.ErrorIs(t, trigger.err, context.DeadlineExceeded, "missing publication must fail the handshake")
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Less(t, returned.Sub(trigger.at), slow)
+	if runtime.GOOS == "linux" {
+		assert.Eventually(t, func() bool { return len(survivors(t, rec)) == 0 }, slow, 10*time.Millisecond)
+	}
+}
+
+// hangs are the stand-in's hangs the kill tests run: one that ignores
+// SIGTERM, and one slow to start its child, as a loaded machine can make it.
+var hangs = map[string]struct{ mode, delay string }{
+	"a hang":                         {"hang", "0"},
+	"a hang that ignores SIGTERM":    {"stubborn", "0"},
+	"a hang slow to start its child": {"hang", "1"},
+}
+
+// hangingStandIn is standIn in mode, held back delay seconds before it starts
+// its child.
+func hangingStandIn(t *testing.T, mode, delay string) (string, preflight.Runner, string) {
+	t.Helper()
+	bin, r, rec := standIn(t, mode)
+	r.Env = append(r.Env, "FAKE_TDADDY_DELAY="+delay)
+	return bin, r, rec
+}
+
+// ownedProcess binds a PID to its Linux start time, so cleanup never signals
+// a reused PID. Only processes carrying this test's private marker qualify.
+type ownedProcess struct {
+	pid   int
+	start string
+}
+
+func processStart(pid int) (string, error) {
+	raw, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+	if err != nil {
+		return "", fmt.Errorf("process start: %w", err)
+	}
+	end := strings.LastIndex(string(raw), ") ")
+	if end < 0 {
+		return "", fmt.Errorf("invalid process stat for %d", pid)
+	}
+	fields := strings.Fields(string(raw)[end+2:])
+	if len(fields) < 20 {
+		return "", fmt.Errorf("invalid process stat for %d", pid)
+	}
+	if fields[0] == "Z" {
+		return "", nil
+	} // Zombies have no running code or readable environment.
+	return fields[19], nil
+}
+
+// survivors uses Linux /proc; unavailable observation must fail, never prove
+// absence. Other users' unreadable processes cannot inherit our private marker.
+func survivors(t *testing.T, rec string) []ownedProcess {
+	t.Helper()
+	marker := []byte("\x00FAKE_TDADDY_DIR=" + rec + "\x00")
+	_, err := os.ReadFile("/proc/self/environ")
+	require.NoError(t, err, "Linux survivor observation requires readable /proc")
+	selfStart, err := processStart(os.Getpid())
+	require.NoError(t, err)
+	floor, err := strconv.ParseUint(selfStart, 10, 64)
+	require.NoError(t, err)
+	entries, err := os.ReadDir("/proc")
+	require.NoError(t, err)
+	var out []ownedProcess
+processes:
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		start, err := processStart(pid)
+		if errors.Is(err, fs.ErrNotExist) || err == nil && start == "" {
+			continue
+		}
+		require.NoError(t, err)
+		tick, err := strconv.ParseUint(start, 10, 64)
+		require.NoError(t, err)
+		if tick < floor {
+			continue
+		} // A process older than this binary cannot be its descendant.
+		env, err := os.ReadFile(filepath.Join("/proc", e.Name(), "environ"))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if errors.Is(err, fs.ErrPermission) {
+			info, statErr := os.Stat(filepath.Join("/proc", e.Name()))
+			if errors.Is(statErr, fs.ErrNotExist) {
+				continue
+			}
+			require.NoError(t, statErr)
+			if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Uid != uint32(os.Geteuid()) {
+				continue
+			}
+			// During exit Linux can deny environ before stat becomes Z.
+			// Retry that transition boundedly; persistent denial still fails.
+			for tries := 0; tries < 100 && errors.Is(err, fs.ErrPermission); tries++ {
+				now, startErr := processStart(pid)
+				if errors.Is(startErr, fs.ErrNotExist) || startErr == nil && (now == "" || now != start) {
+					continue processes
+				}
+				require.NoError(t, startErr)
+				time.Sleep(10 * time.Millisecond)
+				env, err = os.ReadFile(filepath.Join("/proc", e.Name(), "environ"))
+				if errors.Is(err, fs.ErrNotExist) {
+					continue processes
+				}
+			}
+		}
+		require.NoError(t, err, "cannot observe a same-user process")
+		if bytes.Contains(append([]byte{0}, env...), marker) {
+			out = append(out, ownedProcess{pid, start})
+		}
+	}
+	return out
+}
+
+// TestRunnerTimeoutEndsTheRun: a tdaddy that hangs is ended at the timeout,
+// however far it got, with ErrTimeout, and nothing it started outlives the
+// run. That is checked by environment, not by its record, so it holds
+// wherever the timeout lands. The next two tests check, on a recorded
+// child, that the kill reaches what tdaddy started.
+func TestRunnerTimeoutEndsTheRun(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "linux" {
+		t.Skip("timeout survivor observation requires Linux /proc; recorded-child tests remain portable")
+	}
+	for name, h := range hangs {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			killsTheChild(t, tc.mode, tc.delay, func(r preflight.Runner, bin string, limit time.Duration) {
-				r.Timeout = limit
-				start := time.Now()
-				err := r.Run(t.Context(), t.TempDir(), bin, "--version")
-				require.ErrorIs(t, err, preflight.ErrTimeout)
-				assert.Contains(t, err.Error(), "no answer within "+limit.String())
-				assert.Less(t, time.Since(start), limit+slow)
-			})
+			bin, r, rec := hangingStandIn(t, h.mode, h.delay)
+			r.Timeout = 300 * time.Millisecond
+			start := time.Now()
+			err := r.Run(t.Context(), t.TempDir(), bin, "--version")
+			require.ErrorIs(t, err, preflight.ErrTimeout)
+			assert.Contains(t, err.Error(), "no answer within 300ms")
+			assert.Less(t, time.Since(start), slow)
+			assert.Eventually(t, func() bool { return len(survivors(t, rec)) == 0 }, slow, 10*time.Millisecond,
+				"a process tdaddy started outlived the timeout")
 		})
 	}
 }
 
 // TestRunnerCancelKillsTheGroup: a run whose context is canceled ends with
-// that cancel, and takes everything it started with it.
+// that cancel, and takes everything it started with it, even what ignores
+// SIGTERM. The cancel comes once the child is recorded.
 func TestRunnerCancelKillsTheGroup(t *testing.T) {
 	t.Parallel()
-	bin, r, rec := standIn(t, "hang")
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	go func() {
-		for {
-			if _, err := os.Stat(filepath.Join(rec, "child")); err == nil {
-				cancel()
-				return
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(10 * time.Millisecond):
-			}
-		}
-	}()
-	err := r.Run(ctx, t.TempDir(), bin, "--version")
-	require.ErrorIs(t, err, context.Canceled)
-	assert.NotErrorIs(t, err, preflight.ErrTimeout, "a cancel is not a timeout")
-	childGone(t, rec)
+	for name, h := range hangs {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			bin, r, rec := hangingStandIn(t, h.mode, h.delay)
+			r.Timeout = time.Hour // the cancel ends the run, never the timeout
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			ended := afterTheRecord(t, rec, slow, cancel)
+			err := r.Run(ctx, t.TempDir(), bin, "--version")
+			returned := time.Now()
+			trigger := <-ended
+			require.NoError(t, trigger.err, "the child record must be published before ending the run")
+			assert.Less(t, returned.Sub(trigger.at), slow, "caller end-to-return latency")
+			require.ErrorIs(t, err, context.Canceled)
+			assert.NotErrorIs(t, err, preflight.ErrTimeout, "a cancel is not a timeout")
+			childGone(t, rec)
+		})
+	}
 }
 
 // TestRunnerDrainsItsOutput: a tdaddy that prints far past the cap and then
@@ -616,22 +840,53 @@ func TestRunnerBoundsAnOrphansPipes(t *testing.T) {
 	assert.Less(t, time.Since(start), slow)
 }
 
+// passedDeadline is a caller's context whose deadline passes when pass is
+// called: its Err is then context.DeadlineExceeded, as a deadline's is. The
+// test passes it once the child is recorded.
+type passedDeadline struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
+func newPassedDeadline(ctx context.Context) *passedDeadline {
+	return &passedDeadline{Context: ctx, done: make(chan struct{})}
+}
+
+func (d *passedDeadline) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (d *passedDeadline) Done() <-chan struct{}       { return d.done }
+func (d *passedDeadline) pass()                       { d.once.Do(func() { close(d.done) }) }
+
+func (d *passedDeadline) Err() error {
+	select {
+	case <-d.done:
+		return context.DeadlineExceeded
+	default:
+		return nil
+	}
+}
+
 // TestRunnerCallersDeadlineIsNotATimeout: when the caller's own deadline
 // ends the run before the Runner's timeout, the error is the caller's
-// deadline, not ErrTimeout.
+// deadline, not ErrTimeout, and the run takes everything it started with it.
+// The deadline passes once the child is recorded.
 func TestRunnerCallersDeadlineIsNotATimeout(t *testing.T) {
 	t.Parallel()
-	for name, delay := range map[string]string{"a hang": "0", "a hang slow to start its child": "1"} {
+	for name, h := range hangs {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			killsTheChild(t, "hang", delay, func(r preflight.Runner, bin string, limit time.Duration) {
-				r.Timeout = 2 * slow
-				ctx, cancel := context.WithTimeout(t.Context(), limit)
-				defer cancel()
-				err := r.Run(ctx, t.TempDir(), bin, "--version")
-				require.ErrorIs(t, err, context.DeadlineExceeded)
-				assert.NotErrorIs(t, err, preflight.ErrTimeout)
-			})
+			bin, r, rec := hangingStandIn(t, h.mode, h.delay)
+			r.Timeout = time.Hour // the deadline ends the run, never the timeout
+			ctx := newPassedDeadline(t.Context())
+			ended := afterTheRecord(t, rec, slow, ctx.pass)
+			err := r.Run(ctx, t.TempDir(), bin, "--version")
+			returned := time.Now()
+			trigger := <-ended
+			require.NoError(t, trigger.err, "the child record must be published before ending the run")
+			assert.Less(t, returned.Sub(trigger.at), slow, "caller end-to-return latency")
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			assert.NotErrorIs(t, err, preflight.ErrTimeout)
+			childGone(t, rec)
 		})
 	}
 }
