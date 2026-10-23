@@ -106,6 +106,12 @@ repeat = 300
 # the plugin's read-only launch (docs/debugger.md, [debugger] below): its
 # group sets a model only, never a command, and [agent]'s command never
 # applies to it.
+#
+# To a codex command that chooses no sandbox (-s, --sandbox, --approve-for-me,
+# the bypass flag or -c sandbox_mode), spawn adds its type's: read-only for
+# review, danger-full-access for coder, qa and precheck, and none for the
+# others (A59). That flag outranks a sandbox_mode in Codex's config.toml or
+# a -p profile; a sandbox in the command itself stands.
 [groups.precheck]
 workers = 1
 slots = 1
@@ -121,6 +127,16 @@ rotation = { thresholds = [45, 55, 65] }
 [groups.debugger]
 workers = 0
 slots = 1
+
+# A Codex qa group, commented out (ADR-001 A59). Its workers start as
+#   codex --no-daemon --sandbox danger-full-access --model gpt-6.1-sol
+# so the repo's tests, git, signing, gh and team/ files work, as a Claude
+# worker's do: with no OS sandbox and no Codex reviewer. To keep Codex's
+# sandbox, put one in the command (--sandbox workspace-write, say), at the
+# cost the README's Codex sandbox paragraph states. The sandbox goes with
+# each Codex launch, never with a Claude one.
+# [groups.qa]
+# agent = { command = ["codex"], model = "gpt-6.1-sol" }
 
 [integrations.github]
 token = { env = "GITHUB_TOKEN" }

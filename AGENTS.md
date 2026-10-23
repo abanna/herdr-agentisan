@@ -217,7 +217,10 @@ exempts whatever is later added under that name.
   refused by default, an empty table adding an entry included, A53), and
   the merged model, whichever layer sets it, is checked as safe to pass to
   an agent
-  (`CheckModel`). Sample in `docs/config/herdr-agentisan.example.toml`.
+  (`CheckModel`), and the sandbox each worker type's Codex starts in when
+  its command chooses none (`sandbox.go`, A59: read-only for review, full
+  access for coder, qa and precheck), which spawn adds.
+  Sample in `docs/config/herdr-agentisan.example.toml`.
 - `internal/routing/` — the model and effort each spawned worker starts
   with (ADR-001 A50, NERD-5289). It reads the user's routing rules,
   embedded byte for byte from `rules/jev-routing-v1.json` and decoded

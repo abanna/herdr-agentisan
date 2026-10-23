@@ -155,16 +155,33 @@ Under the shared app-server daemon, with Codex's default sandbox (even for an
 approved escalation), or on an OS other than Linux and macOS, it reports
 nothing (ADR-001 A25, A26).
 
-Codex workers run under your own Codex sandbox setting, the review type's
-built-in `--sandbox read-only` aside (ADR-001 A55), so by default their
-`report stage` commands report nothing: they show `ctx`, and an item or a
-stage only from the [turn hooks](#report-item-and-stage-from-every-turn),
-which run outside the sandbox. To have a group's Codex workers report each
-step too, add `--sandbox danger-full-access` to the agent command they
-launch with.
-That runs their commands with no sandbox and no reviewer, since Codex's
-automatic review sees only escalations, which that mode never makes: a weaker
-guard than Claude's auto mode (ADR-001 A43).
+Codex workers start in their type's sandbox (ADR-001 A59), unless their
+agent command chooses one itself: `-s` or `--sandbox`, `--approve-for-me`,
+`--dangerously-bypass-approvals-and-sandbox`, or `-c sandbox_mode=…`. A choice
+in the command stands. Spawn's flag outranks a `sandbox_mode` in Codex's
+`config.toml` or a `-p` profile, so to run a type in another sandbox, put the
+sandbox in its group's command.
+
+- **review** runs `--sandbox read-only` (A55). It writes nothing, and the
+  boss reads its report from its final message.
+- **coder, qa and precheck** run `--sandbox danger-full-access`. The repo's
+  tests and `task check` run, as do git (worktrees, signed commits, pushes),
+  `gh`, the `herdr` and `herdr-agentisan` CLIs and the team's files under
+  `.git/`, and `report stage` reports each pipeline step, as for a Claude
+  worker. The cost: no OS sandbox, and no reviewer, since Codex's automatic
+  review sees only escalations, which that mode never makes. That is a
+  weaker guard than Claude's auto mode (ADR-001 A43).
+- **Every other type** keeps your Codex configuration.
+
+What a coder or qa loses in another sandbox: `workspace-write`, Codex's
+default for a trusted folder, denies sockets and keeps `.git` read-only. So
+`go test ./...`, `task check`, the herdr CLIs, the 1Password SSH agent (so
+signing and pushing), `gh` and `git fetch` fail. `git worktree add`, commits
+and a handoff file under `.git/agentisan/` fail too. `read-only` also stops
+every other write. Under either, `report stage` reports nothing: the worker
+shows `ctx`, and an item or a stage only from the
+[turn hooks](#report-item-and-stage-from-every-turn), which run outside the
+sandbox.
 
 ## Report `$item` and `$stage` from every turn
 
