@@ -253,7 +253,15 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   `Decision` that is also the audit record. `worker spawn` asks it once per
   spawn, and `team up` once per group it fills, before anything opens; each
   records it on each worker's row and sends it as an
-  `agentisan.worker.routed` event.
+  `agentisan.worker.routed` event. A coder's decision says when Jev should
+  be asked (`AsksJev`), and `ApplyJev` maps Jev's answer onto it (A57): the
+  request is `JevRequest`'s, and the caller makes the call, so routing never
+  sees the key. Nothing asks Jev yet.
+- `internal/jev/` — the client of TypeSafe's System One (ADR-001 A57): one
+  POST of the body routing built, with the key as the Bearer token, within
+  the rules' timeout, never retried or redirected; no error carries the key,
+  the request or TypeSafe's body. Tests run an httptest TypeSafe, never the
+  real one.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
   embedded from `migrations/` and tracked by `user_version`. The daemon holds
