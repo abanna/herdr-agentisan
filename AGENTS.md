@@ -80,6 +80,31 @@ same check also fails on an entry with nothing behind it — a task or table row
 that was deleted while its exemption stayed — because a dead entry silently
 exempts whatever is later added under that name.
 
+## Reporting (in a herdr team)
+
+When you work in a herdr-agentisan team, the dashboard and the sidebar show
+your item and stage, read from your own words by the turn hooks
+(`herdr-agentisan report turn`, ADR-001 A42). Nothing else reads them, and a
+turn that states neither reports nothing, so your stage ages. Claude and Codex
+follow the same rule.
+
+- **Stage:** end the final message of every turn with a line that opens with
+  `BOSS:` (you report to a boss) or `STATUS:` (no boss above you), in
+  capitals, followed by what you are doing or what you need. It must be the
+  very last line of the message, with nothing after it. A status line
+  anywhere else, inside a sentence or behind a list marker, is not read. If
+  you open a message with a status headline, repeat it as the last line.
+  Where your role names its own closing lines, as `roles/review.md` does,
+  write those instead: they keep this form.
+- **Item:** whenever your task changes, state it on a line that opens with
+  `item:`, such as `item: NERD-5370` or `item: PR#100`, directly above the
+  status line. One inside a sentence is not read.
+
+```text
+item: PR#100
+BOSS: #100 fix pushed 273f69f; QA re-checks
+```
+
 ## Layout
 
 - `herdr-plugin.toml` — the plugin manifest herdr reads. Every action execs

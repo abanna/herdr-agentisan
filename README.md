@@ -190,6 +190,8 @@ so a pipeline step's stage stays; so do a subagent's turns, and a Claude turn
 you interrupt, which runs no `Stop` hook. Agents write these lines only when
 told to, so say it in their instructions (`CLAUDE.md`, `AGENTS.md`), for
 example: "End every turn with a last line `BOSS: <what you are doing>`."
+This repository's own rule, the text to copy into another repository's
+instructions, is the "Reporting" section of [`AGENTS.md`](AGENTS.md).
 
 For Claude, add the hooks to `.claude/settings.json` or
 `~/.claude/settings.json`
