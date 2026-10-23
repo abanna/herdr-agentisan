@@ -18,7 +18,7 @@ import (
 // such hosts, so the daemon must too. Not parallel: it swaps the statx call
 // for the whole package.
 func TestHerdrIdentityWithoutStatx(t *testing.T) {
-	path := filepath.Join(shortDir(t), "h.sock")
+	path := filepath.Join(herdrDir(t), "h.sock")
 	ln, err := net.Listen("unix", path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })

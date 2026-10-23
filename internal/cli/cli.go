@@ -74,7 +74,7 @@ func Root() *cobra.Command {
 		Version:       fmt.Sprintf("%s (%s)", config.Version, config.Commit),
 	}
 	root.AddCommand(newVersionCmd(), newActionCmd(), newReportCmd(), newDaemonCmd(), newConfigCmd(), newDashboardCmd(), newBackCmd(),
-		newTeamCmd(), newWorkerCmd(), newHandoffCmd(), newSendCmd(), newNoticesCmd(), newEventsCmd(), newCodexCmd(), newDebuggerCmd(), newStatusCmd())
+		newTeamCmd(), newWorkerCmd(), newHandoffCmd(), newSendCmd(), newNoticesCmd(), newBoardCmd(), newEventsCmd(), newCodexCmd(), newDebuggerCmd(), newStatusCmd())
 	return root
 }
 

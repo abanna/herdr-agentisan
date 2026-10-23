@@ -215,7 +215,7 @@ func TestFocusFollowsOnlyItsOwnServer(t *testing.T) {
 // replacement, which the next daemon belongs to, is never asked anything.
 func TestFocusIgnoresAServerReplacedWhileSubscribing(t *testing.T) {
 	t.Parallel()
-	h := &fakeHerdr{t: t, path: filepath.Join(shortDir(t), "h.sock"), streams: make(chan *stream, 64)}
+	h := &fakeHerdr{t: t, path: filepath.Join(herdrDir(t), "h.sock"), streams: make(chan *stream, 64)}
 	h.focus("w1:p0")
 	normal := h.serve(22)
 	swap, swapped := make(chan struct{}), make(chan struct{})
@@ -275,7 +275,7 @@ func TestFocusIgnoresAPaneListAnsweredAcrossASwap(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			h := &fakeHerdr{t: t, path: filepath.Join(shortDir(t), "h.sock"), streams: make(chan *stream, 64)}
+			h := &fakeHerdr{t: t, path: filepath.Join(herdrDir(t), "h.sock"), streams: make(chan *stream, 64)}
 			h.focus("w1:listed")
 			normal := h.serve(22)
 			swap, swapped := make(chan struct{}), make(chan struct{})
@@ -331,7 +331,7 @@ func TestFocusIgnoresAPaneListAnsweredAcrossASwap(t *testing.T) {
 // daemon belongs to, receives no request at all, and nothing is recorded.
 func TestFocusNeverDialsAReplacement(t *testing.T) {
 	t.Parallel()
-	h := &fakeHerdr{t: t, path: filepath.Join(shortDir(t), "h.sock"), streams: make(chan *stream, 64)}
+	h := &fakeHerdr{t: t, path: filepath.Join(herdrDir(t), "h.sock"), streams: make(chan *stream, 64)}
 	h.focus("w1:p0")
 	normal := h.serve(22)
 	swap, swapped := make(chan struct{}), make(chan struct{})
@@ -514,7 +514,7 @@ func TestFocusDialGuardClasses(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			sock := filepath.Join(shortDir(t), "h.sock")
+			sock := filepath.Join(herdrDir(t), "h.sock")
 			bind(t, sock)
 			ident := mustIdentity(t, sock)
 

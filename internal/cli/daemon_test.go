@@ -32,6 +32,9 @@ import (
 // store's waits (store.BusyTimeout). A fresh state.db costs ten fsyncs,
 // which take seconds on a runner whose disk other suites keep busy, so a
 // literal few seconds flakes there. A ready daemon ends every wait at once.
+// On Linux the tests' state is on tmpfs (testtmp, NERD-5503), where those
+// fsyncs wait on no disk; ready stays for a host without one, or a run that
+// opts out.
 //
 // TestDaemonRunFindsGhOnItsPATH waits for its daemon's first GitHub
 // collection after the daemon serves (awaitDaemon), so its start and that
@@ -183,7 +186,7 @@ func TestDaemonLifecycleCommands(t *testing.T) {
 	require.NoError(t, json.Unmarshal([]byte(out), &info))
 	assert.Equal(t, os.Getpid(), info.PID)
 	assert.EqualValues(t, 22, info.HerdrProtocol)
-	assert.Equal(t, 6, info.StoreVersion)
+	assert.Equal(t, 7, info.StoreVersion)
 
 	out, err = runCtx(ctx, "daemon", "restart")
 	require.NoError(t, err)
@@ -227,7 +230,7 @@ func TestDaemonHealthText(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "pid")
 	assert.Contains(t, out, "protocol 22")
-	assert.Contains(t, out, "state schema 6, 0 focus rows")
+	assert.Contains(t, out, "state schema 7, 0 focus rows")
 }
 
 // TestDaemonCommandsFailClearly: what each command reports when it cannot do
