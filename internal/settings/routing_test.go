@@ -195,15 +195,18 @@ func escape(args []string) []string {
 }
 
 // codexCommandAt is a shared file setting a codex command with args at each
-// agent table whose command Load checks, keyed by the path its error names.
+// agent table whose command Load checks, keyed by the path its error names: a
+// provider's table (A62) included.
 func codexCommandAt(args ...string) map[string]string {
 	command := `["codex"]`
 	if len(args) > 0 {
 		command = `["codex", "` + strings.Join(escape(args), `", "`) + `"]`
 	}
 	return map[string]string{
-		"agent.command":              "[agent]\ncommand = " + command + "\n",
-		"groups.coder.agent.command": "[groups.coder]\nworkers = 0\nslots = 1\nagent = { command = " + command + " }\n",
+		"agent.command":                    "[agent]\ncommand = " + command + "\n",
+		"groups.coder.agent.command":       "[groups.coder]\nworkers = 0\nslots = 1\nagent = { command = " + command + " }\n",
+		"agent.codex.command":              "[agent.codex]\ncommand = " + command + "\n",
+		"groups.coder.agent.codex.command": "[groups.coder]\nworkers = 0\nslots = 1\n[groups.coder.agent.codex]\ncommand = " + command + "\n",
 	}
 }
 
