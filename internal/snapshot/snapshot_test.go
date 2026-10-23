@@ -26,11 +26,11 @@ const valid = `{
     {"number": 878, "ci": "pending", "codex": "pending", "merge": "blocked"},
     {"number": 886, "ci": "success", "codex": "approved", "merge": "clean"}
   ], "issues": 14, "slots": {"used": 1, "total": 2}},
-  "boss": {"name": "boss", "pane_id": "w1:p1", "status": "working", "model": "opus", "ctx": 23, "item": "#867 release", "stage": "review",
+  "boss": {"name": "boss", "pane_id": "w1:p1", "status": "working", "agent": "claude", "model": "opus", "ctx": 23, "item": "#867 release", "stage": "review",
            "stage_started_at": "2026-10-09T17:07:00Z", "watchers": 4, "started_at": "2026-10-09T15:05:00Z"},
   "groups": [
     {"name": "coders", "description": "write code", "agents": [
-      {"name": "pee01", "pane_id": "w2:p1", "status": "working", "model": "claude-opus-4-1", "ctx": 38, "item": "r2", "stage": "J1 re-run", "stage_started_at": "2026-10-09T17:12:30Z"},
+      {"name": "pee01", "pane_id": "w2:p1", "status": "working", "agent": "claude", "model": "claude-opus-4-1", "ctx": 38, "item": "r2", "stage": "J1 re-run", "stage_started_at": "2026-10-09T17:12:30Z"},
       {"name": "pee02", "pane_id": "w2:p2", "status": "idle", "model": "opus"}
     ]},
     {"name": "qa", "agents": []}
@@ -63,7 +63,7 @@ func TestDecodeReadsTheContract(t *testing.T) {
 		},
 		Boss: &snapshot.Boss{
 			Agent: snapshot.Agent{
-				Name: "boss", PaneID: "w1:p1", Status: snapshot.StatusWorking, Model: "opus",
+				Name: "boss", PaneID: "w1:p1", Status: snapshot.StatusWorking, Kind: "claude", Model: "opus",
 				Ctx: new(23), Item: "#867 release", Stage: "review", StageStartedAt: utc(17, 7, 0),
 			},
 			Watchers:  new(4),
@@ -71,7 +71,7 @@ func TestDecodeReadsTheContract(t *testing.T) {
 		},
 		Groups: []snapshot.Group{
 			{Name: "coders", Description: "write code", Agents: []snapshot.Agent{
-				{Name: "pee01", PaneID: "w2:p1", Status: snapshot.StatusWorking, Model: "claude-opus-4-1", Ctx: new(38), Item: "r2", Stage: "J1 re-run", StageStartedAt: utc(17, 12, 30)},
+				{Name: "pee01", PaneID: "w2:p1", Status: snapshot.StatusWorking, Kind: "claude", Model: "claude-opus-4-1", Ctx: new(38), Item: "r2", Stage: "J1 re-run", StageStartedAt: utc(17, 12, 30)},
 				{Name: "pee02", PaneID: "w2:p2", Status: snapshot.StatusIdle, Model: "opus"},
 			}},
 			{Name: "qa", Agents: []snapshot.Agent{}},
@@ -187,8 +187,22 @@ func TestDecodeAcceptsEveryContractValue(t *testing.T) {
 		"stage_stale false":            agent(`"status":"idle","stage":"x","stage_stale":false`),
 		"a boss's stale stage":         boss(`"stage":"x","stage_at":"2026-10-09T17:12:30+05:30","stage_stale":true`),
 		"no model":                     `{"v":1,"team":"t","groups":[{"name":"g","agents":[{"name":"a","pane_id":"w1:p1","status":"idle"}]}]}`,
-		"an empty team name":           `{"v":1,"team":"","groups":[]}`,
-		"an empty agent list":          `{"v":1,"team":"t","groups":[{"name":"g","agents":[]}]}`,
+		// agent is optional and open (ADR-001 A68): whatever herdr detects,
+		// a kind this build has never heard of included; absent, empty and
+		// null all mean not reported, the only agent a shell may carry.
+		"a claude":                      agent(`"status":"working","agent":"claude"`),
+		"a codex":                       agent(`"status":"working","agent":"codex"`),
+		"an agent herdr adds":           agent(`"status":"idle","agent":"gemini"`),
+		"an agent wider than a column":  agent(`"status":"idle","agent":"opencode-nightly"`),
+		"an agent with no model":        `{"v":1,"team":"t","groups":[{"name":"g","agents":[{"name":"a","pane_id":"w1:p1","status":"unknown","agent":"codex"}]}]}`,
+		"an empty agent":                agent(`"status":"idle","agent":""`),
+		"a null agent":                  agent(`"status":"idle","agent":null`),
+		"a boss's agent":                boss(`"agent":"codex"`),
+		"a shell with an empty agent":   agent(`"status":"unknown","unnamed":true,"shell":true,"agent":""`),
+		"an agent in another case":      agent(`"status":"idle","agent":"Codex"`),
+		"an agent in a CRLF-framed row": "{\"v\":1,\"team\":\"t\",\"groups\":[{\"name\":\"g\",\"agents\":[{\"name\":\"a\",\"status\":\"idle\",\r\n\"agent\":\"codex\"}]}]}\r\n",
+		"an empty team name":            `{"v":1,"team":"","groups":[]}`,
+		"an empty agent list":           `{"v":1,"team":"t","groups":[{"name":"g","agents":[]}]}`,
 	}
 	for name, in := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -270,13 +284,24 @@ func TestDecodeRefuses(t *testing.T) {
 		"stage_stale in another case":  {in: agent(`"name":"a","status":"idle","Stage_Stale":true`), want: snapshot.ErrInvalid, contains: []string{`"Stage_Stale"`}},
 		"stage_at in another case":     {in: agent(`"name":"a","status":"idle","stageAt":"2026-10-09T17:12:30Z"`), want: snapshot.ErrInvalid, contains: []string{`"stageAt"`}},
 		"a duplicate stage_at":         {in: agent(`"name":"a","status":"idle","stage_at":null,"stage_at":null`), want: snapshot.ErrInvalid, contains: []string{`"stage_at"`, "twice"}},
-		"v negative":                   {in: `{"v":-1}`, want: snapshot.ErrUnsupportedVersion},
-		"v past int64":                 {in: `{"v":99999999999999999999,"team":"t","groups":[]}`, want: snapshot.ErrInvalid},
-		"v not an integer":             {in: `{"v":1.0,"team":"t","groups":[]}`, want: snapshot.ErrInvalid},
-		"ctx past int64":               {in: agent(`"name":"a","status":"idle","ctx":1e30`), want: snapshot.ErrInvalid},
-		"a byte-order mark":            {in: "\xef\xbb\xbf" + `{"v":1,"team":"t","groups":[]}`, want: snapshot.ErrInvalid},
-		"a UTF-16 document":            {in: utf16le(`{"v":1,"team":"t","groups":[]}`), want: snapshot.ErrInvalid},
-		"a raw NUL in a string":        {in: "{\"v\":1,\"team\":\"t\x00\",\"groups\":[]}", want: snapshot.ErrInvalid},
+		// agent is a string (ADR-001 A68), spelled exactly, once; a shell
+		// is a pane herdr detects no agent in, so it carries none.
+		"agent is a number":     {in: agent(`"name":"a","status":"idle","agent":7`), want: snapshot.ErrInvalid},
+		"agent is a bool":       {in: agent(`"name":"a","status":"idle","agent":true`), want: snapshot.ErrInvalid},
+		"agent is an object":    {in: agent(`"name":"a","status":"idle","agent":{"kind":"codex"}`), want: snapshot.ErrInvalid},
+		"agent is an array":     {in: agent(`"name":"a","status":"idle","agent":["codex"]`), want: snapshot.ErrInvalid},
+		"agent in another case": {in: agent(`"name":"a","status":"idle","Agent":"codex"`), want: snapshot.ErrInvalid, contains: []string{`"Agent"`}},
+		"a duplicate agent":     {in: agent(`"name":"a","status":"idle","agent":"claude","agent":"codex"`), want: snapshot.ErrInvalid, contains: []string{`"agent"`, "twice"}},
+		"a shell with an agent": {in: agent(`"name":"w2:p4","status":"unknown","unnamed":true,"shell":true,"agent":"codex"`), want: snapshot.ErrInvalid, contains: []string{`"w2:p4"`, "shell", `"codex"`}},
+		"a boss agent not text": {in: boss(`"agent":1`), want: snapshot.ErrInvalid},
+		"a boss agent re-cased": {in: boss(`"AGENT":"codex"`), want: snapshot.ErrInvalid, contains: []string{`"AGENT"`}},
+		"v negative":            {in: `{"v":-1}`, want: snapshot.ErrUnsupportedVersion},
+		"v past int64":          {in: `{"v":99999999999999999999,"team":"t","groups":[]}`, want: snapshot.ErrInvalid},
+		"v not an integer":      {in: `{"v":1.0,"team":"t","groups":[]}`, want: snapshot.ErrInvalid},
+		"ctx past int64":        {in: agent(`"name":"a","status":"idle","ctx":1e30`), want: snapshot.ErrInvalid},
+		"a byte-order mark":     {in: "\xef\xbb\xbf" + `{"v":1,"team":"t","groups":[]}`, want: snapshot.ErrInvalid},
+		"a UTF-16 document":     {in: utf16le(`{"v":1,"team":"t","groups":[]}`), want: snapshot.ErrInvalid},
+		"a raw NUL in a string": {in: "{\"v\":1,\"team\":\"t\x00\",\"groups\":[]}", want: snapshot.ErrInvalid},
 		// encoding/json refuses nesting past 10,000 levels; the object itself
 		// is one, so 9,999 arrays reach the limit and 10,000 pass it. Either
 		// way the value is no team name.
@@ -551,11 +576,12 @@ func TestDecodeText(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			// The same literal as the team, a group's name, an agent's
-			// name and its tab: every string field goes through the same
-			// decoder, and Validate accepts each spelling as a name.
+			// name, its tab and its agent (A68): every string field goes
+			// through the same decoder, and Validate accepts each spelling
+			// as a name, and as a kind herdr may send.
 			l := tc.literal
 			got, err := snapshot.Decode(strings.NewReader(
-				`{"v":1,"team":` + l + `,"groups":[{"name":` + l + `,"agents":[{"name":` + l + `,"tab_id":` + l + `,"status":"idle"}]}]}`))
+				`{"v":1,"team":` + l + `,"groups":[{"name":` + l + `,"agents":[{"name":` + l + `,"tab_id":` + l + `,"status":"idle","agent":` + l + `}]}]}`))
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got.Team)
 			require.Len(t, got.Groups, 1)
@@ -563,6 +589,7 @@ func TestDecodeText(t *testing.T) {
 			require.Len(t, got.Groups[0].Agents, 1)
 			assert.Equal(t, tc.want, got.Groups[0].Agents[0].Name)
 			assert.Equal(t, tc.want, got.Groups[0].Agents[0].TabID)
+			assert.Equal(t, tc.want, got.Groups[0].Agents[0].Kind)
 		})
 	}
 }
@@ -742,6 +769,46 @@ func TestStageAtAndStaleAreLeftOutUnlessSet(t *testing.T) {
 	got, err := snapshot.Decode(bytes.NewReader(raw))
 	require.NoError(t, err)
 	assert.Equal(t, doc, got)
+}
+
+// TestKindIsLeftOutUnlessSet: a writer leaves agent out when herdr detects
+// none (ADR-001 A68), so a snapshot from before the key existed decodes to
+// the same rows, none of them with a kind; set, it survives a round trip,
+// the boss's included, and a kind this build does not know is kept as sent.
+func TestKindIsLeftOutUnlessSet(t *testing.T) {
+	t.Parallel()
+
+	bare, err := json.Marshal(snapshot.Agent{Name: "pee01", PaneID: "w2:p1", Status: snapshot.StatusIdle})
+	require.NoError(t, err)
+	assert.NotContains(t, string(bare), `"agent"`)
+
+	doc := snapshot.Snapshot{
+		V: snapshot.Version, Team: "t",
+		Boss: &snapshot.Boss{Agent: snapshot.Agent{Name: "boss", PaneID: "w1:p1", Status: snapshot.StatusWorking, Kind: "codex"}},
+		Groups: []snapshot.Group{{Name: "g", Agents: []snapshot.Agent{
+			{Name: "pee01", PaneID: "w2:p1", Status: snapshot.StatusWorking, Kind: "claude", Model: "claude-opus-5-5"},
+			{Name: "pee02", PaneID: "w2:p2", Status: snapshot.StatusUnknown, Kind: "codex"},
+			{Name: "pee03", PaneID: "w2:p3", Status: snapshot.StatusIdle, Kind: "gemini"},
+			{Name: "notes", PaneID: "w2:p4", Status: snapshot.StatusUnknown, Unnamed: true, Shell: true},
+		}}},
+	}
+	raw, err := json.Marshal(doc)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"name":"boss","pane_id":"w1:p1","status":"working","agent":"codex"`)
+	assert.Contains(t, string(raw), `"status":"unknown","agent":"codex"`)
+	assert.NotContains(t, string(raw), `"shell":true,"agent"`)
+	got, err := snapshot.Decode(bytes.NewReader(raw))
+	require.NoError(t, err)
+	assert.Equal(t, doc, got)
+
+	old, err := snapshot.Decode(strings.NewReader(strings.ReplaceAll(valid, `"agent": "claude", `, "")))
+	require.NoError(t, err)
+	assert.Empty(t, old.Boss.Kind, "a document without the key reports no agent")
+	for _, g := range old.Groups {
+		for _, a := range g.Agents {
+			assert.Empty(t, a.Kind, "a document without the key reports no agent")
+		}
+	}
 }
 
 // TestHeldIsLeftOutUnlessSet: a writer leaves held out when no slot is held
