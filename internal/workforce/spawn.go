@@ -122,6 +122,9 @@ func (s *Service) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 	if err != nil {
 		return SpawnResult{}, err
 	}
+	if d != nil {
+		*d = s.askJev(ctx, p, *d, req.Task)
+	}
 	pending, st, err := s.planAndOpen(ctx, req.Selector, func(st state) ([]planned, error) {
 		if st.profile.Repo != p.Repo {
 			return nil, fmt.Errorf("%w: the repo changed from %s to %s during the preflight; spawn again", ErrPreflight, p.Repo, st.profile.Repo)
