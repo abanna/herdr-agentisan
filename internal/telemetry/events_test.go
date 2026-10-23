@@ -321,6 +321,31 @@ func TestHandoffEmitsTheSchema(t *testing.T) {
 	assert.Equal(t, []string{"ready", "cleared"}, []string{telemetry.HandoffReady, telemetry.HandoffCleared})
 }
 
+// TestHandoffStepsOfARotation is A33 part 2b-1's: the ack's completed step
+// names the pane the worker was on and how the old pane's item and stage
+// read, and retire's abandon, the failed step, the pane the worker stays on;
+// each only the attributes it has.
+func TestHandoffStepsOfARotation(t *testing.T) {
+	t.Parallel()
+	events, rec := telemetrytest.NewEvents()
+	events.HandoffStep(t.Context(), telemetry.Handoff{WorkerID: "ha-coder-1", Bound: true, Project: "ha", Group: "coder", PaneID: "w1:p7", OldPane: "w1:p2", Old: "unread", Step: telemetry.HandoffCompleted})
+	events.HandoffStep(t.Context(), telemetry.Handoff{WorkerID: "ha-coder-1", Bound: true, Project: "ha", Group: "coder", PaneID: "w1:p8", OldPane: "w1:p2", Step: telemetry.HandoffFailed})
+
+	base := map[string]any{
+		"agentisan.worker.id": "ha-coder-1", "agentisan.worker.bound": true,
+		"agentisan.project": "ha", "agentisan.group": "coder", "agentisan.handoff.old_pane": "w1:p2",
+	}
+	completed, failed := maps.Clone(base), maps.Clone(base)
+	completed["herdr.pane.id"], completed["agentisan.handoff.step"], completed["agentisan.handoff.old"] = "w1:p7", "completed", "unread"
+	failed["herdr.pane.id"], failed["agentisan.handoff.step"] = "w1:p8", "failed"
+	got := rec.Events()
+	require.Len(t, got, 2)
+	assert.Equal(t, completed, got[0].Attrs)
+	assert.Equal(t, failed, got[1].Attrs)
+	assert.Equal(t, "ha-coder-1 handoff completed", rec.Records()[0].Body().AsString())
+	assert.Equal(t, []string{"completed", "failed"}, []string{telemetry.HandoffCompleted, telemetry.HandoffFailed})
+}
+
 // TestSetupEventsWithoutAnEndpointIsANoop: with no endpoint (the default,
 // and .env.example's) nothing is built and nothing is exported.
 func TestSetupEventsWithoutAnEndpointIsANoop(t *testing.T) {

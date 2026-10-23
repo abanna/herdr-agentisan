@@ -358,6 +358,29 @@ func (f *fakeHerdr) answer(r herdrtest.Request) herdrtest.Reply {
 			agent["terminal_id"] = f.startTerminal
 		}
 		return herdrtest.Reply{Result: map[string]any{"type": "agent_started", "agent": agent, "argv": []string{}}}
+	case "agent.rename":
+		// herdr 0.9.5 (src/app/agents.rs:98-133): the target is a pane id or
+		// an agent name; a missing name clears it and "" is refused; a name
+		// another agent has is taken; a launch still pending changes none.
+		i := slices.IndexFunc(f.panes, func(q *fakePane) bool {
+			return (q.id == str("target") || q.name == str("target")) && (q.agent != "" || q.name != "")
+		})
+		if i < 0 {
+			return errReply("agent_not_found")
+		}
+		pane := f.panes[i]
+		name, set := p["name"]
+		if s, _ := name.(string); set && s == "" {
+			return errReply("invalid_params")
+		}
+		if pane.pending {
+			return errReply("agent_launch_pending")
+		}
+		if s := str("name"); slices.ContainsFunc(f.panes, func(q *fakePane) bool { return q != pane && s != "" && q.name == s }) {
+			return errReply("agent_name_taken")
+		}
+		pane.name = str("name")
+		return herdrtest.Reply{Result: map[string]any{"type": "agent_info", "agent": f.agentInfo(pane)}}
 	case "agent.get":
 		if f.badGet {
 			return herdrtest.Reply{Result: map[string]any{"type": "pane_info"}}

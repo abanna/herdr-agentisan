@@ -128,6 +128,10 @@ type Service struct {
 	// (A57); nil asks nothing, and a decision that would ask keeps
 	// jev_disabled. The daemon gives one.
 	Jev JevAsker
+	// HandoffSteps records each step the boss's commands take a handoff
+	// through (A33); nil records nothing. The daemon sends it as a workflow
+	// event.
+	HandoffSteps func(context.Context, HandoffStep)
 	// Dashboard is the plugin pane team up opens as a team's dashboard; zero
 	// opens none (A18, A23).
 	Dashboard DashboardPane

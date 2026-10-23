@@ -575,6 +575,7 @@ drives them.
 | `worker spawn --group g [--count n] [--model m]` | Adds workers, refused whole past the group's `slots` or when the repo fails the tdaddy preflight |
 | `worker retire <id> [--after-handoff]` | Closes a worker's pane, by logical id or pane id; with the flag, once its handoff is written. Refused (`handoff_pending`) while the worker is being replaced; retiring the replacement's pane abandons that rotation and answers `handoff_failed` with the worker's id (ADR-001 A33) |
 | `handoff ready [<id>] [--clear]` | Marks a worker ready to be replaced, once it has written its handoff: the daemon sets the `handoff` token on its agent pane, by logical id, tab label or pane id, or this pane with none; `--clear` takes it off (ADR-001 A33) |
+| `handoff ack [<pane>]` | Completes a rotation from its replacement, by pane id or this pane with none: once the replacement reports the old pane's item and stage, the worker's herdr name and inbox move to it. Refused with `stage_mismatch`, naming both pairs, until they match, and with `no_handoff` on a pane that is no replacement (ADR-001 A33) |
 
 Each prints one JSON object and exits 1 when refused. Without `--project`
 status, up and spawn read the team whose workspace the command runs in, else

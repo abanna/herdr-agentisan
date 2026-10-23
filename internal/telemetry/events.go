@@ -130,17 +130,28 @@ const (
 	AttrCtxShown = "agentisan.ctx.shown"
 )
 
-// EventHandoff is a step of a worker's handoff (A33): so far its handoff
-// token set (HandoffReady) or cleared (HandoffCleared).
+// EventHandoff is a step of a worker's handoff (A33): its handoff token set
+// (HandoffReady) or cleared (HandoffCleared), and a rotation completed by
+// its ack (HandoffCompleted) or failed (HandoffFailed).
 const EventHandoff = "agentisan.worker.handoff"
 
-// AttrHandoffStep is the key of EventHandoff's step, beside the worker's.
-const AttrHandoffStep = "agentisan.handoff.step"
+// The keys of EventHandoff's own attributes, beside the worker's.
+const (
+	AttrHandoffStep = "agentisan.handoff.step"
+	// AttrHandoffOldPane is the pane the worker was on: on HandoffCompleted
+	// and HandoffFailed.
+	AttrHandoffOldPane = "agentisan.handoff.old_pane"
+	// AttrHandoffOld is how the old pane's item and stage read at the ack,
+	// "matched" or "unread": on HandoffCompleted.
+	AttrHandoffOld = "agentisan.handoff.old"
+)
 
 // The values of AttrHandoffStep.
 const (
-	HandoffReady   = "ready"
-	HandoffCleared = "cleared"
+	HandoffReady     = "ready"
+	HandoffCleared   = "cleared"
+	HandoffCompleted = "completed"
+	HandoffFailed    = "failed"
 )
 
 // scope names the instrumentation the events come from.
@@ -239,8 +250,11 @@ type Handoff struct {
 	Project  string
 	Group    string
 	PaneID   string
-	// Step is HandoffReady or HandoffCleared.
+	// Step is one of the values of AttrHandoffStep.
 	Step string
+	// OldPane and Old are AttrHandoffOldPane's and AttrHandoffOld's; ""
+	// leaves the attribute out.
+	OldPane, Old string
 }
 
 // HandoffStep emits h as an EventHandoff record.
@@ -257,6 +271,12 @@ func (e *Events) HandoffStep(ctx context.Context, h Handoff) {
 		attribute.String(AttrPaneID, h.PaneID),
 		attribute.String(AttrHandoffStep, h.Step),
 	)
+	if h.OldPane != "" {
+		r.AddAttributes(attribute.String(AttrHandoffOldPane, h.OldPane))
+	}
+	if h.Old != "" {
+		r.AddAttributes(attribute.String(AttrHandoffOld, h.Old))
+	}
 	e.logger.Emit(ctx, r)
 }
 
