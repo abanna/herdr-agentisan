@@ -35,6 +35,8 @@ var sandboxCommands = map[string]struct {
 	"send":                         {args: []string{"send", "boss", "done: #125"}, caller: true},
 	"handoff ready with no target": {args: []string{"handoff", "ready"}, caller: true},
 	"handoff ready <id>":           {args: []string{"handoff", "ready", "ha-coder-1"}},
+	"handoff ack with no target":   {args: []string{"handoff", "ack"}, caller: true},
+	"handoff ack <pane>":           {args: []string{"handoff", "ack", "w14:p30"}},
 	"notices mute":                 {args: []string{"notices", "mute", "ha-coder-1"}},
 	"notices unmute":               {args: []string{"notices", "unmute", "ha-coder-1"}},
 	"notices list":                 {args: []string{"notices", "list"}},

@@ -374,6 +374,57 @@ func TestHandoffAckGatesOnTheFreshRead(t *testing.T) {
 	}
 }
 
+// TestHandoffAckGatesOnTheFreshItem (QA #140 F7): item freshness is
+// independent of stage freshness. Hold stage constant while pane.get
+// changes only the item, including removing it altogether.
+func TestHandoffAckGatesOnTheFreshItem(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		listed, fresh string
+		refuse        bool
+	}{
+		"the fresh item differs":    {"NERD-5261", "OTHER", true},
+		"the fresh item is missing": {"NERD-5261", "", true},
+		"the fresh item matches":    {"OTHER", "NERD-5261", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, teamConfig)
+			w := f.worker(t, "ha-coder-1", "coder")
+			next, h := rotating(t, f, w)
+			const stage = "BOSS: handoff written"
+			f.stated(w.PaneID, "NERD-5261", stage)
+			f.stated(next, tc.listed, stage)
+			before := f.row(t, w.ID)
+			f.h.onCall = func(method string) {
+				if method == "pane.get" {
+					if tc.fresh == "" {
+						delete(f.h.pane(next).tokens, "item")
+					} else {
+						f.h.pane(next).tokens["item"] = tc.fresh
+					}
+				}
+			}
+
+			res, err := f.svc.HandoffAck(t.Context(), workforce.HandoffAckRequest{Target: next})
+			if tc.refuse {
+				require.ErrorIs(t, err, workforce.ErrStageMismatch)
+				assert.Empty(t, f.h.params("agent.rename"), "refused before any rename")
+				assert.Equal(t, "pending", handoffState(t, f, h))
+				assert.Equal(t, before, f.row(t, w.ID), "the binding is unchanged")
+				return
+			}
+			require.NoError(t, err)
+			assert.True(t, res.Changed)
+			assert.Equal(t, tc.fresh, res.Item)
+			assert.Equal(t, stage, res.Stage)
+			assert.Equal(t, workforce.OldMatched, res.Old)
+			assert.Equal(t, "ended", handoffState(t, f, h))
+			assert.Equal(t, next, f.row(t, w.ID).PaneID)
+		})
+	}
+}
+
 // TestHandoffAckSerializesRepeatedAcks (QA #140 F2): the whole ack runs
 // under the workforce lock, so two acks of one replacement at once complete
 // the handoff once: one changes it, the other finds it completed and changes
