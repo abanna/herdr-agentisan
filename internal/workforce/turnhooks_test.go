@@ -64,9 +64,10 @@ func TestPlanPassesTheTurnHooks(t *testing.T) {
 		// Matched whole, as Claude matches a long flag (A53).
 		"a longer flag is not it": {command: []string{"claude", "--settings-file", "x"}, want: withHooks("--settings-file", "x", "--name", "ha-coder-1")},
 		"nor one in another case": {command: []string{"claude", "--SETTINGS", "x"}, want: withHooks("--SETTINGS", "x", "--name", "ha-coder-1")},
-		"codex":                   {command: []string{"codex"}, want: []string{"--no-daemon"}},
+		// A Codex coder gets its type's sandbox instead (A59).
+		"codex": {command: []string{"codex"}, want: []string{"--no-daemon", "--sandbox", "danger-full-access"}},
 		"codex passing --settings": {
-			command: []string{"codex", "--settings", "x"}, want: []string{"--settings", "x", "--no-daemon"},
+			command: []string{"codex", "--settings", "x"}, want: []string{"--settings", "x", "--no-daemon", "--sandbox", "danger-full-access"},
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

@@ -937,15 +937,16 @@ func TestSpawnLeavesAWorkerRetiredWhileStarting(t *testing.T) {
 
 // TestSpawnRunsCodexOffTheDaemon: every Codex launch gets --no-daemon (A22),
 // once, since Codex refuses it twice; a Claude launch never does
-// (TestSpawnOpensOneTabPerWorker).
+// (TestSpawnOpensOneTabPerWorker). A qa's Codex also gets its type's
+// sandbox, after it (A59, TestSpawnGivesCodexItsTypesSandbox).
 func TestSpawnRunsCodexOffTheDaemon(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		agent string
 		want  []any
 	}{
-		"a group's own codex":        {agent: `{ command = ["codex"] }`, want: []any{"--no-daemon"}},
-		"with its model":             {agent: `{ command = ["codex"], model = "o3" }`, want: []any{"--no-daemon", "--model", "o3"}},
+		"a group's own codex":        {agent: `{ command = ["codex"] }`, want: []any{"--no-daemon", "--sandbox", "danger-full-access"}},
+		"with its model":             {agent: `{ command = ["codex"], model = "o3" }`, want: []any{"--no-daemon", "--sandbox", "danger-full-access", "--model", "o3"}},
 		"the flag already in it":     {agent: `{ command = ["codex", "-s", "workspace-write", "--no-daemon"] }`, want: []any{"-s", "workspace-write", "--no-daemon"}},
 		"a command that is no codex": {agent: `{ command = ["claude"] }`, want: withHooksAny("--name", "ha-qa-1")},
 	} {
