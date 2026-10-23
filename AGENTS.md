@@ -180,7 +180,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   the poll sees, through `internal/notice` and the inbox (`notices.go`,
   A44), with the context levels each agent pane crosses and, at the
   ceiling, a toast for the user (A33), less the workers the boss muted
-  with the `notices.*` ops (`noticeops.go`). It keeps
+  with the `notices.*` ops (`noticeops.go`). It serves each team's board
+  to its boss and the user's dashboard alone (`boardops.go`, A60), each
+  caller placed by the kernel's peer credentials (`peer_linux.go`,
+  `peer_darwin.go`) and its process ancestry. It keeps
   herdr's agent view on the focused team, which focus events and the poll
   feed it, and clears it outside every team and on a clean stop (`view.go`,
   the A28 addendum, A49).
@@ -258,8 +261,14 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   an agent
   (`CheckModel`), and the sandbox each worker type's Codex starts in when
   its command chooses none (`sandbox.go`, A59: read-only for review, full
-  access for coder, qa and precheck), which spawn adds.
-  Sample in `docs/config/herdr-agentisan.example.toml`.
+  access for coder, qa and precheck), which spawn adds. Each type runs
+  claude or codex, its default provider, with a command and a model per
+  provider (`[agent.<provider>]`, `AgentFor(type, provider)`, flags only,
+  A62); nothing chooses the other provider yet (NERD-5519). The debugger
+  refuses codex and review claude, as gaps, and a model whose name says the
+  other provider runs it is refused by `config resolve --project`
+  (`CheckModelProviders`) and at spawn. Sample in
+  `docs/config/herdr-agentisan.example.toml`.
 - `internal/routing/` — the model and effort each spawned worker starts
   with (ADR-001 A50, NERD-5289). It reads the user's routing rules,
   embedded byte for byte from `rules/jev-routing-v1.json` and decoded
@@ -303,7 +312,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   writes are compare-and-sets on the row as it read it. The GitHub notices'
   seen-set, open PRs and seed marks, a kind's own included (`github.go`,
   migrations 0004 and 0006, A45), make each event told once across
-  restarts. Tests open a fresh database in a temp
+  restarts. Each team's board (`board.go`, migration 0007, A60) holds its
+  posts and two read marks, the boss's and the user's; every post wakes
+  each `board wait`. Tests open a fresh database in a temp
   dir; the store is never mocked.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
@@ -361,6 +372,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   it is configuration resolved from the environment the binary was BUILT in,
   and keeping it in a package of its own made every caller import two.
 - `internal/logging/` — zerolog construction and context plumbing.
+- `internal/testtmp/` — `Use`, from TestMain: test state on tmpfs, and
+  `CheckUsed`, one test per caller that fails when its TestMain stops calling
+  `Use` (NERD-5503).
 - `internal/telemetry/` — OpenTelemetry tracing over OTLP/HTTP, and the
   daemon's workflow events (ADR-001 D10, A21) as OTLP log records, schema in
   `docs/telemetry.md`. With no endpoint configured it installs propagation

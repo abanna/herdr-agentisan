@@ -51,12 +51,23 @@ const maxShellReadyAfter = 60
 // agentKey is a group's agent table.
 const agentKey = "agent"
 
-// agentSchema is an agent table, top level or a group's.
-func agentSchema() *node {
-	return &node{kind: kindTable, fields: map[string]*node{
-		"command": leafOf(kindStrings),
-		"model":   leafOf(kindString),
-	}}
+// commandKey and modelKey are an agent table's command and model.
+const (
+	commandKey = "command"
+	modelKey   = "model"
+)
+
+// agentSchema is an agent table, top level or a group's, with a table per
+// provider (A62); a group's also names its type's default provider.
+func agentSchema(group bool) *node {
+	n := providerAgentSchema()
+	for _, prov := range providers {
+		n.fields[prov] = providerAgentSchema()
+	}
+	if group {
+		n.fields[providerKey] = leafOf(kindString)
+	}
+	return n
 }
 
 // spawnSchema is [spawn].
@@ -91,34 +102,6 @@ type Spawn struct {
 	ShellReadyAfter time.Duration
 }
 
-// AgentFor is the agent a worker of type typ launches: for the debugger
-// type, claude, whose arguments the workforce builds, with the group's model,
-// else the top-level one when the top-level command is claude's; else its
-// group's own command and model when its
-// group sets a command, without the top-level model, which belongs to the
-// top-level command; else codex for the review type; else the top-level
-// command, with the group's model or the top-level one.
-func (p Profile) AgentFor(typ string) Agent {
-	g := p.Groups[typ]
-	switch {
-	case typ == DebuggerType:
-		model := g.Agent.Model
-		if model == "" && len(p.Agent.Command) > 0 && filepath.Base(p.Agent.Command[0]) == routing.Claude {
-			model = p.Agent.Model
-		}
-		return Agent{Command: slices.Clone(debuggerCommand), Model: model}
-	case len(g.Agent.Command) > 0:
-		return Agent{Command: slices.Clone(g.Agent.Command), Model: g.Agent.Model}
-	case typ == ReviewType:
-		return Agent{Command: slices.Clone(reviewCommand), Model: g.Agent.Model}
-	}
-	model := g.Agent.Model
-	if model == "" {
-		model = p.Agent.Model
-	}
-	return Agent{Command: slices.Clone(p.Agent.Command), Model: model}
-}
-
 // maxModel bounds a model's length in bytes.
 const maxModel = 128
 
@@ -148,10 +131,17 @@ func CheckModel(model string) error {
 func (m merged) checkModels() error {
 	v, _ := m.get("groups")
 	groups, _ := v.(map[string]any)
-	paths := make([]string, 0, 1+len(groups))
-	paths = append(paths, "agent.model")
+	paths := make([]string, 0, 3*(1+len(groups)))
+	agents := make([]string, 0, 1+len(groups))
+	agents = append(agents, agentKey)
 	for _, name := range slices.Sorted(maps.Keys(groups)) {
-		paths = append(paths, "groups."+name+".agent.model")
+		agents = append(agents, "groups."+name+"."+agentKey)
+	}
+	for _, agent := range agents {
+		paths = append(paths, agent+".model")
+		for _, prov := range providers {
+			paths = append(paths, agent+"."+prov+".model")
+		}
 	}
 	for _, path := range paths {
 		raw, set := m.get(path)
@@ -319,13 +309,10 @@ func buildSpawn(values map[string]any) Spawn {
 	return s
 }
 
-// groupAgent reads a group's own agent table.
-func groupAgent(g map[string]any) Agent {
+// groupAgent reads a group's own agent table: its agent, its default
+// provider and its providers' agents.
+func groupAgent(g map[string]any) (out Agent, provider string, byProvider map[string]Agent) {
 	a, _ := g[agentKey].(map[string]any)
-	var out Agent
-	if cmd, ok := a["command"].([]string); ok {
-		out.Command = slices.Clone(cmd)
-	}
-	out.Model, _ = a["model"].(string)
-	return out
+	provider, _ = a[providerKey].(string)
+	return agentIn(a), provider, providerAgents(a)
 }

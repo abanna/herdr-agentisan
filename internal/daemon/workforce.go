@@ -78,6 +78,9 @@ var opBudgets = map[string]func(json.RawMessage) time.Duration{
 	OpNoticesMute:   fixed(NoticesBudget),
 	OpNoticesUnmute: fixed(NoticesBudget),
 	OpNoticesList:   fixed(NoticesBudget),
+	// The board ops (A60).
+	OpBoardRead: fixed(BoardBudget),
+	OpBoardWait: boardWaitBudget,
 }
 
 func fixed(d time.Duration) func(json.RawMessage) time.Duration {

@@ -92,9 +92,29 @@ too.
 - The header in front of a body, `[msg <ulid> from <sender>]` with or
   without `, originally to <worker>`, or `[agentisan] originally to
   <worker>:`, doesn't hide an `item:` line that opens the body: `report
-  turn` reads it there, so a dispatch can send its item first (A42). One
+  turn` reads it there, so a dispatch can send its item first (A42). A
+  Codex steer (below) runs Codex's UserPromptSubmit hooks when the turn
+  takes it, so `report turn` reads its `item:` then (Codex 0.163.0). One
   that opens a resend notice's quoted body is not: the notice's own words
   come first on that line.
+
+## A recipient that is working
+
+The daemon doesn't wait for the recipient's turn to end: herdr types a
+message into a working agent at once (ADR-001 A30). `delivered` means the
+agent's input took the text, not that the agent has acted on it.
+
+- A Codex agent takes it into its running turn as a steer, and reads it
+  at the turn's next step, once its current tool calls return, so the
+  turn can change course before it ends. Codex may first list it under
+  "Messages to be submitted after next tool call", then shows it in the
+  transcript as your message. During a review or a compaction it holds
+  it under "Messages to be submitted at end of turn" instead.
+- In the live check (Codex 0.163.0) the two ended as one turn: the boss
+  hears of one turn's end, and the stage comes from that turn's last
+  message.
+- A message meant for after the current task says so: "when you finish
+  the current task, …".
 
 ## Pane senders
 
@@ -109,7 +129,9 @@ so a pane sender's pending notices fail then.
 
 - A worker `worker spawn` did not start has no logical id the daemon knows,
   so `send <worker>` is refused. Use `herdr agent prompt` for it.
-- A Codex worker in its default sandbox cannot reach a Unix socket. It
-  receives messages but cannot send them, and the boss reads its turns
-  from the daemon's notices.
+- A Codex worker in a network sandbox (Codex's `workspace-write` or
+  `read-only`, ADR-001 A59) cannot reach a Unix socket. It receives
+  messages but cannot send them: `send` answers
+  `daemon_unavailable`, saying the sandbox is why and to ask the boss
+  (ADR-001 A25), and the boss reads its turns from the daemon's notices.
 - A delivered or failed message is kept 14 days.

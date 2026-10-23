@@ -63,7 +63,7 @@ func newTeamHerdr(t *testing.T) *teamHerdr {
 	t.Helper()
 	workspaces, panes := liveSpaces()
 	th := &teamHerdr{
-		fakeHerdr:  &fakeHerdr{t: t, path: filepath.Join(shortDir(t), "h.sock"), streams: make(chan *stream, 64)},
+		fakeHerdr:  &fakeHerdr{t: t, path: filepath.Join(herdrDir(t), "h.sock"), streams: make(chan *stream, 64)},
 		workspaces: workspaces, tabs: []map[string]any{}, panes: panes, refuse: map[string]bool{},
 		shells: map[string]uint32{}, infoFails: map[string]bool{},
 	}

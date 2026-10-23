@@ -10,13 +10,24 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/settings"
 )
 
-// TestAgentFor: a type launches its group's own command and model when the
-// group sets a command, never the top-level model that belongs to the
-// top-level command; review launches codex unless its group says otherwise;
-// the debugger launches claude, never the top-level command or one of its
-// group's, whose arguments the workforce builds (A32); every other type
-// launches the top-level command, with its group's model or the top-level
-// one.
+// agentFor is p's agent for typ under the type's default provider, which
+// must resolve.
+func agentFor(t *testing.T, p settings.Profile, typ string) settings.Agent {
+	t.Helper()
+	a, err := p.AgentFor(typ, "")
+	require.NoError(t, err)
+	return a
+}
+
+// TestAgentFor: under its default provider, with no provider's table set,
+// every type launches what it launched before providers (A62 keeps it): its
+// group's own command and model when the group sets a command, never the
+// top-level model that belongs to the top-level command; review launches
+// codex unless its group says otherwise; the debugger launches claude, never
+// the top-level command or one of its group's, whose arguments the workforce
+// builds (A32); every other type launches the top-level command, with its
+// group's model or the top-level one. A review group's claude is a refusal
+// now (TestAgentForRefuses).
 func TestAgentFor(t *testing.T) {
 	t.Parallel()
 	top := settings.Agent{Command: []string{"claude", "--setting-sources", "user,project"}, Model: "opus"}
@@ -34,7 +45,6 @@ func TestAgentFor(t *testing.T) {
 		"a group command and model":                  {groups: map[string]settings.Group{"research": {Agent: settings.Agent{Command: []string{"codex"}, Model: "gpt-5"}}}, typ: "research", want: settings.Agent{Command: []string{"codex"}, Model: "gpt-5"}},
 		"review is codex by default, off the daemon": {typ: "review", want: settings.Agent{Command: []string{"codex", "--no-daemon", "--sandbox", "read-only"}}},
 		"review keeps its group's model":             {groups: map[string]settings.Group{"review": {Agent: settings.Agent{Model: "gpt-5"}}}, typ: "review", want: settings.Agent{Command: []string{"codex", "--no-daemon", "--sandbox", "read-only"}, Model: "gpt-5"}},
-		"review set back to claude":                  {groups: map[string]settings.Group{"review": {Agent: settings.Agent{Command: []string{"claude"}}}}, typ: "review", want: settings.Agent{Command: []string{"claude"}}},
 		"the match on review is exact":               {typ: "Review", want: top},
 		"the debugger is claude, with the top model": {typ: "debugger", want: settings.Agent{Command: []string{"claude"}, Model: "opus"}},
 		"the debugger keeps its group's model":       {groups: map[string]settings.Group{"debugger": {Agent: settings.Agent{Model: "sonnet"}}}, typ: "debugger", want: settings.Agent{Command: []string{"claude"}, Model: "sonnet"}},
@@ -51,11 +61,11 @@ func TestAgentFor(t *testing.T) {
 			if tc.top != nil {
 				p.Agent = *tc.top
 			}
-			got := p.AgentFor(tc.typ)
+			got := agentFor(t, p, tc.typ)
 			assert.Equal(t, tc.want, got)
 
 			got.Command[0] = "mutated"
-			assert.NotEqual(t, "mutated", p.AgentFor(tc.typ).Command[0], "the profile's command is not shared")
+			assert.NotEqual(t, "mutated", agentFor(t, p, tc.typ).Command[0], "the profile's command is not shared")
 		})
 	}
 }
@@ -99,10 +109,10 @@ agent = { command = ["codex", "--search"] }
 	p := got.Profile
 	assert.Equal(t, []settings.Team{{Project: "app", Short: "app", Layout: settings.LayoutTabs}}, got.Teams)
 	assert.Equal(t, settings.Spawn{ShellPrompt: `❯\s*$`, ShellReadyKeys: []string{"enter"}, ShellReadyAfter: 20 * time.Second}, p.Spawn, "--set over the project's wait")
-	assert.Equal(t, settings.Agent{Command: []string{"codex", "--no-daemon", "--sandbox", "read-only"}, Model: "gpt-5"}, p.AgentFor("review"))
-	assert.Equal(t, settings.Agent{Command: []string{"codex", "--search"}, Model: "o3"}, p.AgentFor("research"), "--set adds a model to the project's command")
-	assert.Equal(t, settings.Agent{Command: []string{"claude"}, Model: "sonnet"}, p.AgentFor("qa"), "the repo file sets a group's agent too")
-	assert.Equal(t, settings.Agent{Command: []string{"claude"}}, p.AgentFor("coder"))
+	assert.Equal(t, settings.Agent{Command: []string{"codex", "--no-daemon", "--sandbox", "read-only"}, Model: "gpt-5"}, agentFor(t, *p, "review"))
+	assert.Equal(t, settings.Agent{Command: []string{"codex", "--search"}, Model: "o3"}, agentFor(t, *p, "research"), "--set adds a model to the project's command")
+	assert.Equal(t, settings.Agent{Command: []string{"claude"}, Model: "sonnet"}, agentFor(t, *p, "qa"), "the repo file sets a group's agent too")
+	assert.Equal(t, settings.Agent{Command: []string{"claude"}}, agentFor(t, *p, "coder"))
 }
 
 // TestLoadedProfileSharesNoSlice: the profile's shell_ready_keys and a
@@ -266,7 +276,7 @@ func TestLoadRefusesADebuggerCommandFromAnyLayer(t *testing.T) {
 	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n[projects.app.groups.debugger]\nworkers = 0\nslots = 1\nagent = { model = \"sonnet\" }\n", repo)
 	res, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
 	require.NoError(t, err)
-	assert.Equal(t, settings.Agent{Command: []string{"claude"}, Model: "sonnet"}, res.Profile.AgentFor("debugger"))
+	assert.Equal(t, settings.Agent{Command: []string{"claude"}, Model: "sonnet"}, agentFor(t, *res.Profile, "debugger"))
 
 	_, err = settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil), Set: []string{`groups.debugger.agent.command=["claude"]`}})
 	require.ErrorIs(t, err, settings.ErrInvalid)

@@ -157,9 +157,9 @@ func TestOpenMigratesAndIsIdempotent(t *testing.T) {
 
 	s, err := store.Open(t.Context(), path)
 	require.NoError(t, err)
-	assert.Equal(t, 6, store.SchemaVersion(), "0001, 0002, messaging's inbox, 0003, the workers' identity, 0004, the GitHub notices' state, 0005, the workers' routing, and 0006, the GitHub notices' seed per kind")
+	assert.Equal(t, 7, store.SchemaVersion(), "0001, 0002, messaging's inbox, 0003, the workers' identity, 0004, the GitHub notices' state, 0005, the workers' routing, 0006, the GitHub notices' seed per kind, and 0007, the board")
 	assert.Equal(t, store.SchemaVersion(), s.UserVersion())
-	assert.Equal(t, []string{"table:focus", "table:github_open", "table:github_seeded", "table:github_seeded_kinds", "table:github_seen", "table:handoffs", "table:messages", "table:workers", "trigger:focus_cap"}, objects(t, store.DB(s)))
+	assert.Equal(t, []string{"table:board_marks", "table:board_posts", "table:focus", "table:github_open", "table:github_seeded", "table:github_seeded_kinds", "table:github_seen", "table:handoffs", "table:messages", "table:workers", "trigger:focus_cap"}, objects(t, store.DB(s)))
 	at := time.Date(2026, 10, 9, 12, 0, 0, 123456789, time.UTC)
 	require.NoError(t, s.RecordFocus(t.Context(), "w1:p1", at))
 	require.NoError(t, s.Close())
@@ -307,7 +307,8 @@ func TestOpenWaitsForALockUpToTheBusyTimeout(t *testing.T) {
 		after    time.Duration // and Open ends no sooner than this
 	}{
 		// No upper bound on a success: after the lock goes, a fresh file
-		// costs ten fsyncs, which take seconds on a busy disk.
+		// costs ten fsyncs, which take seconds on a busy disk. On Linux
+		// the tests' state is on tmpfs (NERD-5503), but a run can opt out.
 		"an exclusive lock released within the busy timeout": {lock: "BEGIN EXCLUSIVE", hold: 300 * time.Millisecond, after: 150 * time.Millisecond},
 		"an exclusive lock held past the busy timeout": {
 			lock: "BEGIN EXCLUSIVE", hold: long, want: store.ErrOpen,
