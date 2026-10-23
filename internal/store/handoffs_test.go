@@ -231,3 +231,71 @@ func TestCancelledContext(t *testing.T) {
 	require.NoError(t, s.Delivered(t.Context(), m.ID, t1))
 	noClaim(t, s, boss, "nothing else was queued")
 }
+
+// TestPendingHandoffs: the read lists every pending handoff, oldest first,
+// with the binding each completes onto, and leaves out the ones that
+// completed or failed. A handoff begun before migration 0003 has no
+// generation and no terminal, which it reads as -1 and "".
+func TestPendingHandoffs(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	got, err := s.PendingHandoffs(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, got)
+	assert.NotNil(t, got, "none is an empty list, not null")
+
+	for _, w := range []struct {
+		id, pane string
+		gen      int64
+	}{{"w", "w14:p2", 4}, {"v", "w14:p3", 0}, {"u", "w14:p4", 1}, {"x", "w14:p5", 2}} {
+		seedWorker(t, s, w.id, w.pane, w.gen)
+	}
+	acked, err := s.BeginHandoff(ctx, "u", "w14:p8", terminal("w14:p8"), t1)
+	require.NoError(t, err)
+	require.NoError(t, s.CompleteHandoff(ctx, acked, t1))
+	failed, err := s.BeginHandoff(ctx, "v", "w14:p9", terminal("w14:p9"), t1)
+	require.NoError(t, err)
+	require.NoError(t, s.FailHandoff(ctx, failed, t1))
+	first, err := s.BeginHandoff(ctx, "w", "w14:p7", terminal("w14:p7"), t1)
+	require.NoError(t, err)
+	second, err := s.BeginHandoff(ctx, "x", "w14:pA", "term_next", t1.Add(time.Minute))
+	require.NoError(t, err)
+	_, err = store.DB(s).ExecContext(ctx,
+		"INSERT INTO handoffs (logical_id, old_pane, new_pane, created_at, updated_at) VALUES ('v', 'w14:p3', 'w14:pB', 5, 5)")
+	require.NoError(t, err, "a handoff as migration 0003 found it")
+
+	got, err = s.PendingHandoffs(ctx)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Equal(t, store.Handoff{ID: first, LogicalID: "w", Generation: 4, OldPane: "w14:p2", NewPane: "w14:p7", NewTerminal: "term_w14:p7", CreatedAt: t1}, got[0])
+	assert.Equal(t, store.Handoff{ID: second, LogicalID: "x", Generation: 2, OldPane: "w14:p5", NewPane: "w14:pA", NewTerminal: "term_next", CreatedAt: t1.Add(time.Minute)}, got[1])
+	assert.Equal(t, store.Handoff{ID: second + 1, LogicalID: "v", Generation: -1, OldPane: "w14:p3", NewPane: "w14:pB", CreatedAt: time.Unix(0, 5).UTC()}, got[2])
+
+	require.NoError(t, s.Close())
+	_, err = s.PendingHandoffs(context.Background())
+	require.ErrorIs(t, err, store.ErrStore)
+}
+
+// TestBeginHandoffRefusesAStartingWorker: a worker whose agent is not up yet
+// starts no handoff (ErrWorkerStarting), and nothing is recorded, so spawn's
+// failed write never meets a pending handoff; once active it can hand off.
+func TestBeginHandoffRefusesAStartingWorker(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	w := store.Worker{LogicalID: "w", Project: "agentisan", Group: "coders", PaneID: "w14:p2", TerminalID: terminal("w14:p2")}
+	gen, err := s.BindWorker(ctx, w, t1)
+	require.NoError(t, err)
+
+	_, err = s.BeginHandoff(ctx, "w", "w14:p7", terminal("w14:p7"), t1)
+	require.ErrorIs(t, err, store.ErrWorkerStarting)
+	pending, err := s.PendingHandoffs(ctx)
+	require.NoError(t, err)
+	assert.Empty(t, pending, "nothing recorded")
+
+	w.Generation = gen
+	require.NoError(t, s.SetWorkerStatus(ctx, w, store.StatusActive, t1))
+	_, err = s.BeginHandoff(ctx, "w", "w14:p7", terminal("w14:p7"), t1)
+	require.NoError(t, err)
+}

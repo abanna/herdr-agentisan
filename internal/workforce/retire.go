@@ -43,13 +43,21 @@ type RetireResult struct {
 	// Changed is false when the worker was retired already.
 	Changed bool   `json:"changed"`
 	Outcome string `json:"outcome"`
+	// HandoffFailed is the logical id of the worker whose pending handoff
+	// this retire failed, its target being the replacement's pane: the
+	// rotation is abandoned, and the worker stays on its own pane with its
+	// inbox released (A33 part 2a).
+	HandoffFailed string `json:"handoff_failed,omitempty"`
 }
 
 // target is a resolved retire target: a pane, the terminal it showed, and
-// the live row bound to it, if any.
+// the live row bound to it, if any. A live row bound to no pane has no pane
+// id. unlisted is a pane id herdr lists nowhere that a pending handoff names
+// as its replacement.
 type target struct {
 	id, paneID, terminal string
 	row                  *store.Worker
+	unlisted             bool
 }
 
 // Retire closes a worker's pane and marks its row retired. The target is a
@@ -65,7 +73,10 @@ type target struct {
 // handoff token, polling every HandoffPoll; a terminal herdr stops listing
 // while it waits is the worker gone, and ctx ending first is
 // ErrHandoffTimeout, with the pane left open. The pane is closed only once pane.get shows it still has that
-// terminal. Retiring what is retired already answers Changed false.
+// terminal. Retiring what is retired already answers Changed false. Under
+// the workforce lock, finish keeps A33 part 2a's rule: no row is ended while
+// its handoff is pending, and retiring a pending handoff's replacement fails
+// that handoff.
 func (s *Service) Retire(ctx context.Context, req RetireRequest) (RetireResult, error) {
 	if strings.TrimSpace(req.Target) == "" {
 		return RetireResult{}, fmt.Errorf("%w: retire needs a logical id or a pane id", ErrBadRequest)
@@ -74,21 +85,70 @@ func (s *Service) Retire(ctx context.Context, req RetireRequest) (RetireResult, 
 	if err != nil || done != nil {
 		return deref(done), err
 	}
-	if req.AfterHandoff && tg.row != nil && tg.row.Group == settings.DebuggerType {
+	if req.AfterHandoff && tg.row != nil && tg.paneID != "" && tg.row.Group == settings.DebuggerType {
 		return RetireResult{}, fmt.Errorf("%w: %s is a debugger, which writes no handoff (A32); retire it without --after-handoff", ErrBadRequest, tg.id)
 	}
-	if req.AfterHandoff {
-		pane, gone, err := s.waitHandoff(ctx, tg)
+	var gone bool
+	if req.AfterHandoff && tg.paneID != "" && !tg.unlisted {
+		pane, g, err := s.waitHandoff(ctx, tg)
 		if err != nil {
 			return RetireResult{}, err
 		}
-		if gone {
-			return s.markGone(ctx, tg)
+		if !g {
+			tg.paneID = pane
 		}
-		tg.paneID = pane
+		gone = g
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.finish(ctx, tg, gone)
+}
+
+// finish retires tg under the workforce lock, under which a handoff begins,
+// so the handoffs it reads afresh hold until it returns (A33 part 2a). A row
+// whose handoff is pending is never ended: ErrHandoffPending, with nothing
+// closed; nor is one rebound since retire read it (unmoved). A pane that is a
+// pending handoff's replacement fails that handoff first, then closes, so a
+// close that errors leaves an ordinary pane for the retry and never an inbox
+// held. gone is the pane gone while retire waited for its handoff.
+func (s *Service) finish(ctx context.Context, tg target, gone bool) (RetireResult, error) {
+	h, replaced, err := s.handoffOf(ctx, tg)
+	if err != nil {
+		return RetireResult{}, err
+	}
+	if err := s.unmoved(ctx, tg.row); err != nil {
+		return RetireResult{}, err
+	}
+	if tg.unlisted && !replaced {
+		return RetireResult{}, fmt.Errorf("%w: %q is no worker's logical id and no pane herdr lists", ErrUnknownWorker, tg.paneID)
+	}
+	if replaced {
+		if err := s.Store.FailHandoff(ctx, h.ID, s.now()); err != nil {
+			return RetireResult{}, fmt.Errorf("fail %s's handoff to %s: %w", h.LogicalID, h.NewPane, err)
+		}
+	}
+	res, err := s.retireTarget(ctx, tg, gone)
+	if err != nil {
+		return RetireResult{}, err
+	}
+	if replaced {
+		res.HandoffFailed = h.LogicalID
+	}
+	return res, nil
+}
+
+// retireTarget closes tg's pane, once proven, and ends its row: retired,
+// or gone for a pane that went first.
+func (s *Service) retireTarget(ctx context.Context, tg target, gone bool) (RetireResult, error) {
+	switch {
+	case tg.paneID == "":
+		if err := s.endRow(ctx, tg.row, store.StatusRetired); err != nil {
+			return RetireResult{}, err
+		}
+		return RetireResult{ID: tg.id, Changed: true, Outcome: OutcomeUnbound}, nil
+	case tg.unlisted || gone:
+		return s.markGone(ctx, tg)
+	}
 	gone, err := s.closeProven(ctx, tg)
 	if err != nil {
 		return RetireResult{}, err
@@ -100,6 +160,74 @@ func (s *Service) Retire(ctx context.Context, req RetireRequest) (RetireResult, 
 		return RetireResult{}, err
 	}
 	return RetireResult{ID: tg.id, PaneID: tg.paneID, Changed: true, Outcome: OutcomeRetired}, nil
+}
+
+// handoffOf reads the pending handoffs afresh and applies A33 part 2a's
+// rule to tg. A row with one pending is refused (ErrHandoffPending). A pane
+// no row binds may be a pending handoff's replacement, which it returns,
+// found by the replacement's terminal, else by its pane id while herdr lists
+// the recorded terminal nowhere: a herdr live handoff renews a terminal and
+// keeps the pane id. A reissued pane id whose recorded terminal herdr lists
+// elsewhere is no replacement.
+func (s *Service) handoffOf(ctx context.Context, tg target) (store.Handoff, bool, error) {
+	pending, err := s.Store.PendingHandoffs(ctx)
+	if err != nil {
+		return store.Handoff{}, false, fmt.Errorf("read pending handoffs: %w", err)
+	}
+	if tg.row != nil {
+		return store.Handoff{}, false, heldBy(pending, tg.row.LogicalID)
+	}
+	if i := slices.IndexFunc(pending, func(h store.Handoff) bool { return tg.terminal != "" && h.NewTerminal == tg.terminal }); i >= 0 {
+		return pending[i], true, nil
+	}
+	i := slices.IndexFunc(pending, func(h store.Handoff) bool { return h.NewPane == tg.paneID })
+	if i < 0 {
+		return store.Handoff{}, false, nil
+	}
+	if pending[i].NewTerminal != "" {
+		panes, err := s.Herdr.ListPanes(ctx)
+		if err != nil {
+			return store.Handoff{}, false, herdrFailed("list panes", err)
+		}
+		if _, listed := byTerminal(panes, pending[i].NewTerminal); listed {
+			return store.Handoff{}, false, nil
+		}
+	}
+	return pending[i], true, nil
+}
+
+// unmoved re-reads row, if there is one, under the workforce lock. A row
+// rebound since retire read it, while it waited without the lock, is another
+// session's now: a handoff completed meanwhile, or the team poll's re-key
+// after a herdr live handoff renewed its terminal (A35). Nothing of it is
+// closed or ended (ErrPaneChanged), and a retry reads it afresh. A row
+// retired meanwhile is left to endRow, which ignores it.
+func (s *Service) unmoved(ctx context.Context, row *store.Worker) error {
+	if row == nil {
+		return nil
+	}
+	now, err := s.Store.WorkerRow(ctx, row.LogicalID)
+	if errors.Is(err, store.ErrNoWorker) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read worker %s: %w", row.LogicalID, err)
+	}
+	if now.RetiredAt.IsZero() && (now.Generation != row.Generation || now.TerminalID != row.TerminalID) {
+		return fmt.Errorf("%w: %s moved to %s since retire read it; nothing was closed", ErrPaneChanged, row.LogicalID, now.PaneID)
+	}
+	return nil
+}
+
+// heldBy is ErrHandoffPending, naming the replacement, while id has a
+// handoff pending.
+func heldBy(pending []store.Handoff, id string) error {
+	i := slices.IndexFunc(pending, func(h store.Handoff) bool { return h.LogicalID == id })
+	if i < 0 {
+		return nil
+	}
+	next := pending[i].NewPane
+	return fmt.Errorf("%w: %s is being replaced by %s and stays until that handoff completes or fails; worker retire %s abandons it", ErrHandoffPending, id, next, next)
 }
 
 func deref(r *RetireResult) RetireResult {
@@ -152,7 +280,11 @@ func (s *Service) endRow(ctx context.Context, row *store.Worker, status string) 
 	if row == nil {
 		return nil
 	}
-	if err := ignoreGone(s.Store.SetWorkerStatus(ctx, *row, status, s.now())); err != nil {
+	err := ignoreGone(s.Store.SetWorkerStatus(ctx, *row, status, s.now()))
+	if errors.Is(err, store.ErrHandoffPending) {
+		return fmt.Errorf("%w: %w", ErrHandoffPending, err)
+	}
+	if err != nil {
 		return fmt.Errorf("record %s %s: %w", row.LogicalID, status, err)
 	}
 	return nil
@@ -166,8 +298,9 @@ func (s *Service) markGone(ctx context.Context, tg target) (RetireResult, error)
 	return RetireResult{ID: tg.id, PaneID: tg.paneID, Changed: true, Outcome: OutcomeGone}, nil
 }
 
-// resolveTarget finds the pane to close. done is set when there is nothing
-// to close: the worker is retired already, or its row is bound to no pane.
+// resolveTarget finds the pane to close, changing no row. done is set when
+// the worker is retired already. A row whose handoff is pending is refused
+// here too, so --after-handoff never waits only to be refused.
 func (s *Service) resolveTarget(ctx context.Context, name string) (target, *RetireResult, error) {
 	teams, err := s.teams()
 	if err != nil {
@@ -181,6 +314,10 @@ func (s *Service) resolveTarget(ctx context.Context, name string) (target, *Reti
 	if err != nil {
 		return target{}, nil, fmt.Errorf("read workers: %w", err)
 	}
+	pending, err := s.Store.PendingHandoffs(ctx)
+	if err != nil {
+		return target{}, nil, fmt.Errorf("read pending handoffs: %w", err)
+	}
 	bound := team.Bindings(rows)
 	liveRow := func(id string) *store.Worker {
 		i := slices.IndexFunc(rows, func(r store.Worker) bool { return r.LogicalID == id })
@@ -193,21 +330,20 @@ func (s *Service) resolveTarget(ctx context.Context, name string) (target, *Reti
 	// A live row's pane comes first; then, for an id no live row has, the
 	// agent pane of the tab labelled with it; then a pane id.
 	if r := liveRow(name); r != nil {
+		tg := target{id: name, row: r}
 		if p, ok := byTerminal(l.Panes, r.TerminalID); ok && bound[r.TerminalID] == name {
-			return target{id: name, paneID: p.PaneID, terminal: p.TerminalID, row: r}, nil, nil
+			tg.paneID, tg.terminal = p.PaneID, p.TerminalID
 		}
-		if r.HandoffPending {
-			return target{}, nil, fmt.Errorf("%w: %s is bound to no pane while its handoff is pending; retire it once the handoff completes or fails", ErrHandoffPending, name)
-		}
-		if err := s.endRow(ctx, r, store.StatusRetired); err != nil {
-			return target{}, nil, err
-		}
-		return target{}, &RetireResult{ID: name, Changed: true, Outcome: OutcomeUnbound}, nil
+		return tg, nil, heldBy(pending, name)
 	}
 	pane, byLabel := workerPane(name, teams, l)
 	if !byLabel {
 		var done *RetireResult
-		if pane, done, err = s.paneByID(ctx, name, l); err != nil || done != nil {
+		pane, done, err = s.paneByID(ctx, name, l)
+		if errors.Is(err, ErrUnknownWorker) && slices.ContainsFunc(pending, func(h store.Handoff) bool { return h.NewPane == name }) {
+			return target{paneID: name, unlisted: true}, nil, nil
+		}
+		if err != nil || done != nil {
 			return target{}, done, err
 		}
 	}
@@ -223,7 +359,9 @@ func (s *Service) resolveTarget(ctx context.Context, name string) (target, *Reti
 	tg := target{id: bound[pane.TerminalID], paneID: pane.PaneID, terminal: pane.TerminalID}
 	if tg.id != "" {
 		tg.row = liveRow(tg.id)
-	} else if byLabel {
+		return tg, nil, heldBy(pending, tg.id)
+	}
+	if byLabel {
 		tg.id = name
 	}
 	return tg, nil, nil
