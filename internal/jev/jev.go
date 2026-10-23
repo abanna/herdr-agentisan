@@ -46,8 +46,8 @@ type Client struct {
 	URL string
 	// Key is the API key.
 	Key string
-	// HTTP sends the request; nil is a client that follows no redirect.
-	// The timeout Ask is given bounds it either way.
+	// HTTP sends the request; nil is Go's default transport. Whichever it
+	// is, Ask follows no redirect, and the timeout it is given bounds it.
 	HTTP *http.Client
 }
 
@@ -60,7 +60,7 @@ type Answer struct {
 
 // noRedirect keeps the request, and its key, at the URL it was sent to: a
 // redirect is answered as the status it is.
-var noRedirect = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+func noRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
 // Ask posts body to System One once, within timeout. A status other than
 // 200 is ErrStatus with the status; an answer cut off, too large or without
@@ -79,10 +79,11 @@ func (c Client) Ask(ctx context.Context, body []byte, timeout time.Duration) (An
 	req.Header.Set("Authorization", "Bearer "+c.Key)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
-	h := c.HTTP
-	if h == nil {
-		h = noRedirect
+	var h http.Client
+	if c.HTTP != nil {
+		h = *c.HTTP
 	}
+	h.CheckRedirect = noRedirect
 	resp, err := h.Do(req)
 	if err != nil {
 		return Answer{}, fmt.Errorf("%w: %w", ErrCall, err)

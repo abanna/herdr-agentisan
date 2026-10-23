@@ -124,6 +124,21 @@ func TestAskRefusals(t *testing.T) {
 	assert.Zero(t, elsewhereHits.Load(), "the redirect is never followed, so the key stays where it was sent")
 }
 
+// TestAskNeverFollowsARedirect: whatever client the caller gives, even one
+// that follows redirects, a redirect is answered as its status, so the key
+// never goes to another URL.
+func TestAskNeverFollowsARedirect(t *testing.T) {
+	t.Parallel()
+	elsewhere, elsewhereHits := server(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, answer) })
+	srv, _ := server(t, func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, elsewhere.URL, http.StatusFound) })
+	follows := &http.Client{Timeout: time.Minute}
+	_, err := jev.Client{URL: srv.URL, Key: testKey, HTTP: follows}.Ask(t.Context(), []byte(`{}`), time.Second)
+	require.ErrorIs(t, err, jev.ErrStatus)
+	assert.Contains(t, err.Error(), "HTTP 302")
+	assert.Zero(t, elsewhereHits.Load())
+	assert.Nil(t, follows.CheckRedirect, "the caller's client is left as it was")
+}
+
 // TestAskMalformedAnswers: a 200 that is not an answer is ErrAnswer.
 func TestAskMalformedAnswers(t *testing.T) {
 	t.Parallel()
@@ -163,7 +178,9 @@ func TestAskEndsAtItsTimeout(t *testing.T) {
 	require.ErrorIs(t, err, jev.ErrCall)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Less(t, time.Since(start), 5*time.Second)
-	assert.Equal(t, int32(1), hits.Load())
+	// At most once: on a loaded machine the timeout can end the call before
+	// the server's handler has run at all.
+	assert.LessOrEqual(t, hits.Load(), int32(1), "never retried")
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
