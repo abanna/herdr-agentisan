@@ -49,6 +49,33 @@ func TestCheckAgentCommand(t *testing.T) {
 		"--setting-sources= empty":              {argv: []string{"claude", "--setting-sources="}},
 		"--setting-sources with no value":       {argv: []string{"claude", "--setting-sources"}},
 		"--setting-sources projects is not it":  {argv: []string{"claude", "--setting-sources=projects"}},
+
+		// D12 knows nothing of routing: every Codex flag P7 sorts passes it,
+		// and the test each row names refuses or allows it (A50).
+		"codex --oss (refused: TestRoutingRefusesACodexProvider)":                              {argv: []string{"codex", "--oss"}, ok: true},
+		"codex --local-provider (refused: TestRoutingRefusesACodexProvider)":                   {argv: []string{"codex", "--local-provider", "ollama"}, ok: true},
+		"codex -c model_provider (refused: TestRoutingRefusesACodexProvider)":                  {argv: []string{"codex", "-c", "model_provider=oss"}, ok: true},
+		"codex's hook-trust bypass (refused: TestLoadRefusesWorkforceKeys)":                    {argv: []string{"codex", "--dangerously-bypass-hook-trust"}, ok: true},
+		"codex -c bypass_hook_trust (refused: TestLoadRefusesWorkforceKeys)":                   {argv: []string{"codex", "-c", "bypass_hook_trust=true"}, ok: true},
+		"codex -c hooks.state (refused: TestLoadRefusesCodexHookState)":                        {argv: []string{"codex", "-c", `hooks.state={simple={trusted_hash="x"}}`}, ok: true},
+		"codex -c hooks (refused: TestLoadRefusesCodexHookState)":                              {argv: []string{"codex", "-c", `hooks={state={simple={trusted_hash="x"}}}`}, ok: true},
+		"codex -s (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":                     {argv: []string{"codex", "-s", "read-only"}, ok: true},
+		"codex --sandbox (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":              {argv: []string{"codex", "--sandbox=workspace-write"}, ok: true},
+		"codex --approve-for-me (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":       {argv: []string{"codex", "--approve-for-me"}, ok: true},
+		"codex --not-so-yolo (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":          {argv: []string{"codex", "--not-so-yolo"}, ok: true},
+		"codex's approvals bypass (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":     {argv: []string{"codex", "--dangerously-bypass-approvals-and-sandbox"}, ok: true},
+		"codex --yolo (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":                 {argv: []string{"codex", "--yolo"}, ok: true},
+		"codex -c sandbox_mode (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":        {argv: []string{"codex", "-c", "sandbox_mode=read-only"}, ok: true},
+		"codex -c default_permissions (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)": {argv: []string{"codex", "-c", "default_permissions=mine"}, ok: true},
+		"codex --search (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":               {argv: []string{"codex", "--search"}, ok: true},
+		"codex --no-daemon (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":            {argv: []string{"codex", "--no-daemon"}, ok: true},
+		"codex --add-dir (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":              {argv: []string{"codex", "--add-dir", "/srv/shared"}, ok: true},
+		"codex -c oss_provider (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":        {argv: []string{"codex", "-c", "oss_provider=ollama"}, ok: true},
+		"codex -c model_providers (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":     {argv: []string{"codex", "-c", "model_providers.mine.base_url=https://proxy.example/v1"}, ok: true},
+		"codex -c openai_base_url (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":     {argv: []string{"codex", "-c", "openai_base_url=https://proxy.example/v1"}, ok: true},
+		"codex -C (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":                     {argv: []string{"codex", "-C", "/srv/app"}, ok: true},
+		"codex --cd (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":                   {argv: []string{"codex", "--cd=/srv/app"}, ok: true},
+		"codex --worktree (allowed: TestRoutingKeepsTheCodexFlagsItDoesNotDecide)":             {argv: []string{"codex", "--worktree"}, ok: true},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

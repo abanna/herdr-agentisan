@@ -1,6 +1,7 @@
 package settings_test
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -192,6 +193,123 @@ func escape(args []string) []string {
 		out[i] = strings.ReplaceAll(a, `"`, `\"`)
 	}
 	return out
+}
+
+// codexCommandAt is a shared file setting a codex command with args at each
+// agent table whose command Load checks, keyed by the path its error names: a
+// provider's table (A62) included.
+func codexCommandAt(args ...string) map[string]string {
+	command := `["codex"]`
+	if len(args) > 0 {
+		quoted := make([]string, len(args))
+		for i, arg := range args {
+			quoted[i] = strconv.Quote(arg)
+		}
+		command = `["codex", ` + strings.Join(quoted, `, `) + `]`
+	}
+	return map[string]string{
+		"agent.command":                    "[agent]\ncommand = " + command + "\n",
+		"groups.coder.agent.command":       "[groups.coder]\nworkers = 0\nslots = 1\nagent = { command = " + command + " }\n",
+		"agent.codex.command":              "[agent.codex]\ncommand = " + command + "\n",
+		"groups.coder.agent.codex.command": "[groups.coder]\nworkers = 0\nslots = 1\n[groups.coder.agent.codex]\ncommand = " + command + "\n",
+	}
+}
+
+// TestRoutingRefusesACodexProvider: while routing is on, a codex command
+// choosing its model provider, by --oss, --local-provider or a -c that sets
+// model_provider in any form, is refused at each agent table, since the
+// routed model must run on the provider serving it; the error names the flag,
+// never the provider, and with routing off each resolves (A50).
+func TestRoutingRefusesACodexProvider(t *testing.T) {
+	t.Parallel()
+	const provider = "ollama-secret"
+	forms := map[string]struct {
+		args []string
+		flag string
+	}{
+		"--oss":                          {[]string{"--oss"}, "--oss"},
+		"--oss after another flag":       {[]string{"--search", "--oss"}, "--oss"},
+		"--oss with a value":             {[]string{"--oss=" + provider}, "--oss"},
+		"--local-provider":               {[]string{"--local-provider", provider}, "--local-provider"},
+		"--local-provider joined":        {[]string{"--local-provider=" + provider}, "--local-provider"},
+		"-c model_provider":              {[]string{"-c", "model_provider=" + provider}, "model_provider key"},
+		"--config model_provider":        {[]string{"--config", "model_provider=" + provider}, "model_provider key"},
+		"--config= joined":               {[]string{"--config=model_provider=" + provider}, "model_provider key"},
+		"-c= joined":                     {[]string{"-c=model_provider=" + provider}, "model_provider key"},
+		"-c attached":                    {[]string{"-cmodel_provider=" + provider}, "model_provider key"},
+		"-c with a quoted, spaced key":   {[]string{"-c", ` "model_provider" = ` + provider}, "model_provider key"},
+		"-c model_provider after --cd":   {[]string{"--cd", "/srv/app", "-c", "model_provider=" + provider}, "model_provider key"},
+		"--local-provider after -s":      {[]string{"-s", "read-only", "--local-provider", provider}, "--local-provider"},
+		"--oss beside an allowed -c key": {[]string{"-c", "oss_provider=" + provider, "--oss"}, "--oss"},
+		// The check knows no flag's arity, as the profile's does not, and clap
+		// reads a flag there as the flag, not as --add-dir's value.
+		"--oss as another flag's value": {[]string{"--add-dir", "--oss"}, "--oss"},
+	}
+	for name, tc := range forms {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			for where, file := range codexCommandAt(tc.args...) {
+				_, err := loadRouting(t, file+"[routing]\nenabled = true\n", "", nil, true)
+				require.ErrorIs(t, err, settings.ErrInvalid, where)
+				assert.Contains(t, err.Error(), where+" ("+settings.LayerShared+", ")
+				assert.Contains(t, err.Error(), "codex's "+tc.flag+" chooses the model provider, which must be the one serving the model routing decides while routing.enabled is true: remove it")
+				assert.NotContains(t, err.Error(), provider, "the provider is never echoed")
+				_, err = loadRouting(t, file+"[routing]\nenabled = false\n", "", nil, true)
+				require.NoError(t, err, "%s with routing off", where)
+			}
+		})
+	}
+	for _, program := range []string{"/usr/local/bin/codex", "../bin/codex"} {
+		_, err := loadRouting(t, "[agent]\ncommand = [\""+program+"\", \"--oss\"]\n[routing]\nenabled = true\n", "", nil, true)
+		require.ErrorIs(t, err, settings.ErrInvalid, "codex by its path, %s, is codex", program)
+		assert.Contains(t, err.Error(), "codex's --oss chooses the model provider")
+	}
+	_, err := loadRouting(t, "[agent]\ncommand = [\"claude\", \"--oss\", \"--local-provider\", \"x\", \"-c\", \"model_provider=x\"]\n[routing]\nenabled = true\n", "", nil, true)
+	require.NoError(t, err, "only codex's flags choose codex's provider")
+	_, err = loadRouting(t, "[agent]\ncommand = [\"codex\", \"--profile=mine\", \"--oss\"]\n[routing]\nenabled = true\n", "", nil, true)
+	require.ErrorIs(t, err, settings.ErrInvalid)
+	assert.Contains(t, err.Error(), "codex's --profile chooses a profile, which can set the model and effort routing decides while routing.enabled is true: remove it", "the profile's refusal is unchanged, and comes first")
+}
+
+// TestRoutingKeepsTheCodexFlagsItDoesNotDecide: while routing is on, the
+// codex flags that choose neither the model, the effort nor the provider
+// resolve at each agent table: the sandbox flags stay the user's (Q1 (i)), and
+// so do a provider's own settings, the endpoint, the directory and Codex's
+// own worktree (Q10); only what fights routing or the workforce is refused.
+func TestRoutingKeepsTheCodexFlagsItDoesNotDecide(t *testing.T) {
+	t.Parallel()
+	for name, args := range map[string][]string{
+		"-s":                          {"-s", "read-only"},
+		"-s attached":                 {"-sworkspace-write"},
+		"--sandbox joined":            {"--sandbox=danger-full-access"},
+		"--approve-for-me":            {"--approve-for-me"},
+		"--not-so-yolo":               {"--not-so-yolo"},
+		"the approvals bypass":        {"--dangerously-bypass-approvals-and-sandbox"},
+		"--yolo":                      {"--yolo"},
+		"-c sandbox_mode":             {"-c", "sandbox_mode=read-only"},
+		"-c default_permissions":      {"-c", "default_permissions=mine"},
+		"--search":                    {"--search"},
+		"--no-daemon":                 {"--no-daemon"},
+		"--add-dir":                   {"--add-dir", "/srv/shared"},
+		"-c oss_provider":             {"-c", "oss_provider=ollama"},
+		"-c a provider's own setting": {"-c", "model_providers.mine.base_url=https://proxy.example/v1"},
+		"-c openai_base_url":          {"--config=openai_base_url=https://proxy.example/v1"},
+		"-C":                          {"-C", "/srv/app"},
+		"--cd joined":                 {"--cd=/srv/app"},
+		"--worktree":                  {"--worktree"},
+		"a look-alike of --oss":       {"--ossify", "--oss-x", "--OSS", "--öss", "--local-providers=x"},
+		"codex's -c with no value":    {"--search", "-c"},
+		"bare codex":                  {},
+		"a look-alike of the key":     {"-c", "model_provider_x=y", "-c", "model_providers=y"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			for where, file := range codexCommandAt(args...) {
+				_, err := loadRouting(t, file+"[routing]\nenabled = true\n", "", nil, true)
+				require.NoError(t, err, where)
+			}
+		})
+	}
 }
 
 // TestRoutingOffKeepsTheModelKeys: with routing off, as it is unless the

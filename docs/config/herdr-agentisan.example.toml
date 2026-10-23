@@ -119,7 +119,13 @@ repeat = 300
 # Spawn adds --no-daemon to any codex command that lacks it (A22). The command
 # runs claude or codex (D12) and carries no --model, -m, --name, -n or
 # --effort, nor a codex -c setting model or model_reasoning_effort: the
-# workforce sets them. A codex -p profile or a claude --settings file can
+# workforce sets them; nor --dangerously-bypass-hook-trust or -c
+# bypass_hook_trust or hook trust state in a codex command: hooks.state,
+# hooks.state.* and an inline hooks={state={...}} are refused, routing on or
+# off. Other hook settings stay allowed. Trusting hooks stays a one-time
+# human step (A43). For example, this argv pair is refused:
+# -c 'hooks.state={"file:/tmp/qa145/hooks.json:stop:0:0"={trusted_hash="<current_hash>"}}'
+# A codex -p profile or a claude --settings file can
 # still name a model: the --model the workforce passes outranks both, by each
 # CLI's own precedence, and with no model set the command's configuration
 # decides (A53). An abbreviation such as --mod is no --model to either:
@@ -243,7 +249,8 @@ locks = ["/run/user/1000/agentisan/gate.0.lock"]
 #   enabled  false (the default) launches as configured above; true lets
 #            routing decide, and then no model key may be set: agent.model,
 #            agent.<provider>.model, or a group's (so drop [agent.codex]'s
-#            model above), nor a codex command's -p/--profile.
+#            model above), nor a codex command's -p/--profile, --oss,
+#            --local-provider or -c model_provider.
 #   [routing.bindings.<binding>]  model_id ("" is unresolved), efforts its
 #            client takes (claude: low to max, codex: minimal to xhigh) and
 #            enabled, e.g. [routing.bindings.claude_mid] model_id = "…".
