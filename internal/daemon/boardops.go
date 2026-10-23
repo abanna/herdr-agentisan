@@ -22,8 +22,8 @@ import (
 // for a post on it; the user's dashboard reads it.
 // A worker never reads it: each op places its caller by the kernel's peer
 // credentials (Peer), never by what its request says, and refuses any
-// caller that is not a team's boss or the dashboard in its boss's tab. That
-// is policy, not a boundary: workers run as the same user (A60).
+// caller that is not a team's boss or the dashboard in its boss's place or
+// tab. That is policy, not a boundary: workers run as the same user (A60).
 const (
 	OpBoardRead = "board.read"
 	OpBoardWait = "board.wait"
@@ -46,7 +46,7 @@ const (
 
 var (
 	// ErrNotAllowed means a board op's caller is neither a team's boss nor
-	// the user's dashboard in its boss's tab: workers may only post.
+	// the user's dashboard in its boss's place or tab: workers may only post.
 	ErrNotAllowed = errors.New("only a team's boss and the user's dashboard read the board; workers may only post")
 	// ErrSuperseded means a later board wait from the same pane took this
 	// one's place, so restarted waits never stack.
@@ -271,7 +271,11 @@ func (b *board) wait(ctx context.Context, req BoardWaitRequest) (BoardStateResul
 	for {
 		changed := b.st.BoardChanged()
 		st, err := b.state(ctx, who)
-		if err != nil {
+		switch {
+		case err != nil && ctx.Err() != nil:
+			// The daemon stopping cut the read short.
+			return BoardStateResult{}, fmt.Errorf("%w: %w", ErrStopping, err)
+		case err != nil:
 			return BoardStateResult{}, err
 		}
 		after := st.Mark
@@ -395,7 +399,7 @@ func placeBoardCaller(view func() (*team.Model, map[string]string), c paneProber
 		if failed != nil {
 			return boardCaller{}, failed
 		}
-		return boardCaller{}, fmt.Errorf("%w: the caller runs in no team's boss place, nor in the dashboard in a boss's tab", ErrNotAllowed)
+		return boardCaller{}, fmt.Errorf("%w: the caller runs in no team's boss place, nor in the dashboard in a boss's place or tab", ErrNotAllowed)
 	}
 }
 

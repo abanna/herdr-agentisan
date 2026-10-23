@@ -252,6 +252,13 @@ func TestBoardWaitEndsWhenTheDaemonStops(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the wait was not ended")
 	}
+
+	// A stop that lands before the wait's first read of the board is the
+	// daemon stopping too, never a failed store.
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := daemon.WaitOn(ctx, boardStore(t), as(theBoss), daemon.BoardWaitRequest{Timeout: time.Minute})
+	require.ErrorIs(t, err, daemon.ErrStopping)
 }
 
 // TestBoardBudgets: each board op's budget, which both the server and its

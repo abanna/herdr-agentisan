@@ -47,3 +47,8 @@ func ServeBoard(t testing.TB, dir string, st *store.Store, place func(context.Co
 func PlaceBoardCaller(view func() (*team.Model, map[string]string), c herdr.Client, stat report.StatFunc, uid int) func(context.Context, Peer) (BoardCaller, error) {
 	return placeBoardCaller(view, c, stat, uid)
 }
+
+// WaitOn is a board wait on st with ctx, its caller placed with place.
+func WaitOn(ctx context.Context, st *store.Store, place func(context.Context, Peer) (BoardCaller, error), req BoardWaitRequest) (BoardStateResult, error) {
+	return newBoard(st, place).wait(ctx, req)
+}
