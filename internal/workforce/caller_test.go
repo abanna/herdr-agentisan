@@ -139,9 +139,9 @@ func TestFindCallerUnderTheSharedAppServer(t *testing.T) {
 }
 
 // TestSelectorForAnUnverifiedCaller (A64): a team op run on the shared
-// app-server confirms no pane, so it takes its fallbacks, never the team of
-// the pane that started the daemon, and herdr is never asked; --project still
-// names the team.
+// app-server confirms no pane, so it takes its fallbacks: the pane that
+// started the daemon never chooses the team, and herdr is never asked;
+// --project still names the team.
 func TestSelectorForAnUnverifiedCaller(t *testing.T) {
 	t.Parallel()
 	procs := map[int]report.Stat{5000: {PPID: 4000, Start: 900}, 4000: {PPID: 900, Start: 700}, 900: {PPID: 600, Start: 500}, 600: {PPID: 1, Start: 400}}

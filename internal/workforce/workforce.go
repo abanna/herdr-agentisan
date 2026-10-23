@@ -252,7 +252,8 @@ func FindCaller(ctx context.Context, h report.PaneFinder, pane report.Pane, look
 // SelectorFor is the team a command means: project when set, without asking
 // herdr; else the caller's pane, as FindCallerPane confirms it. A caller it
 // cannot verify (ErrCallerUnverified) confirms no pane, so the op takes its
-// fallbacks, never the team of the pane that started Codex's daemon (A64).
+// fallbacks, as for a caller in no pane: the pane that started Codex's daemon
+// never chooses the team, though the only tabs team may be its (A64).
 func SelectorFor(ctx context.Context, h report.PaneFinder, project string, pane report.Pane) (Selector, error) {
 	if project != "" {
 		return Selector{Project: project}, nil
