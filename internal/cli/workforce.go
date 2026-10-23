@@ -128,6 +128,12 @@ func (f *opFlags) selector(ctx context.Context) (workforce.Selector, error) {
 // does, finding the team (herdr_failed), or when the caller it would name
 // cannot be verified (caller_unverified, A64): the daemon is never asked.
 func (f *opFlags) runOp(cmd *cobra.Command, args []string, op string, req func() (any, error)) error {
+	return f.runOpThen(cmd, args, op, req, nil)
+}
+
+// runOpThen is runOp, with then, when set, given the answer's data once it
+// is printed: its error is the command's.
+func (f *opFlags) runOpThen(cmd *cobra.Command, args []string, op string, req func() (any, error), then func(json.RawMessage) error) error {
 	if len(args) > 0 {
 		return badRequest(cmd, fmt.Errorf("%s takes no arguments, got %s", cmd.CommandPath(), strings.Join(args, " ")))
 	}
@@ -153,7 +159,10 @@ func (f *opFlags) runOp(cmd *cobra.Command, args []string, op string, req func()
 	var refused *daemon.RequestError
 	switch {
 	case err == nil:
-		return printEnvelope(cmd.OutOrStdout(), envelope{OK: true, Data: data})
+		if err := printEnvelope(cmd.OutOrStdout(), envelope{OK: true, Data: data}); err != nil || then == nil {
+			return err
+		}
+		return then(data)
 	case errors.As(err, &refused):
 		return refuseWith(cmd, refused.Code, refused.Message)
 	case errors.Is(err, daemon.ErrUnavailable) && !errors.Is(err, daemon.ErrNotSent):

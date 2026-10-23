@@ -374,7 +374,7 @@ func ResolvePane(ctx context.Context, rep PaneFinder, pane Pane) (string, error)
 
 	info, err := rep.PaneProcessInfo(ctx, pane.PaneID)
 	switch {
-	case err == nil && pane.Lineage.runsIn(info):
+	case err == nil && pane.Lineage.RunsIn(info):
 		return info.PaneID, nil
 	case err != nil && !errors.Is(err, herdr.ErrPaneNotFound):
 		return "", fmt.Errorf("check pane %s: %w", pane.PaneID, err)
@@ -393,7 +393,7 @@ func ResolvePane(ctx context.Context, rep PaneFinder, pane Pane) (string, error)
 		if err != nil {
 			return "", fmt.Errorf("check pane %s: %w", p.PaneID, err)
 		}
-		if pane.Lineage.runsIn(info) {
+		if pane.Lineage.RunsIn(info) {
 			found = append(found, info.PaneID)
 		}
 	}
