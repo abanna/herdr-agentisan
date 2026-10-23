@@ -29,12 +29,38 @@ const serverDirName = "server dir"
 // ErrInvalid means a launch input is not usable.
 var ErrInvalid = errors.New("invalid debugger launch")
 
+// linearPrefix begins the name of every tool of Linear's claude.ai
+// connector.
+const linearPrefix = "mcp__claude_ai_Linear__"
+
 // LinearReadTools are the Linear tools the debugger may call: reads only.
 var LinearReadTools = []string{
-	"mcp__claude_ai_Linear__get_issue",
-	"mcp__claude_ai_Linear__list_issues",
-	"mcp__claude_ai_Linear__list_comments",
+	linearPrefix + "get_issue",
+	linearPrefix + "list_issues",
+	linearPrefix + "list_comments",
 }
+
+// linearServerURL is the one MCP server the session loads, Linear's
+// claude.ai connector, matched by URL: a claude.ai connector's name is its
+// display name, which an allowlist's serverName cannot hold.
+const linearServerURL = "https://mcp.linear.app/*"
+
+// linearWriteVerbs begin the names of the Linear connector's tools that
+// change something or send it out; its reads begin get_, list_, search_ or
+// extract_. Each verb's glob is denied, which removes its tools from the
+// session. A verb Linear adds later is not covered: dontAsk still refuses
+// its tools, since no rule allows them.
+var linearWriteVerbs = []string{
+	"save", "delete", "create", "update", "merge", "submit", "share", "unshare",
+	"mark", "resolve", "restore", "retire", "prepare",
+}
+
+// builtinTools are the only built-in tools the session has (--tools): Bash
+// for `events` and the built-in read-only commands, Read for the repo and
+// the daemon's directory, and ToolSearch, so that MCP tools load when asked
+// for rather than all at start. --tools leaves out every other built-in
+// tool, one a later Claude Code adds included; it does not reach MCP tools.
+var builtinTools = []string{"Bash", "Read", "ToolSearch"}
 
 // deniedTools are refused outright, whatever the permission mode or a
 // setting allows: a deny rule wins over every allow rule.
@@ -45,7 +71,8 @@ var deniedTools = []string{"Edit", "Write", "NotebookEdit", "WebFetch", "WebSear
 // other sessions, send to claude.ai or the user's devices, switch worktrees
 // or read an MCP server's resources. Most of them need no permission (the
 // tools reference), so dontAsk, which denies only a call that would ask,
-// never stops them. A deny rule naming a tool removes it from the session.
+// never stops them. --tools already leaves them out; denying them by name,
+// which also removes a tool from the session, is the second layer.
 // EnterPlanMode is one: plan mode sends a command through the flow that
 // asks the user, instead of denying it.
 var sessionTools = []string{
@@ -66,12 +93,20 @@ const mcpFile = ".mcp.json"
 // mode, and its file-reading Bash commands then ask, which dontAsk denies
 // (Claude Code 2.1.257 or later). Without it, its built-in read-only
 // commands, such as cat and grep, read any file the user can, with no
-// allow rule. And the project's MCP servers, rejected by name.
+// allow rule. The project's MCP servers, rejected by name. And the MCP
+// servers allowed to load, Linear's connector alone: an allowlist covers
+// the servers Claude Code loads itself, claude.ai's connectors included.
 type launchSettings struct {
 	Permissions struct {
 		BlockReadsOutsideWorkingDirectories bool `json:"blockReadsOutsideWorkingDirectories"`
 	} `json:"permissions"`
-	DisabledMcpjsonServers []string `json:"disabledMcpjsonServers,omitempty"`
+	DisabledMcpjsonServers []string    `json:"disabledMcpjsonServers,omitempty"`
+	AllowedMcpServers      []mcpServer `json:"allowedMcpServers"`
+}
+
+// mcpServer is an MCP server allowlist entry, matched by the server's URL.
+type mcpServer struct {
+	ServerURL string `json:"serverUrl"`
 }
 
 // Launch is what a debugger's launch is built from: the plugin's checkout
@@ -104,18 +139,21 @@ type Command struct {
 // In dontAsk mode a call that would ask is denied without asking: the
 // debugger reads the repo (not its .env files) and the daemon's directory,
 // runs `<Bin> events` and Claude Code's built-in read-only commands, and
-// reads Linear. The tools that never ask and act past that (sessionTools)
-// are denied by name. Its reads are fenced to its working directories, the
-// repo it starts in (Dir) and the daemon's directory (--add-dir), by
-// launchSettings, which also rejects every server the project's MCP
-// configs name (projectServers), so none loads or asks for approval at
-// start. claude.ai's connectors, Linear's among them, still load:
-// --strict-mcp-config would keep them out too. Only the project's settings load
-// (D12's bundle), so the allow rules that pile up in the user's and the
-// repo's local settings never widen it; the repo's .claude/settings.json,
-// tracked by git or not, and managed policy still apply. Each key file is
-// denied to Read, and neither the repo nor the daemon's directory may hold
-// one. It carries no --model or --name: the workforce sets those.
+// reads Linear. Its built-in tools are builtinTools alone (--tools), and
+// the tools that never ask and act past that (sessionTools) are denied by
+// name as well. Its reads are fenced to its working directories, the repo
+// it starts in (Dir) and the daemon's directory (--add-dir), by
+// launchSettings, which allows Linear's connector as the only MCP server
+// to load and rejects every server the project's MCP configs name
+// (projectServers), so none of those loads or asks for approval at start.
+// --strict-mcp-config would keep claude.ai's connectors out, Linear's among
+// them. Linear's tools that write are denied by verb (linearWriteVerbs).
+// Only the project's settings load (D12's bundle), so the allow rules that
+// pile up in the user's and the repo's local settings never widen it; the
+// repo's .claude/settings.json, tracked by git or not, and managed policy
+// still apply. Each key file is denied to Read, and neither the repo nor
+// the daemon's directory may hold one. It carries no --model or --name: the
+// workforce sets those.
 func (l Launch) Command() (Command, error) {
 	if len(l.KeyFiles) == 0 {
 		return Command{}, fmt.Errorf("%w: no env file holds the trail's key", ErrInvalid)
@@ -153,9 +191,13 @@ func (l Launch) Command() (Command, error) {
 	}
 	deny = append(deny, deniedTools...)
 	deny = append(deny, sessionTools...)
+	for _, v := range linearWriteVerbs {
+		deny = append(deny, linearPrefix+v+"_*")
+	}
 
 	var set launchSettings
 	set.Permissions.BlockReadsOutsideWorkingDirectories = true
+	set.AllowedMcpServers = []mcpServer{{ServerURL: linearServerURL}}
 	servers, err := projectServers(l.Repo)
 	if err != nil {
 		return Command{}, err
@@ -166,7 +208,7 @@ func (l Launch) Command() (Command, error) {
 		return Command{}, fmt.Errorf("%w: the settings: %w", ErrInvalid, err)
 	}
 
-	args := make([]string, 0, 14+len(allow)+len(deny))
+	args := make([]string, 0, 16+len(allow)+len(deny))
 	args = append(args,
 		"--append-system-prompt-file", filepath.Join(l.Root, RoleFile),
 		"--append-system-prompt", l.facts(),
@@ -176,6 +218,7 @@ func (l Launch) Command() (Command, error) {
 	if l.ServerDir != "" {
 		args = append(args, "--add-dir", l.ServerDir)
 	}
+	args = append(args, "--tools", strings.Join(builtinTools, ","))
 	args = append(args, "--allowedTools")
 	args = append(args, allow...)
 	args = append(args, "--disallowedTools")

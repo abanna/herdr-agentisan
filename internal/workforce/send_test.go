@@ -97,6 +97,25 @@ func TestSendFindsTheSenderAndTheRecipient(t *testing.T) {
 	}
 }
 
+// TestSendFromTheDashboardIsAPane is the cutover's F2 in send: the team's
+// dashboard pane in the boss's tab is not the boss, so a send from it is
+// the pane's, by its terminal, whichever of its two labels it has.
+func TestSendFromTheDashboardIsAPane(t *testing.T) {
+	t.Parallel()
+	for name, label := range map[string]string{"labelled by team up": "ha-dashboard", "opened with prefix+d": dashTitle} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := upFixture(t, sendConfig)
+			dash := f.h.addPane(f.boss, "", "unknown")
+			f.h.setPane(dash, func(p *fakePane) { p.label = label })
+			got, err := f.svc.Send(t.Context(), workforce.SendRequest{To: "boss", CallerPane: dash, Body: "hello"})
+			require.NoError(t, err)
+			assert.Equal(t, workforce.Party{Kind: store.KindPane, ID: f.terminal(t, dash)}, got.From)
+			assert.Equal(t, workforce.Party{Kind: store.KindBoss, ID: "ha-boss"}, got.To)
+		})
+	}
+}
+
 // TestSendKnowsAWorkerByItsTerminal: herdr reissues pane ids, so a worker
 // whose pane has a new id is still found by the terminal its row binds.
 func TestSendKnowsAWorkerByItsTerminal(t *testing.T) {

@@ -66,6 +66,26 @@ func TestStatus(t *testing.T) {
 	assert.Equal(t, int64(0), *got.Groups[0].Members[0].IdleS, "a clock stepped back reports no rest, not a negative one")
 }
 
+// TestStatusLeavesOutTheDashboard is the cutover's F2: the team's dashboard
+// pane in the boss's tab, labelled as team up labels it or with the title
+// prefix+d gives it, is no boss member; a plain shell split there still is.
+func TestStatusLeavesOutTheDashboard(t *testing.T) {
+	t.Parallel()
+	f := upFixture(t, teamConfig)
+	byTeamUp := f.h.addPane(f.boss, "", "unknown")
+	f.h.setPane(byTeamUp, func(p *fakePane) { p.label = "ha-dashboard" })
+	byKey := f.h.addPane(f.boss, "", "unknown")
+	f.h.setPane(byKey, func(p *fakePane) { p.label = dashTitle })
+	split := f.h.addPane(f.boss, "", "unknown")
+
+	got, err := f.svc.Status(t.Context(), workforce.StatusRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, []workforce.Member{
+		{ID: f.boss, PaneID: f.boss, Agent: "claude", Status: "working"},
+		{ID: split, PaneID: split, Status: "unknown"},
+	}, got.Boss)
+}
+
 // TestStatusStage: each member's stage carries its stage_at, in UTC, and
 // stage_stale from the poll's clock, the same rule the snapshot uses (ADR-001
 // A42): the coder worked a turn the clock saw whole and reported nothing in
@@ -189,6 +209,33 @@ func TestStatusOrdersTheGroupsItFinds(t *testing.T) {
 	assert.Equal(t, []string{"librarian", "research"}, names, "not the types' order, research before librarian")
 }
 
+// TestStatusOfATeamWithNoWorkspace: a configured tabs team herdr shows no
+// workspace for lists its configured groups by name, each with every slot
+// open and nothing found, and answers empty lists, never null: workspaces,
+// each group's targets and members, the boss and the unbound rows (QA #39
+// item 4).
+func TestStatusOfATeamWithNoWorkspace(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig+"\n[projects.assay]\nrepo = \"REPO\"\nshort = \"as\"\n[projects.assay.groups.research]\nworkers = 0\nslots = 1\n[projects.assay.groups.qa]\nworkers = 1\nslots = 2\n")
+
+	got, err := f.svc.Status(t.Context(), workforce.StatusRequest{Selector: workforce.Selector{Project: "assay"}})
+	require.NoError(t, err)
+	assert.Equal(t, workforce.StatusResult{
+		Project: "assay", Layout: "tabs", Workspaces: []string{},
+		Groups: []workforce.GroupStatus{
+			{Name: "qa", Workers: 1, Slots: 2, Occupied: 0, Open: 2, Configured: true, Targets: []string{}, Members: []workforce.Member{}},
+			{Name: "research", Workers: 0, Slots: 1, Occupied: 0, Open: 1, Configured: true, Targets: []string{}, Members: []workforce.Member{}},
+		},
+		Boss: []workforce.Member{}, Unbound: []workforce.UnboundWorker{},
+	}, got, "empty lists, not nil ones")
+	raw, err := json.Marshal(got)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"project":"assay","layout":"tabs","workspaces":[],"groups":[`+
+		`{"name":"qa","workers":1,"slots":2,"occupied":0,"open":2,"configured":true,"targets":[],"members":[]},`+
+		`{"name":"research","workers":0,"slots":1,"occupied":0,"open":1,"configured":true,"targets":[],"members":[]}],`+
+		`"boss":[],"unbound":[]}`, string(raw))
+}
+
 // TestStatusOfADescriptionOnlyGroup: a group that only describes is no
 // worker type (ADR-001 A36), so it is listed only as herdr shows it, never
 // as configured; a group that sets both counts to 0 is still one.
@@ -303,6 +350,58 @@ func TestStatusPicksTheTeam(t *testing.T) {
 	broken := newFixture(t, "schema_version = 1\n[projects.herdr-agentisan]\nrepo = \"REPO\"\nlayout = \"grid\"\n")
 	_, err = broken.svc.Status(t.Context(), workforce.StatusRequest{})
 	require.ErrorIs(t, err, workforce.ErrConfig)
+}
+
+// TestACallerInASpaceIsTheSpacesProjects: a caller whose pane is in a ◆
+// space, ◆ boss included, is the spaces project's, never the only tabs
+// team's: team status reports that project, and spawn and team up refuse it
+// (no_target), opening nothing. With no [spaces] project configured the
+// spaces are the unnamed project's, which has no configuration, and every op
+// refuses it. A caller in any other workspace
+// still gets the only tabs team (QA #39, the boss's answer).
+func TestACallerInASpaceIsTheSpacesProjects(t *testing.T) {
+	t.Parallel()
+	const spaces = "\n[spaces]\nproject = \"agentisan\"\n[projects.agentisan]\nrepo = \"REPO\"\n[projects.agentisan.groups.coders]\nworkers = 1\nslots = 2\n"
+	tests := map[string]struct {
+		config string
+		space  string
+		// project is the team status reports; "" for a refusal.
+		project string
+	}{
+		"a space of the configured project": {config: teamConfig + spaces, space: "◆ coders", project: "agentisan"},
+		"its boss space":                    {config: teamConfig + spaces, space: "◆ boss", project: "agentisan"},
+		"a space no project owns":           {config: teamConfig, space: "◆ coders"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, tc.config)
+			caller := f.h.addTab(f.h.addWorkspace(tc.space), "1", "claude", "working")
+			sel := workforce.Selector{CallerPane: caller}
+
+			got, err := f.svc.Status(t.Context(), workforce.StatusRequest{Selector: sel})
+			if tc.project == "" {
+				require.ErrorIs(t, err, workforce.ErrNoTarget)
+				assert.Contains(t, err.Error(), "no [spaces] project configures")
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tc.project, got.Project)
+				assert.Equal(t, "spaces", got.Layout)
+			}
+			_, err = f.svc.Spawn(t.Context(), workforce.SpawnRequest{Selector: sel, Group: "coder", Count: 1})
+			require.ErrorIs(t, err, workforce.ErrNoTarget, "spawn never fills the only tabs team")
+			_, err = f.svc.Up(t.Context(), workforce.UpRequest{Selector: sel})
+			require.ErrorIs(t, err, workforce.ErrNoTarget, "nor does team up")
+			assert.Empty(t, f.h.params("tab.create"))
+			assert.Empty(t, f.h.params("workspace.create"))
+		})
+	}
+
+	f := newFixture(t, teamConfig+spaces)
+	other := f.h.addTab(f.h.addWorkspace("notes"), "1", "", "unknown")
+	got, err := f.svc.Status(t.Context(), workforce.StatusRequest{Selector: workforce.Selector{CallerPane: other}})
+	require.NoError(t, err)
+	assert.Equal(t, "herdr-agentisan", got.Project, "a caller in no space and no team's workspace gets the only tabs team")
 }
 
 // TestStatusRefusesAUserOnlyKeyFromTheRepoFile: team status reads the

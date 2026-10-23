@@ -347,9 +347,9 @@ func (s *Service) planAndOpen(ctx context.Context, sel Selector, planFn func(sta
 	}
 	out := make([]opened, 0, len(plans))
 	for _, p := range plans {
-		o, err := s.open(ctx, &st, p)
+		o, left, err := s.open(ctx, &st, p)
 		if err != nil {
-			return out, st, errors.Join(err, s.abandon(ctx, out))
+			return out, st, errors.Join(err, s.abandon(ctx, out, left))
 		}
 		out = append(out, o)
 	}
@@ -357,8 +357,9 @@ func (s *Service) planAndOpen(ctx context.Context, sel Selector, planFn func(sta
 }
 
 // open opens one worker's tab, or the team's workspace when it has none yet
-// (its first tab then becomes the worker's), and binds its row.
-func (s *Service) open(ctx context.Context, st *state, p planned) (opened, error) {
+// (its first tab then becomes the worker's), and binds its row. When the rest
+// of an open fails, left is the pane it opened, for abandon to close.
+func (s *Service) open(ctx context.Context, st *state, p planned) (opened, *herdr.Created, error) {
 	env := maps.Clone(p.launch.env)
 	if env == nil {
 		env = map[string]string{}
@@ -371,31 +372,43 @@ func (s *Service) open(ctx context.Context, st *state, p planned) (opened, error
 	if st.workspace == "" {
 		c, err = s.Herdr.CreateWorkspace(ctx, herdr.WorkspaceCreate{Cwd: st.profile.Repo, Label: st.team.Project, Env: env})
 		if err != nil {
-			return opened{}, herdrFailed("create the team's workspace "+st.team.Project, err)
+			return opened{}, nil, herdrFailed("create the team's workspace "+st.team.Project, err)
 		}
 		st.workspace = c.WorkspaceID
 		if err := s.Herdr.RenameTab(ctx, c.TabID, p.id); err != nil {
-			return opened{}, errors.Join(herdrFailed("label "+p.id+"'s tab", err), s.closeQuietly(ctx, c.RootPane.PaneID, c.RootPane.TerminalID))
+			return opened{}, &c, herdrFailed("label "+p.id+"'s tab", err)
 		}
 	} else {
 		c, err = s.Herdr.CreateTab(ctx, herdr.TabCreate{WorkspaceID: st.workspace, Cwd: st.profile.Repo, Label: p.id, Env: env})
 		if err != nil {
-			return opened{}, herdrFailed("open "+p.id+"'s tab", err)
+			return opened{}, nil, herdrFailed("open "+p.id+"'s tab", err)
 		}
 	}
 	gen, err := s.Store.BindWorker(ctx, store.Worker{LogicalID: p.id, Project: st.team.Project, Group: p.group, PaneID: c.RootPane.PaneID, TerminalID: c.RootPane.TerminalID, Routing: p.routing}, s.now())
 	if err != nil {
-		return opened{}, errors.Join(fmt.Errorf("record %s: %w", p.id, err), s.closeQuietly(ctx, c.RootPane.PaneID, c.RootPane.TerminalID))
+		return opened{}, &c, fmt.Errorf("record %s: %w", p.id, err)
 	}
-	return opened{planned: p, paneID: c.RootPane.PaneID, terminalID: c.RootPane.TerminalID, generation: gen}, nil
+	return opened{planned: p, paneID: c.RootPane.PaneID, terminalID: c.RootPane.TerminalID, generation: gen}, nil, nil
 }
 
 // abandon closes the panes of workers opened before a failure, and marks
-// their rows failed.
-func (s *Service) abandon(ctx context.Context, ws []opened) error {
+// their rows failed, and closes left, the pane the failed open opened with no
+// row bound, if any: all at once on one settle context. What failed may be
+// the op's own context ending, at a shutdown's cancel or the deadline, and a
+// close on that context would fail at once, leaving a pane no row binds whose
+// label takes the id; one budget for all of them keeps the lock, and a
+// daemon's stop, waiting the settle budget at most (NERD-5350).
+func (s *Service) abandon(ctx context.Context, ws []opened, left *herdr.Created) error {
 	settle, cancel := settling(ctx)
 	defer cancel()
-	return errors.Join(s.failAll(settle, ws)...)
+	var leftErr error
+	var wg sync.WaitGroup
+	if left != nil {
+		wg.Go(func() { leftErr = s.closeQuietly(settle, left.RootPane.PaneID, left.RootPane.TerminalID) })
+	}
+	errs := s.failAll(settle, ws)
+	wg.Wait()
+	return errors.Join(append(errs, leftErr)...)
 }
 
 // settleBudget bounds what an op does once its own deadline may have passed:

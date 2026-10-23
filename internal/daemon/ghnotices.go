@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"strconv"
 	"sync"
@@ -15,9 +16,10 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/store"
 )
 
-// githubLookups bounds how many PRs that left the open list one collection
-// looks up per repo, lowest number first: each is a gh call of up to 15 s.
-// The rest wait for the next interval.
+// githubLookups bounds how many gh calls one collection makes per repo
+// beyond the header's two, each of up to 15 s: the PRs that left the open
+// list, lowest number first, then the new reviews' counts. The rest wait
+// for the next interval.
 const githubLookups = 10
 
 // noticeQueue carries notices from a source on another goroutine to the
@@ -76,9 +78,10 @@ func (o Options) newGitHubNotices(st *store.Store, n *notices) *githubNotices {
 }
 
 // collected diffs h's successful list, open, against state.db. A repo's first
-// one is the seed: everything true then is recorded, and nothing is told. A
+// one is the seed: everything true then is recorded, and nothing is told;
+// the reviews' first is theirs, in a repo seeded before they were told. A
 // PR the last list held and this one does not is looked up, unless the list
-// may be cut off at the limit.
+// may be cut off at the limit, and then each new review, for its counts.
 func (g *githubNotices) collected(ctx context.Context, gh github.Runner, h settings.Header, open github.Open) {
 	log := g.o.Logger.With().Str("project", h.Project).Str("repo", h.GitHub).Logger()
 	// held is read before the state: an event acknowledged in between is
@@ -94,6 +97,7 @@ func (g *githubNotices) collected(ctx context.Context, gh github.Runner, h setti
 		return
 	}
 	events := notice.GitHubEvents(open.PRs)
+	reviews := notice.GitHubReviews(open.PRs)
 	u := store.GitHubUpdate{Project: h.Project, Repo: h.GitHub, Collected: true}
 	for _, p := range open.PRs {
 		u.Open = append(u.Open, p.Number)
@@ -103,6 +107,13 @@ func (g *githubNotices) collected(ctx context.Context, gh github.Runner, h setti
 			u.Seen = append(u.Seen, seenOf(e))
 		}
 	}
+	seedReviews := !state.Seeded || !state.Kinds[string(notice.Review)]
+	if seedReviews {
+		for _, r := range reviews {
+			u.Seen = append(u.Seen, seenOf(r.GitHubEvent))
+		}
+		u.SeedKinds = []string{string(notice.Review)}
+	}
 	if err := g.st.UpdateGitHub(ctx, u, g.o.Now()); err != nil {
 		log.Warn().Err(err).Msg("github: notices: state.db not written; nothing is told this interval")
 		return
@@ -111,9 +122,15 @@ func (g *githubNotices) collected(ctx context.Context, gh github.Runner, h setti
 		log.Info().Int("prs", len(u.Open)).Msg("github: notices start from this collection; what is true now is not told")
 		return
 	}
-	if g.complete(h, open.Full, log) {
-		events = append(events, g.left(ctx, gh, h, state.Open, u.Open, held, log)...)
+	if seedReviews {
+		log.Info().Int("reviews", len(reviews)).Msg("github: review notices start from this collection; the reviews there now are not told")
+		reviews = nil
 	}
+	looked := 0
+	if g.complete(h, open.Full, log) {
+		events = append(events, g.left(ctx, gh, h, state.Open, u.Open, held, &looked, log)...)
+	}
+	events = append(events, g.reviewed(ctx, gh, h, reviews, state.Seen, held, &looked, log)...)
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	until := g.o.Now().Add(g.n.configs.For(h.Project).Gap + g.o.Team.GitHub.interval())
@@ -145,10 +162,10 @@ func (g *githubNotices) complete(h settings.Header, full bool, log zerolog.Logge
 }
 
 // left looks up the PRs was held and now does not, but those whose merge is
-// already pending: a merged one is an event, a closed one leaves the open
-// set silently, and one still open, or a lookup that failed, stays for the
-// next interval.
-func (g *githubNotices) left(ctx context.Context, gh github.Runner, h settings.Header, was, now []int, held map[githubKey]bool, log zerolog.Logger) []notice.GitHubEvent {
+// already pending, counting each in looked: a merged one is an event, a
+// closed one leaves the open set silently, and one still open, or a lookup
+// that failed, stays for the next interval.
+func (g *githubNotices) left(ctx context.Context, gh github.Runner, h settings.Header, was, now []int, held map[githubKey]bool, looked *int, log zerolog.Logger) []notice.GitHubEvent {
 	merging := map[int]bool{}
 	for k := range held {
 		if k.project == h.Project && k.repo == h.GitHub && k.e.Kind == string(notice.Merged) {
@@ -156,15 +173,14 @@ func (g *githubNotices) left(ctx context.Context, gh github.Runner, h settings.H
 		}
 	}
 	var out []notice.GitHubEvent
-	looked := 0
 	for _, pr := range was {
 		if slices.Contains(now, pr) || merging[pr] {
 			continue
 		}
-		if looked == githubLookups {
+		if *looked == githubLookups {
 			break
 		}
-		looked++
+		*looked++
 		s, err := gh.PRView(ctx, h.GitHub, pr)
 		if ctx.Err() != nil {
 			return nil
@@ -185,6 +201,49 @@ func (g *githubNotices) left(ctx context.Context, gh github.Runner, h settings.H
 			if err := g.st.UpdateGitHub(ctx, store.GitHubUpdate{Project: h.Project, Repo: h.GitHub, Resolved: []int{pr}}, g.o.Now()); err != nil {
 				log.Warn().Err(err).Int("pr", pr).Msg("github: notices: a closed PR not written; it is looked up again")
 			}
+		}
+	}
+	return out
+}
+
+// reviewed looks up each review neither told nor held, for its counts,
+// while looked leaves calls: one whose lookup failed waits for the next
+// interval, and one the answer lacks is told without counts, since asking
+// again would not find it. A review whose login is not one, or that its
+// project skips, is handed over with no lookup.
+func (g *githubNotices) reviewed(ctx context.Context, gh github.Runner, h settings.Header, reviews []notice.GitHubReview, seen map[store.GitHubEvent]bool, held map[githubKey]bool, looked *int, log zerolog.Logger) []notice.GitHubEvent {
+	skip := g.n.configs.For(h.Project).Skip[notice.Review]
+	var out []notice.GitHubEvent
+	for _, r := range reviews {
+		k := githubKey{h.Project, h.GitHub, seenOf(r.GitHubEvent)}
+		if held[k] || seen[k.e] {
+			continue
+		}
+		if skip || r.Review.Login == "" {
+			out = append(out, r.GitHubEvent)
+			continue
+		}
+		if *looked == githubLookups {
+			continue
+		}
+		*looked++
+		d, err := gh.Review(ctx, h.GitHub, r.PR, r.Review)
+		if ctx.Err() != nil {
+			return nil
+		}
+		key := h.Project + "\x00" + h.GitHub + "\x00" + strconv.Itoa(r.PR) + "\x00" + r.Key
+		switch {
+		case errors.Is(err, github.ErrNoReview):
+			delete(g.failing, key)
+			out = append(out, r.GitHubEvent)
+		case err != nil:
+			if g.failing[key] != err.Error() {
+				g.failing[key] = err.Error()
+				log.Warn().Err(err).Int("pr", r.PR).Str("reviewer", r.Review.Login).Msg("github: a new review's counts were not read; they are read again each interval")
+			}
+		default:
+			delete(g.failing, key)
+			out = append(out, notice.GitHubReviewed(r, d))
 		}
 	}
 	return out

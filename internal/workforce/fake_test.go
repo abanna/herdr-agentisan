@@ -186,6 +186,24 @@ func (f *fakeHerdr) pane(id string) *fakePane {
 	return nil
 }
 
+// hasWorkspace reports whether a workspace labelled label is open.
+func (f *fakeHerdr) hasWorkspace(label string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.ContainsFunc(f.workspaces, func(w *fakeWS) bool { return w.label == label })
+}
+
+// paneIDs are the open panes' ids, in herdr's order.
+func (f *fakeHerdr) paneIDs() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, 0, len(f.panes))
+	for _, p := range f.panes {
+		out = append(out, p.id)
+	}
+	return out
+}
+
 // tabByLabel is the tab labelled label, or nil.
 func (f *fakeHerdr) tabByLabel(label string) *fakeTab {
 	f.mu.Lock()

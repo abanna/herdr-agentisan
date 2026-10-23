@@ -80,6 +80,31 @@ same check also fails on an entry with nothing behind it — a task or table row
 that was deleted while its exemption stayed — because a dead entry silently
 exempts whatever is later added under that name.
 
+## Reporting (in a herdr team)
+
+When you work in a herdr-agentisan team, the dashboard and the sidebar show
+your item and stage, read from your own words by the turn hooks
+(`herdr-agentisan report turn`, ADR-001 A42). Nothing else reads them, and a
+turn that states neither reports nothing, so your stage ages. Claude and Codex
+follow the same rule.
+
+- **Stage:** end the final message of every turn with a line that opens with
+  `BOSS:` (you report to a boss) or `STATUS:` (no boss above you), in
+  capitals, followed by what you are doing or what you need. It must be the
+  very last line of the message, with nothing after it. A status line
+  anywhere else, inside a sentence or behind a list marker, is not read. If
+  you open a message with a status headline, repeat it as the last line.
+  Where your role names its own closing lines, as `roles/review.md` does,
+  write those instead: they keep this form.
+- **Item:** whenever your task changes, state it on a line that opens with
+  `item:`, such as `item: NERD-5370` or `item: PR#100`, directly above the
+  status line. One inside a sentence is not read.
+
+```text
+item: PR#100
+BOSS: #100 fix pushed 273f69f; QA re-checks
+```
+
 ## Layout
 
 - `herdr-plugin.toml` — the plugin manifest herdr reads. Every action execs
@@ -181,12 +206,14 @@ exempts whatever is later added under that name.
   `stage_old`).
 - `internal/notice/` — boss notices (ADR-001 A44): the team poll's source
   (`Watch`: a turn's end from `agent.list`'s `completion_seq`, blocked and
-  its end, unknown for two polls, gone (a pane closed or moved, or its agent
-  exited), and the daemon's start), the context levels' source (`CtxWatch`: each
+  its end, unknown for two polls (a new agent's for 20), gone (a pane closed
+  or moved, or its agent exited), and the daemon's start), the context
+  levels' source (`CtxWatch`: each
   agent pane's ctx crossing its rotation thresholds, the boss's included,
   remembered by terminal and re-armed 5 under, A33), GitHub's events
-  (`github.go`, A45: merged, CI failed or passed, a conflict, a 👍, each
-  with its seen-set key), the per-boss pacing (`Batcher`: coalesced, at most
+  (`github.go`, A45: merged, CI failed or passed, a conflict, a 👍, a
+  review with its P-badge counts, each with its seen-set key), the
+  per-boss pacing (`Batcher`: coalesced, at most
   one message per gap, repeats and muted workers dropped, 8 KiB a message),
   the boss's mutes (`Mutes`) and the `Sink` that delivers it: the daemon's
   appends each message to the boss's notice still queued in the inbox
@@ -205,7 +232,9 @@ exempts whatever is later added under that name.
   (`handoff.go`, A33), the daemon writing the `handoff` token on a worker's
   agent pane once `pane.get` proves its terminal, with no row changed. The
   daemon runs them, with the plugin's dashboard pane and the Codex hooks
-  check `internal/cli` gives it; `internal/cli` only asks it.
+  check `internal/cli` gives it; `internal/cli` only asks it, and asks herdr
+  only to confirm its own pane (`FindCallerPane`), when no `--project` names
+  the team, for `send`'s sender and for `handoff ready` with no target.
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
@@ -229,7 +258,15 @@ exempts whatever is later added under that name.
   `Decision` that is also the audit record. `worker spawn` asks it once per
   spawn, and `team up` once per group it fills, before anything opens; each
   records it on each worker's row and sends it as an
-  `agentisan.worker.routed` event.
+  `agentisan.worker.routed` event. A coder's decision says when Jev should
+  be asked (`AsksJev`), and `ApplyJev` maps Jev's answer onto it (A57): the
+  request is `JevRequest`'s, and the caller makes the call, so routing never
+  sees the key. Nothing asks Jev yet.
+- `internal/jev/` — the client of TypeSafe's System One (ADR-001 A57): one
+  POST of the body routing built, with the key as the Bearer token, within
+  the rules' timeout, never retried or redirected; no error carries the key,
+  the request or TypeSafe's body. Tests run an httptest TypeSafe, never the
+  real one.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL`, and numbered migrations
   embedded from `migrations/` and tracked by `user_version`. The daemon holds
@@ -242,8 +279,9 @@ exempts whatever is later added under that name.
   terminal, with the shell the team poll read (migration 0003, A35), and the
   routing decision it was launched with (migration 0005, A50); the poll's
   writes are compare-and-sets on the row as it read it. The GitHub notices'
-  seen-set, open PRs and seed marks (`github.go`, migration 0004, A45) make
-  each event told once across restarts. Tests open a fresh database in a temp
+  seen-set, open PRs and seed marks, a kind's own included (`github.go`,
+  migrations 0004 and 0006, A45), make each event told once across
+  restarts. Tests open a fresh database in a temp
   dir; the store is never mocked.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
@@ -258,7 +296,8 @@ exempts whatever is later added under that name.
   the team poll and caches each project's result for the snapshot, then
   diffs each list against state.db and hands the boss's GitHub notices to
   the poll (`ghnotices.go`, A45), looking up a PR that left the list with
-  `gh pr view`.
+  `gh pr view`, and a new review's P-badge counts with one GraphQL call
+  (`reviews.go`).
 - `internal/testslots/` — the dashboard header's test slots (ADR-001 A31,
   A40): which of a project's lock files some process holds a lock on, read
   from the kernel's `/proc/locks` once every team poll without opening or

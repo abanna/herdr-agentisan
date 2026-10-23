@@ -142,12 +142,21 @@ same as `dir`, `env` and `argv`. The parts of the launch:
   command reads nothing the fence does not already admit, and the env file
   lies outside it. Claude Code's reference documents only that deny and ask
   rules see the nested command.
+- **Its built-in tools, by allowlist:** `--tools Bash,Read,ToolSearch`, so
+  the session has those three and none of Claude Code's other built-in
+  tools: no Edit, Write, Agent, Skill, LSP or Cron tool, and no tool a later
+  Claude Code adds. `EndConversation`, which only ends the session, cannot
+  be removed. `ToolSearch` stays so that Linear's tools load when asked for
+  rather than all at start. `--tools` does not reach MCP tools. Whether
+  `ToolSearch` can load a built-in tool `--tools` leaves out is not
+  documented; NERD-5370's live check settles it, and the deny lists below
+  stay as the second layer.
 - **Denied outright:** reading the repo's `.env*` files and the env file
   (by its name, and its target when it is a link), Edit, Write, NotebookEdit,
   WebFetch and WebSearch. A redirect such as `> file` is checked as an Edit,
   so it is denied too. The launch refuses a repo or daemon directory that
   holds the env file, such as your home directory, and needs `env_file` set.
-- **Denied by name, Claude Code's own tools that act without asking:**
+- **Denied by name as well, Claude Code's own tools that act without asking:**
   `Agent`, `Workflow`, `Monitor`, `TaskStop`, `EnterPlanMode`, the `Cron` tools,
   `ScheduleWakeup`, `RemoteTrigger`, `SendMessage`, `ListAgents`,
   `PushNotification`, `SendUserFile`, `SendFeedback`, the `Artifact` tools,
@@ -155,8 +164,22 @@ same as `dir`, `env` and `argv`. The parts of the launch:
   `ListMcpResourcesTool`, `ReadMcpResourceTool` and `ReadMcpResourceDirTool`.
   Most need no permission, so `dontAsk` never stops them: a live check found
   `CronList` running before they were denied. A deny rule naming a tool
-  removes it from the session. A tool a later Claude Code adds runs until it
-  is listed here, unless it asks.
+  removes it from the session. `--tools` already leaves them out, and a tool
+  a later Claude Code adds with them: this list is the second layer.
+- **Its MCP servers, by allowlist:**
+  `"allowedMcpServers":[{"serverUrl":"https://mcp.linear.app/*"}]` in
+  `--settings`, so Linear's claude.ai connector is the only server that
+  loads. An allowlist covers claude.ai's connectors too, matched by URL,
+  since a connector's name is claude.ai's display name. Your other
+  claude.ai connectors, a plugin's servers and the project's stay out;
+  built-in servers, such as Claude in Chrome and the IDE server, skip an
+  allowlist. An allowlist in the repo's `.claude/settings.json` or in
+  managed policy would add to it. Linear's tools that write are denied by
+  verb, which removes them: `mcp__claude_ai_Linear__save_*`, and the same
+  for `delete`, `create`, `update`, `merge`, `submit`, `share`, `unshare`,
+  `mark`, `resolve`, `restore`, `retire` and `prepare`. Its reads begin
+  `get_`, `list_`, `search_` or `extract_`. A verb Linear adds later is not
+  covered; `dontAsk` still refuses its tools, since no rule allows them.
 - **The project's MCP servers, rejected by name:** the launch reads the
   `.mcp.json` in the repo and in each directory above it, as Claude Code
   does, and names every server in them in `--settings`'
@@ -166,9 +189,8 @@ same as `dir`, `env` and `argv`. The parts of the launch:
   It does not pass `--strict-mcp-config`: that keeps claude.ai's
   connectors out too, and the debugger reads Linear through one. Your own
   MCP servers stay out as well, since Claude Code loads them only with your
-  user and local settings. Your other claude.ai connectors still load, and
-  a plugin's servers may; their tools are offered, and `dontAsk` refuses
-  each one without an allow rule.
+  user and local settings. Your other claude.ai connectors and a plugin's
+  servers are kept out by the allowlist above.
 - **The read fence:** `{"permissions":{"blockReadsOutsideWorkingDirectories":true}}`
   in `--settings`, and `--add-dir <the daemon's directory>`. Without it, Claude Code's built-in
   read-only commands, such as `cat` and `grep`, would read any file you can,
@@ -177,9 +199,8 @@ same as `dir`, `env` and `argv`. The parts of the launch:
   files Claude Code itself needs under `~/.claude/`, such as its skills and
   `CLAUDE.md`, and a file-reading command outside them asks, which `dontAsk`
   denies. It needs Claude Code 2.1.257 or later, and a live check on 2.1.306
-  saw a `cat` outside it refused. On Linux and macOS there is no Grep or
-  Glob tool: Claude Code leaves both out of its default set, so the
-  debugger searches with `grep` and `find` in the shell, as read-only
+  saw a `cat` outside it refused. There is no Grep or Glob tool: `--tools`
+  leaves both out, so the debugger searches with `grep` and `find` in the shell, as read-only
   commands inside the fence. Inside the fence, a command that reads without
   naming a file, such as `grep -r` run from a directory, is not checked
   against the deny rules: `grep -r` in the repo reads its `.env*` files. So
@@ -200,8 +221,8 @@ same as `dir`, `env` and `argv`. The parts of the launch:
   refused, which the docs do not promise.
 
 It is still Claude in the project's repo, so D12 holds and the repo's
-Agentisan bundle loads, but not its MCP servers. With no allow rule its skills cannot run, which is
-intended.
+Agentisan bundle loads, but not its MCP servers. Its skills cannot run, since
+`--tools` leaves out the Skill tool, which is intended.
 
 What still reaches past the allow list and the fence:
 

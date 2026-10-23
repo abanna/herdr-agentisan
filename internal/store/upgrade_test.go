@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 	"testing/fstest"
 
@@ -36,7 +37,7 @@ func TestUpgradeFromTheFirstSchema(t *testing.T) {
 
 	s := open(t, path)
 	assert.Equal(t, store.SchemaVersion(), s.UserVersion())
-	assert.Equal(t, 5, s.UserVersion())
+	assert.Equal(t, 6, s.UserVersion())
 	row, err := s.WorkerRow(t.Context(), "w")
 	require.NoError(t, err)
 	assert.Nil(t, row.Routing, "a worker bound before 0005 was not launched by routing")
@@ -52,4 +53,35 @@ func TestUpgradeFromTheFirstSchema(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, focus, 1)
 	assert.Equal(t, int64(2), send(t, s, worker("w"), boss, "after the upgrade").Generation)
+}
+
+// TestUpgradeKeepsTheGitHubSeed is the live state.db's path into 0006: a
+// repo the GitHub notices seeded at schema 5 stays seeded, with its open
+// PRs and events, and no kind of its own marked, so the reviews' first
+// collection still seeds them (A45).
+func TestUpgradeKeepsTheGitHubSeed(t *testing.T) {
+	t.Parallel()
+	five := fstest.MapFS{}
+	for _, name := range []string{"0001_init.sql", "0002_messages.sql", "0003_worker_identity.sql", "0004_github_notices.sql", "0005_worker_routing.sql"} {
+		raw, err := os.ReadFile(filepath.Join("migrations", name)) // #nosec G304 -- this package's own migrations
+		require.NoError(t, err)
+		five[name] = &fstest.MapFile{Data: raw}
+	}
+	path := dbPath(t)
+	v5, err := store.OpenWith(t.Context(), path, five)
+	require.NoError(t, err)
+	require.Equal(t, 5, v5.UserVersion())
+	_, err = store.DB(v5).ExecContext(t.Context(), `INSERT INTO github_seeded VALUES ('agentisan', 'nerds-run/agentisan-skills', 1, 1);
+INSERT INTO github_open VALUES ('agentisan', 'nerds-run/agentisan-skills', 1006, 1, 1);
+INSERT INTO github_seen VALUES ('agentisan', 'nerds-run/agentisan-skills', 1006, 'ci_passed', 'afa239d', 1, 1)`)
+	require.NoError(t, err)
+	require.NoError(t, v5.Close())
+
+	s := open(t, path)
+	got, err := s.GitHub(t.Context(), "agentisan", "nerds-run/agentisan-skills")
+	require.NoError(t, err)
+	assert.Equal(t, store.GitHubState{
+		Seeded: true, Kinds: map[string]bool{}, Open: []int{1006},
+		Seen: map[store.GitHubEvent]bool{{PR: 1006, Kind: "ci_passed", Key: "afa239d"}: true},
+	}, got)
 }

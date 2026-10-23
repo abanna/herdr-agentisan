@@ -127,7 +127,7 @@ func teamsIn(teams []settings.Team, l layout, rows []store.Worker) []placed {
 	out := make([]placed, 0, len(teams))
 	for _, t := range teams {
 		p := placed{Team: t}
-		m := team.Build(l.Layout, resolverOf(t), rows)
+		m := team.Build(l.Layout, resolverOf(t, l.dashboardTitle), rows)
 		if i := slices.IndexFunc(m.Projects, func(pr team.Project) bool { return pr.Name == t.Project }); i >= 0 {
 			p.pr = m.Projects[i]
 		}
@@ -205,10 +205,14 @@ func BossOf(t settings.Team) string {
 	return tabsOf(t).BossTab()
 }
 
-// resolverOf is the resolver that finds t in herdr's layout.
-func resolverOf(t settings.Team) team.Resolver {
+// resolverOf is the resolver that finds t in herdr's layout. A tabs team's
+// leaves out its dashboard pane, whose label is team.DashboardLabel or, when
+// prefix+d opened it, title (team.Tabs.Dashboard).
+func resolverOf(t settings.Team, title string) team.Resolver {
 	if t.Layout == settings.LayoutSpaces {
 		return team.Spaces{Project: t.Project, Color: t.Color}
 	}
-	return tabsOf(t)
+	r := tabsOf(t)
+	r.DashboardTitle = title
+	return r
 }
