@@ -199,50 +199,59 @@ func TestNoticesWithABrokenConfig(t *testing.T) {
 // queued (A44): while the boss is away, every message the poll flushes for
 // it is appended to its one queued notice, from the daemon, which holds
 // them all, oldest first; daemon.log has each message as well, each naming
-// that notice.
+// that notice. The same in a team whose boss and worker are Codex
+// (NERD-5507): Watch tells a Codex worker's turn and block, and the boss
+// gets one notice, by its name, whatever agent it runs.
 func TestNoticesQueueOneNoticePerBoss(t *testing.T) {
 	t.Parallel()
-	th := newTeamHerdr(t)
-	th.setAgents(turned("wN:p1", "pee01", 1))
-	var logs lockedLog
-	dir := shortDir(t)
-	o := teamOpts(t, dir, th, noticesConfig(t, "gap = 0\n"))
-	logger, err := logging.New(&logs, "info", "json")
-	require.NoError(t, err)
-	o.Logger = logger
-	serving(t, o, th.fakeHerdr)
-	waitLine(t, &logs, "the daemon started")
-	polled(t, th.srv, 2)
-	th.setAgents(turned("wN:p1", "pee01", 2))
-	waitLine(t, &logs, "pee01 finished a turn")
-	th.setPane("wN:p1", "agent_status", "blocked")
-	waitLine(t, &logs, "pee01 is blocked")
-	polled(t, th.srv, 2)
-	assert.Equal(t, []string{"boss boss daemon agentisan queued " + strings.Join([]string{
-		"[agentisan] notices:",
-		"agentisan: the daemon started; turns that ended while it was down are not reported",
-		"pee01 finished a turn · ctx 40%",
-		"pee01 is blocked · ctx 40%",
-	}, "\n")}, query(t, paths(t, dir, th.fakeHerdr).DB,
-		"SELECT recipient_kind || ' ' || recipient || ' ' || sender_kind || ' ' || sender || ' ' || state || ' ' || body FROM messages"),
-		"no agent named boss is in the ◆ boss space, so the one notice waits")
+	for _, kind := range []string{"claude", "codex"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			th := newTeamHerdr(t)
+			th.setAgents(turned("wN:p1", "pee01", 1))
+			th.setPane("wJ:p1", "agent", kind)
+			th.setPane("wN:p1", "agent", kind)
+			var logs lockedLog
+			dir := shortDir(t)
+			o := teamOpts(t, dir, th, noticesConfig(t, "gap = 0\n"))
+			logger, err := logging.New(&logs, "info", "json")
+			require.NoError(t, err)
+			o.Logger = logger
+			serving(t, o, th.fakeHerdr)
+			waitLine(t, &logs, "the daemon started")
+			polled(t, th.srv, 2)
+			th.setAgents(turned("wN:p1", "pee01", 2))
+			waitLine(t, &logs, "pee01 finished a turn")
+			th.setPane("wN:p1", "agent_status", "blocked")
+			waitLine(t, &logs, "pee01 is blocked")
+			polled(t, th.srv, 2)
+			assert.Equal(t, []string{"boss boss daemon agentisan queued " + strings.Join([]string{
+				"[agentisan] notices:",
+				"agentisan: the daemon started; turns that ended while it was down are not reported",
+				"pee01 finished a turn · ctx 40%",
+				"pee01 is blocked · ctx 40%",
+			}, "\n")}, query(t, paths(t, dir, th.fakeHerdr).DB,
+				"SELECT recipient_kind || ' ' || recipient || ' ' || sender_kind || ' ' || sender || ' ' || state || ' ' || body FROM messages"),
+				"no agent named boss is in the ◆ boss space, so the one notice waits")
 
-	var inboxes []string
-	appended := []bool{}
-	for line := range strings.Lines(logs.String()) {
-		var e struct {
-			Msg      string `json:"message"`
-			Inbox    string `json:"inbox"`
-			Appended bool   `json:"appended"`
-		}
-		if json.Unmarshal([]byte(line), &e) == nil && e.Msg == "notice" {
-			inboxes, appended = append(inboxes, e.Inbox), append(appended, e.Appended)
-		}
+			var inboxes []string
+			appended := []bool{}
+			for line := range strings.Lines(logs.String()) {
+				var e struct {
+					Msg      string `json:"message"`
+					Inbox    string `json:"inbox"`
+					Appended bool   `json:"appended"`
+				}
+				if json.Unmarshal([]byte(line), &e) == nil && e.Msg == "notice" {
+					inboxes, appended = append(inboxes, e.Inbox), append(appended, e.Appended)
+				}
+			}
+			require.Len(t, inboxes, 3)
+			assert.NotEmpty(t, inboxes[0])
+			assert.Equal(t, []string{inboxes[0], inboxes[0], inboxes[0]}, inboxes, "each message went into the one notice")
+			assert.Equal(t, []bool{false, true, true}, appended)
+		})
 	}
-	require.Len(t, inboxes, 3)
-	assert.NotEmpty(t, inboxes[0])
-	assert.Equal(t, []string{inboxes[0], inboxes[0], inboxes[0]}, inboxes, "each message went into the one notice")
-	assert.Equal(t, []bool{false, true, true}, appended)
 }
 
 // haNotices is a config dir with the tabs team ha and body appended.
