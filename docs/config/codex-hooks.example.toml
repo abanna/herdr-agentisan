@@ -10,6 +10,13 @@
 #   daemon carries the daemon's environment, not the pane's, so the report
 #   refuses it and reports nothing. `features.daemon_auto_start = false` is
 #   not enough: Codex still attaches to a daemon that is already running.
+# - Codex's `ctx` needs Linux or macOS: the report tells the pane's own Codex
+#   from a shared server by the process table, which it reads only there
+#   (ADR-001 A26). Anywhere else the hooks run and report nothing;
+#   HERDR_AGENTISAN_LOG_LEVEL=debug says why.
+# - A fresh Codex shows `ctx` as `--` until its first tool call or turn end,
+#   when the first of these hooks runs (A27). One started without -m or
+#   --model shows no model until then either (A39, A56).
 # - Codex runs a new or edited hook only once you trust it, at startup or in
 #   /hooks.
 # - The hooks run through your login shell, so `herdr-agentisan` must be on
