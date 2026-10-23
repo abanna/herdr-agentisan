@@ -248,9 +248,10 @@ Every audit field is present, `""` where the decision has none.
 | `agentisan.routing.model_id` | string | Its model id |
 | `agentisan.routing.effort` | string | The effort, such as `high` |
 | `agentisan.routing.policy_version` | string | The rules' schema version and a digest of the rules and `[routing]` |
-| `agentisan.routing.jev_model_returned` | string | Jev's model; `""` until NERD-5289 part 2 |
-| `agentisan.routing.answers` | string | Jev's answers as JSON; `""` until part 2 |
-| `agentisan.routing.fallback_reason` | string | Why a coder took its default: `task_not_found`, `lookup_unavailable`, `insufficient_assignment`, `jev_disabled`, or `jev_no_change` for a codex coder, whose default no answer of Jev's could change (A57); `""` for none |
+| `agentisan.routing.jev_model_returned` | string | The model Jev answered as; `""` unless Jev answered (A57) |
+| `agentisan.routing.answers` | string | Jev's two answers as JSON, with only their known fields; `""` unless Jev's answers were read |
+| `agentisan.routing.fallback_reason` | string | Why a coder took its default: `task_not_found`, `lookup_unavailable`, `insufficient_assignment`, `jev_disabled`, or `jev_no_change` for a codex coder, whose default no answer of Jev's could change; while Jev is enabled (A57), `jev_failure`, `jev_key_unavailable`, `jev_insufficient`, `jev_unknown`, `jev_low_confidence` or `escalation_ineligible`; `""` for none |
+| `agentisan.routing.jev_error` | string | Why Jev gave no usable answer (`jev_failure`) or was not asked for want of its key (`jev_key_unavailable`), at most 200 bytes, never the key; `""` otherwise |
 | `agentisan.routing.override.binding` | string | The binding an override named |
 | `agentisan.routing.override.by` | string | `user` (`[routing.overrides]`) or `boss` (`--model`) |
 | `agentisan.routing.override.effort` | string | The boss's `--effort` |

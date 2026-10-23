@@ -122,6 +122,9 @@ func (s *Service) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 	if err != nil {
 		return SpawnResult{}, err
 	}
+	if d != nil {
+		*d = s.askJev(ctx, p, *d, req.Task)
+	}
 	pending, st, err := s.planAndOpen(ctx, req.Selector, func(st state) ([]planned, error) {
 		if st.profile.Repo != p.Repo {
 			return nil, fmt.Errorf("%w: the repo changed from %s to %s during the preflight; spawn again", ErrPreflight, p.Repo, st.profile.Repo)
@@ -584,11 +587,11 @@ var effortPattern = regexp.MustCompile(`^[a-z]{1,16}$`)
 // plan builds each id's launch: the kind is the command's bare executable,
 // which herdr runs from the shell's PATH, and the arguments the command's own,
 // for the debugger type its launch's (dbg, A32), --no-daemon for Codex if
-// absent, c's model and effort and, for Claude only, --name with the id
-// (herdr names a Codex), then the turn hooks as --settings, unless the
-// command passes its own; the debugger's go into its launch's one
-// --settings object instead (withTurnHooks). A debugger's tab also gets its
-// launch's environment.
+// absent, its type's sandbox for a Codex whose command chooses none (A59),
+// c's model and effort and, for Claude only, --name with the id (herdr names
+// a Codex), then the turn hooks as --settings, unless the command passes its
+// own; the debugger's go into its launch's one --settings object instead
+// (withTurnHooks). A debugger's tab also gets its launch's environment.
 func plan(p *settings.Profile, typ string, c choice, ids []string, dbg *debugger.Command) ([]planned, error) {
 	agent := p.AgentFor(typ)
 	var env map[string]string
@@ -634,6 +637,9 @@ func plan(p *settings.Profile, typ string, c choice, ids []string, dbg *debugger
 		args := slices.Clone(agent.Command[1:])
 		if kind == codexKind && !slices.Contains(args, noDaemon) {
 			args = append(args, noDaemon)
+		}
+		if mode := settings.SandboxFor(typ); kind == codexKind && mode != "" && !settings.ChoosesSandbox(args) {
+			args = append(args, "--sandbox", mode)
 		}
 		if c.model != "" {
 			args = append(args, "--model", c.model)

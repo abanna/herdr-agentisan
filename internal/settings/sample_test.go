@@ -112,3 +112,34 @@ func TestSampleConfigResolves(t *testing.T) {
 	assert.Equal(t, []int{45, 55, 65}, rs.For("assay").For("librarian"), "the daemon reads the sample's role thresholds")
 	assert.Equal(t, []int{55, 65, 75}, rs.For("assay").For(""))
 }
+
+// TestSampleCodexGroupResolves: the sample's commented Codex qa group,
+// uncommented, loads, and each project's qa then runs codex with the
+// sample's model, in Codex's full access (A59).
+func TestSampleCodexGroupResolves(t *testing.T) {
+	t.Parallel()
+	sample, err := os.ReadFile(samplePath)
+	require.NoError(t, err)
+	block := "# [groups.qa]\n# agent = { command = [\"codex\"], model = \"gpt-6.1-sol\" }\n"
+	require.Equal(t, 1, strings.Count(string(sample), block), "the sample's commented Codex group")
+	on := strings.Replace(string(sample), block, strings.ReplaceAll(block, "# ", ""), 1)
+
+	dir, home := t.TempDir(), t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte(on), 0o600))
+	tree := fstest.MapFS{}
+	for _, repo := range []string{"agentisan-skills", "assay"} {
+		marker := filepath.Join(home, "Development", "nerdsrun", repo, settings.BundleMarker)
+		tree[strings.TrimPrefix(filepath.ToSlash(marker), "/")] = &fstest.MapFile{Data: []byte("1\n")}
+	}
+	stat := func(name string) (fs.FileInfo, error) {
+		return fs.Stat(tree, strings.TrimPrefix(filepath.ToSlash(name), "/"))
+	}
+	for _, project := range []string{"agentisan", "assay"} {
+		got, err := settings.Load(settings.LoadOptions{ConfigDir: dir, LookupEnv: envOf(map[string]string{"HOME": home}), Stat: stat, Project: project})
+		require.NoError(t, err, project)
+		require.NotNil(t, got.Profile, project)
+		assert.Equal(t, settings.Agent{Command: []string{"codex"}, Model: "gpt-6.1-sol"}, got.Profile.AgentFor("qa"), project)
+	}
+	assert.Equal(t, settings.SandboxFullAccess, settings.SandboxFor("qa"), "the sample's comment says qa runs with full access")
+	assert.Contains(t, string(sample), "#   codex --no-daemon --sandbox "+settings.SandboxFor("qa")+" --model gpt-6.1-sol\n", "the launch the comment shows")
+}
