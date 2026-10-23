@@ -353,4 +353,14 @@ func TestDaemonRunNamesThePluginsDashboard(t *testing.T) {
 	installed, err = o.Team.CodexHooks()
 	require.NoError(t, err)
 	assert.True(t, installed)
+
+	require.NotNil(t, o.Team.CodexTurnHooks)
+	turned, err := o.Team.CodexTurnHooks()
+	require.NoError(t, err)
+	assert.False(t, turned, "the ctx hooks alone are not the turn hooks")
+	_, err = codexhooks.InstallWithTurn(home)
+	require.NoError(t, err)
+	turned, err = o.Team.CodexTurnHooks()
+	require.NoError(t, err)
+	assert.True(t, turned)
 }

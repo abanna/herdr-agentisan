@@ -104,8 +104,9 @@ func daemonOptions(cmd *cobra.Command, stateDirFlag string, client bool) (daemon
 		Team: &daemon.TeamOptions{
 			ConfigDir: env.ConfigDir, GitHub: daemon.GitHubOptions{Gh: findGh(lookup)},
 			PluginRoot: debugger.Root(lookup, exe), Binary: exe,
-			Dashboard:  workforce.DashboardPane{PluginID: plugin.ID, Entrypoint: plugin.DashboardPane, Title: plugin.DashboardTitle},
-			CodexHooks: func() (bool, error) { return codexhooks.InstalledIn(lookup) },
+			Dashboard:      workforce.DashboardPane{PluginID: plugin.ID, Entrypoint: plugin.DashboardPane, Title: plugin.DashboardTitle},
+			CodexHooks:     func() (bool, error) { return codexhooks.InstalledIn(lookup) },
+			CodexTurnHooks: func() (bool, error) { return codexhooks.TurnInstalledIn(lookup) },
 		},
 	}, nil
 }
