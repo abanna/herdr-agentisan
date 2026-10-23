@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"maps"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/abanna/herdr-agentisan/internal/daemon"
 )
 
 // sandboxed is the environment Codex gives a tool command under its network
@@ -53,9 +56,9 @@ func refusal(t *testing.T, lookup func(string) (string, bool), args ...string) (
 // TestCommandsFromACodexSandbox: a command Codex ran in its network sandbox,
 // whose seccomp filter denies every connect, is told so once its dial
 // reaches nothing, by every command that asks the daemon: daemon_unavailable
-// with the cause and who to ask, never the daemon-restart advice (A25).
-// Herdr refusing the caller's pane gets the same, and the daemon is never
-// asked. One whose escalation Codex approved carries the same variable and
+// with the cause and who to ask, then the dial's own error, never the
+// daemon-restart advice (A25). Herdr refusing the caller's pane gets the
+// same, with herdr's dial, and the daemon is never asked. One whose escalation Codex approved carries the same variable and
 // reaches the daemon as any other; a daemon that took the request and gave
 // no answer is still daemon_no_answer, since it may have run it (A52).
 func TestCommandsFromACodexSandbox(t *testing.T) {
@@ -64,13 +67,15 @@ func TestCommandsFromACodexSandbox(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			code, msg := refusal(t, newDaemonEnv(t).lookup(sandboxed), tc.args...)
+			e := newDaemonEnv(t)
+			code, msg := refusal(t, e.lookup(sandboxed), tc.args...)
 			assert.Equal(t, "daemon_unavailable", code, "no daemon")
 			assert.True(t, strings.HasPrefix(msg, sandboxedPrefix), msg)
 			assert.Contains(t, msg, "ask your boss")
 			assert.NotContains(t, msg, "daemon-restart")
+			assert.True(t, strings.HasSuffix(msg, ": "+dialError(t, e.daemonSocket(t))), "the daemon's dial error ends it: %s", msg)
 
-			e := newDaemonEnv(t)
+			e = newDaemonEnv(t)
 			asked := fakeDaemon(t, e, `{"ok":true,"data":{}}`)
 			out, err := runStdin(t, e.lookup(sandboxed), "", tc.args...)
 			require.NoError(t, err, "an approved escalation reaches the daemon")
@@ -94,6 +99,7 @@ func TestCommandsFromACodexSandbox(t *testing.T) {
 			code, msg = refusal(t, e.lookup(withPane(sandboxed)), tc.args...)
 			assert.Equal(t, "daemon_unavailable", code, "herdr unreached")
 			assert.True(t, strings.HasPrefix(msg, sandboxedPrefix), msg)
+			assert.True(t, strings.HasSuffix(msg, ": "+dialError(t, e.herdrSock)), "herdr's dial error ends it: %s", msg)
 			assert.Empty(t, asked, "the daemon is never asked")
 
 			// A herdr reached that answers amiss, as after an approved
@@ -137,6 +143,27 @@ func gone(t *testing.T) daemonEnv {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	return daemonEnv{herdrSock: filepath.Join(dir, "h.sock"), stateDir: filepath.Join(dir, "state")}
+}
+
+// daemonSocket is the plugin socket e's commands dial.
+func (e daemonEnv) daemonSocket(t *testing.T) string {
+	t.Helper()
+	p, err := daemon.PathsFor(e.stateDir, e.herdrSock)
+	require.NoError(t, err)
+	return p.Socket
+}
+
+// dialError is the error a dial of socket, where nothing listens, fails
+// with: the cause a sandboxed refusal ends with, so the boss it asks sees
+// which socket was not reached and why.
+func dialError(t *testing.T, socket string) string {
+	t.Helper()
+	conn, err := net.Dial("unix", socket)
+	if conn != nil {
+		_ = conn.Close()
+	}
+	require.Error(t, err, "nothing listens at %s", socket)
+	return err.Error()
 }
 
 // withPane is env with HERDR_PANE_ID set.
