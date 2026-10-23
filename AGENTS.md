@@ -370,6 +370,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   it is configuration resolved from the environment the binary was BUILT in,
   and keeping it in a package of its own made every caller import two.
 - `internal/logging/` — zerolog construction and context plumbing.
+- `internal/testtmp/` — `Use`, from TestMain: test state on tmpfs, and
+  `CheckUsed`, one test per caller that fails when its TestMain stops calling
+  `Use` (NERD-5503).
 - `internal/telemetry/` — OpenTelemetry tracing over OTLP/HTTP, and the
   daemon's workflow events (ADR-001 D10, A21) as OTLP log records, schema in
   `docs/telemetry.md`. With no endpoint configured it installs propagation
