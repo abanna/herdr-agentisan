@@ -185,10 +185,10 @@ func policyOf(d routing.Deployment) (routing.Policy, error) {
 	return p, nil
 }
 
-// CheckRoutingProviders refuses a user override that every spawn of a
-// worker type under a provider it runs would be refused for (A50, A63): a
-// binding the deployment disables, leaves unresolved, or that does not take
-// the role's effort. An override binds only workers of its binding's
+// CheckRoutingProviders refuses a user override that a spawn of a worker
+// type, under a provider it runs and at its role's own effort, would be
+// refused for (A50, A63): a binding the deployment disables, leaves
+// unresolved, or that does not take the role's effort. An override binds only workers of its binding's
 // provider, so one for another provider is no override of the pair, and a
 // role's default that fails is the spawn's to refuse. config resolve
 // --project runs it whether or not routing is on. Load does not, so one

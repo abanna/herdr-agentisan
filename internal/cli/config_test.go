@@ -149,8 +149,8 @@ func TestConfigResolveShowsThePolicyVersion(t *testing.T) {
 }
 
 // TestConfigResolveRefusesAnOverrideATypeCannotRun: with --project, config
-// resolve refuses a user override that every spawn of a worker type under
-// its provider would be refused for, whether or not routing is on, before it
+// resolve refuses a user override that a spawn of a worker type under its
+// provider, at the role's effort, would be refused for, whether or not routing is on, before it
 // prints anything; with no project it names no type, so it resolves (A50,
 // A63). An override of the other provider's binding is no override of the
 // type, so it resolves.

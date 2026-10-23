@@ -611,8 +611,8 @@ which binds only workers of that binding's provider, so `coder =
 one per provider, such as `coder = ["claude_strong", "codex_strong"]`.
 `config resolve` shows each key with its layer, then `routing policy:`, the
 version a decision records; with `--project` it also refuses an override
-every spawn of a worker type under its provider would be refused for, such
-as a binding switched off in `[routing.bindings]`.
+a worker type's spawns under its provider would be refused for at the
+role's effort, such as a binding switched off in `[routing.bindings]`.
 
 `[routing.jev]` is for Jev's complexity answer about a coder's assignment
 (ADR-001 A57): `enabled` (off by default, and Jev is asked only while

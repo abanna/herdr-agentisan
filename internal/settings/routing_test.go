@@ -256,8 +256,8 @@ func TestProfilePolicyIsTheResolvedOne(t *testing.T) {
 }
 
 // TestCheckRoutingProviders: config resolve --project refuses a user
-// override that every spawn of a worker type under its provider would be
-// refused for, naming the override, the type, the provider and why, whether
+// override that a spawn of a worker type under its provider, at the role's
+// effort, would be refused for, naming the override, the type, the provider and why, whether
 // or not routing is on (A63). An override binds only workers of its
 // binding's provider, so a type of another provider passes, as do a type
 // whose override runs, a type with no role, one that only describes and a
