@@ -160,7 +160,7 @@ type BoardFrame struct {
 	Open, Ready, Expanded, Available bool
 	Posts                            []daemon.BoardPostView
 	Mark, OpenMark                   int64
-	Selected                         int
+	Selected, Scroll                 int
 	Filter                           string
 	Err                              error
 }
@@ -285,9 +285,17 @@ func (m *Model) boardLoaded(r daemon.BoardReadResult) {
 		}
 	}
 	m.board.Selected = min(m.board.Selected, max(0, len(m.board.posts())-1))
+	posts := m.board.posts()
+	if len(posts) == 0 || posts[m.board.Selected].Seq != seq {
+		m.board.Expanded = false
+		m.board.Scroll = 0
+	}
 }
 
 func (m Model) boardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.board.Expanded && !m.help && m.scrollBoard(msg.String()) {
+		return m, nil
+	}
 	switch k := msg.String(); k {
 	case "q", keyQuit:
 		return m, tea.Quit
@@ -301,17 +309,21 @@ func (m Model) boardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.help = false
 		case m.board.Expanded:
 			m.board.Expanded = false
+			m.board.Scroll = 0
 		default:
 			m.closeBoard()
 		}
 	case keyUp:
 		m.board.Selected = max(0, m.board.Selected-1)
 		m.board.Expanded = false
+		m.board.Scroll = 0
 	case keyDown:
 		m.board.Selected = min(max(0, len(m.board.posts())-1), m.board.Selected+1)
 		m.board.Expanded = false
+		m.board.Scroll = 0
 	case keyEnter:
 		m.board.Expanded = !m.board.Expanded
+		m.board.Scroll = 0
 	case "t", "d":
 		filter := "team"
 		if k == "d" {
@@ -323,7 +335,33 @@ func (m Model) boardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.board.Filter = filter
 		m.board.Selected = 0
 		m.board.Expanded = false
+		m.board.Scroll = 0
 		return m, m.boardNext()
 	}
 	return m, nil
+}
+
+// scrollBoard moves within the expanded post, never changing its selection or
+// read mark. The renderer supplies the same wrapped-line bounds it draws.
+func (m *Model) scrollBoard(key string) bool {
+	v := plan(m.Frame(), m.Width(), m.Height()).board
+	scroll := min(max(0, m.board.Scroll), v.scrollMax)
+	switch key {
+	case keyUp:
+		scroll--
+	case keyDown:
+		scroll++
+	case "pgup":
+		scroll -= max(1, v.room-1)
+	case "pgdown":
+		scroll += max(1, v.room-1)
+	case "home":
+		scroll = 0
+	case "end":
+		scroll = v.scrollMax
+	default:
+		return false
+	}
+	m.board.Scroll = min(max(0, scroll), v.scrollMax)
+	return true
 }

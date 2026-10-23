@@ -1129,6 +1129,8 @@ func footerParts(f Frame, view bool) []seg {
 	}
 	act := onAgent(f, view)
 	switch {
+	case f.Board.Open && f.Board.Expanded:
+		return append(parts, seg{"↑↓ scroll · pgup/pgdown page · home/end · enter collapse · esc back", dimStyle})
 	case f.Board.Open:
 		return append(parts, seg{"↑↓ move · enter expand · t team · d daemon · esc back · ? help · q quit", dimStyle})
 	case f.Search:

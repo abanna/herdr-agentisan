@@ -394,6 +394,7 @@ func (m Model) click(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	case hitBoard:
 		m.board.Selected = sel.Agent
 		m.board.Expanded = false
+		m.board.Scroll = 0
 		return m, nil
 	case hitBack:
 		if m.board.Open {

@@ -541,8 +541,9 @@ moves the user's. Posts are kept 30 days, at most 2,000 a team. Nothing
 posts to the board yet: until part 1a B of NERD-5533 the boss's messages
 and notices are still typed into its pane. Press `b` in the dashboard for
 the user's board panel. `t` and `d` toggle its team and daemon filters; arrows
-move, Enter expands a post, and Escape closes help, then the expansion, then
-the panel. Closing returns to the overview or group view you opened it from.
+move between posts. Enter expands a post; within it arrows scroll by line,
+PageUp/PageDown by page, and Home/End reach its beginning/end. Escape closes
+help, then the expansion, then the panel. Closing returns to the overview or group view you opened it from.
 The `board N` badge in the header and tab bar counts the user's unread posts.
 The panel reads at most 200 newest posts every 3 seconds while open, and
 marks through the newest post under its filter. With team-only on, that

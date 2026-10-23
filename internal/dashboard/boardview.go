@@ -15,10 +15,11 @@ import (
 // boardView uses the same rows for drawing and hits. A row names a post,
 // including its continuation lines, or -1 for a border or state message.
 type boardView struct {
-	rows   []line
-	posts  []int
-	offset int
-	back   span
+	rows            []line
+	posts           []int
+	offset          int
+	scrollMax, room int
+	back            span
 }
 
 func (v *boardView) add(ln line, post int) {
@@ -89,11 +90,16 @@ func planBoard(l layout, b BoardFrame) *boardView {
 		}
 	}
 	v.add(line{{"╰" + strings.Repeat("─", max(0, l.w-2)) + "╯", dimStyle}}, -1)
-	// Keep title and top border fixed; scroll only the posts. A tall expanded
-	// post starts at its first line, so the body is never opened mid-sentence.
+	// Keep title and borders fixed. An expansion starts at its first line;
+	// navigation can then scroll through every wrapped body line.
 	room := max(0, l.avail-3)
+	v.room = room
 	if selectedEnd > 0 && room > 0 {
 		v.offset = min(max(0, selectedEnd-2-room), max(0, selectedStart-2))
+		if b.Expanded {
+			v.scrollMax = max(0, selectedEnd-selectedStart-room)
+			v.offset += min(max(0, b.Scroll), v.scrollMax)
+		}
 	}
 	return v
 }
