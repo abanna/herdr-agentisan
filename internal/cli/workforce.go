@@ -121,13 +121,17 @@ func (f *opFlags) selector(ctx context.Context) (workforce.Selector, error) {
 
 // runOp asks the daemon to run op with the request req builds once the
 // daemon's socket is known, and prints its answer. req fails only when
-// herdr does, finding the team (herdr_failed).
+// herdr does, finding the team (herdr_failed). A command Codex ran in its
+// network sandbox whose dial reached neither herdr nor the daemon is told
+// why, and who to ask (workforce.CheckReach); one whose escalation Codex
+// approved still carries the sandbox's variable, and dials as any other.
 func (f *opFlags) runOp(cmd *cobra.Command, args []string, op string, req func() (any, error)) error {
 	if len(args) > 0 {
 		return badRequest(cmd, fmt.Errorf("%s takes no arguments, got %s", cmd.CommandPath(), strings.Join(args, " ")))
 	}
 	ctx := cmd.Context()
 	lookup := lookupEnvFrom(ctx)
+	pane := report.PaneFrom(lookup)
 	env, err := plugin.EnvFrom(lookup)
 	if err != nil {
 		return refuseWith(cmd, codeDaemonUnavailable, fmt.Sprintf("read plugin environment: %v", err))
@@ -139,6 +143,9 @@ func (f *opFlags) runOp(cmd *cobra.Command, args []string, op string, req func()
 	}
 	r, err := req()
 	if err != nil {
+		if sandboxed := workforce.CheckReach(pane); sandboxed != nil && errors.Is(err, herdr.ErrNotSent) {
+			return refuseWith(cmd, codeDaemonUnavailable, sandboxed.Error()+": "+err.Error())
+		}
 		return refuseWith(cmd, "herdr_failed", err.Error())
 	}
 	data, err := daemon.Workforce(ctx, paths.Socket, op, r)
@@ -151,6 +158,9 @@ func (f *opFlags) runOp(cmd *cobra.Command, args []string, op string, req func()
 	case errors.Is(err, daemon.ErrUnavailable) && !errors.Is(err, daemon.ErrNotSent):
 		return refuseWith(cmd, codeDaemonNoAnswer, "the daemon at "+paths.Socket+" took the request and gave no answer, so it may have done it: "+err.Error())
 	case errors.Is(err, daemon.ErrUnavailable):
+		if sandboxed := workforce.CheckReach(pane); sandboxed != nil {
+			return refuseWith(cmd, codeDaemonUnavailable, sandboxed.Error()+": "+err.Error())
+		}
 		msg := "no daemon answered at " + paths.Socket
 		if derived {
 			msg += " (herdr's state directory for this plugin, from XDG_STATE_HOME or HOME; pass --state-dir if herdr runs with another)"

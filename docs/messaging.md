@@ -109,7 +109,9 @@ so a pane sender's pending notices fail then.
 
 - A worker `worker spawn` did not start has no logical id the daemon knows,
   so `send <worker>` is refused. Use `herdr agent prompt` for it.
-- A Codex worker in its default sandbox cannot reach a Unix socket. It
-  receives messages but cannot send them, and the boss reads its turns
-  from the daemon's notices.
+- A Codex worker in a network sandbox (Codex's `workspace-write` or
+  `read-only`, ADR-001 A59) cannot reach a Unix socket. It receives
+  messages but cannot send them: `send` answers
+  `daemon_unavailable`, saying the sandbox is why and to ask the boss
+  (ADR-001 A25), and the boss reads its turns from the daemon's notices.
 - A delivered or failed message is kept 14 days.

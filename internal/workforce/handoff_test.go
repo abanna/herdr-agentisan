@@ -24,7 +24,9 @@ func (f *fixture) handoffOf(t *testing.T, pane string) string {
 // TestHandoffReady: by logical id, a hand-started worker's tab label, a pane
 // id and a stale pane id, the worker's agent pane is marked with hready.sh's
 // value, as source agentisan, for herdr's longest TTL; a mark again changes
-// nothing but is written again; --clear takes it off with no TTL.
+// nothing but is written again; --clear takes it off with no TTL. A Codex
+// worker, at rest on unknown, is marked as well: its network sandbox leaves
+// the mark to its boss (A25).
 func TestHandoffReady(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, teamConfig)
@@ -32,6 +34,8 @@ func TestHandoffReady(t *testing.T) {
 	hand := f.h.addTab(f.ws, "ha-qa-3", "claude", "idle")
 	other := f.worker(t, "ha-coder-2", "coder")
 	stale := f.worker(t, "ha-review-1", "review")
+	codex := f.h.addTab(f.ws, "ha-coder-3", "codex", "unknown")
+	f.bindRow(t, "ha-coder-3", "coder", codex)
 	f.h.mu.Lock()
 	f.h.alias["w3:p1"] = stale.PaneID
 	f.h.mu.Unlock()
@@ -44,6 +48,7 @@ func TestHandoffReady(t *testing.T) {
 		{"ha-qa-3", workforce.HandoffReadyResult{ID: hand, Project: "herdr-agentisan", Group: "qa", PaneID: hand}},
 		{other.PaneID, workforce.HandoffReadyResult{ID: other.ID, Bound: true, Project: "herdr-agentisan", Group: "coder", PaneID: other.PaneID}},
 		{"w3:p1", workforce.HandoffReadyResult{ID: stale.ID, Bound: true, Project: "herdr-agentisan", Group: "review", PaneID: stale.PaneID}},
+		{"ha-coder-3", workforce.HandoffReadyResult{ID: "ha-coder-3", Bound: true, Project: "herdr-agentisan", Group: "coder", PaneID: codex}},
 	}
 	for _, tc := range tests {
 		tc.want.Ready, tc.want.Changed = true, true
