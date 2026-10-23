@@ -26,8 +26,10 @@ import (
 
 // fakeHerdr is a herdr server with state: workspaces, tabs, panes and the
 // agents named in them, changed by the workforce's calls the way herdr
-// 0.9.3 changes them. Knobs make a pane's shell busy, an agent slow, blocked
-// or gone, a prompt late, a method fail, or a stale pane id resolve.
+// 0.9.3 changes them: a pane's tokens keep one value per key, whichever
+// source wrote it, and an empty value clears the key. Knobs make a pane's
+// shell busy, an agent slow, blocked or gone, a prompt late, a method fail,
+// or a stale pane id resolve.
 type fakeHerdr struct {
 	t   *testing.T
 	srv *herdrtest.Server
@@ -414,6 +416,23 @@ func (f *fakeHerdr) answer(r herdrtest.Request) herdrtest.Reply {
 			return errReply("pane_not_found")
 		}
 		return herdrtest.Reply{Result: map[string]any{"type": "pane_info", "pane": f.paneInfo(pane)}}
+	case "pane.report_metadata":
+		pane := f.pane(str("pane_id"))
+		if pane == nil {
+			return errReply("pane_not_found")
+		}
+		tokens, _ := p["tokens"].(map[string]any)
+		for k, v := range tokens {
+			if pane.tokens == nil {
+				pane.tokens = map[string]string{}
+			}
+			if s, _ := v.(string); s != "" {
+				pane.tokens[k] = s
+			} else {
+				delete(pane.tokens, k)
+			}
+		}
+		return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
 	case "pane.send_keys":
 		var keys []string
 		for _, k := range p["keys"].([]any) {
