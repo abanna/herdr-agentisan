@@ -16,12 +16,24 @@ import (
 // a project's, and a repo file, which whoever commits to the repo writes,
 // never chooses which models run. The overrides are the shared file's alone:
 // the user's standing choice, the only way to a premium binding.
+// [routing.jev] is whether a spawn asks Jev, the env file its key comes
+// from, and the thresholds in whole percents (A57); a repo file never names
+// the file a key is read from.
 
 const (
-	routingEnabledPath   = "routing.enabled"
-	routingBindingsPath  = "routing.bindings"
-	routingOverridesPath = "routing.overrides"
+	routingEnabledPath    = "routing.enabled"
+	routingBindingsPath   = "routing.bindings"
+	routingOverridesPath  = "routing.overrides"
+	routingJevPath        = "routing.jev"
+	routingJevEnabledPath = "routing.jev.enabled"
+	routingJevEnvFilePath = "routing.jev.env_file"
 )
+
+// enabledKey switches routing, a binding or Jev.
+const enabledKey = "enabled"
+
+// jevPctKeys are [routing.jev]'s thresholds, each a whole percent.
+var jevPctKeys = []string{"confidence_pct", "sufficiency_pct"}
 
 // routingSchema is [routing]. Its tables' keys are the rules' own binding and
 // role names, so a misspelt one is an unknown key.
@@ -32,17 +44,25 @@ var routingSchema = func() *node {
 		bindings[name] = &node{kind: kindTable, fields: map[string]*node{
 			"model_id": leafOf(kindString),
 			"efforts":  leafOf(kindStrings),
-			"enabled":  leafOf(kindBool),
+			enabledKey: leafOf(kindBool),
 		}}
 	}
 	overrides := map[string]*node{}
 	for _, name := range rules.RoleNames() {
 		overrides[name] = leafOf(kindString)
 	}
+	jev := map[string]*node{
+		enabledKey: leafOf(kindBool),
+		"env_file": leafOf(kindString),
+	}
+	for _, key := range jevPctKeys {
+		jev[key] = leafOf(kindInt)
+	}
 	return &node{kind: kindTable, fields: map[string]*node{
-		"enabled":   leafOf(kindBool),
+		enabledKey:  leafOf(kindBool),
 		"bindings":  {kind: kindTable, fields: bindings},
 		"overrides": {kind: kindTable, fields: overrides},
+		"jev":       {kind: kindTable, fields: jev},
 	}}
 }()
 
@@ -70,6 +90,9 @@ func (m merged) checkRouting() error {
 			return fmt.Errorf("%s: %w: %w", m.at(routingOverridesPath+"."+role), ErrInvalid, err)
 		}
 	}
+	if err := m.checkJev(); err != nil {
+		return err
+	}
 	if !d.Enabled {
 		return nil
 	}
@@ -94,6 +117,29 @@ func (m merged) checkRouting() error {
 	return nil
 }
 
+// checkJev checks [routing.jev], whether or not routing is on: the env file
+// is a path, as the debugger's is, each threshold a whole percent, and Jev
+// enabled names the env file its key comes from (A57).
+func (m merged) checkJev() error {
+	v, _ := m.get(routingJevEnvFilePath)
+	envFile, _ := v.(string)
+	if envFile != "" && !validEnvFile(envFile) {
+		return m.invalidf(routingJevEnvFilePath, envFileHint)
+	}
+	for _, key := range jevPctKeys {
+		v, ok := m.get(routingJevPath + "." + key)
+		if n, _ := v.(int); ok {
+			if err := routing.CheckJevPct(n); err != nil {
+				return fmt.Errorf("%s: %w: %w", m.at(routingJevPath+"."+key), ErrInvalid, err)
+			}
+		}
+	}
+	if on, _ := m.get(routingJevEnabledPath); on == true && envFile == "" {
+		return m.invalidf(routingJevEnabledPath, "Jev needs the TypeSafe key: set %s to the env file holding it", routingJevEnvFilePath)
+	}
+	return nil
+}
+
 // checkNoRoutingOverrides refuses an override set by --set: an override is
 // the user's standing choice, set in the shared file only.
 func (s *source) checkNoRoutingOverrides() error {
@@ -106,6 +152,17 @@ func (s *source) checkNoRoutingOverrides() error {
 // Routing is the resolved [routing] as routing.New takes it. Load has
 // checked it against the rules.
 func (r Resolved) Routing() routing.Deployment { return deploymentOf(r.Values) }
+
+// JevEnvFile is routing.jev.env_file, the env file Jev's key is read from,
+// with a leading ~/ expanded through lookupEnv's HOME; "" is none.
+func (r Resolved) JevEnvFile(lookupEnv func(string) (string, bool)) (string, error) {
+	v, _ := lookup(r.Values, routingJevEnvFilePath)
+	s, _ := v.(string)
+	if s == "" {
+		return "", nil
+	}
+	return ExpandHome(s, lookupEnv)
+}
 
 // Policy is the policy the resolved [routing] makes of the rules: what a
 // spawn decides by, named by its version.
@@ -180,5 +237,27 @@ func deploymentOf(values map[string]any) routing.Deployment {
 			d.Overrides[role], _ = raw.(string)
 		}
 	}
+	d.Jev = jevOf(values)
 	return d
+}
+
+// jevOf reads [routing.jev]'s facts out of a resolved tree: nil while it
+// sets none, so a deployment without them keeps its version.
+func jevOf(values map[string]any) *routing.JevFacts {
+	var j routing.JevFacts
+	set := false
+	if v, ok := lookup(values, routingJevEnabledPath); ok {
+		j.Enabled, _ = v.(bool)
+		set = true
+	}
+	for key, to := range map[string]**int{"confidence_pct": &j.ConfidencePct, "sufficiency_pct": &j.SufficiencyPct} {
+		v, _ := lookup(values, routingJevPath+"."+key)
+		if n, ok := v.(int); ok {
+			*to, set = &n, true
+		}
+	}
+	if !set {
+		return nil
+	}
+	return &j
 }

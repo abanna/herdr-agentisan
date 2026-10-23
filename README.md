@@ -190,6 +190,8 @@ so a pipeline step's stage stays; so do a subagent's turns, and a Claude turn
 you interrupt, which runs no `Stop` hook. Agents write these lines only when
 told to, so say it in their instructions (`CLAUDE.md`, `AGENTS.md`), for
 example: "End every turn with a last line `BOSS: <what you are doing>`."
+This repository's own rule, the text to copy into another repository's
+instructions, is the "Reporting" section of [`AGENTS.md`](AGENTS.md).
 
 For Claude, add the hooks to `.claude/settings.json` or
 `~/.claude/settings.json`
@@ -349,16 +351,20 @@ The daemon tells each team's boss what its team poll sees (ADR-001 A44):
 
 From the GitHub collector (A45), it tells each project's boss when one of
 its repo's PRs merged, its CI failed or passed at a head, it has a merge
-conflict at a head, or it got its first 👍:
+conflict at a head, it got its first 👍, or it got a review, with the
+review's P-badge counts from its body and inline comments, as the Codex
+connector marks its findings:
 
 ```
 herdr-agentisan #50 merged as 1e0fb1b
 #50 CI failed at 1e0fb1b (2 of 7 checks)
+#1006 review by chatgpt-codex-connector at afa239d: commented, P1 ×2
 ```
 
 Each is told once, across restarts, from `state.db`. A repo's first
-collection only records what is true then. GitHub's lines never carry a
-title, branch, body or comment.
+collection only records what is true then, and so does the first that
+looks for reviews. The PR author's own reviews are not told. GitHub's lines
+never carry a title, branch, body or comment.
 
 It also tells each boss, once, that the daemon started. Turns that end while
 the daemon is down are not reported. The boss's own panes and plain shells are
@@ -534,6 +540,16 @@ then `routing policy:`, the version a decision records; with `--project` it
 also refuses an override a worker type with that role cannot run, such as a
 claude binding for a type on codex.
 
+`[routing.jev]` is for Jev's complexity answer about a coder's assignment
+(ADR-001 A57): `enabled` (off by default, and Jev is asked only while
+routing is enabled too), `env_file`, the env file holding `TYPESAFE_API_KEY`
+(an absolute path or one under `~/`, required while Jev is enabled; a file
+1Password mounts works), and `confidence_pct` and `sufficiency_pct`, whole
+percents in place of the rules' 75 and 80. Like the rest of `[routing]` it
+belongs to the shared file and `--set`. `config resolve --check-secrets`
+reads the key from the file, and prints only whether it is there. Nothing
+asks Jev yet.
+
 `worker spawn` asks routing once per spawn, and `team up` once per group it
 fills, before it opens anything: while routing is on, a group it refuses
 stops the whole `team up`. While it is on, the decision is
@@ -583,7 +599,8 @@ where `dashboard-tab.sh` jumped to the one it had made, so close a dashboard
 with `q`. Add `--direction down` to split below the focused pane instead.
 `team up` opens one for you, above the boss, labelled `<short>-dashboard`,
 when the team's workspace has none, and leaves one prefix+d opened there as
-it is.
+it is. Either is no member of the team: `team status` does not list it as the
+boss's (ADR-001 A19's addendum).
 See [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml).
 
 `herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json`

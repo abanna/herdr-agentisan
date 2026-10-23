@@ -945,6 +945,36 @@ func TestDispatcherTypesCleanText(t *testing.T) {
 	assert.Equal(t, body, stateOf(t, st, m.ID).Body)
 }
 
+// TestDispatcherTypesTextOffItsLastToken is the off-token rule on the wire:
+// a text whose last token starts with @ or $ is typed with one space after
+// it, so Codex opens no file or mention popup to take herdr's Enter, a BOM
+// ending the token included, and a text that already ends in white space
+// is typed as it is. The store keeps each body as sent.
+func TestDispatcherTypesTextOffItsLastToken(t *testing.T) {
+	t.Parallel()
+	th, p, dir := haTeam(t)
+	st := stateStore(t, dir, th)
+	bodies := []string{"see @notes", "pay $5", "see @notes\n", "see @notes\ufeff"}
+	var ms []store.Message
+	for _, body := range bodies {
+		ms = append(ms, sent(t, st, coder, haBoss, body))
+	}
+	serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
+
+	for _, m := range ms {
+		eventuallyState(t, st, m.ID, store.MessageDelivered)
+	}
+	assert.Equal(t, []typed{
+		{Target: "ha-coder-1", Pane: "w14:p2", Text: "[msg " + ms[0].ID + " from ha-boss] see @notes "},
+		{Target: "ha-coder-1", Pane: "w14:p2", Text: "[msg " + ms[1].ID + " from ha-boss] pay $5 "},
+		{Target: "ha-coder-1", Pane: "w14:p2", Text: "[msg " + ms[2].ID + " from ha-boss] see @notes\n"},
+		{Target: "ha-coder-1", Pane: "w14:p2", Text: "[msg " + ms[3].ID + " from ha-boss] see @notes\ufeff "},
+	}, p.all())
+	for i, m := range ms {
+		assert.Equal(t, bodies[i], stateOf(t, st, m.ID).Body)
+	}
+}
+
 // TestDispatcherStopFinishesThePromptInFlight: a daemon stopped while a
 // prompt is in flight waits for its answer and records the message
 // delivered, so a stop never turns a deliverable message into a failure.
@@ -1288,6 +1318,42 @@ func TestCleanText(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tc.want, daemon.CleanText(tc.in))
+		})
+	}
+}
+
+// TestOffToken is the off-token rule, byte by byte: one space after a last
+// token that starts with @ or $, the run after the text's last white space,
+// Unicode's included; any other text as it is.
+func TestOffToken(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct{ in, want string }{
+		"plain":                      {"hello", "hello"},
+		"empty":                      {"", ""},
+		"an @ token last":            {"see @notes", "see @notes "},
+		"a $ token last":             {"pay $5", "pay $5 "},
+		"an @ alone last":            {"cc @", "cc @ "},
+		"the whole text one token":   {"@notes", "@notes "},
+		"an @ inside the last token": {"mail a@b", "mail a@b"},
+		"an @ token not last":        {"@notes then", "@notes then"},
+		"a space after the token":    {"see @notes ", "see @notes "},
+		"an LF after the token":      {"see @notes\n", "see @notes\n"},
+		"a TAB after the token":      {"see @notes\t", "see @notes\t"},
+		"an NBSP after the token":    {"see @notes\u00a0", "see @notes\u00a0"},
+		"the token after a TAB":      {"see\t@notes", "see\t@notes "},
+		"the token on its own line":  {"line one\n@notes", "line one\n@notes "},
+		"after an ideographic space": {"エ\u3000@x", "エ\u3000@x "},
+		"after a multi-byte rune":    {"エ @x", "エ @x "},
+		"a multi-byte token":         {"see @ノート", "see @ノート "},
+		"a CR after the token":       {"see @notes\r", "see @notes\r"},
+		"a BOM after the token":      {"see @notes\ufeff", "see @notes\ufeff "},
+		"an invalid byte before it":  {"a\xff @x", "a\xff @x "},
+		"a truncated rune ending it": {"see @x\xe2\x82", "see @x\xe2\x82 "},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tc.want, daemon.OffToken(tc.in))
 		})
 	}
 }

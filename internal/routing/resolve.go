@@ -110,10 +110,10 @@ type Override struct {
 }
 
 // Reason is why a decision took the role's default where the role's
-// selection would otherwise ask Jev.
+// selection would otherwise ask Jev, or what Jev's answer kept it at.
 type Reason string
 
-// The reasons. A later part adds Jev's own.
+// The reasons.
 const (
 	ReasonNone Reason = ""
 	// ReasonTaskNotFound: no packet, or the boss did not find the task.
@@ -122,8 +122,28 @@ const (
 	ReasonLookupUnavailable Reason = "lookup_unavailable"
 	// ReasonInsufficientAssignment: the packet's assignment is empty.
 	ReasonInsufficientAssignment Reason = "insufficient_assignment"
-	// ReasonJevDisabled: Jev is not built yet.
+	// ReasonJevDisabled: the assignment is one Jev would classify, and no
+	// answer of Jev's is applied (AsksJev): Jev is off, or not asked yet.
 	ReasonJevDisabled Reason = "jev_disabled"
+	// ReasonJevNoChange: no answer could change the binding, so Jev is not
+	// asked: a codex coder's default is already its strong binding at high.
+	ReasonJevNoChange Reason = "jev_no_change"
+	// ReasonJevFailure: Jev gave no usable answer; jev_error says why.
+	ReasonJevFailure Reason = "jev_failure"
+	// ReasonJevKeyUnavailable: Jev was not asked, for want of the TypeSafe
+	// key (ErrJevKey); jev_error says why.
+	ReasonJevKeyUnavailable Reason = "jev_key_unavailable"
+	// ReasonJevInsufficient: Jev found the information insufficient to
+	// classify the assignment, below the sufficiency threshold.
+	ReasonJevInsufficient Reason = "jev_insufficient"
+	// ReasonJevUnknown: Jev classified the assignment as unknown.
+	ReasonJevUnknown Reason = "jev_unknown"
+	// ReasonJevLowConfidence: Jev's complexity is below the confidence
+	// threshold. Low confidence never escalates.
+	ReasonJevLowConfidence Reason = "jev_low_confidence"
+	// ReasonEscalationIneligible: Jev found the assignment demanding, and
+	// a filter drops the strong binding it would move to.
+	ReasonEscalationIneligible Reason = "escalation_ineligible"
 )
 
 // Unchecked are the rules' hard filters the plugin has no data for yet:
@@ -149,13 +169,18 @@ type Decision struct {
 	ModelID          string  `json:"model_id"`
 	Effort           string  `json:"effort"`
 	PolicyVersion    string  `json:"policy_version"`
-	// JevModelReturned and Answers are Jev's, empty until it is built.
+	// JevModelReturned and Answers are Jev's (ApplyJev), empty unless it
+	// answered.
 	JevModelReturned string          `json:"jev_model_returned"`
 	Answers          json.RawMessage `json:"answers"`
 	FallbackReason   Reason          `json:"fallback_reason"`
-	Override         *Override       `json:"override"`
-	Timestamp        time.Time       `json:"timestamp"`
-	Selection        Selection       `json:"selection"`
+	// JevError is why Jev gave no usable answer, or was not asked for want
+	// of a key: its error, which never carries the key; "" unless the reason
+	// is jev_failure or jev_key_unavailable.
+	JevError  string    `json:"jev_error"`
+	Override  *Override `json:"override"`
+	Timestamp time.Time `json:"timestamp"`
+	Selection Selection `json:"selection"`
 	// Applied is false while routing is off: the decision is what it
 	// would have chosen.
 	Applied   bool     `json:"applied"`
@@ -207,6 +232,9 @@ func (p Policy) Resolve(req Request, now time.Time) (Decision, error) {
 	}
 	if (d.Override == nil || d.Override.Binding == "") && role.Selection == SelectJevComplexity {
 		d.FallbackReason = jevReason(req.Task)
+		if up, effort, ok := p.escalation(role, req.Provider, d.Override); d.FallbackReason == ReasonJevDisabled && (!ok || up == name && effort == d.Effort) {
+			d.FallbackReason = ReasonJevNoChange
+		}
 	}
 	d.SelectedBinding, d.ModelID = name, b.ModelID
 	return d, nil

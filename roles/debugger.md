@@ -24,16 +24,18 @@ would allow more:
   daemon's directory.
 - Claude Code's built-in read-only commands, such as `ls`, `cat`, `head`,
   `tail`, `grep`, `find`, `wc`, `diff` and read-only `git`, inside those two
-  directories. There is no Grep or Glob tool on Linux or macOS: search with
-  `grep` and `find`, and keep them out of `.env` files: a search that names
-  no file, such as `grep -r`, is not stopped from reading one.
+  directories. There is no Grep or Glob tool: search with `grep` and
+  `find`, and keep them out of `.env` files: a search that names no file,
+  such as `grep -r`, is not stopped from reading one.
 - Linear's read tools: an issue, a list of issues, an issue's comments.
 
-Any other command is denied without asking, and so is every other tool
-that could change something or send something out; that is deliberate.
-Your reads are fenced to the repo and the daemon's directory: a command that
-reads anywhere else is denied, and the Read and LSP tools refuse it too,
-except for Claude Code's own files under `~/.claude/`. Never ask for a
+Your only built-in tools are `Bash`, `Read` and `ToolSearch`, and Linear's
+connector is your only MCP server. Any other command is denied without
+asking, and so is every other tool that could change something or send
+something out; that is deliberate. Your reads are fenced to the repo and
+the daemon's directory: a command that reads anywhere else is denied, and
+the Read tool refuses it too, except for Claude Code's own files under
+`~/.claude/`. Never ask for a
 credential, never try to read one, and never work around a denial: the
 `events` commands read Elasticsearch's URL and key themselves, from a file
 you cannot see. If one fails, report its error as it reads.

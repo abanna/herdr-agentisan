@@ -3,6 +3,7 @@ package settings
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -175,21 +176,44 @@ func firstLine(s string) string {
 	return strings.TrimSpace(strings.ToValidUTF8(line, ""))
 }
 
-// SecretStatus is whether one secret reference resolves. Err is nil when it
-// does; the value itself is never kept.
+// SecretStatus is whether one secret resolves: a reference, or the key an
+// env file holds (EnvFile set, Ref zero). Err is nil when it does; the
+// value itself is never kept.
 type SecretStatus struct {
-	Path string
-	Ref  SecretRef
-	Err  error
+	Path    string
+	Ref     SecretRef
+	EnvFile string
+	Err     error
+}
+
+// Source names where the secret is read from, never the secret: its
+// reference, or file: and the env file.
+func (s SecretStatus) Source() string {
+	if s.EnvFile != "" {
+		return "file:" + s.EnvFile
+	}
+	return s.Ref.String()
 }
 
 // CheckSecrets resolves every secret reference in r, in path order, and
-// discards each value as soon as it is read. The error is
-// ErrSecretUnavailable when any is missing; each status says which and why.
-func CheckSecrets(ctx context.Context, r Resolved, lookupEnv func(string) (string, bool), opRead func(context.Context, string) (string, error)) ([]SecretStatus, error) {
+// reads Jev's key from routing.jev.env_file when it is set, enabled or not,
+// through readKeyFile (nil reads none: the key is missing), discarding each
+// value as soon as it is read. The error is ErrSecretUnavailable when any
+// is missing; each status says which and why.
+func CheckSecrets(ctx context.Context, r Resolved, lookupEnv func(string) (string, bool), opRead func(context.Context, string) (string, error), readKeyFile func(context.Context, string) error) ([]SecretStatus, error) {
 	var out []SecretStatus
 	missing := 0
 	for _, l := range r.Leaves() {
+		if l.Path == routingJevEnvFilePath {
+			st, ok := checkKeyFile(ctx, r, lookupEnv, readKeyFile)
+			if ok {
+				if st.Err != nil {
+					missing++
+				}
+				out = append(out, st)
+			}
+			continue
+		}
 		ref, ok := l.Value.(SecretRef)
 		if !ok {
 			continue
@@ -204,4 +228,28 @@ func CheckSecrets(ctx context.Context, r Resolved, lookupEnv func(string) (strin
 		return out, fmt.Errorf("%w: %d of %d secrets missing", ErrSecretUnavailable, missing, len(out))
 	}
 	return out, nil
+}
+
+// checkKeyFile is routing.jev.env_file's status: false when it names no
+// file.
+func checkKeyFile(ctx context.Context, r Resolved, lookupEnv func(string) (string, bool), readKeyFile func(context.Context, string) error) (SecretStatus, bool) {
+	v, _ := lookup(r.Values, routingJevEnvFilePath)
+	raw, _ := v.(string)
+	if raw == "" {
+		return SecretStatus{}, false
+	}
+	st := SecretStatus{Path: routingJevEnvFilePath, EnvFile: raw}
+	path, err := r.JevEnvFile(lookupEnv)
+	if err == nil {
+		st.EnvFile = path
+		if readKeyFile == nil {
+			err = errors.New("no env file reader")
+		} else {
+			err = readKeyFile(ctx, path)
+		}
+	}
+	if err != nil {
+		st.Err = fmt.Errorf("%w: %w", ErrSecretUnavailable, err)
+	}
+	return st, true
 }

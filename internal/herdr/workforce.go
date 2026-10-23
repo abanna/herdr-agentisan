@@ -1,7 +1,6 @@
 package herdr
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -45,6 +44,13 @@ var (
 // that as a success with changed false and the reason (src/api/schema/
 // panes.rs:521-540 at v0.9.5), so it is no ErrAPI.
 var ErrNotSwapped = errors.New("herdr swapped no panes")
+
+// ErrSwapDeclined is an ErrNotSwapped that names its reason: herdr declined
+// the swap before it touched the tab, so it moved no focus. One with no
+// reason found both panes in one tab, and herdr focused the source there
+// even though the layout did not change (src/app/api/panes.rs:874-884 at
+// v0.9.5).
+var ErrSwapDeclined = errors.New("herdr declined the swap")
 
 // workforceCodes maps the codes above to their sentinels; APIError.Is reads
 // it.
@@ -366,8 +372,8 @@ func (c Client) OpenPluginSplit(ctx context.Context, s PluginSplit) (PaneInfo, e
 // SwapPanes swaps two panes of one tab in its layout: pane.swap, answered
 // with pane_swap. A pane keeps its id and label, which are the pane's, not
 // the place's. herdr also focuses source and switches to its tab
-// (src/app/api/panes.rs:883-890 at v0.9.5). A swap herdr declines is
-// ErrNotSwapped, with its reason.
+// (src/app/api/panes.rs:883-890 at v0.9.5). A swap that changed nothing is
+// ErrNotSwapped, and ErrSwapDeclined too when herdr names its reason.
 func (c Client) SwapPanes(ctx context.Context, source, target string) error {
 	params := struct {
 		SourcePaneID string `json:"source_pane_id"`
@@ -386,8 +392,11 @@ func (c Client) SwapPanes(ctx context.Context, source, target string) error {
 	if out.Type != "pane_swap" || out.Swap == nil {
 		return fmt.Errorf("%w: pane.swap: result type %q with no swap, want \"pane_swap\"", ErrProtocol, out.Type)
 	}
-	if !out.Swap.Changed {
-		return fmt.Errorf("%w: %s with %s: %s", ErrNotSwapped, source, target, cmp.Or(out.Swap.Reason, "unchanged"))
+	switch {
+	case !out.Swap.Changed && out.Swap.Reason != "":
+		return fmt.Errorf("%w: %w: %s with %s: %s", ErrNotSwapped, ErrSwapDeclined, source, target, out.Swap.Reason)
+	case !out.Swap.Changed:
+		return fmt.Errorf("%w: %s with %s: unchanged", ErrNotSwapped, source, target)
 	}
 	return nil
 }

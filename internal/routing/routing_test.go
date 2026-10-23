@@ -299,9 +299,9 @@ func TestJevReasons(t *testing.T) {
 }
 
 // TestDecisionCarriesEveryAuditField: a decision encodes every audit field
-// the rules list, null where it has nothing, plus the selection, whether it
-// was applied and the filters left unchecked; the assignment is there as a
-// digest, never as text.
+// the rules list, null where it has nothing, plus Jev's error, the
+// selection, whether it was applied and the filters left unchecked; the
+// assignment is there as a digest, never as text.
 func TestDecisionCarriesEveryAuditField(t *testing.T) {
 	t.Parallel()
 	p := policy(t, routing.Deployment{})
@@ -316,7 +316,8 @@ func TestDecisionCarriesEveryAuditField(t *testing.T) {
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(raw, &got))
 	audit := []string{"task_id", "task_lookup_status", "assignment_digest", "role", "provider", "selected_binding", "model_id", "effort", "policy_version", "jev_model_returned", "answers", "fallback_reason", "override", "timestamp"}
-	assert.ElementsMatch(t, append(audit, "selection", "applied", "unchecked"), slices.Collect(maps.Keys(got)))
+	assert.ElementsMatch(t, append(audit, "jev_error", "selection", "applied", "unchecked"), slices.Collect(maps.Keys(got)))
+	assert.Empty(t, got["jev_error"])
 	assert.Equal(t, "NERD-5289", got["task_id"])
 	assert.Equal(t, routing.LookupFound, got["task_lookup_status"])
 	assert.Regexp(t, `^sha256:[0-9a-f]{64}$`, got["assignment_digest"])

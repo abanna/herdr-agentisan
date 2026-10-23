@@ -286,3 +286,96 @@ func TestCheckRoutingProviders(t *testing.T) {
 		require.NoError(t, res.Profile.CheckRoutingProviders(), name)
 	}
 }
+
+// TestRoutingJevResolves: [routing.jev] from the shared file and --set
+// resolves into the deployment's Jev facts, each leaf with its layer; the
+// env file is no routing fact, and expands ~/ with HOME. A [routing.jev]
+// that sets no fact leaves the deployment's version as it was, and Jev
+// enabled while routing is off asks nothing.
+func TestRoutingJevResolves(t *testing.T) {
+	t.Parallel()
+	file := "[routing]\nenabled = true\n[routing.jev]\nenabled = true\nenv_file = \"~/.config/typesafe.env\"\nconfidence_pct = 70\n"
+	res, err := loadRouting(t, file, "", []string{"routing.jev.sufficiency_pct=85"}, true)
+	require.NoError(t, err)
+	assert.Equal(t, &routing.JevFacts{Enabled: true, ConfidencePct: new(70), SufficiencyPct: new(85)}, res.Routing().Jev)
+	for path, layer := range map[string]string{
+		"routing.jev.enabled":         settings.LayerShared,
+		"routing.jev.env_file":        settings.LayerShared,
+		"routing.jev.confidence_pct":  settings.LayerShared,
+		"routing.jev.sufficiency_pct": settings.LayerFlag,
+	} {
+		assert.Equal(t, layer, res.Sources[path], path)
+	}
+	envFile, err := res.JevEnvFile(envOf(map[string]string{"HOME": "/home/u"}))
+	require.NoError(t, err)
+	assert.Equal(t, "/home/u/.config/typesafe.env", envFile)
+	_, err = res.JevEnvFile(envOf(nil))
+	require.ErrorIs(t, err, settings.ErrInvalid, "~/ with no HOME")
+	p, err := res.Policy()
+	require.NoError(t, err)
+	assert.True(t, p.JevEnabled())
+
+	base, err := loadRouting(t, "[routing]\nenabled = true\n", "", nil, true)
+	require.NoError(t, err)
+	baseVersion := base.Routing()
+	fileOnly, err := loadRouting(t, "[routing]\nenabled = true\n[routing.jev]\nenv_file = \"/run/typesafe.env\"\n", "", nil, true)
+	require.NoError(t, err)
+	assert.Nil(t, fileOnly.Routing().Jev, "the env file alone is no routing fact")
+	assert.Equal(t, baseVersion, fileOnly.Routing())
+	envFile, err = fileOnly.JevEnvFile(envOf(nil))
+	require.NoError(t, err)
+	assert.Equal(t, "/run/typesafe.env", envFile)
+	envFile, err = base.JevEnvFile(envOf(nil))
+	require.NoError(t, err)
+	assert.Empty(t, envFile, "no env file")
+
+	routingOff, err := loadRouting(t, "", "", []string{"routing.jev.enabled=true", "routing.jev.env_file=/run/typesafe.env"}, false)
+	require.NoError(t, err, "Jev enabled while routing is off resolves")
+	assert.Equal(t, settings.LayerFlag, routingOff.Sources["routing.jev.enabled"])
+	p, err = routingOff.Policy()
+	require.NoError(t, err)
+	assert.False(t, p.JevEnabled(), "and asks nothing")
+}
+
+// TestRoutingJevRefuses: Jev enabled with no env file, an env file that is
+// no absolute or ~/ path, a threshold outside a whole percent, and
+// [routing.jev] anywhere but the shared file and --set are each refused,
+// naming the key and its layer.
+func TestRoutingJevRefuses(t *testing.T) {
+	t.Parallel()
+	tests := map[string]struct {
+		file, repoFile string
+		set            []string
+		project        bool
+		wantErr        error
+		wantIn         []string
+	}{
+		"enabled with no env file":             {file: "[routing.jev]\nenabled = true\n", wantErr: settings.ErrInvalid, wantIn: []string{"routing.jev.enabled (shared, ", "routing.jev.env_file"}},
+		"enabled with an empty env file":       {file: "[routing.jev]\nenabled = true\nenv_file = \"\"\n", wantErr: settings.ErrInvalid, wantIn: []string{"routing.jev.enabled (shared, "}},
+		"enabled by --set with no env file":    {set: []string{"routing.jev.enabled=true"}, wantErr: settings.ErrInvalid, wantIn: []string{"routing.jev.enabled (flag, --set)"}},
+		"enabled with routing on, no file":     {file: "[routing]\nenabled = true\n[routing.jev]\nenabled = true\n", wantErr: settings.ErrInvalid, wantIn: []string{"routing.jev.env_file"}},
+		"a relative env file":                  {file: "[routing.jev]\nenv_file = \"typesafe.env\"\n", wantErr: settings.ErrInvalid, wantIn: []string{"routing.jev.env_file (shared, ", "not an absolute path"}},
+		"a bare ~/":                            {file: "[routing.jev]\nenv_file = \"~/\"\n", wantErr: settings.ErrInvalid, wantIn: []string{"routing.jev.env_file"}},
+		"a control character in it":            {set: []string{`routing.jev.env_file="/run/a\nb.env"`}, wantErr: settings.ErrInvalid, wantIn: []string{"routing.jev.env_file (flag, --set)"}},
+		"an env file that is a table":          {file: "[routing.jev]\nenv_file = { env = \"TYPESAFE_API_KEY\" }\n", wantErr: settings.ErrInvalid},
+		"confidence 0":                         {file: "[routing.jev]\nconfidence_pct = 0\n", wantErr: settings.ErrInvalid, wantIn: []string{"routing.jev.confidence_pct (shared, ", "1 to 100"}},
+		"confidence 101":                       {file: "[routing.jev]\nconfidence_pct = 101\n", wantErr: settings.ErrInvalid, wantIn: []string{"routing.jev.confidence_pct"}},
+		"sufficiency 150 from --set":           {set: []string{"routing.jev.sufficiency_pct=150"}, wantErr: settings.ErrInvalid, wantIn: []string{"routing.jev.sufficiency_pct (flag, --set)"}},
+		"a threshold as a fraction":            {file: "[routing.jev]\nconfidence_pct = 0.75\n", wantErr: settings.ErrInvalid},
+		"a [routing.jev] key it does not know": {file: "[routing.jev]\nkey = { env = \"TYPESAFE_API_KEY\" }\n", wantErr: settings.ErrUnknownKey, wantIn: []string{"routing.jev.key"}},
+		"the endpoint":                         {file: "[routing.jev]\nurl = \"https://example.com\"\n", wantErr: settings.ErrUnknownKey},
+		"[routing.jev] in a repo file":         {repoFile: "[routing.jev]\nenabled = true\nenv_file = \"/tmp/x.env\"\n", project: true, wantErr: settings.ErrUnknownKey},
+		"an env file in a repo file":           {repoFile: "[routing.jev]\nenv_file = \"/tmp/x.env\"\n", project: true, wantErr: settings.ErrUnknownKey},
+		"[routing.jev] in a project table":     {file: "[projects.other]\nrepo = \"REPO\"\n[projects.other.routing.jev]\nenabled = true\n", wantErr: settings.ErrUnknownKey},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := loadRouting(t, tc.file, tc.repoFile, tc.set, tc.project)
+			require.ErrorIs(t, err, tc.wantErr)
+			for _, s := range tc.wantIn {
+				assert.Contains(t, err.Error(), s)
+			}
+		})
+	}
+}
