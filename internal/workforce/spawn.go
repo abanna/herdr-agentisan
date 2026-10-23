@@ -231,8 +231,8 @@ func kindOf(a settings.Agent) string {
 }
 
 // warnings are what the boss should fix about the workers in ws that did
-// not stop them: a Claude group that starts without the turn hooks, and
-// Codex's hooks.
+// not stop them: first each Claude group that starts without the turn
+// hooks, then Codex's hooks, which are the machine's.
 func (s *Service) warnings(ws []opened) []string {
 	return append(settingsWarnings(ws), s.codexWarnings(ws)...)
 }

@@ -192,3 +192,40 @@ func TestSpawnWarnsOnlyOfClaudesSettings(t *testing.T) {
 	require.Len(t, res.Workers, 1)
 	assert.Empty(t, res.Warnings)
 }
+
+// TestUpWarnsOfCodexHooks: team up fills a Codex group too, and warns, never
+// refusing, of its ctx hooks and its turn hooks when either is missing,
+// as a spawn does (A42, A43). A group's own warning comes first, then the
+// machine's: a Claude group's own --settings before Codex's hooks.
+func TestUpWarnsOfCodexHooks(t *testing.T) {
+	t.Parallel()
+	config := strings.Replace(teamConfig, "groups.review]\nworkers = 0", "groups.review]\nworkers = 1", 1)
+	ownSettings := strings.Replace(config, "[projects.herdr-agentisan.groups.coder]\n", "[projects.herdr-agentisan.groups.coder]\nagent = { command = [\"claude\", \"--settings\", \"x\"] }\n", 1)
+	for name, tc := range map[string]struct {
+		config      string
+		ctx, turned bool
+		want        []string
+	}{
+		"neither installed":  {config: config, want: []string{"Codex's ctx hooks are not installed", "Codex's turn hooks are not installed"}},
+		"turn hooks missing": {config: config, ctx: true, want: []string{"Codex's turn hooks are not installed"}},
+		"both installed":     {config: config, ctx: true, turned: true},
+		"and the coders' own --settings": {config: ownSettings, want: []string{
+			"coder's agent command passes a --settings of its own", "Codex's ctx hooks are not installed", "Codex's turn hooks are not installed",
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := upFixture(t, tc.config)
+			f.svc.CodexHooks = func() (bool, error) { return tc.ctx, nil }
+			f.svc.CodexTurnHooks = func() (bool, error) { return tc.turned, nil }
+
+			res, err := f.svc.Up(t.Context(), workforce.UpRequest{})
+			require.NoError(t, err)
+			require.Len(t, res.Workers, 4, "two coders, a QA and the Codex reviewer come up")
+			require.Len(t, res.Warnings, len(tc.want))
+			for i, w := range tc.want {
+				assert.Contains(t, res.Warnings[i], w)
+			}
+		})
+	}
+}

@@ -104,12 +104,21 @@ func TestInstallWithTurn(t *testing.T) {
 			changed: true,
 		},
 		"all five": {start: new(allFive), want: allFive, states: five(codexhooks.Unchanged, codexhooks.Unchanged)},
+		// The last hook installed is not the one that decides the write: both
+		// turn hooks are in, the ctx hooks are not, and the file still changes.
+		"both turn hooks in, the ctx hooks not": {
+			start:   new(`{"hooks":{"Stop":[` + turnStop + `],"UserPromptSubmit":[` + turnUPS + `]}}`),
+			want:    `{"hooks":{"PostToolUse":[` + ours("PostToolUse", cmd, "") + `],"Stop":[` + turnStop + `,` + ctxStop + `],"PostCompact":[` + ours("PostCompact", cmd, "") + `],"UserPromptSubmit":[` + turnUPS + `]}}`,
+			states:  five(codexhooks.Added, codexhooks.Unchanged),
+			changed: true,
+		},
 		// Only `herdr-agentisan report turn`, by any path and with
 		// anything after it, is ours: an empty command, one short of the
-		// binary and another verb are the user's.
+		// binary, another verb and one that only starts with turn are the
+		// user's.
 		"commands that are not ours, and one by its path with a redirect": {
-			start: new(`{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":""}]},{"hooks":[{"type":"command","command":"report turn"}]},{"hooks":[{"type":"command","command":"herdr-agentisan report Turn"}]}],"Stop":[` + ours("Stop", "/home/u/go/bin/herdr-agentisan  report turn >/dev/null 2>&1", "") + `]}}`),
-			want:  `{"hooks":{"PostToolUse":[` + ours("PostToolUse", cmd, "") + `],"Stop":[` + ours("Stop", "/home/u/go/bin/herdr-agentisan  report turn >/dev/null 2>&1", "") + `,` + ctxStop + `],"PostCompact":[` + ours("PostCompact", cmd, "") + `],"UserPromptSubmit":[{"hooks":[{"type":"command","command":""}]},{"hooks":[{"type":"command","command":"report turn"}]},{"hooks":[{"type":"command","command":"herdr-agentisan report Turn"}]},` + turnUPS + `]}}`,
+			start: new(`{"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":""}]},{"hooks":[{"type":"command","command":"report turn"}]},{"hooks":[{"type":"command","command":"herdr-agentisan report Turn"}]},{"hooks":[{"type":"command","command":"herdr-agentisan report turnover"}]}],"Stop":[` + ours("Stop", "/home/u/go/bin/herdr-agentisan  report turn >/dev/null 2>&1", "") + `]}}`),
+			want:  `{"hooks":{"PostToolUse":[` + ours("PostToolUse", cmd, "") + `],"Stop":[` + ours("Stop", "/home/u/go/bin/herdr-agentisan  report turn >/dev/null 2>&1", "") + `,` + ctxStop + `],"PostCompact":[` + ours("PostCompact", cmd, "") + `],"UserPromptSubmit":[{"hooks":[{"type":"command","command":""}]},{"hooks":[{"type":"command","command":"report turn"}]},{"hooks":[{"type":"command","command":"herdr-agentisan report Turn"}]},{"hooks":[{"type":"command","command":"herdr-agentisan report turnover"}]},` + turnUPS + `]}}`,
 			states: map[string]codexhooks.State{
 				"codex PostToolUse": codexhooks.Added, "codex Stop": codexhooks.Added, "codex PostCompact": codexhooks.Added,
 				"turn Stop": codexhooks.Unchanged, "turn UserPromptSubmit": codexhooks.Added,
