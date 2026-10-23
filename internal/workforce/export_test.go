@@ -23,7 +23,7 @@ func Plan(p *settings.Profile, typ, model, effort string) (kind string, args []s
 // PlanRouted is spawn's launch for one worker of typ under p, with the model
 // and effort routing chose for provider.
 func PlanRouted(p *settings.Profile, typ, model, effort, provider string) (kind string, args []string, err error) {
-	ps, err := plan(p, typ, choice{model: model, effort: effort, provider: provider}, []string{"ha-" + typ + "-1"})
+	ps, err := plan(p, typ, choice{model: model, effort: effort, provider: provider}, []string{"ha-" + typ + "-1"}, nil)
 	if err != nil {
 		return "", nil, err
 	}

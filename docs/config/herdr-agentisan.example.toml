@@ -102,7 +102,10 @@ repeat = 300
 # still name a model: the --model the workforce passes outranks both, by each
 # CLI's own precedence, and with no model set the command's configuration
 # decides (A53). An abbreviation such as --mod is no --model to either:
-# claude matches long flags whole, and codex refuses it.
+# claude matches long flags whole, and codex refuses it. The debugger runs
+# the plugin's read-only launch (docs/debugger.md, [debugger] below): its
+# group sets a model only, never a command, and [agent]'s command never
+# applies to it.
 [groups.precheck]
 workers = 1
 slots = 1
