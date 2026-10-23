@@ -105,6 +105,9 @@ type Profile struct {
 	Spawn Spawn
 	// Routing is [routing], which worker spawn asks for its model (A50).
 	Routing routing.Deployment
+
+	// jevEnvFile is routing.jev.env_file as set, ~/ not yet expanded.
+	jevEnvFile string
 }
 
 // Agent is the command every session starts with, and its model.

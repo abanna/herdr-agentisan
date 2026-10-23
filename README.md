@@ -654,8 +654,13 @@ routing is enabled too), `env_file`, the env file holding `TYPESAFE_API_KEY`
 1Password mounts works), and `confidence_pct` and `sufficiency_pct`, whole
 percents in place of the rules' 75 and 80. Like the rest of `[routing]` it
 belongs to the shared file and `--set`. `config resolve --check-secrets`
-reads the key from the file, and prints only whether it is there. Nothing
-asks Jev yet.
+reads the key from the file, and prints only whether it is there. While
+both are enabled, `worker spawn` asks Jev once about a coder's task packet,
+before it opens anything, unless an override names the coder's binding;
+`team up` never asks. A demanding answer that meets the thresholds starts
+the coder on its strong binding. Anything else, a failure or a missing key
+included, keeps its default, and the routed event's `fallback_reason` and
+`jev_error` say why.
 
 `worker spawn` asks routing once per spawn, and `team up` once per group it
 fills, before it opens anything: while routing is on, a group it refuses

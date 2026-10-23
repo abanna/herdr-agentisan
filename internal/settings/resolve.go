@@ -381,6 +381,7 @@ func buildProfile(name string, values map[string]any) *Profile {
 	}
 	p.Spawn = buildSpawn(values)
 	p.Routing = deploymentOf(values)
+	p.jevEnvFile = str(routingJevEnvFilePath)
 	if v, ok := lookup(values, "groups"); ok {
 		groups, _ := v.(map[string]any)
 		p.Groups = make(map[string]Group, len(groups))

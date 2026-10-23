@@ -170,6 +170,13 @@ func (r Resolved) JevEnvFile(lookupEnv func(string) (string, bool)) (string, err
 	return ExpandHome(s, lookupEnv)
 }
 
+// JevEnvFile is the project's routing.jev.env_file, as Resolved.JevEnvFile
+// gives it: a spawn that asks Jev reads the key from it, with the daemon's
+// HOME (A57).
+func (p Profile) JevEnvFile(lookupEnv func(string) (string, bool)) (string, error) {
+	return ExpandHome(p.jevEnvFile, lookupEnv)
+}
+
 // Policy is the policy the resolved [routing] makes of the rules: what a
 // spawn decides by, named by its version.
 func (r Resolved) Policy() (routing.Policy, error) { return policyOf(r.Routing()) }
