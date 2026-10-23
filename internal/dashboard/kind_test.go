@@ -142,7 +142,7 @@ func TestGroupViewModelLineStyles(t *testing.T) {
 	}}}}
 	frame := dashboard.Render(dashboard.Frame{Snapshot: snap, Group: "coder", Now: at}, 97, 20, fullColour)
 	var modelLine string
-	for _, line := range strings.Split(frame, "\n") {
+	for line := range strings.SplitSeq(frame, "\n") {
 		if strings.Contains(ansi.Strip(line), "codex · sol6.1") {
 			modelLine = line
 			break
