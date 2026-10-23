@@ -810,11 +810,15 @@ spawn with routing off and no model set for it. It shows no model until its
 first hook, since a model set with `-c model=`, a profile or `config.toml` is
 not read (A39).
 
+A row with no model shows the agent herdr detects in its pane instead, dim:
+`codex` for a Codex still starting, `claude` for a Claude (ADR-001 A68). So
+every row says which provider runs in it.
+
 ### A group's view
 
 Press 1-9, or click a group's title, to open that group's view (ADR-001
-A37): a box per agent, two to a row from 110 columns, with its model and
-ctx, item, the whole stage (two lines, then `…`), how long it has been in
+A37): a box per agent, two to a row from 110 columns, with its agent and
+model (`codex · sol6.1`, A68) and ctx, item, the whole stage (two lines, then `…`), how long it has been in
 that stage and at rest, and the pane and tab it runs in. Everything in it is
 what the agents report and the daemon times; nothing is read from a screen,
 so a worker's stage line is what says what it is doing. Enter or a click
