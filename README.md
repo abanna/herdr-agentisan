@@ -86,8 +86,10 @@ machine:
    ```
 
    agentisan-skills' `docs/codex-plugin.md` is the source of truth for both.
-   `CODEX_PROJECT_ROOT` is where the install writes its agents overlay, so
-   point it away from your repos. A new Codex thread picks the plugin up.
+   The install moves older Agentisan agent copies out of
+   `<CODEX_PROJECT_ROOT>/.codex/agents` (the current directory by default),
+   so a scratch directory keeps it out of your repos. A new Codex thread picks
+   the plugin up.
 2. Install the three `ctx` hooks and trust them, as below.
 3. Paste the turn hooks for `$item` and `$stage` ("Report `$item` and
    `$stage` from every turn").
@@ -151,12 +153,15 @@ nothing. Like `report statusline`, it prints nothing and always exits 0.
 `HERDR_AGENTISAN_LOG_LEVEL=debug` logs why nothing was reported. Codex runs
 its hooks outside its sandbox, so `ctx` works whatever the sandbox.
 
-Codex's `ctx` needs Linux or macOS, and so do the `$item` and `$stage` of its
-turn hooks. To tell the pane's own Codex from a shared server, the report
-checks the process running the hook against the process table, which it
-reads only on Linux (`/proc`) and macOS (`sysctl`) (ADR-001 A26). Anywhere
-else the hooks run and report nothing, and only the debug log says why.
-Claude's statusline and turn hooks are not checked this way.
+Codex's `ctx` needs Linux or macOS. To tell the pane's own Codex from a
+shared server, `report codex` checks the process running the hook against
+the process table, which it reads only on Linux (`/proc`) and macOS
+(`sysctl`) (ADR-001 A26). Anywhere else the hooks run and report nothing,
+and only the debug log says why. The turn hooks for `$item` and `$stage` do
+report there, but they trust `HERDR_PANE_ID` as given (A42), so start Codex
+with `codex --no-daemon`: a hook the shared app-server ran could otherwise
+land on another pane. Claude's statusline and turn hooks are not checked this
+way.
 
 Codex's context changes only in a turn or a compaction, and those are when
 its hooks run, so the token lasts 24 h, set again by every report: an idle
