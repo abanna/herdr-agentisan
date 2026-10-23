@@ -23,7 +23,7 @@ import (
 // session's that started the daemon, w14:p1's ha-coder-1, and its lineage runs
 // through w14:p1's shell (codexLineage(true)); once that TUI exits, it runs
 // to init and confirms no pane (appServerAlone), and main sent as ha-coder-1.
-// So send and handoff ready with no target are refused caller_unverified in
+// So send, handoff ready and handoff ack with no target refuse caller_unverified in
 // one JSON object, exit 1, and the daemon is never asked; team status asks
 // with no caller pane, so it takes its fallbacks. From the pane's own Codex
 // (--no-daemon) each asks as before.
@@ -39,9 +39,12 @@ func TestACallerOnTheSharedAppServer(t *testing.T) {
 		workerReads int32
 	}{
 		"send":                                 {args: []string{"send", "boss", "hi"}, lineage: shared},
+		"handoff ack":                          {args: []string{"handoff", "ack"}, lineage: shared},
 		"handoff ready":                        {args: []string{"handoff", "ready"}, lineage: shared},
 		"send, the starting TUI gone":          {args: []string{"send", "boss", "hi"}, lineage: appServerAlone},
 		"handoff ready, the starting TUI gone": {args: []string{"handoff", "ready"}, lineage: appServerAlone},
+		"handoff ack, the starting TUI gone":   {args: []string{"handoff", "ack"}, lineage: appServerAlone},
+		"handoff ack, its own":                 {args: []string{"handoff", "ack"}, lineage: own, sent: `{"v":1,"op":"handoff.ack","args":{"caller_pane":"w14:p1"}}`},
 		"team status":                          {args: []string{"team", "status"}, lineage: shared, sent: `{"v":1,"op":"team.status","args":{}}`},
 		"send, the pane's own Codex":           {args: []string{"send", "boss", "hi"}, lineage: own, workerReads: 1, sent: `{"v":1,"op":"send","args":{"to":"boss","body":"hi","caller_pane":"w14:p1","worker":"ha-coder-1"}}`},
 		"handoff ready, its own":               {args: []string{"handoff", "ready"}, lineage: own, workerReads: 1, sent: `{"v":1,"op":"handoff.ready","args":{"caller_pane":"w14:p1","worker":"ha-coder-1"}}`},
@@ -87,7 +90,7 @@ func TestACallerOnTheSharedAppServer(t *testing.T) {
 	}
 }
 
-// TestACallerInTheSandboxNamespace (A64, A25): send and handoff ready with
+// TestACallerInTheSandboxNamespace (A64, A25): send, handoff ready and ack with
 // no target, in Codex's network sandbox whose pid namespace hides Codex from
 // their walk, get A25's answer before any dial: daemon_unavailable, the
 // sandbox as the cause and the boss as who to ask, ending with the gate's
@@ -109,6 +112,9 @@ func TestACallerInTheSandboxNamespace(t *testing.T) {
 		sent    string
 	}{
 		"send":                        {args: []string{"send", "boss", "hi"}, env: inside, lineage: sandboxNamespace, code: "daemon_unavailable"},
+		"handoff ack":                 {args: []string{"handoff", "ack"}, env: inside, lineage: sandboxNamespace, code: "daemon_unavailable"},
+		"handoff ack, shared server":  {args: []string{"handoff", "ack"}, env: inside, lineage: codexLineage(true), code: "caller_unverified"},
+		"handoff ack, outside":        {args: []string{"handoff", "ack"}, env: outside, lineage: sandboxNamespace, code: "caller_unverified"},
 		"handoff ready":               {args: []string{"handoff", "ready"}, env: inside, lineage: sandboxNamespace, code: "daemon_unavailable"},
 		"team status":                 {args: []string{"team", "status"}, env: inside, lineage: sandboxNamespace, sent: `{"v":1,"op":"team.status","args":{}}`},
 		"send, the shared app-server": {args: []string{"send", "boss", "hi"}, env: inside, lineage: codexLineage(true), code: "caller_unverified"},

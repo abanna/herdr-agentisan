@@ -593,6 +593,8 @@ func TestRetireAbandonsARotation(t *testing.T) {
 	t.Run("by its terminal", func(t *testing.T) {
 		t.Parallel()
 		f := newFixture(t, teamConfig)
+		rec := &steps{}
+		f.svc.HandoffSteps = rec.record
 		w := f.worker(t, "ha-coder-1", "coder")
 		next, h := replacing(t, f, w)
 		to := store.Address{Kind: store.KindWorker, ID: w.ID}
@@ -603,6 +605,9 @@ func TestRetireAbandonsARotation(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, workforce.RetireResult{PaneID: next, Changed: true, Outcome: workforce.OutcomeRetired, HandoffFailed: w.ID}, res)
 		assert.Equal(t, "ended", handoffState(t, f, h))
+		assert.Equal(t, []workforce.HandoffStep{{
+			ID: w.ID, Project: "herdr-agentisan", Group: "coder", PaneID: next, OldPane: w.PaneID, Step: workforce.StepFailed,
+		}}, rec.all(), "the abandon is the handoff's failed step (Q3)")
 		f.h.mu.Lock()
 		assert.Nil(t, f.h.pane(next), "the replacement closed")
 		assert.NotNil(t, f.h.pane(w.PaneID), "the worker's own pane stays")
@@ -630,6 +635,24 @@ func TestRetireAbandonsARotation(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, workforce.RetireResult{PaneID: next, Changed: true, Outcome: workforce.OutcomeRetired, HandoffFailed: w.ID}, res)
 		assert.Equal(t, "ended", handoffState(t, f, h))
+	})
+	t.Run("the close fails after the handoff did", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t, teamConfig)
+		rec := &steps{}
+		f.svc.HandoffSteps = rec.record
+		w := f.worker(t, "ha-coder-1", "coder")
+		next, h := replacing(t, f, w)
+		f.h.mu.Lock()
+		f.h.fail["pane.close"] = "internal_error"
+		f.h.mu.Unlock()
+
+		_, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: next})
+		require.ErrorIs(t, err, workforce.ErrHerdr)
+		assert.Equal(t, "ended", handoffState(t, f, h))
+		steps := rec.all()
+		require.Len(t, steps, 1, "the handoff failed, so its step is told, closed or not")
+		assert.Equal(t, workforce.StepFailed, steps[0].Step)
 	})
 	t.Run("herdr fails before the handoff does", func(t *testing.T) {
 		t.Parallel()

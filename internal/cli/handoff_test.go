@@ -96,7 +96,7 @@ func TestHandoffReadyRefusesBeforeAsking(t *testing.T) {
 		"an empty target":        {args: []string{"handoff", "ready", ""}, daemon: true, code: "bad_request"},
 		"a project":              {args: []string{"handoff", "ready", "ha-coder-1", "--project", "ha"}, daemon: true, code: "bad_request"},
 		"a value for --clear":    {args: []string{"handoff", "ready", "--clear=maybe"}, daemon: true, code: "bad_request"},
-		"an unknown verb":        {args: []string{"handoff", "ack"}, daemon: true, code: "bad_request"},
+		"an unknown verb":        {args: []string{"handoff", "begin"}, daemon: true, code: "bad_request"},
 		"the group alone":        {args: []string{"handoff"}, daemon: true, code: "bad_request"},
 		"herdr failing":          {args: []string{"handoff", "ready"}, env: map[string]string{"HERDR_PANE_ID": "w14:p1"}, daemon: true, code: "herdr_failed"},
 		"no daemon":              {args: []string{"handoff", "ready", "ha-coder-1"}, code: "daemon_unavailable"},
@@ -121,5 +121,76 @@ func TestHandoffReadyRefusesBeforeAsking(t *testing.T) {
 			assert.NotEmpty(t, errBody["message"])
 			assert.Empty(t, asked, "the daemon is never asked")
 		})
+	}
+}
+
+// TestHandoffAckAsksTheDaemon: handoff ack sends its op with the
+// replacement's pane id, herdr unasked; with none, the caller's pane as
+// workforce.FindCallerPane confirms it, and never HERDR_AGENTISAN_WORKER,
+// which the old pane has too. It prints the daemon's answer as the
+// envelope; a refusal exits 1.
+func TestHandoffAckAsksTheDaemon(t *testing.T) {
+	t.Parallel()
+	failing := func(herdrtest.Request) herdrtest.Reply {
+		return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "internal", Message: "boom"}}
+	}
+	const ok = `{"ok":true,"data":{"id":"ha-coder-1","project":"ha","group":"coder","old_pane":"w14:p2","new_pane":"w14:p1","handoff_id":3,"item":"NERD-5261","stage":"BOSS: handoff written","old":"matched","changed":true}}`
+	const mismatch = `{"ok":false,"error":{"code":"stage_mismatch","message":"new item \"\", stage \"\""}}`
+	tests := map[string]struct {
+		args  []string
+		env   map[string]string
+		herdr herdrtest.Handler
+		reply string
+		sent  string
+	}{
+		"a pane id, herdr unasked": {
+			args: []string{"handoff", "ack", "w14:p1"}, env: map[string]string{"HERDR_PANE_ID": "w14:p2"}, herdr: failing, reply: ok,
+			sent: `{"v":1,"op":"handoff.ack","args":{"target":"w14:p1"}}`,
+		},
+		"the caller's pane, never the worker's variable": {
+			args: []string{"handoff", "ack"}, env: map[string]string{"HERDR_PANE_ID": "w14:p1", "HERDR_AGENTISAN_WORKER": "ha-coder-1"}, reply: ok,
+			sent: `{"v":1,"op":"handoff.ack","args":{"caller_pane":"w14:p1"}}`,
+		},
+		"no pane confirmed, for the daemon to refuse": {
+			args: []string{"handoff", "ack"}, env: map[string]string{"HERDR_PANE_ID": "", "HERDR_AGENTISAN_WORKER": "ha-coder-1"}, reply: mismatch,
+			sent: `{"v":1,"op":"handoff.ack","args":{}}`,
+		},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := tc.herdr
+			if h == nil {
+				h = paneHerdr("w14:p1", "w9:p9")
+			}
+			e := newDaemonEnvWith(t, h)
+			sent := fakeDaemon(t, e, tc.reply)
+			out, _, err := runOut(t, e.lookup(tc.env), tc.args...)
+			if strings.Contains(tc.reply, `"ok":true`) {
+				require.NoError(t, err)
+			} else {
+				require.Error(t, err, "a refusal exits 1")
+			}
+			assert.JSONEq(t, tc.reply, out)
+			oneJSONObject(t, out)
+			require.Len(t, sent, 1)
+			assert.JSONEq(t, tc.sent, <-sent)
+		})
+	}
+
+	for name, args := range map[string][]string{
+		"two panes":          {"handoff", "ack", "w14:p1", "w14:p2"},
+		"an empty pane":      {"handoff", "ack", ""},
+		"a pane like a flag": {"handoff", "ack", "-x"},
+		"a --clear":          {"handoff", "ack", "--clear"},
+	} {
+		e := newDaemonEnv(t)
+		asked := fakeDaemon(t, e, `{"ok":true,"data":{}}`)
+		out, _, err := runOut(t, e.lookup(nil), args...)
+		require.Error(t, err, name)
+		v := oneJSONObject(t, out)
+		errBody, _ := v["error"].(map[string]any)
+		assert.Equal(t, "bad_request", errBody["code"], name)
+		assert.Empty(t, asked, "%s: the daemon is never asked", name)
 	}
 }
