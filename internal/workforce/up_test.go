@@ -182,6 +182,15 @@ func TestUpStartsACodexGroup(t *testing.T) {
 	for _, w := range res.Workers {
 		agents[w.ID] = w.Agent
 		assert.Equal(t, store.StatusActive, f.row(t, w.ID).Status, w.ID)
+		if w.Agent == "codex" {
+			f.h.mu.Lock()
+			p := f.h.pane(w.PaneID)
+			if assert.NotNil(t, p, w.ID) {
+				assert.Equal(t, "unknown", p.status, w.ID)
+				assert.True(t, p.ready, w.ID)
+			}
+			f.h.mu.Unlock()
+		}
 	}
 	assert.Equal(t, map[string]string{"ha-coder-1": "codex", "ha-coder-2": "codex", "ha-qa-1": "claude", "ha-review-1": "codex"}, agents)
 	full, readOnly := []any{"--no-daemon", "--sandbox", "danger-full-access"}, []any{"--no-daemon", "--sandbox", "read-only"}

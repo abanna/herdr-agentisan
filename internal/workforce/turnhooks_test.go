@@ -204,14 +204,15 @@ func TestUpWarnsOfCodexHooks(t *testing.T) {
 	config := strings.Replace(teamConfig, "groups.review]\nworkers = 0", "groups.review]\nworkers = 1", 1)
 	ownSettings := strings.Replace(config, "[projects.herdr-agentisan.groups.coder]\n", "[projects.herdr-agentisan.groups.coder]\nagent = { command = [\"claude\", \"--settings\", \"x\"] }\n", 1)
 	for name, tc := range map[string]struct {
-		config      string
-		ctx, turned bool
-		ctxErr      error
-		want        []string
-		workers     int
+		config          string
+		ctx, turned     bool
+		ctxErr, turnErr error
+		want            []string
+		workers         int
 	}{
 		"neither installed":  {config: config, want: []string{"Codex's ctx hooks are not installed", "Codex's turn hooks are not installed"}},
 		"a check that fails": {config: config, ctxErr: errors.New("hooks.json is not JSON"), turned: true, want: []string{"could not check Codex's ctx hooks: hooks.json is not JSON"}},
+		"turn check fails":   {config: config, ctx: true, turnErr: errors.New("turn hooks unreadable"), want: []string{"could not check Codex's turn hooks: turn hooks unreadable"}},
 		"no Codex group":     {config: teamConfig, workers: 3},
 		"turn hooks missing": {config: config, ctx: true, want: []string{"Codex's turn hooks are not installed"}},
 		"both installed":     {config: config, ctx: true, turned: true},
@@ -224,7 +225,7 @@ func TestUpWarnsOfCodexHooks(t *testing.T) {
 			f := upFixture(t, tc.config)
 			asked := 0
 			f.svc.CodexHooks = func() (bool, error) { asked++; return tc.ctx, tc.ctxErr }
-			f.svc.CodexTurnHooks = func() (bool, error) { asked++; return tc.turned, nil }
+			f.svc.CodexTurnHooks = func() (bool, error) { asked++; return tc.turned, tc.turnErr }
 
 			res, err := f.svc.Up(t.Context(), workforce.UpRequest{})
 			require.NoError(t, err)

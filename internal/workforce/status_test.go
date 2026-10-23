@@ -580,3 +580,37 @@ func TestStatusGatesALastAgentsCtx(t *testing.T) {
 	require.NotNil(t, got)
 	assert.Equal(t, 70, *got)
 }
+
+// TestFixtureWorkerUsesTheConfiguredKind pins the fixture itself: worker
+// follows the group's launch, while workerAs explicitly overrides it.
+func TestFixtureWorkerUsesTheConfiguredKind(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		config, group, override, want string
+	}{
+		"default coder":    {config: teamConfig, group: "coder", want: "claude"},
+		"default review":   {config: teamConfig, group: "review", want: "codex"},
+		"configured coder": {config: teamConfig + "\n[projects.herdr-agentisan.groups.coder.agent]\ncommand = [\"codex\"]\n", group: "coder", want: "codex"},
+		"configured QA":    {config: teamConfig + "\n[projects.herdr-agentisan.groups.qa.agent]\ncommand = [\"codex\"]\n", group: "qa", want: "codex"},
+		"explicit Codex":   {config: teamConfig, group: "coder", override: "codex", want: "codex"},
+		"explicit Claude":  {config: teamConfig, group: "review", override: "claude", want: "claude"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, tc.config)
+			id := "ha-" + tc.group + "-1"
+			var w worker
+			if tc.override == "" {
+				w = f.worker(t, id, tc.group)
+			} else {
+				w = f.workerAs(t, id, tc.group, tc.override)
+			}
+			f.h.mu.Lock()
+			p := f.h.pane(w.PaneID)
+			if assert.NotNil(t, p) {
+				assert.Equal(t, tc.want, p.agent, "the actual fixture pane follows the configured kind or explicit override")
+			}
+			f.h.mu.Unlock()
+		})
+	}
+}

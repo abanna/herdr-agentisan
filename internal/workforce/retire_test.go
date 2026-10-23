@@ -74,6 +74,11 @@ func TestRetire(t *testing.T) {
 	res, err = f.svc.Retire(t.Context(), workforce.RetireRequest{Target: "ha-qa-5"})
 	require.NoError(t, err)
 	assert.Equal(t, workforce.RetireResult{ID: "ha-qa-5", PaneID: codex, Changed: true, Outcome: workforce.OutcomeRetired}, res, "the Codex's pane, not the shell's")
+	f.h.mu.Lock()
+	assert.Nil(t, f.h.pane(cw.PaneID), "the recorded Codex pane closes")
+	assert.Nil(t, f.h.pane(codex), "the hand-started Codex pane closes")
+	assert.NotNil(t, f.h.pane(codexSplit), "the hand-started Codex's shell stays")
+	f.h.mu.Unlock()
 
 	stale := f.h.addTab(f.ws, "notes-2", "", "unknown")
 	f.h.mu.Lock()
