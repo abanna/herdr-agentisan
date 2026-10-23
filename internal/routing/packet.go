@@ -58,7 +58,9 @@ func DecodeTask(r io.Reader) (*Task, error) {
 }
 
 // CheckBounds checks each field of a packet against its bound, and all its
-// text together against MaxTaskBytes.
+// text together against MaxTaskBytes, and that its provider_preference, the
+// provider a spawn with no --provider runs (A66), is claude, codex or none.
+// The refusal never quotes the preference: the packet is the boss's text.
 func (t *Task) CheckBounds() error {
 	total := 0
 	field := func(name, s string, limit int) error {
@@ -98,5 +100,9 @@ func (t *Task) CheckBounds() error {
 	if total > MaxTaskBytes {
 		return fmt.Errorf("%w: the task packet's text is over %d bytes", ErrInvalid, MaxTaskBytes)
 	}
-	return nil
+	switch t.ProviderPreference {
+	case "", Claude, Codex:
+		return nil
+	}
+	return fmt.Errorf("%w: the task packet's provider_preference is neither %s nor %s", ErrInvalid, Claude, Codex)
 }

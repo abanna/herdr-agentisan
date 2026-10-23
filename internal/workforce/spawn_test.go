@@ -58,7 +58,7 @@ func TestSpawnOpensOneTabPerWorker(t *testing.T) {
 		f.h.mu.Lock()
 		terminal := f.h.pane(w.PaneID).terminal
 		f.h.mu.Unlock()
-		assert.Equal(t, store.Worker{LogicalID: id, Project: "herdr-agentisan", Group: "coder", PaneID: w.PaneID, TerminalID: terminal, Status: store.StatusActive},
+		assert.Equal(t, store.Worker{LogicalID: id, Project: "herdr-agentisan", Group: "coder", PaneID: w.PaneID, TerminalID: terminal, Status: store.StatusActive, Provider: "claude"},
 			f.row(t, id).Worker, "bound to its pane's terminal (A35)")
 	}
 	assert.Equal(t, "herdr-agentisan", res.Project)
@@ -192,7 +192,7 @@ func TestSpawnIDs(t *testing.T) {
 	cfg := strings.Replace(teamConfig, "workers = 2\nslots = 3", "workers = 2\nslots = 9", 1)
 	g := newFixture(t, cfg)
 	g.h.addTab(g.ws, "ha-coder-1", "", "unknown")
-	_, err = g.st.BindWorker(t.Context(), store.Worker{LogicalID: "ha-coder-2", Project: "herdr-agentisan", PaneID: "w99:p1", TerminalID: "term_gone"}, time.Now())
+	_, err = g.st.BindWorker(t.Context(), store.Worker{LogicalID: "ha-coder-2", Provider: "claude", Project: "herdr-agentisan", PaneID: "w99:p1", TerminalID: "term_gone"}, time.Now())
 	require.NoError(t, err)
 	require.NoError(t, g.st.SetWorkerStatus(t.Context(), store.Worker{LogicalID: "ha-coder-2"}, store.StatusRetired, time.Now()))
 	res, err = g.svc.Spawn(t.Context(), workforce.SpawnRequest{Selector: workforce.Selector{Project: "herdr-agentisan"}, Group: "coder", Count: 1})

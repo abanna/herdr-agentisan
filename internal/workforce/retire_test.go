@@ -728,7 +728,7 @@ func TestRetireRereadsTheRowUnderTheLock(t *testing.T) {
 			if err := f.st.SetWorkerStatus(context.Background(), row, store.StatusRetired, time.Now()); err != nil {
 				return err
 			}
-			again := store.Worker{LogicalID: w.ID, Project: "herdr-agentisan", Group: "coder", PaneID: w.PaneID, TerminalID: row.TerminalID}
+			again := store.Worker{LogicalID: w.ID, Provider: "claude", Project: "herdr-agentisan", Group: "coder", PaneID: w.PaneID, TerminalID: row.TerminalID}
 			if _, err := f.st.BindWorker(context.Background(), again, time.Now()); err != nil {
 				return err
 			}

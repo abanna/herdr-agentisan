@@ -100,6 +100,7 @@ var workforceCodes = []struct {
 	{workforce.ErrUnknownGroup, "unknown_group"},
 	{routing.ErrUnknownRole, "unknown_role"},
 	{routing.ErrProviderMismatch, "provider_mismatch"},
+	{settings.ErrProviderRefused, "provider_refused"},
 	{routing.ErrOverrideRefused, "override_refused"},
 	{routing.ErrBlocked, "routing_blocked"},
 	{workforce.ErrSlotCap, "slot_cap"},

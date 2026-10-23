@@ -91,7 +91,7 @@ func (s *Service) Up(ctx context.Context, req UpRequest) (UpResult, error) {
 				if err != nil {
 					return nil, err
 				}
-				agent, err := agentOf(st.profile, name)
+				agent, err := agentOf(st.profile, name, "")
 				if err != nil {
 					return nil, err
 				}

@@ -39,6 +39,7 @@ func TestDecodeTask(t *testing.T) {
 		"an array":                   `[]`,
 		"a file a byte past 64 KiB":  `{"title":"x"` + strings.Repeat(" ", routing.MaxTaskBytes-12) + `}`,
 		"a field past its own bound": `{"title":"` + strings.Repeat("x", 513) + `"}`,
+		"an unknown provider":        `{"task_lookup_status":"found","provider_preference":"gemini"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -115,4 +116,22 @@ func TestTaskBounds(t *testing.T) {
 			require.ErrorIs(t, err, routing.ErrInvalid, "decoded, too")
 		})
 	}
+}
+
+// TestTaskProviderPreference: a packet's provider_preference chooses the
+// provider of a spawn with no --provider (A66), so it is claude, codex or
+// none; anything else is refused, whichever way the packet arrived, and the
+// refusal never quotes it.
+func TestTaskProviderPreference(t *testing.T) {
+	t.Parallel()
+	for _, ok := range []string{"", routing.Claude, routing.Codex} {
+		require.NoError(t, (&routing.Task{ProviderPreference: ok}).CheckBounds(), "%q", ok)
+	}
+	for _, bad := range []string{"gemini-3-pro", "Claude", "codex ", " claude", "claude,codex"} {
+		err := (&routing.Task{ProviderPreference: bad}).CheckBounds()
+		require.ErrorIs(t, err, routing.ErrInvalid, "%q", bad)
+		assert.Contains(t, err.Error(), "provider_preference is neither claude nor codex")
+	}
+	err := (&routing.Task{ProviderPreference: "gemini-3-pro"}).CheckBounds()
+	assert.NotContains(t, err.Error(), "gemini", "the boss's text is never quoted")
 }

@@ -741,6 +741,7 @@ func TestWorkforceCodes(t *testing.T) {
 		workforce.ErrUnknownGroup:                                                "unknown_group",
 		routing.ErrUnknownRole:                                                   "unknown_role",
 		routing.ErrProviderMismatch:                                              "provider_mismatch",
+		fmt.Errorf("coder: %w", settings.ErrProviderRefused):                     "provider_refused",
 		routing.ErrOverrideRefused:                                               "override_refused",
 		routing.ErrBlocked:                                                       "routing_blocked",
 		fmt.Errorf("%w: %w", workforce.ErrBadRequest, routing.ErrInvalid):        "bad_request",

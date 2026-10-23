@@ -230,7 +230,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   sender and recipient (A30): each group's counts and members on a tabs team
   or the ◆ spaces, with idle times from the daemon's clock and the rows no
   pane is bound to (A35); opening a tab per worker and waiting for its agent,
-  a Claude one launched with A42's turn hooks as `--settings`,
+  of the provider `--provider` or the packet's preference asks for, else the
+  type's default (`provider.go`, A66), a Claude one launched with A42's turn
+  hooks as `--settings`,
   after `internal/preflight`'s check and, for a coder with a task packet,
   Jev's answer (`jev.go`, A57), each group up to its count for
   `team up`, which also opens the team's dashboard above the boss
@@ -262,7 +264,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   access for coder, qa and precheck), which spawn adds. Each type runs
   claude or codex, its default provider, with a command and a model per
   provider (`[agent.<provider>]`, `AgentFor(type, provider)`, flags only,
-  A62); nothing chooses the other provider yet (NERD-5519). The debugger
+  A62); `worker spawn --provider` or the task packet's preference chooses
+  the other (A66). The debugger
   refuses codex and review claude, as gaps, and a model whose name says the
   other provider runs it is refused by `config resolve --project`
   (`CheckModelProviders`) and at spawn. Sample in
@@ -305,7 +308,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   ending is written to the worker's row, and a worker still starting
   begins none (A33). A `workers` row binds its pane by terminal, with the
   shell the team poll read (migration 0003, A35), and the routing decision
-  it was launched with (migration 0005, A50); the poll's
+  it was launched with (migration 0005, A50), and the provider it was
+  launched as, written at every bind (migration 0008, A66); the poll's
   writes are compare-and-sets on the row as it read it. The GitHub notices'
   seen-set, open PRs and seed marks, a kind's own included (`github.go`,
   migrations 0004 and 0006, A45), make each event told once across

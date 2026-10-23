@@ -198,7 +198,7 @@ func policyOf(d routing.Deployment) (routing.Policy, error) {
 }
 
 // CheckRoutingProviders refuses a user override that a spawn of a worker
-// type, under a provider it runs and at its role's own effort, would be
+// type, under a provider it may run and at its role's own effort, would be
 // refused for (A50, A63): a binding the deployment disables, leaves
 // unresolved, or that does not take the role's effort. An override binds only workers of its binding's
 // provider, so one for another provider is no override of the pair, and a
@@ -229,18 +229,12 @@ func (p Profile) CheckRoutingProviders() error {
 	return nil
 }
 
-// providersOf are the providers a worker of type typ runs, each a pair
-// CheckRoutingProviders checks: the provider of the agent its spawn runs,
-// AgentFor's for the type's default provider, when that is claude or codex
-// (A62). Nothing chooses another provider until P18 (NERD-5519), whose
-// --provider widens it to every provider the type may run, providers less
-// those refused.
+// providersOf are the providers a worker of type typ may run, each a pair
+// CheckRoutingProviders checks: every provider (A62) but those the type
+// cannot run yet (refused), since a spawn's --provider or its packet may
+// choose either, whatever the type's default (A66).
 func (p Profile) providersOf(typ string) []string {
-	agent, err := p.AgentFor(typ, "")
-	if prov := executable(agent.Command); err == nil && slices.Contains(providers, prov) {
-		return []string{prov}
-	}
-	return nil
+	return slices.DeleteFunc(slices.Clone(providers), func(provider string) bool { return refused(typ, provider) != nil })
 }
 
 // deploymentOf reads [routing] out of a resolved tree.

@@ -287,7 +287,13 @@ func TestCheckRoutingProviders(t *testing.T) {
 			},
 			"the list's codex binding disabled": {
 				file: precheck + qa + both + "[routing.bindings.codex_strong]\nenabled = false\n",
-				want: "routing.overrides.pre_check: invalid config: the worker type qa under codex: override refused: codex_strong, which the user's [routing.overrides] chose for pre_check, is disabled in [routing.bindings]",
+				want: "routing.overrides.pre_check: invalid config: the worker type precheck under codex: override refused: codex_strong, which the user's [routing.overrides] chose for pre_check, is disabled in [routing.bindings]",
+			},
+			// A66: a spawn may choose either provider, so a claude type's pairs
+			// include codex.
+			"a disabled binding of the type's other provider": {
+				file: precheck + "[routing.overrides]\npre_check = \"codex_strong\"\n[routing.bindings.codex_strong]\nenabled = false\n",
+				want: "routing.overrides.pre_check: invalid config: the worker type precheck under codex: override refused: codex_strong, which the user's [routing.overrides] chose for pre_check, is disabled in [routing.bindings]",
 			},
 		} {
 			res, err := loadRouting(t, routingOn+tc.file, "", nil, true)
@@ -304,7 +310,7 @@ func TestCheckRoutingProviders(t *testing.T) {
 		"claude by its path":                     "[groups.precheck]\nworkers = 0\nslots = 1\nagent = { command = [\"/usr/local/bin/claude\"] }\n" + override,
 		"the live coder override, a codex coder": "[routing]\nenabled = true\n" + coder + "[routing.overrides]\ncoder = \"claude_strong\"\n",
 		"a list for both providers":              precheck + qa + both,
-		"a disabled binding no type runs":        precheck + "[routing.overrides]\npre_check = \"codex_strong\"\n[routing.bindings.codex_strong]\nenabled = false\n",
+		"a disabled binding no type may run":     "[groups.debugger]\nworkers = 0\nslots = 1\n[routing.overrides]\nalex_debugger = \"codex_strong\"\n[routing.bindings.codex_strong]\nenabled = false\n",
 		"a type running the binding's provider":  precheck + override,
 		"no override":                            qa,
 		"another role's override":                qa + "[routing.overrides]\nresearcher = \"claude_small\"\n",

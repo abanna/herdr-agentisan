@@ -54,7 +54,7 @@ func (t *Task) check(role, provider string) error {
 	case t.RequestedRole != "" && t.RequestedRole != role:
 		return fmt.Errorf("%w: the packet's requested_role is not the worker type's role, %s", ErrInvalid, role)
 	case t.ProviderPreference != "" && t.ProviderPreference != provider:
-		return fmt.Errorf("%w: the packet's provider_preference is not %s, which the worker type runs; set the type's agent command to change it", ErrProviderMismatch, provider)
+		return fmt.Errorf("%w: the packet's provider_preference is not %s, which the spawn runs", ErrProviderMismatch, provider)
 	}
 	return nil
 }
@@ -76,8 +76,9 @@ func (t *Task) digest() string {
 type Request struct {
 	// Role is the worker type's role (RoleFor).
 	Role string
-	// Provider is the agent the worker type's command runs, claude or
-	// codex. A decision never changes it.
+	// Provider is the agent the worker runs, claude or codex: the spawn's
+	// --provider, else the packet's provider_preference, else the worker
+	// type's default (A66). A decision never changes it.
 	Provider string
 	// Task is the boss's task packet; nil when it sent none.
 	Task *Task
