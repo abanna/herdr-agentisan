@@ -79,11 +79,38 @@ func ghReviewAnswer(t *testing.T, login, state, at, oid string, levels ...int) s
 	return string(raw)
 }
 
+// mergeAnswers is the review query's answers as one: every review each
+// holds, under the form of the login it was under.
+func mergeAnswers(t *testing.T, answers ...string) string {
+	t.Helper()
+	type conn struct {
+		Nodes []any `json:"nodes"`
+	}
+	var user, bot conn
+	user.Nodes, bot.Nodes = []any{}, []any{}
+	for _, a := range answers {
+		var d struct {
+			Data struct {
+				Repository struct {
+					PullRequest struct{ User, Bot conn } `json:"pullRequest"`
+				} `json:"repository"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(a), &d))
+		user.Nodes = append(user.Nodes, d.Data.Repository.PullRequest.User.Nodes...)
+		bot.Nodes = append(bot.Nodes, d.Data.Repository.PullRequest.Bot.Nodes...)
+	}
+	raw, err := json.Marshal(map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{"user": user, "bot": bot}}}})
+	require.NoError(t, err)
+	return string(raw)
+}
+
 // TestGitHubReviewNoticesReachTheLog is A45's reviews end to end on the
 // stand-in gh: the seed records the reviews there and looks none up; a new
-// review, and a new reviewer's, are each looked up once and told with the
-// commit, the state and the P-badge counts, never the body or a comment;
-// the next collections, the same, look nothing up and tell nothing.
+// review, and new reviewers' (two of one PR, through the poll's Batcher
+// together), are each looked up once and told with the commit, the state
+// and the P-badge counts, never the body or a comment; the next
+// collections, the same, look nothing up and tell nothing.
 func TestGitHubReviewNoticesReachTheLog(t *testing.T) {
 	t.Parallel()
 	g := newGHNotices(t, "")
@@ -93,19 +120,21 @@ func TestGitHubReviewNoticesReachTheLog(t *testing.T) {
 	assert.Empty(t, g.told(), "the review there at the seed is not told")
 	assert.Equal(t, []string{"50 review chatgpt"}, g.seen(t))
 
-	g.f.Answer(t, withReviews(t, open, map[int][]ghRev{50: {{codexLogin, "COMMENTED", reviewT2}}, 51: {{"alice", "APPROVED", reviewT3}}}), noIssues)
-	g.f.Review(t, 50, ghReviewAnswer(t, codexLogin, "COMMENTED", reviewT2, headB, 1, 2, 1))
+	g.f.Answer(t, withReviews(t, open, map[int][]ghRev{50: {{codexLogin, "COMMENTED", reviewT2}, {"bob", "CHANGES_REQUESTED", reviewT3}}, 51: {{"alice", "APPROVED", reviewT3}}}), noIssues)
+	g.f.Review(t, 50, mergeAnswers(t, ghReviewAnswer(t, codexLogin, "COMMENTED", reviewT2, headB, 1, 2, 1), ghReviewAnswer(t, "bob", "CHANGES_REQUESTED", reviewT3, headB, 0)))
 	g.f.Review(t, 51, ghReviewAnswer(t, "alice", "APPROVED", reviewT3, headA))
-	g.tick(t, 2)
+	g.tick(t, 3)
 	assert.Equal(t, []string{
 		"#50 review by chatgpt-codex-connector at 38926d5: commented, P1 ×2, P2 ×1",
+		"#50 review by bob at 38926d5: changes requested, P0 ×1",
 		"#51 review by alice at 1e0fb1b: approved, no P-badges",
 	}, g.told())
 	assert.Equal(t, "number=51", g.f.Args(t, "review")[9])
+	assert.Equal(t, []string{"50 review bob 202", "50 review chatgpt", "50 review chatgpt", "51 review alice 2"}, g.seen(t), "both of #50's recorded")
 
 	g.tick(t, 0)
 	g.tick(t, 0)
-	assert.Len(t, g.told(), 2, "nothing is told twice, and nothing is looked up again")
+	assert.Len(t, g.told(), 3, "nothing is told twice, and nothing is looked up again")
 	assert.NotContains(t, g.logs.String(), "merge it now", "no body or comment")
 }
 
