@@ -561,6 +561,12 @@ func TestTheWorkforceRecordsItsRouting(t *testing.T) {
 	assert.Len(t, rec.Events(), 3, "no event without a decision")
 	assert.Contains(t, logs.String(), "worker spawn: routing is off; when on, it would refuse this")
 	assert.Contains(t, logs.String(), routing.ErrUnknownRole.Error())
+
+	logs.Reset()
+	svc.Routed(t.Context(), workforce.Routed{Op: "team up", Project: "ha", Group: "ops", IDs: []string{"ha-ops-1"}, Refused: routing.ErrUnknownRole})
+	assert.Len(t, rec.Events(), 3, "no event without a decision")
+	assert.Contains(t, logs.String(), "team up: routing is off; when on, it would refuse this")
+	assert.NotContains(t, logs.String(), "worker spawn", "a team up refusal is named for its own op")
 }
 
 // TestWorkforceCodes: every workforce refusal has a code of its own, and
