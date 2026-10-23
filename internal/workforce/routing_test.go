@@ -284,7 +284,8 @@ func TestSpawnRoutingRefusals(t *testing.T) {
 func TestSpawnUnderAnOverrideOfTheOtherProvider(t *testing.T) {
 	t.Parallel()
 	codexCoder := strings.Replace(routingOn, "groups.coder]\n", "groups.coder]\nagent = { command = [\"codex\"] }\n", 1)
-	codexArgs := []any{"--no-daemon", "--model", "gpt-6.1-sol", "-c", `model_reasoning_effort="high"`}
+	// A coder's Codex starts with full access (A59).
+	codexArgs := []any{"--no-daemon", "--sandbox", "danger-full-access", "--model", "gpt-6.1-sol", "-c", `model_reasoning_effort="high"`}
 	tests := map[string]struct {
 		overrides string
 		reason    routing.Reason
