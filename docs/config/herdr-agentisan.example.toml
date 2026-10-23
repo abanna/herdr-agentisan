@@ -207,8 +207,20 @@ locks = ["/run/user/1000/agentisan/gate.0.lock"]
 #            enabled, e.g. [routing.bindings.claude_mid] model_id = "…".
 #   [routing.overrides]  <role> = "<binding>": your standing choice, and the
 #            only way to a premium binding (Fable, Astra). This file only.
+#   [routing.jev]  Jev's complexity answer for a coder spawned with a task
+#            packet (ADR-001 A57). enabled false (the default) never asks
+#            Jev, and Jev is asked only while routing is enabled too;
+#            env_file is the env file holding TYPESAFE_API_KEY, an absolute
+#            path or one under ~/, required while enabled (a file 1Password
+#            mounts works: while it is locked, a spawn takes the default);
+#            confidence_pct and sufficiency_pct, whole percents, replace the
+#            rules' 75 and 80. `config resolve --check-secrets` reads the key.
 [routing]
 enabled = false
+
+[routing.jev]
+enabled = false
+env_file = "~/.config/herdr-agentisan/typesafe.env"
 
 # ---------------------------------------------------------------------------
 # Projects. The key is the project's name: lower case, digits and dashes.

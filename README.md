@@ -540,6 +540,16 @@ then `routing policy:`, the version a decision records; with `--project` it
 also refuses an override a worker type with that role cannot run, such as a
 claude binding for a type on codex.
 
+`[routing.jev]` is for Jev's complexity answer about a coder's assignment
+(ADR-001 A57): `enabled` (off by default, and Jev is asked only while
+routing is enabled too), `env_file`, the env file holding `TYPESAFE_API_KEY`
+(an absolute path or one under `~/`, required while Jev is enabled; a file
+1Password mounts works), and `confidence_pct` and `sufficiency_pct`, whole
+percents in place of the rules' 75 and 80. Like the rest of `[routing]` it
+belongs to the shared file and `--set`. `config resolve --check-secrets`
+reads the key from the file, and prints only whether it is there. Nothing
+asks Jev yet.
+
 `worker spawn` asks routing once per spawn, and `team up` once per group it
 fills, before it opens anything: while routing is on, a group it refuses
 stops the whole `team up`. While it is on, the decision is
