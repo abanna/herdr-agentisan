@@ -243,7 +243,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   Codex hooks check `internal/cli` gives it; `internal/cli` only asks it, and
   asks herdr only to confirm its own pane (`FindCallerPane`), when no
   `--project` names the team, for `send`'s sender and for `handoff ready`
-  with no target.
+  with no target; under Codex, only from the pane's own Codex, else no pane
+  and no `HERDR_AGENTISAN_WORKER` (`FindCaller`, `caller_unverified`, A64).
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret

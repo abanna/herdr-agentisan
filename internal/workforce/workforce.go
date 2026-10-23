@@ -58,6 +58,10 @@ var (
 	ErrHandoffTimeout = errors.New("no handoff in time")
 	// ErrHerdr means a herdr call failed.
 	ErrHerdr = errors.New("herdr call failed")
+	// ErrCallerUnverified means the command runs under Codex, but not in the
+	// pane's own Codex, so its HERDR_PANE_ID and HERDR_AGENTISAN_WORKER may
+	// be another session's (A64).
+	ErrCallerUnverified = errors.New("the caller runs under Codex but not in its pane's own codex")
 	// ErrNoTarget means no tabs team to spawn into: the ◆ spaces are hand-run.
 	ErrNoTarget = errors.New("no team to spawn into")
 	// ErrUnknownGroup means the type is no worker group of the project.
@@ -200,7 +204,22 @@ type Selector struct {
 // when nothing confirms one: HERDR_PANE_ID counts only as report.ResolvePane
 // confirms it, by a process in the command's own lineage, since herdr can
 // reissue a closed workspace's ids to new panes. A failing herdr is ErrHerdr.
+//
+// First, without asking herdr, a command run under Codex must be run by the
+// pane's own Codex (report's CheckCallerHost), else it is ErrCallerUnverified
+// (A64): under the shared app-server its lineage runs through the pane that
+// started the daemon, which ResolvePane would confirm. One in Codex's network
+// sandbox whose walk shows no Codex, as the sandbox's pid namespace hides it,
+// also wraps CheckReach's report.ErrCodexSandboxed, so it is told why and
+// who to ask, as a sandboxed dial that failed is (A25), not to start Codex
+// with --no-daemon: it could not reach herdr or the daemon anyway.
 func FindCallerPane(ctx context.Context, h report.PaneFinder, pane report.Pane) (string, error) {
+	if err := pane.CheckCallerHost(); err != nil {
+		if sandboxed := CheckReach(pane); sandboxed != nil && errors.Is(err, report.ErrNoCodexHost) {
+			return "", fmt.Errorf("%w: %w: %w", sandboxed, ErrCallerUnverified, err)
+		}
+		return "", fmt.Errorf("%w: start Codex with --no-daemon, and run the command outside its sandbox: %w", ErrCallerUnverified, err)
+	}
 	if pane.PaneID == "" || pane.Lineage == nil {
 		return "", nil
 	}
@@ -216,13 +235,40 @@ func FindCallerPane(ctx context.Context, h report.PaneFinder, pane report.Pane) 
 	return id, nil
 }
 
+// Caller is who a command runs as: its pane, as FindCallerPane confirms it,
+// or "", and its HERDR_AGENTISAN_WORKER, or "".
+type Caller struct {
+	Pane   string
+	Worker string
+}
+
+// FindCaller is the command's caller: its pane, as FindCallerPane confirms
+// it, and its HERDR_AGENTISAN_WORKER through lookup (os.LookupEnv in
+// production), read only once the pane's check passed. A command whose
+// HERDR_PANE_ID may be another session's has that session's variable too,
+// so an ErrCallerUnverified caller is neither (A64).
+func FindCaller(ctx context.Context, h report.PaneFinder, pane report.Pane, lookup func(string) (string, bool)) (Caller, error) {
+	id, err := FindCallerPane(ctx, h, pane)
+	if err != nil {
+		return Caller{}, err
+	}
+	worker, _ := lookup(WorkerEnv)
+	return Caller{Pane: id, Worker: worker}, nil
+}
+
 // SelectorFor is the team a command means: project when set, without asking
-// herdr; else the caller's pane, as FindCallerPane confirms it.
+// herdr; else the caller's pane, as FindCallerPane confirms it. A caller it
+// cannot verify (ErrCallerUnverified) confirms no pane, so the op takes its
+// fallbacks, as for a caller in no pane: the pane that started Codex's daemon
+// never chooses the team, though the only tabs team may be its (A64).
 func SelectorFor(ctx context.Context, h report.PaneFinder, project string, pane report.Pane) (Selector, error) {
 	if project != "" {
 		return Selector{Project: project}, nil
 	}
 	caller, err := FindCallerPane(ctx, h, pane)
+	if errors.Is(err, ErrCallerUnverified) {
+		return Selector{}, nil
+	}
 	return Selector{CallerPane: caller}, err
 }
 

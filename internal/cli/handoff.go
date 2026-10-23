@@ -47,9 +47,8 @@ func newHandoffReadyCmd() *cobra.Command {
 				lookup := lookupEnvFrom(ctx)
 				pane := report.PaneFrom(lookup)
 				pane.Lineage = lineageFrom(ctx)()
-				caller, err := workforce.FindCallerPane(ctx, herdr.Client{SocketPath: pane.SocketPath}, pane)
-				worker, _ := lookup(workforce.WorkerEnv)
-				return workforce.HandoffReadyRequest{Clear: unmark, CallerPane: caller, Worker: worker}, err //nolint:wrapcheck // workforce wraps it
+				caller, err := workforce.FindCaller(ctx, herdr.Client{SocketPath: pane.SocketPath}, pane, lookup)
+				return workforce.HandoffReadyRequest{Clear: unmark, CallerPane: caller.Pane, Worker: caller.Worker}, err //nolint:wrapcheck // workforce wraps it
 			})
 		},
 	}

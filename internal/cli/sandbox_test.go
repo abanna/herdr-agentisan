@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"bytes"
 	"maps"
 	"net"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/abanna/herdr-agentisan/internal/cli"
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 )
 
@@ -40,10 +42,26 @@ var sandboxCommands = map[string]struct {
 	"notices list":                 {args: []string{"notices", "list"}},
 }
 
-// refusal runs args and returns the code and message it was refused with.
+// runUnderCodex runs args as its pane's own Codex runs a tool command, or an
+// escalation it approved: codex --no-daemon is among the command's parents,
+// so a command carrying CODEX_THREAD_ID counts as the pane's (A64).
+func runUnderCodex(t *testing.T, lookup func(string) (string, bool), args ...string) (stdout string, err error) {
+	t.Helper()
+	root := cli.Root()
+	var out, errOut bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+	root.SetIn(strings.NewReader(""))
+	root.SetArgs(args)
+	err = root.ExecuteContext(cli.WithLookupEnv(cli.WithLineage(t.Context(), codexLineage(false)), lookup))
+	return out.String(), err
+}
+
+// refusal runs args under Codex and returns the code and message it was
+// refused with.
 func refusal(t *testing.T, lookup func(string) (string, bool), args ...string) (code, message string) {
 	t.Helper()
-	out, err := runStdin(t, lookup, "", args...)
+	out, err := runUnderCodex(t, lookup, args...)
 	require.Error(t, err, "a refusal exits 1")
 	v := oneJSONObject(t, out)
 	require.Equal(t, false, v["ok"])
@@ -77,7 +95,7 @@ func TestCommandsFromACodexSandbox(t *testing.T) {
 
 			e = newDaemonEnv(t)
 			asked := fakeDaemon(t, e, `{"ok":true,"data":{}}`)
-			out, err := runStdin(t, e.lookup(sandboxed), "", tc.args...)
+			out, err := runUnderCodex(t, e.lookup(sandboxed), tc.args...)
 			require.NoError(t, err, "an approved escalation reaches the daemon")
 			assert.Equal(t, true, oneJSONObject(t, out)["ok"])
 			require.Len(t, asked, 1)
