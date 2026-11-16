@@ -171,15 +171,74 @@ func TestRenderGolden(t *testing.T) {
 	}
 }
 
-// widths and heights are swept in full: every frame of every fixture, at
-// each pair, with and without help and the btop button, the selection first
-// and last.
-var (
-	widths  = []int{1, 2, 3, 4, 5, 8, 12, 16, 20, 26, 30, 34, 40, 46, 50, 60, 80, 100, 120, 200}
-	heights = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 16, 24, 40, 60}
-	// huge are a terminal's 16-bit limits, one side at a time.
-	huge = [][2]int{{65535, 30}, {80, 65535}}
+// sizes are the w x h frames both sweeps draw, every fixture with and
+// without help and the btop button, the selection first and last. They are
+// not every size: a frame passes checkFrame unless an index or a count goes
+// out of range, or Render's last cut and trim are broken, so the sweep draws
+// the sizes on each side of the renderer's thresholds and leaves the layout
+// between them to the goldens.
+//
+// Every width is drawn at the low heights, where the header changes form:
+// one line from 1, the footer from 2, two bare lines from 4, the box from
+// boxedHeight 9, the help box cut by the canvas below 17. The widths cross
+// the columns' fit (1 to 4 has no row text, 5 the first), the boss line's
+// room (12), the btop button (24 boxed), the state, model, item and stage
+// columns as each fixture's names allow (30 to 68), the help box's width
+// (45 is flush), and twoColumns (110) and the project line's full PRs with
+// the button (130).
+//
+// The high heights add a group view's agent box whole on screen (15, or 16
+// under a description), the help box whole in the canvas (17) and inside
+// the groups (24), and the groups shorter than the room, which each fixture
+// reaches at its own height (15 to 40). They are drawn at the widths whose
+// lines change with height: the narrowest (1 to 5), the button (24), the
+// help box flush (45), one column (80) and two (110).
+var sizes = sweepSizes(
+	[]int{1, 2, 3, 4, 5, 8, 12, 20, 24, 30, 34, 40, 45, 50, 60, 68, 80, 110, 130},
+	[]int{1, 2, 3, 4, 5, 8, 9},
+	[]int{1, 2, 3, 5, 24, 45, 80, 110},
+	[]int{15, 16, 17, 24, 40},
 )
+
+// huge are a terminal's 16-bit limits, one side at a time. The tall one is
+// drawn for every frame the sweeps draw. The wide one, thirty lines of 65535
+// cells, costs about a hundred times as much under -race, so it is drawn
+// only for the frames that take a path of their own there: wideFixtures and
+// wideGroups.
+var huge = [][2]int{{65535, 30}, {80, 65535}}
+
+// wideFixtures are the overviews drawn at huge's wide size: no snapshot; a
+// snapshot with no groups, boss or project; groups with no boss or project;
+// and groups with both.
+var wideFixtures = []string{"no snapshot", "empty", "blocked", "full"}
+
+// wideGroups are the group views drawn at huge's wide size, by fixture:
+// full's coders has a description and nine agents (two columns of boxes, a
+// ready badge, a blocked border), its qa one agent (one box the whole
+// width), and group's research none (no box).
+var wideGroups = map[string][]string{"full": {"coders", "qa"}, "group": {"research"}}
+
+// wideSize reports whether size is huge's wide size.
+func wideSize(size [2]int) bool {
+	return size[0] > size[1]
+}
+
+// sweepSizes is every width at every low height, then every high width at
+// every high height.
+func sweepSizes(widths, low, highWidths, high []int) [][2]int {
+	out := make([][2]int, 0, len(widths)*len(low)+len(highWidths)*len(high))
+	for _, w := range widths {
+		for _, h := range low {
+			out = append(out, [2]int{w, h})
+		}
+	}
+	for _, w := range highWidths {
+		for _, h := range high {
+			out = append(out, [2]int{w, h})
+		}
+	}
+	return out
+}
 
 // checkFrame fails unless frame is exactly h lines, none wider than w and
 // none ending in a space, so bubbletea never wraps or scrolls it.
@@ -225,19 +284,21 @@ func TestRenderFillsTheFrameExactly(t *testing.T) {
 					Note: "focus off", Errors: []error{errors.New(strings.Repeat("a long error ", 20))},
 				}
 			}
-			for _, w := range widths {
-				for _, h := range heights {
-					for _, sel := range sels {
-						for _, on := range []bool{false, true} {
-							label := fmt.Sprintf("%dx%d sel=%+v help,btop=%v", w, h, sel, on)
-							if !checkFrame(t, dashboard.Render(frame(sel, on), w, h, plain), w, h, label) {
-								return
-							}
+			for _, size := range sizes {
+				w, h := size[0], size[1]
+				for _, sel := range sels {
+					for _, on := range []bool{false, true} {
+						label := fmt.Sprintf("%dx%d sel=%+v help,btop=%v", w, h, sel, on)
+						if !checkFrame(t, dashboard.Render(frame(sel, on), w, h, plain), w, h, label) {
+							return
 						}
 					}
 				}
 			}
 			for _, size := range huge {
+				if wideSize(size) && !slices.Contains(wideFixtures, name) {
+					continue
+				}
 				checkFrame(t, dashboard.Render(frame(sels[len(sels)-1], true), size[0], size[1], plain), size[0], size[1], fmt.Sprint(size))
 			}
 		})
