@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"testing"
@@ -37,7 +38,7 @@ func TestUpgradeFromTheFirstSchema(t *testing.T) {
 
 	s := open(t, path)
 	assert.Equal(t, store.SchemaVersion(), s.UserVersion())
-	assert.Equal(t, 8, s.UserVersion())
+	assert.Equal(t, 9, s.UserVersion())
 	row, err := s.WorkerRow(t.Context(), "w")
 	require.NoError(t, err)
 	assert.Nil(t, row.Routing, "a worker bound before 0005 was not launched by routing")
@@ -131,4 +132,66 @@ INSERT INTO github_seen VALUES ('agentisan', 'nerds-run/agentisan-skills', 1006,
 		Seeded: true, Kinds: map[string]bool{}, Open: []int{1006},
 		Seen: map[store.GitHubEvent]bool{{PR: 1006, Kind: "ci_passed", Key: "afa239d"}: true},
 	}, got)
+}
+
+// TestUpgradeFrom8 (A10) is the live state.db's path into 0009: a database
+// at schema 8 with rows in every table migrates to 9 with every row and
+// every object it had unchanged, and an empty ledger, which then imports
+// what github_seen already held and admits the rest.
+func TestUpgradeFrom8(t *testing.T) {
+	t.Parallel()
+	eight := fstest.MapFS{}
+	for _, name := range []string{
+		"0001_init.sql", "0002_messages.sql", "0003_worker_identity.sql", "0004_github_notices.sql",
+		"0005_worker_routing.sql", "0006_github_seeded_kinds.sql", "0007_board.sql", "0008_worker_provider.sql",
+	} {
+		raw, err := os.ReadFile(filepath.Join("migrations", name)) // #nosec G304 -- this package's own migrations
+		require.NoError(t, err)
+		eight[name] = &fstest.MapFile{Data: raw}
+	}
+	path := dbPath(t)
+	v8, err := store.OpenWith(t.Context(), path, eight)
+	require.NoError(t, err)
+	require.Equal(t, 8, v8.UserVersion())
+	ctx := t.Context()
+	require.NoError(t, v8.RecordFocus(ctx, "w14:p2", t1))
+	seedWorker(t, v8, "w", "w14:p2", 1)
+	_, err = store.DB(v8).ExecContext(ctx, "INSERT INTO handoffs (logical_id, old_pane, new_pane, state, created_at, updated_at) VALUES ('w', 'w14:p1', 'w14:p2', 'acknowledged', 1, 2)")
+	require.NoError(t, err)
+	send(t, v8, worker("w"), boss, "before 0009")
+	post(t, v8, teamPost("ha", "w", "before 0009"))
+	_, err = v8.MarkSeen(ctx, "ha", store.ReaderUser, 1)
+	require.NoError(t, err)
+	require.NoError(t, v8.UpdateGitHub(ctx, store.GitHubUpdate{
+		Project: "ha", Repo: ledgerRepo, Collected: true, SeedKinds: []string{"review"}, Open: []int{50},
+		Seen: []store.GitHubEvent{{PR: 50, Kind: "ci_failed", Key: headOID}},
+	}, ledgerSeen))
+	before := otherTables(t, store.DB(v8))
+	for table, rows := range before {
+		require.NotEmpty(t, rows, "%s has a row before the upgrade", table)
+	}
+	schema := func(db *sql.DB) [][]any {
+		return queryRows(t, db, "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name NOT IN ('notice_identities', 'notice_payloads') ORDER BY type, name")
+	}
+	objectsBefore := schema(store.DB(v8))
+	require.NoError(t, v8.Close())
+
+	s := open(t, path)
+	assert.Equal(t, 9, s.UserVersion())
+	assert.Equal(t, before, otherTables(t, store.DB(s)), "every row of schema 8 survives as it was")
+	assert.Equal(t, objectsBefore, schema(store.DB(s)), "every object of schema 8 is as it was")
+	assert.Equal(t, [2]int{0, 0}, ledgerRows(t, s), "the ledger starts empty")
+	var check string
+	require.NoError(t, store.DB(s).QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&check))
+	assert.Equal(t, "ok", check)
+	assert.Empty(t, queryRows(t, store.DB(s), "PRAGMA foreign_key_check"))
+
+	told := admissible(t)
+	assert.Equal(t, store.NoticeAdmission{CaptureID: told.CaptureID, State: "imported", Imported: true}, admit(t, s, told),
+		"an event told before the upgrade is imported, never told again")
+	fresh := admissible(t, func(e *store.NoticeEnvelope) { e.Receipt.PR = 51 })
+	assert.Equal(t, "pending", admit(t, s, fresh).State)
+	got, err := s.PendingNotice(ctx, fresh.CaptureID)
+	require.NoError(t, err)
+	assert.Equal(t, fresh.Text, got.Text)
 }
