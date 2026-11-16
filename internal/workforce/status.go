@@ -27,9 +27,11 @@ type Member struct {
 	// Agent is the agent herdr detects, such as "claude"; "" for a shell.
 	Agent string `json:"agent"`
 	// Provider is the agent its row records it was launched as, claude or
-	// codex (ADR-001 A66); absent for a pane no row binds and a row bound
-	// before migration 0008. Beside Agent, it shows a pane that now runs
-	// another agent than its worker was launched as.
+	// codex (ADR-001 A66); absent for a pane no row binds and for a row
+	// bound before migration 0008 that routing did not launch (0008 copied
+	// the routed provider into every row routing launched). Beside Agent,
+	// it shows a pane that now runs another agent than its worker was
+	// launched as.
 	Provider string `json:"provider,omitempty"`
 	Status   string `json:"status"`
 	// Ctx is the context used, from the ctx token; null when absent, not a
@@ -81,7 +83,9 @@ type UnboundWorker struct {
 	// the poll re-keys or loses it.
 	Status string `json:"status"`
 	// Provider is the agent the row records it was launched as (A66);
-	// absent for a row bound before migration 0008.
+	// absent for a row bound before migration 0008 that routing did not
+	// launch (0008 copied the routed provider into every row routing
+	// launched).
 	Provider string `json:"provider,omitempty"`
 }
 
