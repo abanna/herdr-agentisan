@@ -46,3 +46,22 @@ func TestQA146CodexHandoffKeepsProvider(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "codex", row.Provider)
 }
+
+// TestCodexHandoffOntoKeepsProvider: handoff ack completes a rotation with
+// CompleteHandoffOnto (A33 part 2b-1), onto the terminal it proved, which
+// rebinds the row without touching the provider it was launched as (A66).
+func TestCodexHandoffOntoKeepsProvider(t *testing.T) {
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	w := store.Worker{LogicalID: "qa146", Project: "ha", Group: "coder", PaneID: "w14:p4", TerminalID: "term_a", Provider: "codex"}
+	_, err := s.BindWorker(ctx, w, t1)
+	require.NoError(t, err)
+	require.NoError(t, s.SetWorkerStatus(ctx, w, store.StatusActive, t1))
+	handoff, err := s.BeginHandoff(ctx, w.LogicalID, "w14:p5", "term_b", t1)
+	require.NoError(t, err)
+	require.NoError(t, s.CompleteHandoffOnto(ctx, handoff, "term_renewed", t1))
+	row, err := s.WorkerRow(ctx, w.LogicalID)
+	require.NoError(t, err)
+	assert.Equal(t, "term_renewed", row.TerminalID, "bound onto the terminal the ack proved")
+	assert.Equal(t, "codex", row.Provider, "and still the provider it was launched as")
+}
