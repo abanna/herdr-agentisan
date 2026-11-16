@@ -21,6 +21,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/debugger"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
 	"github.com/abanna/herdr-agentisan/internal/jev"
 	"github.com/abanna/herdr-agentisan/internal/preflight"
 	"github.com/abanna/herdr-agentisan/internal/routing"
@@ -154,13 +155,30 @@ func TestHandoffReadyOverTheSocket(t *testing.T) {
 
 	coder := workforce.HandoffReadyResult{ID: "w14:p2", Project: "ha", Group: "coder", PaneID: "w14:p2", Ready: true, Changed: true}
 	assert.Equal(t, coder, mark(workforce.HandoffReadyRequest{Target: "ha-coder-1"}))
-	th.mu.Lock()
-	for _, p := range th.panes {
-		if p["pane_id"] == "w14:p2" {
-			p["tokens"] = map[string]string{"ctx": "31", "handoff": "⟳ READY TO RESTART"}
+	t.Run("retained_pane_list_keeps_original_tokens", func(t *testing.T) {
+		paneTokens := func(reply herdrtest.Reply) map[string]string {
+			t.Helper()
+			require.Nil(t, reply.Error)
+			data, err := json.Marshal(reply.Result)
+			require.NoError(t, err)
+			var list struct {
+				Type  string           `json:"type"`
+				Panes []herdr.PaneInfo `json:"panes"`
+			}
+			require.NoError(t, json.Unmarshal(data, &list))
+			require.Equal(t, "pane_list", list.Type)
+			i := slices.IndexFunc(list.Panes, func(p herdr.PaneInfo) bool { return p.PaneID == "w14:p2" })
+			require.NotEqual(t, -1, i, "the reply contains the coder pane")
+			return list.Panes[i].Tokens
 		}
-	}
-	th.mu.Unlock()
+		// Retain the handler's unencoded reply, as the fake server does
+		// after the handler unlocks. Encode only after this same update.
+		old := th.h(herdrtest.Request{Method: "pane.list"})
+		th.setToken("w14:p2", "handoff", "⟳ READY TO RESTART")
+		assert.Equal(t, map[string]string{"ctx": "31"}, paneTokens(old), "retained pane.list snapshot changed")
+		fresh := th.h(herdrtest.Request{Method: "pane.list"})
+		assert.Equal(t, map[string]string{"ctx": "31", "handoff": "⟳ READY TO RESTART"}, paneTokens(fresh), "the next reply preserves ctx and shows the handoff mark")
+	})
 	coder.Changed = false
 	assert.Equal(t, coder, mark(workforce.HandoffReadyRequest{Target: "w14:p2"}), "the pane shows the mark already")
 	coder.Ready, coder.Changed = false, true

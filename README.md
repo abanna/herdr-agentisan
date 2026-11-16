@@ -46,7 +46,7 @@ from `XDG_STATE_HOME` or `HOME` as herdr works it out (ADR-001 A51).
 `daemon start`, `run` and `restart` never guess: run them from herdr, or
 pass `--state-dir`.
 
-Requires Go 1.26.10+ and [Task](https://taskfile.dev). Linters and scanners are
+Requires Go 1.26.11+ and [Task](https://taskfile.dev). Linters and scanners are
 pinned in `go.mod` under the `tool` directive — nothing to install globally.
 
 ## Report `$ctx` from Claude's statusline
@@ -522,6 +522,10 @@ from the shared file, the project's table and the repo file. `skip` can name
 
 ## The team board
 
+B0a.1 supplies a pure GitHub notice capture-ID helper and frozen input types.
+It has no production callers or storage/effect path; durable admission and
+Board B remain incomplete.
+
 Each team has a board in `state.db`: its workers' posts and the daemon's
 notices. Only the team's boss and the user read it; workers only post. The
 daemon tells who asks from the kernel, by the process that connected, never
@@ -907,7 +911,7 @@ See the Layout section of [AGENTS.md](AGENTS.md).
 
 ## Dev container
 
-`.devcontainer/` builds the local workflow into one image: Go 1.26.10, Task, uv
+`.devcontainer/` builds the local workflow into one image: Go 1.26.11, Task, uv
 (which is how `uvx pre-commit` runs).
 Everything `go tool` already resolves — golangci-lint, gosec, govulncheck,
 modernize, gitleaks — is deliberately absent; go.mod is where those are pinned.

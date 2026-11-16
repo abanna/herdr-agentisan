@@ -16,9 +16,9 @@ govulncheck, modernize) are pinned in `go.mod` under the `tool` directive and
 resolve through `go tool` — there is nothing to install globally and no
 version to keep in sync by hand. `task tools` lists what is pinned.
 
-Requires Go 1.26.10+ (pinned by the `toolchain` directive in `go.mod`; earlier
+Requires Go 1.26.11+ (pinned by the `toolchain` directive in `go.mod`; earlier
 1.26 patches carry reachable stdlib advisories that `govulncheck` fails on,
-most recently GO-2026-6809 in `crypto/x509`, fixed in 1.26.10)
+most recently GO-2026-6859 in `net/http`, fixed in 1.26.11)
 and [Task](https://taskfile.dev). `task --list` shows
 everything.
 
@@ -318,6 +318,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   posts and two read marks, the boss's and the user's; every post wakes
   each `board wait`. Tests open a fresh database in a temp
   dir; the store is never mocked.
+  `boardnotice.go` also provides the pure version-1 GitHub capture-ID helper
+  and its frozen envelope/receipt types (B0a.1), with no production callers
+  or storage/effect API; durable notice admission remains incomplete.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real
@@ -409,7 +412,7 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   `internal/settings/reviewrole_test.go` pins the section's hash and commit,
   the guards and the read-only default, and
   `internal/routing/reviewrole_test.go` routing's `findings_require`.
-- `.devcontainer/` — the reproducible dev environment: Go 1.26.10 plus the
+- `.devcontainer/` — the reproducible dev environment: Go 1.26.11 plus the
   two tools `go tool` does not resolve (Task, uv).
 - `docs/architecture.md` — why the pieces are shaped this way, and the
   deliberate limits.
