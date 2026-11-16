@@ -258,12 +258,22 @@ func boxTitleLine(a snapshot.Agent, w int, sel bool, border lipgloss.Style) line
 	return slices.Concat(line{{"╭", border}}, head, line{{fill, border}}, badge, line{{"╮", border}})
 }
 
-// modelAndCtx is "opus  ctx ▓▓▓▓░░░░░░ 38%": the model when it is reported
-// (G1), then the ctx gauge.
+// modelAndCtx is "codex · sol6.1  ctx ▓▓▓▓░░░░░░ 38%": the agent herdr
+// detects, dim, when it is reported (A68), the model when it is (G1), then
+// the ctx gauge.
 func modelAndCtx(a snapshot.Agent, th Thresholds) line {
 	var out line
+	if k := kindLabel(a); k != "" {
+		out = line{{k, dimStyle}}
+	}
 	if m := ShortModel(a.Model); m != "" {
-		out = line{{m, plainStyle}, {strings.Repeat(" ", colGap), plainStyle}}
+		if len(out) > 0 {
+			out = append(out, seg{sep, dimStyle})
+		}
+		out = append(out, seg{m, plainStyle})
+	}
+	if len(out) > 0 {
+		out = append(out, seg{strings.Repeat(" ", colGap), plainStyle})
 	}
 	return slices.Concat(out, line{{"ctx ", dimStyle}}, bar(a.Ctx, boxBarCells, th), line{{" ", plainStyle}, pct(a.Ctx, 0, th)})
 }

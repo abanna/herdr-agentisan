@@ -448,6 +448,10 @@ func TestWatchKeepsANameOnlyWhileUnnamed(t *testing.T) {
 			[]poll{answered(paneOn("", "claude", "working"), listed("wN:p1", "t1", "pee01")), answered(paneOn("", "claude", "blocked"), listed("wN:p1", "t1", ""))},
 			[]string{"pane wN:p1 is blocked"},
 		},
+		"a pane showing no terminal, another pane lists no terminal": {
+			[]poll{answered(paneOn("", "claude", "working"), listed("wN:p1", "t1", "pee01")), answered(paneOn("", "claude", "blocked"), listed("wN:p9", "", ""))},
+			[]string{"pee01 is blocked"},
+		},
 		"a new terminal agent.list does not list": {
 			[]poll{start, answered(paneOn("t2", "claude", "blocked"), nil)},
 			[]string{"pane wN:p1 is blocked"},

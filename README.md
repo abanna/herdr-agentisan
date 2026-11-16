@@ -46,7 +46,7 @@ from `XDG_STATE_HOME` or `HOME` as herdr works it out (ADR-001 A51).
 `daemon start`, `run` and `restart` never guess: run them from herdr, or
 pass `--state-dir`.
 
-Requires Go 1.26.10+ and [Task](https://taskfile.dev). Linters and scanners are
+Requires Go 1.26.11+ and [Task](https://taskfile.dev). Linters and scanners are
 pinned in `go.mod` under the `tool` directive — nothing to install globally.
 
 ## Report `$ctx` from Claude's statusline
@@ -227,6 +227,15 @@ every other write. Under either, `report stage` reports nothing: the worker
 shows `ctx`, and an item or a stage only from the
 [turn hooks](#report-item-and-stage-from-every-turn), which run outside the
 sandbox.
+
+A command a Codex worker runs inside its network sandbox reaches neither
+herdr's socket nor the daemon's. Then `send`, `handoff ready` and the
+`team`, `worker` and `notices` commands answer `daemon_unavailable`, saying
+the sandbox is why and to ask the boss, who runs the command for the worker,
+as it marks `handoff ready <id>` (ADR-001 A25). An escalation Codex approved
+reaches both, and runs as any other; only if herdr or the daemon is really down
+does it get the same hint, where the boss's own run gets `herdr_failed` or the
+daemon-restart advice.
 
 ## Report `$item` and `$stage` from every turn
 
@@ -513,6 +522,10 @@ from the shared file, the project's table and the repo file. `skip` can name
 
 ## The team board
 
+B0a.1 supplies a pure GitHub notice capture-ID helper and frozen input types.
+It has no production callers or storage/effect path; durable admission and
+Board B remain incomplete.
+
 Each team has a board in `state.db`: its workers' posts and the daemon's
 notices. Only the team's boss and the user read it; workers only post. The
 daemon tells who asks from the kernel, by the process that connected, never
@@ -600,6 +613,7 @@ drives them.
 | `worker spawn --group g [--count n] [--model m]` | Adds workers, refused whole past the group's `slots` or when the repo fails the tdaddy preflight |
 | `worker retire <id> [--after-handoff]` | Closes a worker's pane, by logical id or pane id; with the flag, once its handoff is written. Refused (`handoff_pending`) while the worker is being replaced; retiring the replacement's pane abandons that rotation and answers `handoff_failed` with the worker's id (ADR-001 A33) |
 | `handoff ready [<id>] [--clear]` | Marks a worker ready to be replaced, once it has written its handoff: the daemon sets the `handoff` token on its agent pane, by logical id, tab label or pane id, or this pane with none; `--clear` takes it off (ADR-001 A33) |
+| `handoff ack [<pane>]` | Completes a rotation from its replacement, by pane id or this pane with none: once the replacement reports the old pane's item and stage, the worker's herdr name and inbox move to it. Refused with `stage_mismatch`, naming both pairs, until they match, and with `no_handoff` on a pane that is no replacement (ADR-001 A33) |
 
 Each prints one JSON object and exits 1 when refused. Without `--project`
 status, up and spawn read the team whose workspace the command runs in, else
@@ -801,11 +815,15 @@ spawn with routing off and no model set for it. It shows no model until its
 first hook, since a model set with `-c model=`, a profile or `config.toml` is
 not read (A39).
 
+A row with no model shows the agent herdr detects in its pane instead, dim:
+`codex` for a Codex still starting, `claude` for a Claude (ADR-001 A68). So
+every row says which provider runs in it.
+
 ### A group's view
 
 Press 1-9, or click a group's title, to open that group's view (ADR-001
-A37): a box per agent, two to a row from 110 columns, with its model and
-ctx, item, the whole stage (two lines, then `…`), how long it has been in
+A37): a box per agent, two to a row from 110 columns, with its agent and
+model (`codex · sol6.1`, A68) and ctx, item, the whole stage (two lines, then `…`), how long it has been in
 that stage and at rest, and the pane and tab it runs in. Everything in it is
 what the agents report and the daemon times; nothing is read from a screen,
 so a worker's stage line is what says what it is doing. Enter or a click
@@ -893,7 +911,7 @@ See the Layout section of [AGENTS.md](AGENTS.md).
 
 ## Dev container
 
-`.devcontainer/` builds the local workflow into one image: Go 1.26.10, Task, uv
+`.devcontainer/` builds the local workflow into one image: Go 1.26.11, Task, uv
 (which is how `uvx pre-commit` runs).
 Everything `go tool` already resolves — golangci-lint, gosec, govulncheck,
 modernize, gitleaks — is deliberately absent; go.mod is where those are pinned.

@@ -259,6 +259,33 @@ VALUES ('ha-handing-off', 'w2:p1', 'w2:p9', 0, 'term_w2:p9', 1, 1)`)
 	assert.Equal(t, "lost", row(t, dir, th, "ha-reused").Status, "lost is sticky: the boss's to retire or reuse")
 }
 
+// TestTheTeamPollReKeysACodexWorker is A35's re-key for a Codex worker
+// (NERD-5507): across a live handoff its terminal is new and herdr names its
+// agent no more, so the candidate is the agent pane in the tab its id
+// labels, which herdr detects as Codex. Its shell proves it, and the row
+// follows it there.
+func TestTheTeamPollReKeysACodexWorker(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	withTeam(th)
+	dir := shortDir(t)
+	// ha-coder-2's hint pane runs the boss's shell; its own is in the tab its
+	// id labels, unnamed.
+	seedRow(t, dir, th, "ha-coder-2", "wJ:p1", "term_wJ:p1", 3333, 5)
+	th.mu.Lock()
+	th.tabs = append(slices.Clone(th.tabs), map[string]any{"tab_id": "w14:t3", "workspace_id": "w14", "label": "ha-coder-2"})
+	th.panes = append(slices.Clone(th.panes), map[string]any{"pane_id": "w14:p3", "terminal_id": "term_w14:p3", "workspace_id": "w14", "tab_id": "w14:t3", "agent": "codex", "agent_status": "idle"})
+	th.mu.Unlock()
+	th.setShell("wJ:p1", 1111, false)
+	th.setShell("w14:p3", 3333, false)
+	th.renewTerminals()
+	o := teamOpts(t, dir, th, workforceConfig(t))
+	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 1111: 5, 3333: 5}}).startTime
+	serving(t, o, th.fakeHerdr)
+
+	eventually(t, dir, th, "ha-coder-2", workerRow{Pane: "w14:p3", Terminal: "renewed_w14:p3", Status: "active", ShellPID: 3333, ShellStart: 5})
+}
+
 // TestARowBoundMidPollIsNotLost: the poll reads the rows before it lists the
 // panes. A spawn opens its pane, then writes its row; when both land after
 // the poll's pane.list, a poll that read the rows last would find a row

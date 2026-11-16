@@ -75,51 +75,59 @@ func jsonOf(v any) string {
 // after a toast that alerts the user, once; the boss is told about its own
 // context; a pane in no team is never told about; each crossing is an
 // event; and no poll makes a herdr call it did not make before, but the
-// toast.
+// toast. The same for a Codex worker and a Codex boss (NERD-5507): a
+// Codex's ctx token crosses its levels as a Claude's does.
 func TestCtxLevelsReachTheBoss(t *testing.T) {
 	t.Parallel()
-	th := newTeamHerdr(t)
-	th.setAgents(named("wJ:p1", "boss"), named("wN:p1", "pee01"))
-	th.setToken("w2:p1", "ctx", "90")
-	var logs lockedLog
-	_, rec := ctxRun(t, teamOpts(t, shortDir(t), th, noticesConfig(t, "gap = 0\n")), &logs)
+	for _, kind := range []string{"claude", "codex"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			th := newTeamHerdr(t)
+			th.setAgents(named("wJ:p1", "boss"), named("wN:p1", "pee01"))
+			th.setPane("wJ:p1", "agent", kind)
+			th.setPane("wN:p1", "agent", kind)
+			th.setToken("w2:p1", "ctx", "90")
+			var logs lockedLog
+			_, rec := ctxRun(t, teamOpts(t, shortDir(t), th, noticesConfig(t, "gap = 0\n")), &logs)
 
-	waitLine(t, &logs, "the daemon started")
-	th.setToken("wN:p1", "ctx", "56")
-	waitLine(t, &logs, "pee01 is at 56% context (soft: 55%): let it finish its unit, then rotate it")
-	th.setToken("wN:p1", "ctx", "66")
-	waitLine(t, &logs, "pee01 is at 66% context (hard: 65%): rotate it now")
-	assert.Empty(t, toasts(t, th), "only the ceiling alerts the user")
-	before := methodsOf(t, th)
-	th.setToken("wN:p1", "ctx", "76")
-	waitLine(t, &logs, "pee01 is at 76% context (ceiling: 75%): act now; the user has been alerted")
-	th.setToken("wJ:p1", "ctx", "80")
-	waitLine(t, &logs, "you are at 80% context (ceiling: 75%): hand off now; the user has been alerted")
-	polled(t, th.srv, 3)
+			waitLine(t, &logs, "the daemon started")
+			th.setToken("wN:p1", "ctx", "56")
+			waitLine(t, &logs, "pee01 is at 56% context (soft: 55%): let it finish its unit, then rotate it")
+			th.setToken("wN:p1", "ctx", "66")
+			waitLine(t, &logs, "pee01 is at 66% context (hard: 65%): rotate it now")
+			assert.Empty(t, toasts(t, th), "only the ceiling alerts the user")
+			before := methodsOf(t, th)
+			th.setToken("wN:p1", "ctx", "76")
+			waitLine(t, &logs, "pee01 is at 76% context (ceiling: 75%): act now; the user has been alerted")
+			th.setToken("wJ:p1", "ctx", "80")
+			waitLine(t, &logs, "you are at 80% context (ceiling: 75%): hand off now; the user has been alerted")
+			polled(t, th.srv, 3)
 
-	lines := slices.DeleteFunc(noticeLines(&logs), func(l string) bool { return !strings.Contains(l, "context") })
-	assert.Equal(t, []string{
-		"pee01 is at 56% context (soft: 55%): let it finish its unit, then rotate it",
-		"pee01 is at 66% context (hard: 65%): rotate it now",
-		"pee01 is at 76% context (ceiling: 75%): act now; the user has been alerted",
-		"you are at 80% context (ceiling: 75%): hand off now; the user has been alerted",
-	}, lines, "each once; w2:p1, in no team, never")
-	assert.Equal(t, []herdr.Notification{
-		{Title: "agentisan: pee01 at 76% context", Body: "past the 75% ceiling; its boss is told to rotate it", Sound: "request"},
-		{Title: "agentisan: boss at 80% context", Body: "the boss is past the 75% ceiling and is told to hand off", Sound: "request"},
-	}, toasts(t, th), "one toast per ceiling crossed")
-	assert.Equal(t, []string{
-		"wN:p1 worker soft 56 55 false false",
-		"wN:p1 worker hard 66 65 false false",
-		"wN:p1 worker ceiling 76 75 true true",
-		"wJ:p1 boss ceiling 80 75 true true",
-	}, ctxEvents(rec))
+			lines := slices.DeleteFunc(noticeLines(&logs), func(l string) bool { return !strings.Contains(l, "context") })
+			assert.Equal(t, []string{
+				"pee01 is at 56% context (soft: 55%): let it finish its unit, then rotate it",
+				"pee01 is at 66% context (hard: 65%): rotate it now",
+				"pee01 is at 76% context (ceiling: 75%): act now; the user has been alerted",
+				"you are at 80% context (ceiling: 75%): hand off now; the user has been alerted",
+			}, lines, "each once; w2:p1, in no team, never")
+			assert.Equal(t, []herdr.Notification{
+				{Title: "agentisan: pee01 at 76% context", Body: "past the 75% ceiling; its boss is told to rotate it", Sound: "request"},
+				{Title: "agentisan: boss at 80% context", Body: "the boss is past the 75% ceiling and is told to hand off", Sound: "request"},
+			}, toasts(t, th), "one toast per ceiling crossed")
+			assert.Equal(t, []string{
+				"wN:p1 worker soft 56 55 false false",
+				"wN:p1 worker hard 66 65 false false",
+				"wN:p1 worker ceiling 76 75 true true",
+				"wJ:p1 boss ceiling 80 75 true true",
+			}, ctxEvents(rec))
 
-	after := methodsOf(t, th)
-	for m := range before {
-		delete(after, m)
+			after := methodsOf(t, th)
+			for m := range before {
+				delete(after, m)
+			}
+			assert.Equal(t, map[string]bool{"notification.show": true}, after, "the ceilings add the toast, and no other method the poll did not call before")
+		})
 	}
-	assert.Equal(t, map[string]bool{"notification.show": true}, after, "the ceilings add the toast, and no other method the poll did not call before")
 }
 
 // methodsOf is every method th has been asked so far.
@@ -241,4 +249,50 @@ func TestCtxLevelsAfterARestart(t *testing.T) {
 	var after lockedLog
 	ctxRun(t, restarted(teamOpts(t, dir, th, cfg)), &after)
 	assert.Equal(t, 1, waitLine(t, &after, line), "once more after the restart")
+}
+
+// TestCtxWatchIgnoresACodexCtxLeftBehind is A27 at the boss's end
+// (NERD-5507): nothing clears a Codex's ctx when it exits, so a pane
+// agent.list still names but herdr detects no agent in, holding the 70% the
+// Codex left, crosses no level and shows "ctx  --". Once herdr detects a
+// Codex there again, its ctx is a level.
+func TestCtxWatchIgnoresACodexCtxLeftBehind(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	th.setAgents(named("wJ:p1", "boss"), named("wN:p1", "pee01"))
+	th.setPane("wN:p1", "agent", nil)
+	th.setToken("wN:p1", "ctx", "70")
+	var logs lockedLog
+	_, rec := ctxRun(t, teamOpts(t, shortDir(t), th, noticesConfig(t, "gap = 0\n")), &logs)
+
+	waitLine(t, &logs, "the daemon started")
+	polled(t, th.srv, 3)
+	assert.Empty(t, ctxEvents(rec), "the ctx a Codex left behind is no level")
+	assert.Equal(t, map[string]string{"ctx_ok": "ctx  --", "ctx_warn": "", "ctx_hot": ""}, lastBands(t, th, "wN:p1"))
+
+	th.setPane("wN:p1", "agent", "codex")
+	waitLine(t, &logs, "pee01 is at 70% context (hard: 65%): rotate it now")
+	assert.Equal(t, []string{"wN:p1 worker hard 70 65 false false"}, ctxEvents(rec))
+}
+
+// TestCtxWatchACodexWithNoHooksTellsNothing (NERD-5507): a Codex whose ctx
+// hooks are not installed (A22) writes no ctx token, so it crosses no level
+// and shows "ctx  --". The first ctx it writes is a level.
+func TestCtxWatchACodexWithNoHooksTellsNothing(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	th.setAgents(named("wJ:p1", "boss"), named("wN:p1", "pee01"))
+	th.setPane("wN:p1", "agent", "codex")
+	th.setToken("wN:p1", "ctx", "") // liveSpaces gives it 40
+	var logs lockedLog
+	_, rec := ctxRun(t, teamOpts(t, shortDir(t), th, noticesConfig(t, "gap = 0\n")), &logs)
+
+	waitLine(t, &logs, "the daemon started")
+	polled(t, th.srv, 3)
+	assert.Empty(t, ctxEvents(rec), "no ctx, no level")
+	assert.Equal(t, map[string]string{"ctx_ok": "ctx  --", "ctx_warn": "", "ctx_hot": ""}, lastBands(t, th, "wN:p1"))
+
+	th.setToken("wN:p1", "ctx", "70")
+	waitLine(t, &logs, "pee01 is at 70% context (hard: 65%): rotate it now")
+	assert.Equal(t, []string{"wN:p1 worker hard 70 65 false false"}, ctxEvents(rec))
 }

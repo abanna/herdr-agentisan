@@ -21,6 +21,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/debugger"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
 	"github.com/abanna/herdr-agentisan/internal/jev"
 	"github.com/abanna/herdr-agentisan/internal/preflight"
 	"github.com/abanna/herdr-agentisan/internal/routing"
@@ -112,6 +113,10 @@ func TestWorkforceOpsOverTheSocket(t *testing.T) {
 		"retire with no name":         {op: daemon.OpWorkerRetire, args: map[string]any{}, code: "bad_request"},
 		"retire the boss":             {op: daemon.OpWorkerRetire, args: map[string]any{"target": "w14:p1"}, code: "not_a_worker"},
 		"retire nobody":               {op: daemon.OpWorkerRetire, args: map[string]any{"target": "ha-coder-9"}, code: "unknown_worker"},
+		"ack with no pane":            {op: daemon.OpHandoffAck, args: map[string]any{}, code: "bad_request"},
+		"ack a pane herdr lacks":      {op: daemon.OpHandoffAck, args: map[string]any{"target": "w14:p99"}, code: "unknown_worker"},
+		"ack no replacement":          {op: daemon.OpHandoffAck, args: map[string]any{"target": "w14:p2"}, code: "no_handoff"},
+		"ack an unknown arg":          {op: daemon.OpHandoffAck, args: map[string]any{"target": "w14:p2", "worker": "ha-coder-1"}, code: "bad_request"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -150,13 +155,30 @@ func TestHandoffReadyOverTheSocket(t *testing.T) {
 
 	coder := workforce.HandoffReadyResult{ID: "w14:p2", Project: "ha", Group: "coder", PaneID: "w14:p2", Ready: true, Changed: true}
 	assert.Equal(t, coder, mark(workforce.HandoffReadyRequest{Target: "ha-coder-1"}))
-	th.mu.Lock()
-	for _, p := range th.panes {
-		if p["pane_id"] == "w14:p2" {
-			p["tokens"] = map[string]string{"ctx": "31", "handoff": "⟳ READY TO RESTART"}
+	t.Run("retained_pane_list_keeps_original_tokens", func(t *testing.T) {
+		paneTokens := func(reply herdrtest.Reply) map[string]string {
+			t.Helper()
+			require.Nil(t, reply.Error)
+			data, err := json.Marshal(reply.Result)
+			require.NoError(t, err)
+			var list struct {
+				Type  string           `json:"type"`
+				Panes []herdr.PaneInfo `json:"panes"`
+			}
+			require.NoError(t, json.Unmarshal(data, &list))
+			require.Equal(t, "pane_list", list.Type)
+			i := slices.IndexFunc(list.Panes, func(p herdr.PaneInfo) bool { return p.PaneID == "w14:p2" })
+			require.NotEqual(t, -1, i, "the reply contains the coder pane")
+			return list.Panes[i].Tokens
 		}
-	}
-	th.mu.Unlock()
+		// Retain the handler's unencoded reply, as the fake server does
+		// after the handler unlocks. Encode only after this same update.
+		old := th.h(herdrtest.Request{Method: "pane.list"})
+		th.setToken("w14:p2", "handoff", "⟳ READY TO RESTART")
+		assert.Equal(t, map[string]string{"ctx": "31"}, paneTokens(old), "retained pane.list snapshot changed")
+		fresh := th.h(herdrtest.Request{Method: "pane.list"})
+		assert.Equal(t, map[string]string{"ctx": "31", "handoff": "⟳ READY TO RESTART"}, paneTokens(fresh), "the next reply preserves ctx and shows the handoff mark")
+	})
 	coder.Changed = false
 	assert.Equal(t, coder, mark(workforce.HandoffReadyRequest{Target: "w14:p2"}), "the pane shows the mark already")
 	coder.Ready, coder.Changed = false, true
@@ -722,6 +744,30 @@ func TestTheWorkforceRecordsItsRouting(t *testing.T) {
 	assert.NotContains(t, logs.String(), "worker spawn", "a team up refusal is named for its own op")
 }
 
+// TestTheWorkforceRecordsItsHandoffSteps: the daemon's service hands each
+// step its commands take a rotation through, the ack's completed and
+// retire's failed, to the workflow events as the worker's handoff event
+// (A33 part 2b-1).
+func TestTheWorkforceRecordsItsHandoffSteps(t *testing.T) {
+	t.Parallel()
+	events, rec := telemetrytest.NewEvents()
+	svc := daemon.WorkforceOf(daemon.Options{Team: &daemon.TeamOptions{Events: events}, Logger: zerolog.Nop()}, daemon.Identity{})
+	require.NotNil(t, svc.HandoffSteps)
+
+	svc.HandoffSteps(t.Context(), workforce.HandoffStep{ID: "ha-coder-1", Project: "ha", Group: "coder", PaneID: "w14:p7", OldPane: "w14:p2", Step: workforce.StepCompleted, Old: workforce.OldMatched})
+	svc.HandoffSteps(t.Context(), workforce.HandoffStep{ID: "ha-coder-2", Project: "ha", Group: "coder", PaneID: "w14:p8", OldPane: "w14:p3", Step: workforce.StepFailed})
+	assert.Equal(t, []telemetrytest.Event{
+		{Name: telemetry.EventHandoff, Attrs: map[string]any{
+			"agentisan.worker.id": "ha-coder-1", "agentisan.worker.bound": true, "agentisan.project": "ha", "agentisan.group": "coder",
+			"herdr.pane.id": "w14:p7", "agentisan.handoff.step": telemetry.HandoffCompleted, "agentisan.handoff.old_pane": "w14:p2", "agentisan.handoff.old": "matched",
+		}},
+		{Name: telemetry.EventHandoff, Attrs: map[string]any{
+			"agentisan.worker.id": "ha-coder-2", "agentisan.worker.bound": true, "agentisan.project": "ha", "agentisan.group": "coder",
+			"herdr.pane.id": "w14:p8", "agentisan.handoff.step": telemetry.HandoffFailed, "agentisan.handoff.old_pane": "w14:p3",
+		}},
+	}, rec.Events())
+}
+
 // TestWorkforceCodes: every workforce refusal has a code of its own, and
 // D12 is told apart from any other config error.
 func TestWorkforceCodes(t *testing.T) {
@@ -737,6 +783,11 @@ func TestWorkforceCodes(t *testing.T) {
 		workforce.ErrPaneChanged:                                                 "pane_changed",
 		workforce.ErrHandoffPending:                                              "handoff_pending",
 		workforce.ErrHandoffTimeout:                                              "handoff_timeout",
+		workforce.ErrNoHandoff:                                                   "no_handoff",
+		fmt.Errorf("complete it: %w", store.ErrNoHandoff):                        "no_handoff",
+		workforce.ErrHandoffChanged:                                              "handoff_changed",
+		workforce.ErrStageMismatch:                                               "stage_mismatch",
+		fmt.Errorf("begin it: %w", store.ErrWorkerStarting):                      "worker_starting",
 		workforce.ErrNoTarget:                                                    "no_target",
 		workforce.ErrUnknownGroup:                                                "unknown_group",
 		routing.ErrUnknownRole:                                                   "unknown_role",
@@ -777,13 +828,14 @@ func TestOpBudgets(t *testing.T) {
 		{daemon.OpWorkerRetire, `not json`, 10 * time.Second},
 		{daemon.OpSend, `{"to":"boss","body":"hi"}`, 10 * time.Second},
 		{daemon.OpHandoffReady, `{"target":"x"}`, 10 * time.Second},
+		{daemon.OpHandoffAck, `{"target":"x"}`, 10 * time.Second},
 	} {
 		args := json.RawMessage(tc.args)
 		assert.Equal(t, tc.want, daemon.OpBudget(tc.op, args), "the client's wait: %s %s", tc.op, tc.args)
 		assert.Equal(t, tc.want, daemon.ServedBudget(tc.op, args), "the budget the daemon enforces: %s %s", tc.op, tc.args)
 	}
 	assert.Zero(t, daemon.OpBudget("health", nil))
-	assert.Equal(t, []string{daemon.OpHandoffReady, daemon.OpSend, daemon.OpTeamStatus, daemon.OpTeamUp, daemon.OpWorkerRetire, daemon.OpWorkerSpawn}, daemon.WorkforceOpNames())
+	assert.Equal(t, []string{daemon.OpHandoffAck, daemon.OpHandoffReady, daemon.OpSend, daemon.OpTeamStatus, daemon.OpTeamUp, daemon.OpWorkerRetire, daemon.OpWorkerSpawn}, daemon.WorkforceOpNames())
 	for _, op := range daemon.WorkforceOpNames() {
 		assert.Positive(t, daemon.ServedBudget(op, nil), "%s has a budget in the table, not a nil one", op)
 		assert.Equal(t, daemon.ServedBudget(op, nil), daemon.OpBudget(op, nil), "%s: the client waits the budget the daemon enforces", op)

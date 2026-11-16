@@ -2,7 +2,7 @@ module github.com/abanna/herdr-agentisan
 
 go 1.26.5
 
-toolchain go1.26.10
+toolchain go1.26.11
 
 require (
 	charm.land/bubbletea/v2 v2.1.0

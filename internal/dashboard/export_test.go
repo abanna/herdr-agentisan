@@ -50,3 +50,10 @@ func ClipText(base []string, reverse []bool, w int) string {
 	}
 	return b.String()
 }
+
+// ModelLabel is the text a row's model column draws for a: its model, or
+// the agent herdr detects in its place.
+func ModelLabel(a snapshot.Agent) string {
+	text, _ := modelLabel(a)
+	return text
+}

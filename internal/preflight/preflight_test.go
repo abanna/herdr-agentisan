@@ -488,38 +488,76 @@ func TestRunnerFollowsASymlink(t *testing.T) {
 	require.NoError(t, err, "the stand-in ran")
 }
 
-// childGone waits until the stand-in's recorded child no longer exists.
+// recordedChild is the pid the stand-in in rec recorded for its child, read
+// once the run has returned, so nothing writes it any more; false when it
+// recorded none, as when the run ended it before it started one. The
+// stand-in renames its record into place whole (record_child).
+func recordedChild(t *testing.T, rec string) (int, bool) {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(rec, "child"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, false
+	}
+	require.NoError(t, err)
+	child, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	require.NoError(t, err, "the stand-in's record holds its child's pid")
+	return child, true
+}
+
+// childGone waits until the child the stand-in recorded in rec no longer
+// exists. The run must have returned, and the stand-in recorded a child.
 func childGone(t *testing.T, rec string) {
 	t.Helper()
-	var raw []byte
-	require.Eventually(t, func() bool {
-		var err error
-		raw, err = os.ReadFile(filepath.Join(rec, "child"))
-		return err == nil && len(strings.TrimSpace(string(raw))) > 0
-	}, slow, 10*time.Millisecond, "the hanging tdaddy started its child")
-	child, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-	require.NoError(t, err)
+	child, ok := recordedChild(t, rec)
+	require.True(t, ok, "the hanging tdaddy recorded its child")
 	assert.Eventually(t, func() bool {
 		return errors.Is(syscall.Kill(child, 0), syscall.ESRCH)
 	}, slow, 10*time.Millisecond, "tdaddy's child outlived the run")
 }
 
+// killsTheChild runs a hanging stand-in in mode, held back delay seconds
+// before it starts its child, through run, which ends the run within limit,
+// first 300 ms, until a run ends after the stand-in recorded its child, and
+// checks that child is gone. A run that ends the stand-in before it starts
+// its child, as a loaded machine can (NERD-5563), shows nothing about what
+// the kill reaches, so it is run again with the limit doubled; run checks
+// every run's own end.
+func killsTheChild(t *testing.T, mode, delay string, run func(r preflight.Runner, bin string, limit time.Duration)) {
+	t.Helper()
+	limit := 300 * time.Millisecond
+	for ; limit < slow; limit *= 2 {
+		bin, r, rec := standIn(t, mode)
+		r.Env = append(r.Env, "FAKE_TDADDY_DELAY="+delay)
+		run(r, bin, limit)
+		if _, ok := recordedChild(t, rec); ok {
+			childGone(t, rec)
+			return
+		}
+	}
+	t.Fatalf("the hanging tdaddy recorded no child before its run ended, within up to %v", limit/2)
+}
+
 // TestRunnerTimeoutKillsTheGroup: a tdaddy that hangs is killed at the
 // timeout, and so is every process it started, even when they ignore
-// SIGTERM.
+// SIGTERM. One slow to start its child, past the first timeout, is run again
+// until it has one.
 func TestRunnerTimeoutKillsTheGroup(t *testing.T) {
 	t.Parallel()
-	for name, mode := range map[string]string{"a hang": "hang", "a hang that ignores SIGTERM": "stubborn"} {
+	for name, tc := range map[string]struct{ mode, delay string }{
+		"a hang":                         {"hang", "0"},
+		"a hang that ignores SIGTERM":    {"stubborn", "0"},
+		"a hang slow to start its child": {"hang", "1"},
+	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			bin, r, rec := standIn(t, mode)
-			r.Timeout = 300 * time.Millisecond
-			start := time.Now()
-			err := r.Run(t.Context(), t.TempDir(), bin, "--version")
-			require.ErrorIs(t, err, preflight.ErrTimeout)
-			assert.Contains(t, err.Error(), "no answer within 300ms")
-			assert.Less(t, time.Since(start), slow)
-			childGone(t, rec)
+			killsTheChild(t, tc.mode, tc.delay, func(r preflight.Runner, bin string, limit time.Duration) {
+				r.Timeout = limit
+				start := time.Now()
+				err := r.Run(t.Context(), t.TempDir(), bin, "--version")
+				require.ErrorIs(t, err, preflight.ErrTimeout)
+				assert.Contains(t, err.Error(), "no answer within "+limit.String())
+				assert.Less(t, time.Since(start), limit+slow)
+			})
 		})
 	}
 }
@@ -583,14 +621,19 @@ func TestRunnerBoundsAnOrphansPipes(t *testing.T) {
 // deadline, not ErrTimeout.
 func TestRunnerCallersDeadlineIsNotATimeout(t *testing.T) {
 	t.Parallel()
-	bin, r, rec := standIn(t, "hang")
-	r.Timeout = slow
-	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
-	defer cancel()
-	err := r.Run(ctx, t.TempDir(), bin, "--version")
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.NotErrorIs(t, err, preflight.ErrTimeout)
-	childGone(t, rec)
+	for name, delay := range map[string]string{"a hang": "0", "a hang slow to start its child": "1"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			killsTheChild(t, "hang", delay, func(r preflight.Runner, bin string, limit time.Duration) {
+				r.Timeout = 2 * slow
+				ctx, cancel := context.WithTimeout(t.Context(), limit)
+				defer cancel()
+				err := r.Run(ctx, t.TempDir(), bin, "--version")
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				assert.NotErrorIs(t, err, preflight.ErrTimeout)
+			})
+		})
+	}
 }
 
 // TestRunnerInheritsTheEnvironment: with no Env, tdaddy gets the daemon's
