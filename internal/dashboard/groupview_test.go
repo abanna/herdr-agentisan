@@ -88,29 +88,60 @@ func TestGroupViewFillsTheFrameExactly(t *testing.T) {
 			snap := fixture(t, name)
 			for g, grp := range snap.Groups {
 				sels := []dashboard.Selection{{Group: g}, {Group: g, Agent: max(0, len(grp.Agents)-1)}}
-				for _, w := range widths {
-					for _, h := range heights {
-						for _, sel := range sels {
-							for _, on := range []bool{false, true} {
-								f := dashboard.Frame{
-									Snapshot: snap, Selection: sel, Now: at, Help: on, Btop: on, Group: grp.Name,
-									Note: "focus off", Errors: []error{errors.New(strings.Repeat("a long error ", 20))},
-								}
-								label := fmt.Sprintf("%s %dx%d sel=%+v help,btop=%v", grp.Name, w, h, sel, on)
-								if !checkFrame(t, dashboard.Render(f, w, h, plain), w, h, label) {
-									return
-								}
+				for _, size := range sizes {
+					w, h := size[0], size[1]
+					for _, sel := range sels {
+						for _, on := range []bool{false, true} {
+							f := dashboard.Frame{
+								Snapshot: snap, Selection: sel, Now: at, Help: on, Btop: on, Group: grp.Name,
+								Note: "focus off", Errors: []error{errors.New(strings.Repeat("a long error ", 20))},
+							}
+							label := fmt.Sprintf("%s %dx%d sel=%+v help,btop=%v", grp.Name, w, h, sel, on)
+							if !checkFrame(t, dashboard.Render(f, w, h, plain), w, h, label) {
+								return
 							}
 						}
 					}
 				}
 				for _, size := range huge {
+					if wideSize(size) && !slices.Contains(wideGroups[name], grp.Name) {
+						continue
+					}
 					f := dashboard.Frame{Snapshot: snap, Selection: sels[1], Now: at, Help: true, Btop: true, Group: grp.Name}
 					checkFrame(t, dashboard.Render(f, size[0], size[1], plain), size[0], size[1], fmt.Sprint(grp.Name, size))
 				}
 			}
 		})
 	}
+}
+
+// TestWideHugeFramesExist: every frame wideFixtures and wideGroups name is
+// one the sweeps draw, and the groups still have the shapes they were chosen
+// for, so a renamed fixture or group cannot drop huge's wide size unseen.
+func TestWideHugeFramesExist(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range wideFixtures {
+		assert.True(t, name == "no snapshot" || slices.Contains(fixtures, name), "no fixture %q", name)
+	}
+	var none, one, two, desc bool
+	for name, groups := range wideGroups {
+		require.Contains(t, fixtures, name)
+		snap := fixture(t, name)
+		for _, g := range groups {
+			i := slices.IndexFunc(snap.Groups, func(grp snapshot.Group) bool { return grp.Name == g })
+			if !assert.GreaterOrEqual(t, i, 0, "%s has no group %q", name, g) {
+				continue
+			}
+			n := len(snap.Groups[i].Agents)
+			none, one, two = none || n == 0, one || n == 1, two || n > 1
+			desc = desc || snap.Groups[i].Description != ""
+		}
+	}
+	assert.True(t, none, "no wide group with no agents")
+	assert.True(t, one, "no wide group with one agent")
+	assert.True(t, two, "no wide group with two columns")
+	assert.True(t, desc, "no wide group with a description")
 }
 
 // TestGroupViewContents: what each box says, from the snapshot alone.
