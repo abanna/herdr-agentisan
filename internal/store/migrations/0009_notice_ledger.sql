@@ -35,11 +35,12 @@ CREATE TABLE notice_identities (
 CREATE INDEX notice_identities_by_state ON notice_identities (project, state, admitted_at);
 CREATE INDEX notice_identities_by_time  ON notice_identities (admitted_at);
 CREATE INDEX notice_identities_by_pr    ON notice_identities (project, repo, pr, state);
--- store_state serves the store-wide count of one state, such as every
--- pending notice, which by_state, led by the project, cannot. It is a plain
--- index, not a partial one on pending rows: SQLite uses a partial index only
--- when the query repeats its WHERE literally, so a bound state would scan
--- every identity.
+-- store_state serves a walk of one state across the store, its state
+-- literal or bound: B0a.3's store-wide pending count and bytes, which
+-- by_state, led by the project, cannot serve, and B0a.4's prune of the
+-- settled states. It is a plain index, not a partial one on pending rows:
+-- that would serve the pending walks too, but a prune selecting
+-- state IN ('posted', 'dropped') would scan every identity.
 CREATE INDEX notice_identities_store_state ON notice_identities (state);
 
 -- notice_payloads holds the frozen envelope of each identity not yet

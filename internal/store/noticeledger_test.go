@@ -741,8 +741,17 @@ func TestLedgerSchemaChecks(t *testing.T) {
 	_, err := db.ExecContext(t.Context(), "DELETE FROM notice_identities WHERE capture_id = 'gh1:with-payload'")
 	constraintFailed(t, err, "an identity deleted from under its payload")
 
-	// A store-wide count of one state, its state bound as B0a.3's quotas
-	// bind it, walks only that state's rows (deviation c).
-	plan := queryRows(t, db, "EXPLAIN QUERY PLAN SELECT count(*) FROM notice_identities WHERE state = ?", "pending")
-	assert.Contains(t, fmt.Sprint(plan), "USING COVERING INDEX notice_identities_store_state (state=?)")
+	// A walk of one state across the store uses store_state (deviation c):
+	// B0a.3's pending count and bytes with the state bound, and B0a.4's
+	// prune of the settled states, which a partial index on pending rows
+	// would leave scanning every identity.
+	for query, args := range map[string][]any{
+		"SELECT count(*) FROM notice_identities WHERE state = ?":                                                                                  {"pending"},
+		"SELECT coalesce(sum(p.bytes), 0) FROM notice_identities AS i JOIN notice_payloads AS p ON p.capture_id = i.capture_id WHERE i.state = ?": {"pending"},
+		"DELETE FROM notice_payloads WHERE capture_id IN (SELECT capture_id FROM notice_identities WHERE state IN ('posted', 'dropped'))":         nil,
+	} {
+		plan := fmt.Sprint(queryRows(t, db, "EXPLAIN QUERY PLAN "+query, args...))
+		assert.Contains(t, plan, "INDEX notice_identities_store_state (state=?)", query)
+		assert.NotContains(t, plan, "SCAN notice_identities", query)
+	}
 }

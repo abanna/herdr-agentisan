@@ -330,7 +330,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   `AdmitNotice` dedupes a GitHub notice by capture ID and receipt and
   imports one `github_seen` holds, `PendingNotice` re-checks its digest.
   No production caller, post, wake or `github_*` write;
-  `noticedormant_test.go` fails on any use outside `internal/store`.
+  `noticedormant_test.go` fails on any use in a non-test file of
+  `internal/` or `cmd/` outside `internal/store`.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real

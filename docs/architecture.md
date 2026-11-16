@@ -114,7 +114,7 @@ frozen envelope of each identity not yet settled. It is dormant. Nothing in
 production calls `store.AdmitNotice` or `store.PendingNotice`, neither posts
 to the board nor wakes `board wait`, and neither writes a `github_*` table;
 `TestLedgerHasNoProductionCaller` fails on any use of the ledger's names, or
-B0a.1's, outside `internal/store`. The migration is one-way: an older build
+B0a.1's, in a non-test file of `internal/` or `cmd/` outside `internal/store`. The migration is one-way: an older build
 refuses the database (`ErrSchemaTooNew`), so no build holding it is installed
 before the board's activation, and the first install is the activation build.
 
