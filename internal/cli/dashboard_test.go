@@ -20,6 +20,7 @@ import (
 
 	"github.com/abanna/herdr-agentisan/internal/cli"
 	"github.com/abanna/herdr-agentisan/internal/daemon"
+	"github.com/abanna/herdr-agentisan/internal/dashboard"
 	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
 	"github.com/abanna/herdr-agentisan/internal/plugin"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
@@ -60,6 +61,8 @@ func TestDashboardRejectsBadInvocations(t *testing.T) {
 			want: plugin.ErrInvalidEnv,
 		},
 		"a project with a fixture": {args: []string{"dashboard", "--fixture", sample, "--project", "alpha"}, contains: "[fixture project]"},
+		"board without snapshot":   {args: []string{"dashboard", "--board-fixture", "board.json"}, want: dashboard.ErrBoard, contains: "requires --fixture"},
+		"missing board":            {args: []string{"dashboard", "--fixture", sample, "--board-fixture", filepath.Join(dir, "missing-board.json")}, want: dashboard.ErrBoard},
 		"positional":               {args: []string{"dashboard", "extra"}},
 		"unknown flag":             {args: []string{"dashboard", "--bogus"}},
 		"missing fixture":          {args: []string{"dashboard", "--fixture", filepath.Join(dir, "nope.json")}, want: snapshot.ErrUnavailable},

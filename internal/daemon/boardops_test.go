@@ -145,6 +145,45 @@ func TestBoardRead(t *testing.T) {
 	assert.Equal(t, "herdr_failed", refusedWith(t, err))
 }
 
+// TestBoardSeen (A60): board.seen moves the caller's own mark to what it
+// showed, only forward and never past the newest post, and answers where the
+// caller stands; the user's leaves the boss's mark, and a caller placed
+// nowhere moves nothing.
+func TestBoardSeen(t *testing.T) {
+	t.Parallel()
+	st := boardStore(t)
+	first := boardPost(t, st, "ha", "one")
+	boardPost(t, st, "ha", "two")
+	socket, _, _ := daemon.ServeBoard(t, shortDir(t), st, as(theUser))
+
+	got, err := boardOp[daemon.BoardStateResult](t, socket, daemon.OpBoardSeen, daemon.BoardSeenRequest{Upto: first.Seq})
+	require.NoError(t, err)
+	assert.Equal(t, daemon.BoardStateResult{Project: "ha", Reader: store.ReaderUser, Mark: first.Seq, Newest: first.Seq + 1, Unread: 1}, got)
+	got, err = boardOp[daemon.BoardStateResult](t, socket, daemon.OpBoardSeen, daemon.BoardSeenRequest{Upto: 1 << 40})
+	require.NoError(t, err)
+	assert.Equal(t, daemon.BoardStateResult{Project: "ha", Reader: store.ReaderUser, Mark: first.Seq + 1, Newest: first.Seq + 1}, got, "never past the newest post")
+	got, err = boardOp[daemon.BoardStateResult](t, socket, daemon.OpBoardSeen, daemon.BoardSeenRequest{Upto: first.Seq})
+	require.NoError(t, err)
+	assert.Equal(t, first.Seq+1, got.Mark, "a mark only moves forward")
+	boss, err := st.BoardStatus(t.Context(), "ha", store.ReaderBoss)
+	require.NoError(t, err)
+	assert.Equal(t, 2, boss.Unread, "the user's seen leaves the boss's mark")
+
+	_, err = boardOp[daemon.BoardStateResult](t, socket, daemon.OpBoardSeen, daemon.BoardSeenRequest{Upto: -1})
+	assert.Equal(t, "bad_request", refusedWith(t, err))
+	_, err = boardOp[daemon.BoardStateResult](t, socket, daemon.OpBoardSeen, map[string]any{"upto": 1, "reader": "boss"})
+	assert.Equal(t, "bad_request", refusedWith(t, err), "the request cannot say who reads")
+	refused, _, _ := daemon.ServeBoard(t, shortDir(t), st, func(context.Context, daemon.Peer) (daemon.BoardCaller, error) {
+		return daemon.BoardCaller{}, daemon.ErrNotAllowed
+	})
+	_, err = boardOp[daemon.BoardStateResult](t, refused, daemon.OpBoardSeen, daemon.BoardSeenRequest{Upto: 1})
+	assert.Equal(t, "not_allowed", refusedWith(t, err))
+	require.ErrorIs(t, err, daemon.ErrNotAllowed, "a client tells the refusal by its sentinel")
+	boss, err = st.BoardStatus(t.Context(), "ha", store.ReaderBoss)
+	require.NoError(t, err)
+	assert.Equal(t, 2, boss.Unread, "a refused caller moves nothing")
+}
+
 // TestBoardWait (A60): a wait answers at once when a post is past its mark,
 // else at the next post, whoever makes it through the store; at its
 // timeout it says so; a later wait from the same pane ends it; a bad
@@ -266,6 +305,7 @@ func TestBoardWaitEndsWhenTheDaemonStops(t *testing.T) {
 func TestBoardBudgets(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, daemon.BoardBudget, daemon.OpBudget(daemon.OpBoardRead, nil))
+	assert.Equal(t, daemon.BoardBudget, daemon.OpBudget(daemon.OpBoardSeen, nil))
 	assert.Equal(t, daemon.DefaultBoardWait+daemon.IOTimeout, daemon.OpBudget(daemon.OpBoardWait, nil))
 	assert.Equal(t, 90*time.Second+daemon.IOTimeout, daemon.OpBudget(daemon.OpBoardWait, json.RawMessage(`{"timeout":90000000000}`)))
 	assert.Equal(t, daemon.DefaultBoardWait+daemon.IOTimeout, daemon.OpBudget(daemon.OpBoardWait, json.RawMessage(`{"timeout":-1}`)), "a refused timeout gets the default's")

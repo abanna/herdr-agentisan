@@ -13,19 +13,21 @@ import (
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/report"
+	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
 	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
 // The board ops (ADR-001 A60). The boss reads its team's board and waits
-// for a post on it; the user's dashboard reads it.
+// for a post on it; the user's dashboard reads it, and says what it showed.
 // A worker never reads it: each op places its caller by the kernel's peer
 // credentials (Peer), never by what its request says, and refuses any
 // caller that is not a team's boss or the dashboard in its boss's place or
 // tab. That is policy, not a boundary: workers run as the same user (A60).
 const (
 	OpBoardRead = "board.read"
+	OpBoardSeen = "board.seen"
 	OpBoardWait = "board.wait"
 )
 
@@ -100,8 +102,13 @@ type BoardReadResult struct {
 	Newest  int64           `json:"newest"`
 }
 
-// BoardStateResult is board.wait's answer: where the caller stands on its
-// team's board.
+// BoardSeenRequest is board.seen's args: every post up to Upto was shown.
+type BoardSeenRequest struct {
+	Upto int64 `json:"upto"`
+}
+
+// BoardStateResult is board.seen's answer, and board.wait's: where the
+// caller stands on its team's board.
 type BoardStateResult struct {
 	Project string `json:"project"`
 	Reader  string `json:"reader"`
@@ -157,6 +164,13 @@ func (b *board) ops() map[string]op {
 				return nil, err
 			}
 			return b.read(ctx, req)
+		}},
+		OpBoardSeen: {run: func(ctx context.Context, args json.RawMessage) (any, error) {
+			var req BoardSeenRequest
+			if err := decodeArgs(args, &req); err != nil {
+				return nil, err
+			}
+			return b.seen(ctx, req)
 		}},
 		OpBoardWait: {run: func(ctx context.Context, args json.RawMessage) (any, error) {
 			var req BoardWaitRequest
@@ -233,6 +247,23 @@ func (b *board) read(ctx context.Context, req BoardReadRequest) (BoardReadResult
 		})
 	}
 	return res, nil
+}
+
+// seen moves the caller's own mark to req.Upto, only forward and never past
+// the newest post (store.MarkSeen), and answers where the caller then
+// stands: the dashboard placed as the user moves only the user's mark.
+func (b *board) seen(ctx context.Context, req BoardSeenRequest) (BoardStateResult, error) {
+	if req.Upto < 0 {
+		return BoardStateResult{}, fmt.Errorf("%w: upto %d", workforce.ErrBadRequest, req.Upto)
+	}
+	who, err := b.place(ctx, peerFrom(ctx))
+	if err != nil {
+		return BoardStateResult{}, err
+	}
+	if _, err := b.st.MarkSeen(ctx, who.Project, who.Reader, req.Upto); err != nil {
+		return BoardStateResult{}, fmt.Errorf("mark %q's board seen: %w", who.Project, err)
+	}
+	return b.state(ctx, who)
 }
 
 func (b *board) state(ctx context.Context, who boardCaller) (BoardStateResult, error) {
@@ -410,4 +441,23 @@ func runsDashboard(info herdr.ProcessInfo) bool {
 	return slices.ContainsFunc(info.ForegroundProcesses, func(p herdr.Process) bool {
 		return len(p.Argv) >= 2 && filepath.Base(p.Argv[0]) == "herdr-agentisan" && p.Argv[1] == "dashboard"
 	})
+}
+
+// fillBoardUnread gives s the user's unread count on project's board (A60),
+// for the dashboard's header and the tab bar, making s a project when it
+// reports none; no post goes in a snapshot, which any pane can read. A read
+// that fails reports none, and is logged.
+func (o Options) fillBoardUnread(ctx context.Context, st *store.Store, project string, s *snapshot.Snapshot) {
+	b, err := st.BoardStatus(ctx, project, store.ReaderUser)
+	if err != nil {
+		o.warnUnlessStopping(ctx, err, "board: read the user's unread count; the snapshot reports none")
+		return
+	}
+	if b.Unread == 0 {
+		return
+	}
+	if s.Project == nil {
+		s.Project = &snapshot.Project{}
+	}
+	s.Project.BoardUnread = b.Unread
 }

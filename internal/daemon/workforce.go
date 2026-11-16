@@ -80,6 +80,7 @@ var opBudgets = map[string]func(json.RawMessage) time.Duration{
 	OpNoticesList:   fixed(NoticesBudget),
 	// The board ops (A60).
 	OpBoardRead: fixed(BoardBudget),
+	OpBoardSeen: fixed(BoardBudget),
 	OpBoardWait: boardWaitBudget,
 }
 
@@ -111,6 +112,7 @@ var workforceCodes = []struct {
 	{workforce.ErrUnknownGroup, "unknown_group"},
 	{routing.ErrUnknownRole, "unknown_role"},
 	{routing.ErrProviderMismatch, "provider_mismatch"},
+	{settings.ErrProviderRefused, "provider_refused"},
 	{routing.ErrOverrideRefused, "override_refused"},
 	{routing.ErrBlocked, "routing_blocked"},
 	{workforce.ErrSlotCap, "slot_cap"},

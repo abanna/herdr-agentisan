@@ -45,6 +45,11 @@ type Worker struct {
 	Status     string
 	// HandoffPending is true while a handoff holds the worker's inbox.
 	HandoffPending bool
+	// Provider is the agent the worker was launched as, claude or codex
+	// (ProviderClaude, ProviderCodex), whether or not routing decided its
+	// launch (A66); "" for a row bound before migration 0008 whose routing
+	// named none. BindWorker requires one.
+	Provider string
 	// Routing is the routing decision the worker was launched with; nil
 	// when routing did not launch it. BindWorker writes it and WorkerRow
 	// reads it; Workers leaves it nil.
@@ -64,13 +69,20 @@ type Routing struct {
 	RoutedAt                                    time.Time
 }
 
+// The providers a worker can be launched as (A66), the agents D12 names.
+const (
+	ProviderClaude = "claude"
+	ProviderCodex  = "codex"
+)
+
 // Workers returns every worker not retired, ordered by logical id. Nothing in
 // the schema stops two of them naming one pane; both are returned, and the
 // caller decides.
 func (s *Store) Workers(ctx context.Context) ([]Worker, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT logical_id, project, grp, pane_id, generation, terminal_id,
 	coalesce(shell_pid, 0), coalesce(shell_start, 0), status,
-	EXISTS (SELECT 1 FROM handoffs AS h WHERE h.logical_id = workers.logical_id AND h.state = 'pending')
+	EXISTS (SELECT 1 FROM handoffs AS h WHERE h.logical_id = workers.logical_id AND h.state = 'pending'),
+	coalesce(provider, '')
 FROM workers WHERE retired_at IS NULL ORDER BY logical_id`)
 	if err != nil {
 		return nil, fmt.Errorf("%w: read workers: %w", ErrStore, err)
@@ -80,7 +92,7 @@ FROM workers WHERE retired_at IS NULL ORDER BY logical_id`)
 	for rows.Next() {
 		var w Worker
 		if err := rows.Scan(&w.LogicalID, &w.Project, &w.Group, &w.PaneID, &w.Generation, &w.TerminalID,
-			&w.ShellPID, &w.ShellStart, &w.Status, &w.HandoffPending); err != nil {
+			&w.ShellPID, &w.ShellStart, &w.Status, &w.HandoffPending, &w.Provider); err != nil {
 			return nil, fmt.Errorf("%w: read workers: %w", ErrStore, err)
 		}
 		out = append(out, w)
@@ -195,17 +207,17 @@ type Row struct {
 }
 
 // bindWorker inserts a logical id never seen, or rebinds a retired or lost
-// one of the same project: the new pane and terminal and group, the routing
-// it was spawned with, the next generation, starting again, with the shell
+// one of the same project: the new pane and terminal and group, the provider
+// and the routing it was spawned with, the next generation, starting again, with the shell
 // left for the team poll to read. Any other row is left alone, and changes
 // nothing: another project's id is never taken over, since its queue and
 // handoffs are that project's (QA #78 F4).
 const bindWorker = `INSERT INTO workers (logical_id, project, grp, pane_id, terminal_id, generation, status, created_at,
 	routed_at, routed_role, routed_provider, routed_binding, routed_model_id, routed_effort,
-	override_binding, override_by, override_effort, assignment_digest, policy_version)
-VALUES (?1, ?2, ?3, ?4, ?5, 0, 'starting', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+	override_binding, override_by, override_effort, assignment_digest, policy_version, provider)
+VALUES (?1, ?2, ?3, ?4, ?5, 0, 'starting', ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)
 ON CONFLICT (logical_id) DO UPDATE SET
-	grp = excluded.grp, pane_id = excluded.pane_id, terminal_id = excluded.terminal_id,
+	grp = excluded.grp, pane_id = excluded.pane_id, terminal_id = excluded.terminal_id, provider = excluded.provider,
 	shell_pid = NULL, shell_start = NULL,
 	generation = workers.generation + 1, status = 'starting', retired_at = NULL,
 	routed_at = excluded.routed_at, routed_role = excluded.routed_role, routed_provider = excluded.routed_provider,
@@ -222,7 +234,8 @@ const failStaleHandoffs = `UPDATE handoffs SET state = 'failed', updated_at = ma
 WHERE logical_id = ?1 AND state = 'pending'`
 
 // BindWorker binds w's logical id to its pane and terminal as a starting
-// worker, with w's routing (none when nil), and returns the row's
+// worker, with w's provider, which must be claude or codex (ErrInvalid), and
+// w's routing (none when nil), and returns the row's
 // generation: 0 for an id never seen, one more than before for one reused
 // after its retirement or once lost (I1, A35).
 // A handoff an earlier generation left pending fails in the same
@@ -230,7 +243,7 @@ WHERE logical_id = ?1 AND state = 'pending'`
 // ErrWorkerLive means the id is bound, not retired and not lost, or is
 // another project's, and then nothing changes.
 func (s *Store) BindWorker(ctx context.Context, w Worker, at time.Time) (int64, error) {
-	if err := errors.Join(checkID(KindWorker, w.LogicalID), checkID(KindPane, w.PaneID), checkTerminal(w.TerminalID)); err != nil {
+	if err := errors.Join(checkID(KindWorker, w.LogicalID), checkID(KindPane, w.PaneID), checkTerminal(w.TerminalID), checkProvider(w.Provider)); err != nil {
 		return 0, err
 	}
 	ns, err := nanos(at)
@@ -247,7 +260,8 @@ func (s *Store) BindWorker(ctx context.Context, w Worker, at time.Time) (int64, 
 		return 0, err
 	}
 	var gen int64
-	err = tx.QueryRowContext(ctx, bindWorker, append([]any{w.LogicalID, w.Project, w.Group, w.PaneID, w.TerminalID, ns}, routed...)...).Scan(&gen)
+	args := append([]any{w.LogicalID, w.Project, w.Group, w.PaneID, w.TerminalID, ns}, routed...)
+	err = tx.QueryRowContext(ctx, bindWorker, append(args, w.Provider)...).Scan(&gen)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, fmt.Errorf("%w: %s is live, or is another project's than %s", ErrWorkerLive, w.LogicalID, w.Project)
 	}
@@ -261,6 +275,14 @@ func (s *Store) BindWorker(ctx context.Context, w Worker, at time.Time) (int64, 
 		return 0, fmt.Errorf("%w: bind worker %s: %w", ErrStore, w.LogicalID, err)
 	}
 	return gen, nil
+}
+
+// checkProvider refuses a provider a worker cannot be launched as.
+func checkProvider(provider string) error {
+	if provider != ProviderClaude && provider != ProviderCodex {
+		return fmt.Errorf("%w: a worker's provider is %s or %s, not %q", ErrInvalid, ProviderClaude, ProviderCodex, provider)
+	}
+	return nil
 }
 
 // routingArgs are bindWorker's ?7 to ?17 for r: every one NULL for none.
@@ -388,11 +410,11 @@ func (s *Store) WorkerRow(ctx context.Context, logicalID string) (Row, error) {
 		`SELECT logical_id, project, grp, pane_id, terminal_id, generation, status, created_at, retired_at,
 	routed_at, coalesce(routed_role, ''), coalesce(routed_provider, ''), coalesce(routed_binding, ''),
 	coalesce(routed_model_id, ''), coalesce(routed_effort, ''), override_binding, override_by, override_effort,
-	coalesce(assignment_digest, ''), coalesce(policy_version, '')
+	coalesce(assignment_digest, ''), coalesce(policy_version, ''), coalesce(provider, '')
 FROM workers WHERE logical_id = ?`,
 		logicalID).Scan(&r.LogicalID, &r.Project, &r.Group, &r.PaneID, &r.TerminalID, &r.Generation, &r.Status, &created, &retiredAt,
 		&routedAt, &rt.Role, &rt.Provider, &rt.Binding, &rt.ModelID, &rt.Effort, &override[0], &override[1], &override[2],
-		&rt.AssignmentDigest, &rt.PolicyVersion)
+		&rt.AssignmentDigest, &rt.PolicyVersion, &r.Provider)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Row{}, fmt.Errorf("%w: %s", ErrNoWorker, logicalID)
 	}

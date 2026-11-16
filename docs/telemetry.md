@@ -243,7 +243,7 @@ Every audit field is present, `""` where the decision has none.
 | `agentisan.routing.task_lookup_status` | string | `found`, `not_found` or `unavailable`; `not_found` with no packet |
 | `agentisan.routing.assignment_digest` | string | `sha256:` of the assignment, requirements and acceptance criteria; never their text |
 | `agentisan.routing.role` | string | The rules' role, such as `pre_check` for `qa` |
-| `agentisan.routing.provider` | string | `claude` or `codex`, the type's agent command |
+| `agentisan.routing.provider` | string | `claude` or `codex`, the provider the worker runs: `--provider`, else the packet's `provider_preference`, else the type's default (A66) |
 | `agentisan.routing.selected_binding` | string | The binding, such as `claude_mid` |
 | `agentisan.routing.model_id` | string | Its model id |
 | `agentisan.routing.effort` | string | The effort, such as `high` |

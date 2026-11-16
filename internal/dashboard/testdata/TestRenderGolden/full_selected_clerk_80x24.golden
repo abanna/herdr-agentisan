@@ -21,4 +21,4 @@
 ╭─ CLERK · 1 ?1 ───────────────────────────────────────────────────────────────╮
 │ ? clerk      unknown  hai   ░░░░░   --                                       │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- enter jump · ↑↓ move · ctrl-b m btop · ? help · q quit                      ↑9
+ enter jump · ↑↓ move · b board · ctrl-b m btop · ? help · q quit            ↑9
