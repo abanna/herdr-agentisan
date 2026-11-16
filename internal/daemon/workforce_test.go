@@ -801,9 +801,9 @@ func TestWorkforceCodes(t *testing.T) {
 		fmt.Errorf("%w: %w", workforce.ErrPreflight, preflight.ErrTdaddyMissing): "preflight_failed",
 		fmt.Errorf("%w: %w", workforce.ErrSpawnFailed, workforce.ErrHerdr):       "spawn_failed",
 		fmt.Errorf("%w: %w", workforce.ErrHerdr, daemon.ErrHerdrGone):            "herdr_gone",
-		workforce.ErrHerdr:          "herdr_failed",
-		store.ErrStore:              "store_failed",
-		errors.New("anything else"): "failed",
+		workforce.ErrHerdr:                                                       "herdr_failed",
+		store.ErrStore:                                                           "store_failed",
+		errors.New("anything else"):                                              "failed",
 	} {
 		assert.Equal(t, code, daemon.WorkforceCode(err), err.Error())
 	}
