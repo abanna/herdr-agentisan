@@ -183,7 +183,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   with the `notices.*` ops (`noticeops.go`). It serves each team's board
   to its boss and the user's dashboard alone (`boardops.go`, A60), each
   caller placed by the kernel's peer credentials (`peer_linux.go`,
-  `peer_darwin.go`) and its process ancestry. It keeps
+  `peer_darwin.go`) and its process ancestry; `board.seen` moves only the
+  caller's own read mark, forward and never past the newest post, and each
+  snapshot carries the user's unread count, when there is one. It keeps
   herdr's agent view on the focused team, which focus events and the poll
   feed it, and clears it outside every team and on a clean stop (`view.go`,
   the A28 addendum, A49).
