@@ -5,4 +5,4 @@
 │ ◐ pee01      working  opus  ▓▓░░░  38%  r2         J1 re-run             12m │
 │ ◐ pee02      working  opus  ▓▓░░░  30%             J1 re-queued          21m │
 │ ● pee03      idle     opus  ▓░░░░  22%  PR3a       committed           1h39m │
- enter jump · ↑↓ move · ctrl-b m btop · ? help · q quit                     ↓12
+ enter jump · ↑↓ move · b board · ctrl-b m btop · ? help · q quit           ↓12

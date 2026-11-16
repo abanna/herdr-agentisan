@@ -1123,7 +1123,7 @@ func TestFixtureConfig(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			cfg, err := dashboard.FixtureConfig(t.Context(), tc.path, tc.socket)
+			cfg, err := dashboard.FixtureConfig(t.Context(), tc.path, "", tc.socket)
 			if tc.want != nil {
 				require.ErrorIs(t, err, tc.want)
 				return
@@ -1412,7 +1412,6 @@ func TestUnboundKeysDoNothing(t *testing.T) {
 		"left":                  keyLeft,
 		"right":                 keyRight,
 		"m":                     {Code: 'm', Text: "m"},
-		"b":                     {Code: 'b', Text: "b"},
 	}
 	for name, k := range tests {
 		t.Run(name, func(t *testing.T) {

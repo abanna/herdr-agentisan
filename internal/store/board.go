@@ -301,6 +301,38 @@ func (s *Store) LatestPosts(ctx context.Context, project string, limit int) ([]B
 	return scanPosts(rows)
 }
 
+// MarkSeen moves reader's mark on project's board to upto, as when the
+// dashboard's panel has shown every post up to it, and returns the mark. A
+// mark only moves forward, and never past the newest post: a seq not yet
+// handed out is never marked read. It moves no other reader's mark.
+func (s *Store) MarkSeen(ctx context.Context, project, reader string, upto int64) (int64, error) {
+	if err := checkReader(reader); err != nil {
+		return 0, err
+	}
+	if upto < 0 {
+		return 0, fmt.Errorf("%w: a mark of %d", ErrInvalid, upto)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("%w: mark %q's board seen: %w", ErrStore, project, err)
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op once committed
+	st, err := boardState(ctx, tx, project, reader)
+	if err != nil {
+		return 0, err
+	}
+	mark := max(st.Mark, min(upto, st.Newest))
+	if mark > st.Mark {
+		if _, err := tx.ExecContext(ctx, setMark, project, reader, mark); err != nil {
+			return 0, fmt.Errorf("%w: mark %q's board seen: %w", ErrStore, project, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("%w: mark %q's board seen: %w", ErrStore, project, err)
+	}
+	return mark, nil
+}
+
 // PruneBoard deletes the posts made more than BoardRetention before now,
 // and each project's oldest past BoardKeep, and reports how many it
 // deleted. The marks stay: a seq is never handed out again, so a mark only

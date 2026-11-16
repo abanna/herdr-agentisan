@@ -80,6 +80,7 @@ var opBudgets = map[string]func(json.RawMessage) time.Duration{
 	OpNoticesList:   fixed(NoticesBudget),
 	// The board ops (A60).
 	OpBoardRead: fixed(BoardBudget),
+	OpBoardSeen: fixed(BoardBudget),
 	OpBoardWait: boardWaitBudget,
 }
 
