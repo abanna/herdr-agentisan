@@ -191,8 +191,11 @@ func TestRenderGolden(t *testing.T) {
 // under a description), the help box whole in the canvas (17) and inside
 // the groups (24), and the groups shorter than the room, which each fixture
 // reaches at its own height (15 to 40). They are drawn at the widths whose
-// lines change with height: the narrowest (1 to 5), the button (24), the
-// help box flush (45), one column (80) and two (110).
+// lines change with height: 1, where a box's corners are cut, and 2 and 3,
+// where its side borders are; 5, the first cell of text; the button (24),
+// the help box flush (45), one column (80) and two (110). Width 4 is left
+// out: its lines are a box's borders with nothing between them, neither
+// cut as at 3 nor holding text as at 5, and the low heights draw it.
 var sizes = sweepSizes(
 	[]int{1, 2, 3, 4, 5, 8, 12, 20, 24, 30, 34, 40, 45, 50, 60, 68, 80, 110, 130},
 	[]int{1, 2, 3, 4, 5, 8, 9},
