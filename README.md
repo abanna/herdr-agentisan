@@ -543,8 +543,15 @@ herdr-agentisan board wait            # run in the background: ends at the next 
 The boss and the user each have a read mark, so the boss reading never
 moves the user's. Posts are kept 30 days, at most 2,000 a team. Nothing
 posts to the board yet: until part 1a B of NERD-5533 the boss's messages
-and notices are still typed into its pane, and the dashboard's board panel
-comes with part 1b.
+and notices are still typed into its pane. Press `b` in the dashboard for
+the user's board panel. `t` and `d` toggle its team and daemon filters; arrows
+move between posts. Enter expands a post; within it arrows scroll by line,
+PageUp/PageDown by page, and Home/End reach its beginning/end. Escape closes
+help, then the expansion, then the panel. Closing returns to the overview or group view you opened it from.
+The `board N` badge in the header and tab bar counts the user's unread posts.
+The panel reads at most 200 newest posts every 3 seconds while open, and
+marks through the newest post under its filter. With team-only on, that
+passes older hidden daemon posts too; newer hidden daemon posts stay unread.
 
 ## The debugger
 
@@ -608,9 +615,9 @@ drives them.
 
 | Command | What it does |
 | --- | --- |
-| `team status [--project p]` | Every group's counts and open slots, and each worker's status, ctx, item, stage (and whether it is old) and idle time |
+| `team status [--project p]` | Every group's counts and open slots, and each worker's status, ctx, item, stage (and whether it is old), idle time and the provider its row records |
 | `team up [--project p]` | Fills each group up to its `workers` count, empty slots only, so a full team gets none; opens the team's dashboard above the boss when none is open |
-| `worker spawn --group g [--count n] [--model m]` | Adds workers, refused whole past the group's `slots` or when the repo fails the tdaddy preflight |
+| `worker spawn --group g [--count n] [--model m] [--provider claude\|codex]` | Adds workers, refused whole past the group's `slots` or when the repo fails the tdaddy preflight |
 | `worker retire <id> [--after-handoff]` | Closes a worker's pane, by logical id or pane id; with the flag, once its handoff is written. Refused (`handoff_pending`) while the worker is being replaced; retiring the replacement's pane abandons that rotation and answers `handoff_failed` with the worker's id (ADR-001 A33) |
 | `handoff ready [<id>] [--clear]` | Marks a worker ready to be replaced, once it has written its handoff: the daemon sets the `handoff` token on its agent pane, by logical id, tab label or pane id, or this pane with none; `--clear` takes it off (ADR-001 A33) |
 | `handoff ack [<pane>]` | Completes a rotation from its replacement, by pane id or this pane with none: once the replacement reports the old pane's item and stage, the worker's herdr name and inbox move to it. Refused with `stage_mismatch`, naming both pairs, until they match, and with `no_handoff` on a pane that is no replacement (ADR-001 A33) |
@@ -666,7 +673,21 @@ Claude Code aliases, `gpt-…`, `codex-…`, the o-series), and spawn refuses
 any launch whose model the other provider runs. For now `review` runs
 codex only and the debugger claude only: each is a gap, which routing v2
 with a read-only Claude review launch (NERD-5529), and Codex's read fence
-(NERD-5530), close. Choosing the provider per spawn is NERD-5519.
+(NERD-5530), close.
+
+A spawn may choose the other provider (ADR-001 A66): `worker spawn
+--provider codex` runs codex in a group whose default is claude, and the
+task packet's `provider_preference` chooses when no `--provider` does.
+`--provider` and a packet that disagree are refused (`provider_mismatch`),
+routing on or off, as is a preference that is neither claude nor codex
+(`bad_request`). A type that cannot run the provider asked for yet answers
+`provider_refused`, naming what lifts the gap. `--model` checks the provider
+and never chooses it: a model or binding of the other provider is
+`provider_mismatch`, which says to pass `--provider` too. `--count n`
+spawns n of one provider. A group's slots count its workers of both
+providers, and `team up` fills a group with its default provider, counting
+the others already there. Each worker's row records the provider it was
+launched as, which `team status` shows beside the agent herdr detects.
 
 ### Model routing
 
@@ -676,8 +697,8 @@ reasoning effort each worker starts with, by its type's role (ADR-001 A50).
 `[routing]` in the shared `herdr-agentisan.toml` holds what they leave to
 the deployment: `enabled` (off by default, and while it is on no
 model key, `agent.model`, `agent.<provider>.model` or a group's, nor a codex
-`--profile` may be set), each binding's real
-`model_id`, efforts its client takes and `enabled`, and
+`--profile`, `--oss`, `--local-provider` or `-c model_provider` may be set),
+each binding's real `model_id`, efforts its client takes and `enabled`, and
 `[routing.overrides]`, the user's standing choice for a role and the only
 way to a premium binding (ADR-001 A63). An override is a binding's name,
 which binds only workers of that binding's provider, so `coder =
@@ -685,8 +706,8 @@ which binds only workers of that binding's provider, so `coder =
 one per provider, such as `coder = ["claude_strong", "codex_strong"]`.
 `config resolve` shows each key with its layer, then `routing policy:`, the
 version a decision records; with `--project` it also refuses an override
-a worker type's spawns under its provider would be refused for at the
-role's effort, such as a binding switched off in `[routing.bindings]`, and
+a worker type's spawns under either provider it may run would be refused
+for at the role's effort, such as a binding switched off in `[routing.bindings]`, and
 a model in another provider's table. Routing routes within the provider the
 worker runs, never across.
 
@@ -709,8 +730,9 @@ included, keeps its default, and the routed event's `fallback_reason` and
 fills, before it opens anything: while routing is on, a group it refuses
 stops the whole `team up`. While it is on, the decision is
 the launch: `--model` must then name a binding the role allows, by its name
-or model id, and `--effort` one it takes. While it is off, spawn launches as
-before and only records what routing would have chosen. `--task-file
+or model id, of the provider the spawn runs, and `--effort` one it takes.
+While it is off, spawn launches as before and only records what routing
+would have chosen. `--task-file
 <path|->` hands routing the boss's task packet, the rules' `task_packet` as
 JSON, at most 64 KiB. Each worker's row keeps the decision it was launched
 with, and each is an `agentisan.worker.routed` event.
@@ -760,7 +782,18 @@ See [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml)
 
 `herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json`
 draws a snapshot file instead, outside herdr too. A fixture's time is fixed,
-so its footer always reads `data Ns old`.
+so its footer always reads `data Ns old`. Preview the board, then press `b`:
+
+```bash
+herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json --board-fixture docs/dashboard/sample-board.json
+```
+
+The board fixture keeps its read mark in memory; the preview badge clears
+without changing either file. Without `--board-fixture`, `b` says there is no
+board with this fixture. The user must check this preview before live board
+activation. This change performs no install or live activation. A newer
+snapshot adds `board_unread`: reopen older dashboards after installing the
+new daemon and dashboard together.
 
 The dashboard keeps v12's cues (ADR-001 A38). A stage that says READY is
 bold green, RED or blocked bold red, and waiting or queued yellow, matched

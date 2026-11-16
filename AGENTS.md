@@ -183,7 +183,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   with the `notices.*` ops (`noticeops.go`). It serves each team's board
   to its boss and the user's dashboard alone (`boardops.go`, A60), each
   caller placed by the kernel's peer credentials (`peer_linux.go`,
-  `peer_darwin.go`) and its process ancestry. It keeps
+  `peer_darwin.go`) and its process ancestry; `board.seen` moves only the
+  caller's own read mark, forward and never past the newest post, and each
+  snapshot carries the user's unread count, when there is one. It keeps
   herdr's agent view on the focused team, which focus events and the poll
   feed it, and clears it outside every team and on a clean stop (`view.go`,
   the A28 addendum, A49).
@@ -230,7 +232,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   sender and recipient (A30): each group's counts and members on a tabs team
   or the ◆ spaces, with idle times from the daemon's clock and the rows no
   pane is bound to (A35); opening a tab per worker and waiting for its agent,
-  a Claude one launched with A42's turn hooks as `--settings`,
+  of the provider `--provider` or the packet's preference asks for, else the
+  type's default (`provider.go`, A66), a Claude one launched with A42's turn
+  hooks as `--settings`,
   after `internal/preflight`'s check and, for a coder with a task packet,
   Jev's answer (`jev.go`, A57), each group up to its count for
   `team up`, which also opens the team's dashboard above the boss
@@ -266,7 +270,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   access for coder, qa and precheck), which spawn adds. Each type runs
   claude or codex, its default provider, with a command and a model per
   provider (`[agent.<provider>]`, `AgentFor(type, provider)`, flags only,
-  A62); nothing chooses the other provider yet (NERD-5519). The debugger
+  A62); `worker spawn --provider` or the task packet's preference chooses
+  the other (A66). The debugger
   refuses codex and review claude, as gaps, and a model whose name says the
   other provider runs it is refused by `config resolve --project`
   (`CheckModelProviders`) and at spawn. Sample in
@@ -309,8 +314,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   fails; while it is pending no ending is written to the worker's row, and
   a worker still starting begins none (A33). A `workers` row binds its
   pane by terminal, with the shell the team poll read (migration 0003,
-  A35), and the routing decision
-  it was launched with (migration 0005, A50); the poll's
+  A35), and the routing decision it was launched with (migration 0005,
+  A50), and the provider it was launched as, written at every bind
+  (migration 0008, A66); the poll's
   writes are compare-and-sets on the row as it read it. The GitHub notices'
   seen-set, open PRs and seed marks, a kind's own included (`github.go`,
   migrations 0004 and 0006, A45), make each event told once across
@@ -351,6 +357,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   pane (A68), the boss, and the project's PRs, issues and test slots.
   Decoding is strict: exact keys, closed enums, RFC 3339 times.
   The daemon's `snapshot` op serves it; `FileSource` reads a fixture.
+  Its optional `project.board_unread` is the user's unread count (A60),
+  omitted at zero; post text never goes in a snapshot.
 - `internal/dashboard/` — the bubbletea team dashboard and its pure renderer:
   a header box, then the groups stacked as boxes with one dense line per
   agent, in the snapshot's group order, scrolling to keep the selection in
@@ -360,7 +368,13 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   pane's workspace to a team (A24). `/` narrows the agents to a search query in
   place (`search.go`, ADR-001 A20), and 1-9 or a click on a group's title
   opens the group's view, a box per agent from the snapshot alone
-  (`groupview.go`, A37). Also the team's one line for herdr's tab
+  (`groupview.go`, A37). `b` opens the board panel (A60), `t`/`d` filter its
+  two channels and Enter
+  expands a post; its single-flight reads and seen marks run only while open
+  (`board.go`, `boardview.go`). `--board-fixture` with `--fixture` previews
+  `docs/dashboard/sample-board.json` with a mark kept in memory. The user's
+  preview before live activation is mandatory. Also the team's one line for
+  herdr's tab
   bar (`tabbar.go`, A41), which `status line` prints, with its
   `tab_bar_right` entry `docs/config/herdr-tab-bar.example.toml`, for herdr's
   own config (`TestTabBarSnippet` in `internal/cli` runs it). Goldens in

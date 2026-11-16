@@ -35,6 +35,9 @@ type SpawnRequest struct {
 	Effort string `json:"effort,omitempty"`
 	// Task is the boss's task packet, which routing reads; nil for none.
 	Task *routing.Task `json:"task,omitempty"`
+	// Provider is the agent the workers run, claude or codex; "" runs the
+	// task packet's provider_preference, else the type's default (A66).
+	Provider string `json:"provider,omitempty"`
 }
 
 // Spawned is one worker whose agent came up.
@@ -99,6 +102,11 @@ func (s *Service) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 			return SpawnResult{}, fmt.Errorf("%w: %w", ErrBadRequest, err)
 		}
 	}
+	provider, err := providerOf(req)
+	if err != nil {
+		return SpawnResult{}, err
+	}
+	req.Provider = provider
 	// The preflight can take seconds, so it runs before the lock: it reads
 	// the host, not the team. So does a debugger's launch, which reads the
 	// env file's name and stats it, and every MCP config above the repo.
@@ -141,11 +149,16 @@ func (s *Service) Spawn(ctx context.Context, req SpawnRequest) (SpawnResult, err
 		if err != nil {
 			return nil, err
 		}
-		agent, err := agentOf(st.profile, req.Group)
+		agent, err := agentOf(st.profile, req.Group, req.Provider)
 		if err != nil {
 			return nil, err
 		}
-		c := choice{model: cmp.Or(req.Model, agent.Model), effort: req.Effort}
+		if req.Model != "" && (d == nil || !d.Applied) {
+			if err := checkAsked(req.Group, req.Model, kindOf(agent)); err != nil {
+				return nil, err
+			}
+		}
+		c := choice{model: cmp.Or(req.Model, agent.Model), effort: req.Effort, asked: req.Provider}
 		return planRouted(st.profile, req.Group, c, d, ids, dbg)
 	})
 	if err != nil {
@@ -172,7 +185,7 @@ func (s *Service) route(p *settings.Profile, req SpawnRequest) (d *routing.Decis
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: %w", ErrConfig, err)
 	}
-	agent, err := agentOf(p, req.Group)
+	agent, err := agentOf(p, req.Group, req.Provider)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -192,6 +205,8 @@ func (s *Service) route(p *settings.Profile, req SpawnRequest) (d *routing.Decis
 		return nil, nil, fmt.Errorf("%w: %w", ErrBadRequest, err)
 	case !policy.Enabled():
 		return nil, err, nil //nolint:wrapcheck // recorded as routing's own refusal
+	case req.Model != "" && errors.Is(err, routing.ErrProviderMismatch):
+		return nil, nil, fmt.Errorf("%w%s with it", err, modelHint)
 	}
 	return nil, nil, err //nolint:wrapcheck // routing's sentinels are the refusal, each with its own code
 }
@@ -217,7 +232,7 @@ func rowOf(d *routing.Decision) *store.Routing {
 // Spawn and team up plan through it, so both launch what routing chose.
 func planRouted(p *settings.Profile, typ string, base choice, d *routing.Decision, ids []string, dbg *debugger.Command) ([]planned, error) {
 	if d != nil && d.Applied {
-		base = choice{model: d.ModelID, effort: d.Effort, provider: d.Provider}
+		base = choice{model: d.ModelID, effort: d.Effort, provider: d.Provider, asked: base.asked}
 	}
 	ps, err := plan(p, typ, base, ids, dbg)
 	for i := range ps {
@@ -395,7 +410,10 @@ func (s *Service) open(ctx context.Context, st *state, p planned) (opened, *herd
 			return opened{}, nil, herdrFailed("open "+p.id+"'s tab", err)
 		}
 	}
-	gen, err := s.Store.BindWorker(ctx, store.Worker{LogicalID: p.id, Project: st.team.Project, Group: p.group, PaneID: c.RootPane.PaneID, TerminalID: c.RootPane.TerminalID, Routing: p.routing}, s.now())
+	gen, err := s.Store.BindWorker(ctx, store.Worker{
+		LogicalID: p.id, Project: st.team.Project, Group: p.group, PaneID: c.RootPane.PaneID, TerminalID: c.RootPane.TerminalID,
+		Provider: p.launch.kind, Routing: p.routing,
+	}, s.now())
 	if err != nil {
 		return opened{}, &c, fmt.Errorf("record %s: %w", p.id, err)
 	}
@@ -584,9 +602,10 @@ func withTurnHooks(args []string) ([]string, error) {
 // choice is the model and effort ("" for none) a spawn's agents start with,
 // chosen before plan: routing's decision while it is on, else --model or the
 // type's agent, and --effort. provider is the agent routing decided for; ""
-// when it did not decide.
+// when it did not decide. asked is the provider the spawn asked for (A66),
+// whose agent plan launches; "" for the type's default.
 type choice struct {
-	model, effort, provider string
+	model, effort, provider, asked string
 }
 
 // effortPattern is an effort, such as high or xhigh: safe in any shell.
@@ -601,7 +620,7 @@ var effortPattern = regexp.MustCompile(`^[a-z]{1,16}$`)
 // own; the debugger's go into its launch's one --settings object instead
 // (withTurnHooks). A debugger's tab also gets its launch's environment.
 func plan(p *settings.Profile, typ string, c choice, ids []string, dbg *debugger.Command) ([]planned, error) {
-	agent, err := agentOf(p, typ)
+	agent, err := agentOf(p, typ, c.asked)
 	if err != nil {
 		return nil, err
 	}

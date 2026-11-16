@@ -246,7 +246,23 @@ func TestSpawnRoutingRefusals(t *testing.T) {
 		"a premium binding":           {req: workforce.SpawnRequest{Group: "debugger", Count: 1, Model: "claude_premium"}, config: strings.Replace(routingOn, opsGroup, "\n[projects.herdr-agentisan.groups.debugger]\nworkers = 0\nslots = 1\n", 1) + debuggerEnvFile, want: routing.ErrOverrideRefused, says: "premium"},
 		"the other provider's model":  {req: workforce.SpawnRequest{Group: "coder", Count: 1, Model: "codex_strong"}, want: routing.ErrProviderMismatch, says: "and the worker type coder runs claude"},
 		"an effort the binding lacks": {req: workforce.SpawnRequest{Group: "coder", Count: 1, Effort: "low"}, want: routing.ErrOverrideRefused, says: "--effort"},
-		"a packet asking for codex":   {req: workforce.SpawnRequest{Group: "coder", Count: 1, Task: &routing.Task{LookupStatus: routing.LookupFound, ProviderPreference: "codex"}}, want: routing.ErrProviderMismatch},
+		"a packet --provider disagrees with": {
+			req:  workforce.SpawnRequest{Group: "coder", Count: 1, Provider: "claude", Task: &routing.Task{LookupStatus: routing.LookupFound, ProviderPreference: "codex"}},
+			want: routing.ErrProviderMismatch, says: "--provider is claude, and the task packet's provider_preference is codex",
+		},
+		"a packet preferring no provider": {
+			req:  workforce.SpawnRequest{Group: "coder", Count: 1, Task: &routing.Task{LookupStatus: routing.LookupFound, ProviderPreference: "gemini"}},
+			want: workforce.ErrBadRequest, says: "provider_preference is neither claude nor codex",
+		},
+		"the other provider's binding, its hint": {
+			req: workforce.SpawnRequest{Group: "coder", Count: 1, Model: "codex_strong"}, want: routing.ErrProviderMismatch,
+			says: "--model never chooses the provider: pass --provider with it",
+		},
+		"a provider no agent is":    {req: workforce.SpawnRequest{Group: "coder", Count: 1, Provider: "gemini"}, want: workforce.ErrBadRequest, says: "--provider is neither claude nor codex"},
+		"a provider's case variant": {req: workforce.SpawnRequest{Group: "coder", Count: 1, Provider: "CODEX"}, want: workforce.ErrBadRequest, says: "--provider is neither claude nor codex"},
+		"a provider the type cannot run yet": {
+			req: workforce.SpawnRequest{Group: "review", Count: 1, Provider: "claude"}, want: settings.ErrProviderRefused, says: "NERD-5529",
+		},
 		"a disabled default": {
 			config: routingOn + "\n[routing.bindings.claude_mid]\nenabled = false\n",
 			req:    workforce.SpawnRequest{Group: "qa", Count: 1}, want: routing.ErrBlocked, says: "disabled",
