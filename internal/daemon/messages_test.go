@@ -299,28 +299,36 @@ func prompts(srv *herdrtest.Server) int {
 // typed once into the agent its recipient's name resolves to, a worker's
 // wrapped with its id and sender so it can reply, the daemon's own as its
 // body, and recorded delivered after one attempt; the one queued first is
-// typed first.
+// typed first. The same for a Codex boss and worker (NERD-5507): delivery
+// goes by the name, never by the agent herdr detected.
 func TestDispatcherDeliversByName(t *testing.T) {
 	t.Parallel()
-	th, p, dir := haTeam(t)
-	st := stateStore(t, dir, th)
-	toCoder := sent(t, st, coder, haBoss, "build it")
-	toBoss := sent(t, st, haBoss, coder, "done")
-	digest := sent(t, st, haBoss, store.Daemon, "[agentisan] 2 turns ended")
-	serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
+	for _, kind := range []string{"claude", "codex"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			th, p, dir := haTeam(t)
+			th.setPane("w14:p1", "agent", kind)
+			th.setPane("w14:p2", "agent", kind)
+			st := stateStore(t, dir, th)
+			toCoder := sent(t, st, coder, haBoss, "build it")
+			toBoss := sent(t, st, haBoss, coder, "done")
+			digest := sent(t, st, haBoss, store.Daemon, "[agentisan] 2 turns ended")
+			serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
 
-	for _, m := range []store.Message{toCoder, toBoss, digest} {
-		got := eventuallyState(t, st, m.ID, store.MessageDelivered)
-		assert.Equal(t, 1, got.Attempts, "%s: one attempt", m.Body)
+			for _, m := range []store.Message{toCoder, toBoss, digest} {
+				got := eventuallyState(t, st, m.ID, store.MessageDelivered)
+				assert.Equal(t, 1, got.Attempts, "%s: one attempt", m.Body)
+			}
+			want := []typed{
+				{Target: "ha-coder-1", Pane: "w14:p2", Text: "[msg " + toCoder.ID + " from ha-boss] build it"},
+				{Target: "ha-boss", Pane: "w14:p1", Text: "[msg " + toBoss.ID + " from ha-coder-1] done"},
+				{Target: "ha-boss", Pane: "w14:p1", Text: "[agentisan] 2 turns ended"},
+			}
+			assert.Equal(t, want, p.all())
+			polled(t, th.srv, 2)
+			assert.Equal(t, want, p.all(), "each typed once")
+		})
 	}
-	want := []typed{
-		{Target: "ha-coder-1", Pane: "w14:p2", Text: "[msg " + toCoder.ID + " from ha-boss] build it"},
-		{Target: "ha-boss", Pane: "w14:p1", Text: "[msg " + toBoss.ID + " from ha-coder-1] done"},
-		{Target: "ha-boss", Pane: "w14:p1", Text: "[agentisan] 2 turns ended"},
-	}
-	assert.Equal(t, want, p.all())
-	polled(t, th.srv, 2)
-	assert.Equal(t, want, p.all(), "each typed once")
 }
 
 // TestDispatcherTypesIntoAWorkingAgent is A30's working recipient (Q19,

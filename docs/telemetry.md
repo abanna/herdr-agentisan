@@ -288,9 +288,11 @@ crossed. The body reads `<worker id> at <n>% crossed <level> (<threshold>%)`.
 ### `agentisan.worker.handoff`
 
 A step of a worker's handoff (ADR-001 A33): `handoff ready` set its agent
-pane's `handoff` token (`ready`) or cleared it (`cleared`). A command that
-left the token as it was gives none. The body reads `<worker id> handoff
-<step>`.
+pane's `handoff` token (`ready`) or cleared it (`cleared`), `handoff ack`
+completed its rotation onto the replacement (`completed`), or `worker
+retire` abandoned the rotation by closing the replacement (`failed`). A
+command that left the token as it was gives none. The body reads `<worker
+id> handoff <step>`.
 
 | Attribute | Type | Value |
 | --- | --- | --- |
@@ -298,12 +300,13 @@ left the token as it was gives none. The body reads `<worker id> handoff
 | `agentisan.worker.bound` | bool | Whether a `workers` row binds the pane |
 | `agentisan.project` | string | The worker's project; `""` is the unnamed project |
 | `agentisan.group` | string | The worker's group |
-| `herdr.pane.id` | string | The pane the token is on |
-| `agentisan.handoff.step` | string | `ready` or `cleared` |
+| `herdr.pane.id` | string | The pane the token is on; for `completed` and `failed`, the replacement |
+| `agentisan.handoff.step` | string | `ready`, `cleared`, `completed` or `failed` |
+| `agentisan.handoff.old_pane` | string | The pane the worker was on; only on `completed` and `failed` |
+| `agentisan.handoff.old` | string | `matched` when the old pane's item and stage equal the replacement's, `unread` when the old pane is gone or reports only one or neither; only on `completed` |
 
 ## Coming
 
 The same helper carries these when their items land: stage changes (fast
-follow on item 3), and the rest of a rotation's handoff steps, begun,
-acknowledged, completed and failed (items 5b and 6). Each adds a section
-here first.
+follow on item 3), and a rotation's `begun` step, when `worker spawn
+--replaces` lands (item 5b). Each adds a section here first.

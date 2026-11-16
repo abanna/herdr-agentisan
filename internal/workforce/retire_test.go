@@ -62,6 +62,24 @@ func TestRetire(t *testing.T) {
 	assert.NotNil(t, f.h.pane(split), "the shell split stays")
 	f.h.mu.Unlock()
 
+	// A Codex is an agent like any other (NERD-5507): a Codex worker by its
+	// row, and a hand-started Codex's pane in its tab, past the shell.
+	cw := f.workerAs(t, "ha-coder-3", "coder", "codex")
+	res, err = f.svc.Retire(t.Context(), workforce.RetireRequest{Target: cw.ID})
+	require.NoError(t, err)
+	assert.Equal(t, workforce.RetireResult{ID: cw.ID, PaneID: cw.PaneID, Changed: true, Outcome: workforce.OutcomeRetired}, res, "a Codex worker")
+	assert.Equal(t, store.StatusRetired, f.row(t, cw.ID).Status)
+	codexSplit := f.h.addTab(f.ws, "ha-qa-5", "", "unknown")
+	codex := f.h.addPane(codexSplit, "codex", "idle")
+	res, err = f.svc.Retire(t.Context(), workforce.RetireRequest{Target: "ha-qa-5"})
+	require.NoError(t, err)
+	assert.Equal(t, workforce.RetireResult{ID: "ha-qa-5", PaneID: codex, Changed: true, Outcome: workforce.OutcomeRetired}, res, "the Codex's pane, not the shell's")
+	f.h.mu.Lock()
+	assert.Nil(t, f.h.pane(cw.PaneID), "the recorded Codex pane closes")
+	assert.Nil(t, f.h.pane(codex), "the hand-started Codex pane closes")
+	assert.NotNil(t, f.h.pane(codexSplit), "the hand-started Codex's shell stays")
+	f.h.mu.Unlock()
+
 	stale := f.h.addTab(f.ws, "notes-2", "", "unknown")
 	f.h.mu.Lock()
 	f.h.alias["w3:p1"] = stale
@@ -575,6 +593,8 @@ func TestRetireAbandonsARotation(t *testing.T) {
 	t.Run("by its terminal", func(t *testing.T) {
 		t.Parallel()
 		f := newFixture(t, teamConfig)
+		rec := &steps{}
+		f.svc.HandoffSteps = rec.record
 		w := f.worker(t, "ha-coder-1", "coder")
 		next, h := replacing(t, f, w)
 		to := store.Address{Kind: store.KindWorker, ID: w.ID}
@@ -585,6 +605,9 @@ func TestRetireAbandonsARotation(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, workforce.RetireResult{PaneID: next, Changed: true, Outcome: workforce.OutcomeRetired, HandoffFailed: w.ID}, res)
 		assert.Equal(t, "ended", handoffState(t, f, h))
+		assert.Equal(t, []workforce.HandoffStep{{
+			ID: w.ID, Project: "herdr-agentisan", Group: "coder", PaneID: next, OldPane: w.PaneID, Step: workforce.StepFailed,
+		}}, rec.all(), "the abandon is the handoff's failed step (Q3)")
 		f.h.mu.Lock()
 		assert.Nil(t, f.h.pane(next), "the replacement closed")
 		assert.NotNil(t, f.h.pane(w.PaneID), "the worker's own pane stays")
@@ -612,6 +635,24 @@ func TestRetireAbandonsARotation(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, workforce.RetireResult{PaneID: next, Changed: true, Outcome: workforce.OutcomeRetired, HandoffFailed: w.ID}, res)
 		assert.Equal(t, "ended", handoffState(t, f, h))
+	})
+	t.Run("the close fails after the handoff did", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t, teamConfig)
+		rec := &steps{}
+		f.svc.HandoffSteps = rec.record
+		w := f.worker(t, "ha-coder-1", "coder")
+		next, h := replacing(t, f, w)
+		f.h.mu.Lock()
+		f.h.fail["pane.close"] = "internal_error"
+		f.h.mu.Unlock()
+
+		_, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: next})
+		require.ErrorIs(t, err, workforce.ErrHerdr)
+		assert.Equal(t, "ended", handoffState(t, f, h))
+		steps := rec.all()
+		require.Len(t, steps, 1, "the handoff failed, so its step is told, closed or not")
+		assert.Equal(t, workforce.StepFailed, steps[0].Step)
 	})
 	t.Run("herdr fails before the handoff does", func(t *testing.T) {
 		t.Parallel()

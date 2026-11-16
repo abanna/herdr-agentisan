@@ -3,6 +3,7 @@ package report_test
 import (
 	"errors"
 	"io"
+	"maps"
 	"math"
 	"os"
 	"path/filepath"
@@ -606,5 +607,80 @@ func TestCodexDrainsStdinOnEveryPath(t *testing.T) {
 			require.NoError(t, r.Close())
 			require.NoError(t, <-wrote, "the writer finished before the hook closed stdin")
 		})
+	}
+}
+
+// TestCheckCallerHost: a command run under Codex, by its CODEX_THREAD_ID or
+// a Codex or app-server parent, takes its pane's environment for its own
+// only from the pane's own Codex (A64); any other command passes. The
+// command's own arguments are its caller's, and a parent that cannot be
+// read is no Codex, so Claude passes either way. Codex's network sandbox is
+// no refusal here: an escalation Codex approved still carries it.
+func TestCheckCallerHost(t *testing.T) {
+	t.Parallel()
+	// A Codex session on the shared app-server: send (5000) -> bash (4998)
+	// -> app-server (4000) -> the TUI that started it (900) -> its pane
+	// shell (600); once that TUI exits, the app-server's parent is init.
+	alive := map[int]report.Stat{
+		5000: {PPID: 4998, Start: 900}, 4998: {PPID: 4000, Start: 800}, 4000: {PPID: 900, Start: 700},
+		900: {PPID: 600, Start: 500}, 600: {PPID: 1, Start: 400},
+	}
+	gone := map[int]report.Stat{5000: {PPID: 4998, Start: 900}, 4998: {PPID: 4000, Start: 800}, 4000: {PPID: 1, Start: 700}}
+	daemonArgv := map[int][]string{
+		5000: {"herdr-agentisan", "send", "boss", "hi"}, 4998: {"/bin/bash", "-lc", "herdr-agentisan send boss hi"},
+		4000: {"/home/u/.codex/packages/bin/codex", "app-server", "--listen", "unix://"}, 900: {"codex"}, 600: {"-zsh"},
+	}
+	// A Codex binary installed under another name runs no process named
+	// codex, but its daemon is still an app-server.
+	renamed := maps.Clone(daemonArgv)
+	renamed[4000] = []string{"/usr/local/bin/codex-beta", "app-server", "--listen", "unix://"}
+	// Inside Codex's sandbox the walk sees only its pid namespace.
+	sandboxed := map[int]report.Stat{5000: {PPID: 2, Start: 900}, 2: {PPID: 1, Start: 800}}
+	sandboxArgv := map[int][]string{5000: daemonArgv[5000], 2: {"/bin/bash", "-lc", "herdr-agentisan send boss hi"}}
+	claude := func(cmds map[int][]string) *report.Lineage {
+		return report.ReadLineage(5000, newProcTable(oursProcs()).stat).WithCmdline(argv(cmds))
+	}
+	saysAppServer := maps.Clone(claudeArgv)
+	saysAppServer[5000] = []string{"herdr-agentisan", "send", "boss", "app-server"}
+	saysAppServer[4998] = []string{"/bin/sh", "-c", "herdr-agentisan send boss app-server"}
+	unreadParent := map[int][]string{5000: claudeArgv[5000], 4999: claudeArgv[4999], 900: claudeArgv[900]}
+	noArgs := maps.Clone(claudeArgv)
+	noArgs[4999] = []string{} // a zombie, or a kernel thread, has no arguments
+	alone := report.ReadLineage(5000, newProcTable(map[int]report.Stat{5000: {PPID: 1, Start: 900}}).stat).WithCmdline(argv(claudeArgv))
+	tests := map[string]struct {
+		lineage *report.Lineage
+		thread  string
+		sandbox bool
+		want    error
+	}{
+		"Claude":                                  {lineage: claude(claudeArgv)},
+		"Claude sending the word app-server":      {lineage: claude(saysAppServer)},
+		"Claude, a parent unreadable":             {lineage: claude(unreadParent)},
+		"Claude, no cmdline reader":               {lineage: ours()},
+		"Claude, a parent with no arguments":      {lineage: claude(noArgs)},
+		"a command with no parent":                {lineage: alone},
+		"under Codex, a command with no parent":   {lineage: alone, thread: "019a", want: report.ErrHostUnverified},
+		"no lineage":                              {},
+		"the pane's own Codex":                    {lineage: codexLineage(embeddedProcs(), embeddedArgv), thread: "019a"},
+		"the pane's own Codex, a hook":            {lineage: codexLineage(embeddedProcs(), embeddedArgv)},
+		"the pane's own Codex, an escalation":     {lineage: codexLineage(embeddedProcs(), embeddedArgv), thread: "019a", sandbox: true},
+		"the shared app-server":                   {lineage: codexLineage(alive, daemonArgv), thread: "019a", want: report.ErrCodexDaemon},
+		"the shared app-server, a hook":           {lineage: codexLineage(alive, daemonArgv), want: report.ErrCodexDaemon},
+		"the shared app-server, its TUI gone":     {lineage: codexLineage(gone, daemonArgv), thread: "019a", want: report.ErrCodexDaemon},
+		"the shared app-server, a hook, TUI gone": {lineage: codexLineage(gone, daemonArgv), want: report.ErrCodexDaemon},
+		"a renamed codex's app-server, a hook":    {lineage: codexLineage(gone, renamed), want: report.ErrCodexDaemon},
+		"Codex's sandbox":                         {lineage: codexLineage(sandboxed, sandboxArgv), thread: "019a", sandbox: true, want: report.ErrNoCodexHost},
+		"under Codex, no lineage":                 {thread: "019a", want: report.ErrHostUnverified},
+		"under Codex, no cmdline reader":          {lineage: ours(), thread: "019a", want: report.ErrHostUnverified},
+		"under Codex, a parent unreadable":        {lineage: claude(unreadParent), thread: "019a", want: report.ErrHostUnverified},
+	}
+	for name, tc := range tests {
+		pane := report.Pane{PaneID: "w15:p1", Lineage: tc.lineage, CodexThread: tc.thread, CodexNetworkSandboxed: tc.sandbox}
+		err := pane.CheckCallerHost()
+		if tc.want == nil {
+			assert.NoError(t, err, name)
+			continue
+		}
+		assert.ErrorIs(t, err, tc.want, name)
 	}
 }

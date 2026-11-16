@@ -268,8 +268,8 @@ func TestPendingHandoffs(t *testing.T) {
 	got, err = s.PendingHandoffs(ctx)
 	require.NoError(t, err)
 	require.Len(t, got, 3)
-	assert.Equal(t, store.Handoff{ID: first, LogicalID: "w", Generation: 4, OldPane: "w14:p2", NewPane: "w14:p7", NewTerminal: "term_w14:p7", CreatedAt: t1}, got[0])
-	assert.Equal(t, store.Handoff{ID: second, LogicalID: "x", Generation: 2, OldPane: "w14:p5", NewPane: "w14:pA", NewTerminal: "term_next", CreatedAt: t1.Add(time.Minute)}, got[1])
+	assert.Equal(t, store.Handoff{ID: first, LogicalID: "w", Generation: 4, OldPane: "w14:p2", NewPane: "w14:p7", NewTerminal: "term_w14:p7", CreatedAt: t1, Project: "agentisan", Group: "coders"}, got[0])
+	assert.Equal(t, store.Handoff{ID: second, LogicalID: "x", Generation: 2, OldPane: "w14:p5", NewPane: "w14:pA", NewTerminal: "term_next", CreatedAt: t1.Add(time.Minute), Project: "agentisan", Group: "coders"}, got[1])
 	assert.Equal(t, store.Handoff{ID: second + 1, LogicalID: "v", Generation: -1, OldPane: "w14:p3", NewPane: "w14:pB", CreatedAt: time.Unix(0, 5).UTC()}, got[2])
 
 	require.NoError(t, s.Close())
@@ -298,4 +298,121 @@ func TestBeginHandoffRefusesAStartingWorker(t *testing.T) {
 	require.NoError(t, s.SetWorkerStatus(ctx, w, store.StatusActive, t1))
 	_, err = s.BeginHandoff(ctx, "w", "w14:p7", terminal("w14:p7"), t1)
 	require.NoError(t, err)
+}
+
+// TestCompleteHandoffOnto: the handoff ack completes onto the terminal it
+// proved the replacement shows (A33 part 2b-1), which a herdr live handoff
+// can have renewed since the handoff began. The worker keeps its id and
+// generation, binds the new pane at that terminal, and its inbox is
+// released. A terminal a live row binds already, the worker's own included,
+// is refused with nothing changed; one a retired row held is free (QA #140
+// F5).
+func TestCompleteHandoffOnto(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	seedWorker(t, s, "w", "w14:p2", 4)
+	seedWorker(t, s, "v", "w14:p3", 0)
+	h, err := s.BeginHandoff(ctx, "w", "w14:p7", terminal("w14:p7"), t1)
+	require.NoError(t, err)
+	sent := send(t, s, worker("w"), boss, "held").ID
+
+	for name, term := range map[string]string{
+		"another live row's terminal": terminal("w14:p3"),
+		"the worker's own terminal":   terminal("w14:p2"),
+		"no terminal":                 "",
+		"a control byte":              "term_\x1b",
+	} {
+		require.ErrorIs(t, s.CompleteHandoffOnto(ctx, h, term, t1), store.ErrInvalid, name)
+		assert.Equal(t, "pending", handoffState(t, s, h), name)
+		noClaim(t, s, worker("w"), name)
+	}
+
+	require.NoError(t, s.CompleteHandoffOnto(ctx, h, "term_renewed", t1.Add(time.Second)))
+	row, err := s.WorkerRow(ctx, "w")
+	require.NoError(t, err)
+	assert.Equal(t, "w14:p7", row.PaneID)
+	assert.Equal(t, "term_renewed", row.TerminalID, "the terminal the ack proved, not the one recorded")
+	assert.Equal(t, int64(4), row.Generation, "the same worker (I1)")
+	assert.Equal(t, "acknowledged", handoffState(t, s, h))
+	claimed, ok, err := s.Claim(ctx, worker("w"), t1.Add(2*time.Second))
+	require.NoError(t, err)
+	require.True(t, ok, "released")
+	assert.Equal(t, sent, claimed.ID)
+	require.ErrorIs(t, s.CompleteHandoffOnto(ctx, h, "term_other", t1), store.ErrNoHandoff, "completed once")
+
+	again, err := s.BeginHandoff(ctx, "w", "w14:p8", terminal("w14:p8"), t1)
+	require.NoError(t, err)
+	retire(t, s, "v")
+	require.NoError(t, s.CompleteHandoffOnto(ctx, again, terminal("w14:p3"), t1), "a retired row binds no terminal")
+	row, err = s.WorkerRow(ctx, "w")
+	require.NoError(t, err)
+	assert.Equal(t, terminal("w14:p3"), row.TerminalID)
+}
+
+// TestPendingHandoffsNameTheWorkersPlace: a pending handoff carries the
+// project and group of its worker's row at the handoff's generation, so the
+// handoff's events name them with no other read. One whose id was reused
+// since, or begun before migration 0003 with no generation, carries none.
+func TestPendingHandoffsNameTheWorkersPlace(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	seedWorker(t, s, "w", "w14:p2", 4)
+	seedWorker(t, s, "v", "w14:p3", 0)
+	_, err := s.BeginHandoff(ctx, "w", "w14:p7", terminal("w14:p7"), t1)
+	require.NoError(t, err)
+	_, err = s.BeginHandoff(ctx, "v", "w14:p8", terminal("w14:p8"), t1)
+	require.NoError(t, err)
+	reuse(t, s, "v")
+	seedWorker(t, s, "u", "w14:p4", 0)
+	_, err = store.DB(s).ExecContext(ctx,
+		"INSERT INTO handoffs (logical_id, old_pane, new_pane, created_at, updated_at) VALUES ('u', 'w14:p4', 'w14:pB', 5, 5)")
+	require.NoError(t, err, "a handoff as migration 0003 found it")
+
+	got, err := s.PendingHandoffs(ctx)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+	assert.Equal(t, [2]string{"agentisan", "coders"}, [2]string{got[0].Project, got[0].Group})
+	assert.Equal(t, [2]string{"", ""}, [2]string{got[1].Project, got[1].Group}, "the id's reuse is another worker")
+	assert.Equal(t, [2]string{"", ""}, [2]string{got[2].Project, got[2].Group}, "no generation to find a row by")
+}
+
+// TestHandoffAcknowledgedOnto: a handoff that completed onto a pane is told
+// from one pending, failed, at another generation or onto another pane, so
+// an ack repeated after a crash past the complete can be told from an ack
+// on any worker's pane.
+func TestHandoffAcknowledgedOnto(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	seedWorker(t, s, "w", "w14:p2", 4)
+	seedWorker(t, s, "v", "w14:p3", 0)
+	h, err := s.BeginHandoff(ctx, "w", "w14:p7", terminal("w14:p7"), t1)
+	require.NoError(t, err)
+	f, err := s.BeginHandoff(ctx, "v", "w14:p8", terminal("w14:p8"), t1)
+	require.NoError(t, err)
+	require.NoError(t, s.FailHandoff(ctx, f, t1))
+
+	for _, tc := range []struct {
+		id, pane string
+		gen      int64
+	}{{"w", "w14:p7", 4}, {"v", "w14:p8", 0}} {
+		ok, err := s.HandoffAcknowledgedOnto(ctx, tc.id, tc.gen, tc.pane)
+		require.NoError(t, err)
+		assert.False(t, ok, "%s: pending or failed", tc.id)
+	}
+	require.NoError(t, s.CompleteHandoff(ctx, h, t1))
+	for _, tc := range []struct {
+		id, pane string
+		gen      int64
+		want     bool
+	}{{"w", "w14:p7", 4, true}, {"w", "w14:p2", 4, false}, {"w", "w14:p7", 5, false}, {"v", "w14:p7", 4, false}} {
+		ok, err := s.HandoffAcknowledgedOnto(ctx, tc.id, tc.gen, tc.pane)
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, ok, "%+v", tc)
+	}
+	require.NoError(t, s.Close())
+	_, err = s.HandoffAcknowledgedOnto(context.Background(), "w", 4, "w14:p7")
+	require.ErrorIs(t, err, store.ErrStore)
 }

@@ -63,19 +63,19 @@ func TestSnapshotRowNames(t *testing.T) {
 	}{
 		"a named agent": {
 			pane: pane("wN:p1", "", "claude", "working", nil), name: "pee01",
-			want: snapshot.Agent{Name: "pee01", PaneID: "wN:p1", Status: snapshot.StatusWorking},
+			want: snapshot.Agent{Name: "pee01", PaneID: "wN:p1", Status: snapshot.StatusWorking, Kind: "claude"},
 		},
 		"a name beats a label": {
 			pane: labelled(pane("wN:p1", "", "claude", "working", nil), "notes"), name: "pee01",
-			want: snapshot.Agent{Name: "pee01", PaneID: "wN:p1", Status: snapshot.StatusWorking},
+			want: snapshot.Agent{Name: "pee01", PaneID: "wN:p1", Status: snapshot.StatusWorking, Kind: "claude"},
 		},
 		"an unnamed agent with a label": {
 			pane: labelled(pane("wN:p2", "", "claude", "idle", nil), "scratch"),
-			want: snapshot.Agent{Name: "scratch", Unnamed: true, PaneID: "wN:p2", Status: snapshot.StatusIdle},
+			want: snapshot.Agent{Name: "scratch", Unnamed: true, PaneID: "wN:p2", Status: snapshot.StatusIdle, Kind: "claude"},
 		},
 		"an unnamed agent without a label": {
 			pane: pane("wN:p2", "", "codex", "idle", nil),
-			want: snapshot.Agent{Name: "wN:p2", Unnamed: true, PaneID: "wN:p2", Status: snapshot.StatusIdle},
+			want: snapshot.Agent{Name: "wN:p2", Unnamed: true, PaneID: "wN:p2", Status: snapshot.StatusIdle, Kind: "codex"},
 		},
 		"a labelled shell": {
 			pane: labelled(pane("wN:p3", "", "", "unknown", nil), "notes"),
@@ -218,6 +218,69 @@ func TestSnapshotRowShell(t *testing.T) {
 			assert.NoError(t, doc.Validate(), "a shell row is unnamed, as the contract requires")
 		})
 	}
+}
+
+// TestSnapshotRowKind: a row's agent is the one herdr detects in its pane,
+// kept as herdr sent it, the boss's included (ADR-001 A68): no fallback
+// from a name or the launch, so a shell and a named pane herdr detects
+// nothing in carry none. Whatever herdr sends, the row is one the decoder
+// accepts.
+func TestSnapshotRowKind(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		pane herdr.PaneInfo
+		name string
+		want string
+	}{
+		"a claude":                        {pane: pane("wN:p1", "", "claude", "working", nil), name: "pee01", want: "claude"},
+		"a codex":                         {pane: pane("wN:p1", "", "codex", "working", nil), name: "pee01", want: "codex"},
+		"an unnamed codex":                {pane: pane("wN:p2", "", "codex", "unknown", nil), want: "codex"},
+		"a kind herdr adds":               {pane: pane("wN:p2", "", "gemini", "idle", nil), want: "gemini"},
+		"a kind with a control character": {pane: pane("wN:p2", "", "co\x1bdex", "idle", nil), want: "co\x1bdex"},
+		// Kept as herdr sent it, whatever its bytes: the dashboard makes
+		// it safe to draw, and JSON makes it valid UTF-8.
+		"a non-ASCII kind":                {pane: pane("wN:p2", "", "コーデックス", "idle", nil), want: "コーデックス"},
+		"a kind with invalid UTF-8":       {pane: pane("wN:p2", "", "co\xffdex", "idle", nil), want: "co\xffdex"},
+		"a decomposed kind":               {pane: pane("wN:p2", "", "cafe\u0301", "idle", nil), want: "cafe\u0301"},
+		"a kind like an option":           {pane: pane("wN:p2", "", "--codex", "idle", nil), want: "--codex"},
+		"a kind with white space":         {pane: pane("wN:p2", "", " codex\r\n", "idle", nil), want: " codex\r\n"},
+		"a kind with a NUL":               {pane: pane("wN:p2", "", "co\x00dex", "idle", nil), want: "co\x00dex"},
+		"a kind in another case":          {pane: pane("wN:p2", "", "Codex", "idle", nil), want: "Codex"},
+		"a truncated multibyte":           {pane: pane("wN:p2", "", "co\xe2\x82", "idle", nil), want: "co\xe2\x82"},
+		"a BOM before a kind":             {pane: pane("wN:p2", "", "\ufeffcodex", "idle", nil), want: "\ufeffcodex"},
+		"mixed encodings":                 {pane: pane("wN:p2", "", "é\xffコ", "idle", nil), want: "é\xffコ"},
+		"a named agent herdr detects not": {pane: pane("wN:p1", "", "", "working", nil), name: "pee01"},
+		"a plain shell":                   {pane: pane("wN:p3", "", "", "unknown", nil)},
+		"a shell with a handoff":          {pane: pane("wN:p3", "", "", "unknown", map[string]string{"handoff": "x"})},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			row := oneRow(t, tc.pane, tc.name)
+			assert.Equal(t, tc.want, row.Kind)
+			raw, err := json.Marshal(snapshot.Snapshot{V: snapshot.Version, Team: "t", Groups: []snapshot.Group{{Name: "coders", Agents: []snapshot.Agent{row}}}})
+			require.NoError(t, err)
+			got, err := snapshot.Decode(bytes.NewReader(raw))
+			require.NoError(t, err, "the decoder accepts every row the daemon writes")
+			var want string // as JSON carries it: valid UTF-8, a U+FFFD for each invalid byte
+			raw, err = json.Marshal(tc.want)
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(raw, &want))
+			assert.Equal(t, want, got.Groups[0].Agents[0].Kind)
+		})
+	}
+	t.Run("the boss", func(t *testing.T) {
+		t.Parallel()
+		l := team.Layout{
+			Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wJ", Label: "◆ boss"}},
+			Panes:      []herdr.PaneInfo{pane("wJ:p1", "wJ", "codex", "working", nil)},
+			Agents:     []herdr.AgentInfo{{PaneID: "wJ:p1", Name: "boss"}},
+		}
+		s := team.Snapshot(team.Build(l, team.Spaces{}, nil), "", at, nil, nil)
+		require.NotNil(t, s.Boss)
+		assert.Equal(t, "codex", s.Boss.Kind)
+	})
 }
 
 // TestSnapshotRowCtx: ctx is the token as `report statusline` writes it, a
@@ -503,27 +566,27 @@ func TestSnapshotBoss(t *testing.T) {
 		"one boss": {
 			workspaces: space, panes: []herdr.PaneInfo{pane("wJ:p1", "wJ", "claude", "working", map[string]string{"ctx": "23", "item": "#867", "stage": "review"})},
 			agents: []herdr.AgentInfo{{PaneID: "wJ:p1", Name: "boss"}},
-			want:   &snapshot.Boss{Agent: snapshot.Agent{Name: "boss", PaneID: "wJ:p1", Status: snapshot.StatusWorking, Ctx: new(23), Item: "#867", Stage: "review"}},
+			want:   &snapshot.Boss{Agent: snapshot.Agent{Name: "boss", PaneID: "wJ:p1", Status: snapshot.StatusWorking, Kind: "claude", Ctx: new(23), Item: "#867", Stage: "review"}},
 		},
 		"the first agent pane by pane id, past a shell": {
 			workspaces: space,
 			panes:      []herdr.PaneInfo{pane("wJ:p3", "wJ", "claude", "idle", nil), pane("wJ:p1", "wJ", "", "unknown", nil), pane("wJ:p2", "wJ", "claude", "working", nil)},
 			agents:     []herdr.AgentInfo{{PaneID: "wJ:p2", Name: "boss"}, {PaneID: "wJ:p3", Name: "boss-next"}},
-			want:       &snapshot.Boss{Agent: snapshot.Agent{Name: "boss", PaneID: "wJ:p2", Status: snapshot.StatusWorking}},
+			want:       &snapshot.Boss{Agent: snapshot.Agent{Name: "boss", PaneID: "wJ:p2", Status: snapshot.StatusWorking, Kind: "claude"}},
 		},
 		"an unnamed boss": {
 			workspaces: space, panes: []herdr.PaneInfo{pane("wJ:p1", "wJ", "claude", "idle", nil)},
-			want: &snapshot.Boss{Agent: snapshot.Agent{Name: "wJ:p1", Unnamed: true, PaneID: "wJ:p1", Status: snapshot.StatusIdle}},
+			want: &snapshot.Boss{Agent: snapshot.Agent{Name: "wJ:p1", Unnamed: true, PaneID: "wJ:p1", Status: snapshot.StatusIdle, Kind: "claude"}},
 		},
 		"only shells in ◆ boss":   {workspaces: space, panes: []herdr.PaneInfo{pane("wJ:p1", "wJ", "", "unknown", nil)}},
 		"an empty ◆ boss":         {workspaces: space},
 		"no ◆ boss":               {workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wN", Label: "◆ coders"}}, panes: []herdr.PaneInfo{pane("wN:p1", "wN", "claude", "idle", nil)}},
-		"the boss is in no group": {workspaces: append(slices.Clone(space), herdr.WorkspaceInfo{WorkspaceID: "wN", Label: "◆ coders"}), panes: []herdr.PaneInfo{pane("wJ:p1", "wJ", "claude", "idle", nil)}, want: &snapshot.Boss{Agent: snapshot.Agent{Name: "wJ:p1", Unnamed: true, PaneID: "wJ:p1", Status: snapshot.StatusIdle}}},
+		"the boss is in no group": {workspaces: append(slices.Clone(space), herdr.WorkspaceInfo{WorkspaceID: "wN", Label: "◆ coders"}), panes: []herdr.PaneInfo{pane("wJ:p1", "wJ", "claude", "idle", nil)}, want: &snapshot.Boss{Agent: snapshot.Agent{Name: "wJ:p1", Unnamed: true, PaneID: "wJ:p1", Status: snapshot.StatusIdle, Kind: "claude"}}},
 		"two ◆ boss spaces, one boss": {
 			workspaces: append(slices.Clone(space), herdr.WorkspaceInfo{WorkspaceID: "wK", Label: "◆ boss"}),
 			panes:      []herdr.PaneInfo{pane("wK:p1", "wK", "claude", "idle", nil), pane("wJ:p1", "wJ", "claude", "working", nil)},
 			agents:     []herdr.AgentInfo{{PaneID: "wJ:p1", Name: "boss"}, {PaneID: "wK:p1", Name: "boss2"}},
-			want:       &snapshot.Boss{Agent: snapshot.Agent{Name: "boss", PaneID: "wJ:p1", Status: snapshot.StatusWorking}},
+			want:       &snapshot.Boss{Agent: snapshot.Agent{Name: "boss", PaneID: "wJ:p1", Status: snapshot.StatusWorking, Kind: "claude"}},
 		},
 	}
 	for name, tc := range tests {

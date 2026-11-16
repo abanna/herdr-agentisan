@@ -33,14 +33,19 @@ type Handoff struct {
 	// one begun before migration 0003.
 	NewTerminal string
 	CreatedAt   time.Time
+	// Project and Group are the worker's row's at the handoff's generation;
+	// "" when no row has that generation.
+	Project, Group string
 }
 
 // PendingHandoffs returns every pending handoff, oldest first. BeginHandoff
 // allows one per worker, so the list is short; the caller matches it against
 // herdr's panes.
 func (s *Store) PendingHandoffs(ctx context.Context) ([]Handoff, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, logical_id, coalesce(generation, -1), old_pane, new_pane, new_terminal_id, created_at
-FROM handoffs WHERE state = 'pending' ORDER BY id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT h.id, h.logical_id, coalesce(h.generation, -1), h.old_pane, h.new_pane, h.new_terminal_id, h.created_at,
+	coalesce(w.project, ''), coalesce(w.grp, '')
+FROM handoffs AS h LEFT JOIN workers AS w ON w.logical_id = h.logical_id AND w.generation = h.generation
+WHERE h.state = 'pending' ORDER BY h.id`)
 	if err != nil {
 		return nil, fmt.Errorf("%w: read pending handoffs: %w", ErrStore, err)
 	}
@@ -49,7 +54,7 @@ FROM handoffs WHERE state = 'pending' ORDER BY id`)
 	for rows.Next() {
 		var h Handoff
 		var created int64
-		if err := rows.Scan(&h.ID, &h.LogicalID, &h.Generation, &h.OldPane, &h.NewPane, &h.NewTerminal, &created); err != nil {
+		if err := rows.Scan(&h.ID, &h.LogicalID, &h.Generation, &h.OldPane, &h.NewPane, &h.NewTerminal, &created, &h.Project, &h.Group); err != nil {
 			return nil, fmt.Errorf("%w: read pending handoffs: %w", ErrStore, err)
 		}
 		h.CreatedAt = time.Unix(0, created).UTC()
@@ -136,6 +141,24 @@ FROM workers WHERE logical_id = ?1 AND retired_at IS NULL`, logicalID).Scan(&old
 // team poll may have rebound or re-keyed the worker meanwhile; that does
 // not stop it.
 func (s *Store) CompleteHandoff(ctx context.Context, id int64, at time.Time) error {
+	return s.completeHandoff(ctx, id, nil, at)
+}
+
+// CompleteHandoffOnto completes handoff id as CompleteHandoff does, but binds
+// the new pane at terminal, the one the caller proved it shows: the recorded
+// one, or the one a herdr live handoff renewed it to since the handoff began
+// (A33 part 2b-1). A terminal some live row binds already, the worker's own
+// included, is ErrInvalid, with nothing changed.
+func (s *Store) CompleteHandoffOnto(ctx context.Context, id int64, terminal string, at time.Time) error {
+	if err := checkTerminal(terminal); err != nil {
+		return err
+	}
+	return s.completeHandoff(ctx, id, &terminal, at)
+}
+
+// completeHandoff is CompleteHandoff onto the recorded terminal, or onto
+// *onto when it is set.
+func (s *Store) completeHandoff(ctx context.Context, id int64, onto *string, at time.Time) error {
 	ns, err := nanos(at)
 	if err != nil {
 		return err
@@ -155,6 +178,16 @@ func (s *Store) CompleteHandoff(ctx context.Context, id int64, at time.Time) err
 	if err != nil {
 		return fmt.Errorf("%w: complete handoff: %w", ErrStore, err)
 	}
+	if onto != nil {
+		newTerminal = *onto
+		var bound bool
+		if err := tx.QueryRowContext(ctx, "SELECT EXISTS (SELECT 1 FROM workers WHERE terminal_id = ? AND retired_at IS NULL)", newTerminal).Scan(&bound); err != nil {
+			return fmt.Errorf("%w: complete handoff: %w", ErrStore, err)
+		}
+		if bound {
+			return fmt.Errorf("%w: a live worker binds terminal %s already", ErrInvalid, newTerminal)
+		}
+	}
 	// A handoff begun before migration 0003 has no generation, which
 	// matches no row.
 	res, err := tx.ExecContext(ctx, `UPDATE workers SET pane_id = ?3, terminal_id = ?4, shell_pid = NULL, shell_start = NULL
@@ -173,6 +206,18 @@ WHERE logical_id = ?1 AND generation = ?2 AND retired_at IS NULL`, logicalID, ge
 		return fmt.Errorf("%w: complete handoff: %w", ErrStore, err)
 	}
 	return nil
+}
+
+// HandoffAcknowledgedOnto reports whether a handoff of logicalID at
+// generation completed onto newPane: what an ack repeated after a crash past
+// its complete finds (A33 part 2b-1).
+func (s *Store) HandoffAcknowledgedOnto(ctx context.Context, logicalID string, generation int64, newPane string) (bool, error) {
+	var ok bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM handoffs
+WHERE logical_id = ? AND generation = ? AND new_pane = ? AND state = 'acknowledged')`, logicalID, generation, newPane).Scan(&ok); err != nil {
+		return false, fmt.Errorf("%w: read handoffs of %s: %w", ErrStore, logicalID, err)
+	}
+	return ok, nil
 }
 
 // FailHandoff ends a handoff that did not complete. The worker stays bound

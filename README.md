@@ -522,6 +522,10 @@ from the shared file, the project's table and the repo file. `skip` can name
 
 ## The team board
 
+B0a.1 supplies a pure GitHub notice capture-ID helper and frozen input types.
+It has no production callers or storage/effect path; durable admission and
+Board B remain incomplete.
+
 Each team has a board in `state.db`: its workers' posts and the daemon's
 notices. Only the team's boss and the user read it; workers only post. The
 daemon tells who asks from the kernel, by the process that connected, never
@@ -609,6 +613,7 @@ drives them.
 | `worker spawn --group g [--count n] [--model m] [--provider claude\|codex]` | Adds workers, refused whole past the group's `slots` or when the repo fails the tdaddy preflight |
 | `worker retire <id> [--after-handoff]` | Closes a worker's pane, by logical id or pane id; with the flag, once its handoff is written. Refused (`handoff_pending`) while the worker is being replaced; retiring the replacement's pane abandons that rotation and answers `handoff_failed` with the worker's id (ADR-001 A33) |
 | `handoff ready [<id>] [--clear]` | Marks a worker ready to be replaced, once it has written its handoff: the daemon sets the `handoff` token on its agent pane, by logical id, tab label or pane id, or this pane with none; `--clear` takes it off (ADR-001 A33) |
+| `handoff ack [<pane>]` | Completes a rotation from its replacement, by pane id or this pane with none: once the replacement reports the old pane's item and stage, the worker's herdr name and inbox move to it. Refused with `stage_mismatch`, naming both pairs, until they match, and with `no_handoff` on a pane that is no replacement (ADR-001 A33) |
 
 Each prints one JSON object and exits 1 when refused. Without `--project`
 status, up and spawn read the team whose workspace the command runs in, else
@@ -825,11 +830,15 @@ spawn with routing off and no model set for it. It shows no model until its
 first hook, since a model set with `-c model=`, a profile or `config.toml` is
 not read (A39).
 
+A row with no model shows the agent herdr detects in its pane instead, dim:
+`codex` for a Codex still starting, `claude` for a Claude (ADR-001 A68). So
+every row says which provider runs in it.
+
 ### A group's view
 
 Press 1-9, or click a group's title, to open that group's view (ADR-001
-A37): a box per agent, two to a row from 110 columns, with its model and
-ctx, item, the whole stage (two lines, then `…`), how long it has been in
+A37): a box per agent, two to a row from 110 columns, with its agent and
+model (`codex · sol6.1`, A68) and ctx, item, the whole stage (two lines, then `…`), how long it has been in
 that stage and at rest, and the pane and tab it runs in. Everything in it is
 what the agents report and the daemon times; nothing is read from a screen,
 so a worker's stage line is what says what it is doing. Enter or a click
