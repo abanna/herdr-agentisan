@@ -37,8 +37,9 @@ import (
 // left out otherwise; item and stage are the tokens; the stage's start comes
 // from clock, and an agent's rest from idle (A37), either of which may be
 // nil; the stage's stage_at and whether it is stale come from StageOf, with
-// idle's stretches (A42). The tab is herdr's. The model is left out: the daemon fills it from
-// each pane's processes (FillModels, A39).
+// idle's stretches (A42). The tab is herdr's, and so is the agent: the one
+// herdr detects in the pane, none for a shell (A68). The model is left out:
+// the daemon fills it from each pane's processes (FillModels, A39).
 func Snapshot(m Model, project string, at time.Time, clock *StageClock, idle *IdleClock) snapshot.Snapshot {
 	s := snapshot.Snapshot{V: snapshot.Version, At: at.UTC(), Team: project, Groups: []snapshot.Group{}}
 	i := slices.IndexFunc(m.Projects, func(p Project) bool { return p.Name == project })
@@ -88,7 +89,7 @@ func rank(order []string, name string) int {
 // shell's status is unknown, so it never carries idle_since, whatever herdr
 // says. Its stage's stage_at and staleness are StageOf's.
 func row(p Pane, clock *StageClock, idle *IdleClock, now time.Time) snapshot.Agent {
-	a := snapshot.Agent{Name: p.Name, PaneID: p.ID, TabID: p.TabID, Status: rowStatus(p), Item: p.Item, Stage: p.Stage, Shell: !p.IsAgent()}
+	a := snapshot.Agent{Name: p.Name, PaneID: p.ID, TabID: p.TabID, Status: rowStatus(p), Kind: p.Agent, Item: p.Item, Stage: p.Stage, Shell: !p.IsAgent()}
 	if a.Name == "" {
 		a.Unnamed = true
 		a.Name = p.ID

@@ -32,6 +32,9 @@ const (
 	OpSend = "send"
 	// OpHandoffReady writes a worker's handoff token (A33).
 	OpHandoffReady = "handoff.ready"
+	// OpHandoffAck completes a worker's rotation onto its replacement (A33
+	// part 2b-1).
+	OpHandoffAck = "handoff.ack"
 )
 
 // The workforce ops' budgets. A command waits at most NotReadyWindow, its
@@ -48,6 +51,8 @@ const (
 	SendBudget    = 10 * time.Second
 	// HandoffReadyBudget is handoff ready's, which waits for nothing.
 	HandoffReadyBudget = 10 * time.Second
+	// HandoffAckBudget is handoff ack's, which waits for nothing either.
+	HandoffAckBudget = 10 * time.Second
 )
 
 // notReadyRetry is how long Workforce waits before asking again a daemon
@@ -68,6 +73,7 @@ var opBudgets = map[string]func(json.RawMessage) time.Duration{
 	OpWorkerRetire: retireBudget,
 	OpSend:         fixed(SendBudget),
 	OpHandoffReady: fixed(HandoffReadyBudget),
+	OpHandoffAck:   fixed(HandoffAckBudget),
 	// The notices ops (A44), which the daemon serves beside the workforce's.
 	OpNoticesMute:   fixed(NoticesBudget),
 	OpNoticesUnmute: fixed(NoticesBudget),
@@ -96,6 +102,11 @@ var workforceCodes = []struct {
 	{workforce.ErrPaneChanged, "pane_changed"},
 	{workforce.ErrHandoffPending, "handoff_pending"},
 	{workforce.ErrHandoffTimeout, "handoff_timeout"},
+	{workforce.ErrNoHandoff, "no_handoff"},
+	{store.ErrNoHandoff, "no_handoff"},
+	{workforce.ErrHandoffChanged, "handoff_changed"},
+	{workforce.ErrStageMismatch, "stage_mismatch"},
+	{store.ErrWorkerStarting, "worker_starting"},
 	{workforce.ErrNoTarget, "no_target"},
 	{workforce.ErrUnknownGroup, "unknown_group"},
 	{routing.ErrUnknownRole, "unknown_role"},
@@ -195,6 +206,13 @@ func workforceOps(svc *workforce.Service, ready *atomic.Bool, queued func(contex
 			}
 			return res, nil
 		}},
+		OpHandoffAck: {code: workforceCode, run: func(ctx context.Context, args json.RawMessage) (any, error) {
+			var req workforce.HandoffAckRequest
+			if err := decodeArgs(args, &req); err != nil {
+				return nil, err
+			}
+			return svc.HandoffAck(ctx, req)
+		}},
 	}
 	for name, o := range ops {
 		o.budget = opBudgets[name]
@@ -277,7 +295,17 @@ func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleCl
 		Debugger:       debugger.Launch{Root: o.Team.PluginRoot, Bin: o.Team.Binary, ServerDir: serverDir},
 		Routed:         o.routed,
 		Jev:            jev.Asker{Keys: &jev.Keys{}},
+		HandoffSteps:   o.handoffStep,
 	}
+}
+
+// handoffStep records a step the workforce took a rotation through as the
+// worker's handoff event (A33 part 2b-1); the worker has a row, so it is
+// bound.
+func (o Options) handoffStep(ctx context.Context, s workforce.HandoffStep) {
+	o.Team.Events.HandoffStep(ctx, telemetry.Handoff{
+		WorkerID: s.ID, Bound: true, Project: s.Project, Group: s.Group, PaneID: s.PaneID, Step: s.Step, OldPane: s.OldPane, Old: s.Old,
+	})
 }
 
 // routed records a routing decision of a spawn or of one group team up

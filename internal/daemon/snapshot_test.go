@@ -111,20 +111,20 @@ func wantFullTeam() snapshot.Snapshot {
 	return snapshot.Snapshot{
 		V: 1, At: t0, Team: "agentisan", Project: &snapshot.Project{Color: "#7c3aed"},
 		Boss: &snapshot.Boss{Agent: snapshot.Agent{
-			Name: "boss", PaneID: "wJ:p1", Status: "working", Ctx: new(23), Item: "#867", Stage: "review", StageStartedAt: new(t0),
+			Name: "boss", PaneID: "wJ:p1", Status: "working", Kind: "claude", Ctx: new(23), Item: "#867", Stage: "review", StageStartedAt: new(t0),
 		}},
 		Groups: []snapshot.Group{
 			{Name: "coders", Agents: []snapshot.Agent{
-				{Name: "pee01", PaneID: "wN:p1", Status: "working", Ctx: new(40), Item: "NERD-5255", Stage: "build_test", StageStartedAt: new(t0)},
-				{Name: "pee02", PaneID: "wN:p2", Status: "ready", Ctx: new(61), IdleSince: new(t0)},
-				{Name: "pee03", PaneID: "wN:p3", Status: "blocked", Ctx: new(78), Item: "NERD-5247", Stage: "waiting on boss", StageStartedAt: new(t0)},
-				{Name: "scratch", Unnamed: true, PaneID: "wN:p4", Status: "idle", IdleSince: new(t0)},
+				{Name: "pee01", PaneID: "wN:p1", Status: "working", Kind: "claude", Ctx: new(40), Item: "NERD-5255", Stage: "build_test", StageStartedAt: new(t0)},
+				{Name: "pee02", PaneID: "wN:p2", Status: "ready", Kind: "claude", Ctx: new(61), IdleSince: new(t0)},
+				{Name: "pee03", PaneID: "wN:p3", Status: "blocked", Kind: "claude", Ctx: new(78), Item: "NERD-5247", Stage: "waiting on boss", StageStartedAt: new(t0)},
+				{Name: "scratch", Unnamed: true, PaneID: "wN:p4", Status: "idle", Kind: "codex", IdleSince: new(t0)},
 				{Name: "wN:p5", Unnamed: true, Shell: true, PaneID: "wN:p5", Status: "unknown"},
 			}},
 			{Name: "precheck", Agents: []snapshot.Agent{
-				{Name: "wP:p1", Unnamed: true, PaneID: "wP:p1", Status: "working", Ctx: new(100), Stage: "running", StageStartedAt: new(t0)},
+				{Name: "wP:p1", Unnamed: true, PaneID: "wP:p1", Status: "working", Kind: "claude", Ctx: new(100), Stage: "running", StageStartedAt: new(t0)},
 			}},
-			{Name: "qa", Agents: []snapshot.Agent{{Name: "qa", PaneID: "wQ:p1", Status: "idle", IdleSince: new(t0)}}},
+			{Name: "qa", Agents: []snapshot.Agent{{Name: "qa", PaneID: "wQ:p1", Status: "idle", Kind: "claude", IdleSince: new(t0)}}},
 			{Name: "research", Agents: []snapshot.Agent{}},
 			{Name: "zeta", Agents: []snapshot.Agent{{Name: "notes", Unnamed: true, Shell: true, PaneID: "wZ:p1", Status: "unknown"}}},
 		},
@@ -216,7 +216,7 @@ func TestNoCtxWithoutADetectedAgent(t *testing.T) {
 	i := slices.IndexFunc(got.Groups, func(g snapshot.Group) bool { return g.Name == "coders" })
 	require.GreaterOrEqual(t, i, 0)
 	assert.Equal(t, []snapshot.Agent{
-		{Name: "pee01", PaneID: "wN:p1", Status: "idle", Ctx: new(45), IdleSince: new(t0)},
+		{Name: "pee01", PaneID: "wN:p1", Status: "idle", Kind: "codex", Ctx: new(45), IdleSince: new(t0)},
 		{Name: "pee02", PaneID: "wN:p2", Status: "unknown"},
 	}, got.Groups[i].Agents)
 
@@ -230,6 +230,57 @@ func TestNoCtxWithoutADetectedAgent(t *testing.T) {
 		require.NoError(t, json.Unmarshal([]byte(params[len(params)-1]), &push))
 		bands := map[string]string{"ctx_ok": push.Tokens["ctx_ok"], "ctx_warn": push.Tokens["ctx_warn"], "ctx_hot": push.Tokens["ctx_hot"]}
 		assert.Equal(t, map[string]string{"ctx_ok": want, "ctx_warn": "", "ctx_hot": ""}, bands, pane)
+	}
+}
+
+// TestSnapshotCarriesTheProvider is A68 on a herdrtest team: each row, the
+// boss's included, carries the agent herdr's pane.list detects in its pane,
+// as sent, a kind this build has never heard of and a Codex with no model
+// yet included; a shell carries none. The op's data, as sent, is a strict
+// snapshot v1 document, so whatever herdr detects never makes the daemon
+// write a snapshot the dashboard refuses.
+func TestSnapshotCarriesTheProvider(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	ws, _, _ := fullTeam()
+	th.layout(ws, []map[string]any{
+		teamPane("wJ:p1", "wJ", "codex", "working", "", nil),
+		teamPane("wN:p1", "wN", "claude", "working", "", nil),
+		teamPane("wN:p2", "wN", "codex", "unknown", "", nil),
+		teamPane("wN:p3", "wN", "gemini", "idle", "", nil),
+		teamPane("wN:p4", "wN", "", "unknown", "notes", nil),
+	}, []map[string]any{named("wJ:p1", "boss"), named("wN:p1", "pee01"), named("wN:p2", "pee02")})
+	dir := shortDir(t)
+	o := teamOpts(t, dir, th, projectConfig(t))
+	o.Now = func() time.Time { return t0 }
+	serving(t, o, th.fakeHerdr)
+	sock := socketPath(t, dir, th.path)
+
+	got := served(t, sock, anySnapshot)
+	require.NotNil(t, got.Boss)
+	assert.Equal(t, "codex", got.Boss.Kind, "the boss carries its agent")
+	i := slices.IndexFunc(got.Groups, func(g snapshot.Group) bool { return g.Name == "coders" })
+	require.GreaterOrEqual(t, i, 0)
+	kinds := map[string]string{}
+	for _, a := range got.Groups[i].Agents {
+		kinds[a.PaneID] = a.Kind
+	}
+	assert.Equal(t, map[string]string{"wN:p1": "claude", "wN:p2": "codex", "wN:p3": "gemini", "wN:p4": ""}, kinds)
+
+	answer := rawSnapshot(t, sock)
+	require.Equal(t, true, answer["ok"])
+	data, err := json.Marshal(answer["data"])
+	require.NoError(t, err)
+	strict, err := snapshot.Decode(bytes.NewReader(data))
+	require.NoError(t, err, "a kind herdr adds is still a strict snapshot v1 document")
+	assert.Equal(t, got, strict)
+	assert.Contains(t, string(data), `"agent":"gemini"`)
+	for _, row := range answer["data"].(map[string]any)["groups"].([]any) {
+		for _, a := range row.(map[string]any)["agents"].([]any) {
+			if a := a.(map[string]any); a["shell"] == true {
+				assert.NotContains(t, a, "agent", "a shell carries no agent key")
+			}
+		}
 	}
 }
 
@@ -973,19 +1024,19 @@ func wantTeams() map[string]snapshot.Snapshot {
 		"agentisan": wantFullTeam(),
 		"alpha": {
 			V: 1, At: t0, Team: "alpha", Project: &snapshot.Project{Color: "#16a34a"},
-			Boss: &snapshot.Boss{Agent: snapshot.Agent{Name: "al-boss", PaneID: "w14:p1", TabID: "w14:t1", Status: "working"}},
+			Boss: &snapshot.Boss{Agent: snapshot.Agent{Name: "al-boss", PaneID: "w14:p1", TabID: "w14:t1", Status: "working", Kind: "claude"}},
 			Groups: []snapshot.Group{
 				{Name: "coder", Agents: []snapshot.Agent{
-					{Name: "al-coder-1", PaneID: "w14:p3", TabID: "w14:t3", Status: "working", Ctx: new(50), Item: "NERD-5285", Stage: "build_test", StageStartedAt: new(t0)},
+					{Name: "al-coder-1", PaneID: "w14:p3", TabID: "w14:t3", Status: "working", Kind: "claude", Ctx: new(50), Item: "NERD-5285", Stage: "build_test", StageStartedAt: new(t0)},
 				}},
-				{Name: "review", Agents: []snapshot.Agent{{Name: "al-review-1", PaneID: "w14:p2", TabID: "w14:t2", Status: "idle", Ctx: new(12), IdleSince: new(t0)}}},
+				{Name: "review", Agents: []snapshot.Agent{{Name: "al-review-1", PaneID: "w14:p2", TabID: "w14:t2", Status: "idle", Kind: "claude", Ctx: new(12), IdleSince: new(t0)}}},
 			},
 		},
 		"beta": {
 			V: 1, At: t0, Team: "beta",
 			Groups: []snapshot.Group{
-				{Name: "research", Agents: []snapshot.Agent{{Name: "be-research-1", PaneID: "w20:p2", TabID: "w20:t2", Status: "working"}}},
-				{Name: "librarian", Agents: []snapshot.Agent{{Name: "w20:p1", Unnamed: true, PaneID: "w20:p1", TabID: "w20:t1", Status: "blocked"}}},
+				{Name: "research", Agents: []snapshot.Agent{{Name: "be-research-1", PaneID: "w20:p2", TabID: "w20:t2", Status: "working", Kind: "codex"}}},
+				{Name: "librarian", Agents: []snapshot.Agent{{Name: "w20:p1", Unnamed: true, PaneID: "w20:p1", TabID: "w20:t1", Status: "blocked", Kind: "claude"}}},
 			},
 		},
 	}

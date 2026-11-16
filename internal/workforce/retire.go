@@ -126,6 +126,7 @@ func (s *Service) finish(ctx context.Context, tg target, gone bool) (RetireResul
 		if err := s.Store.FailHandoff(ctx, h.ID, s.now()); err != nil {
 			return RetireResult{}, fmt.Errorf("fail %s's handoff to %s: %w", h.LogicalID, h.NewPane, err)
 		}
+		s.handoffStep(ctx, HandoffStep{ID: h.LogicalID, Project: h.Project, Group: h.Group, PaneID: tg.paneID, OldPane: h.OldPane, Step: StepFailed})
 	}
 	res, err := s.retireTarget(ctx, tg, gone)
 	if err != nil {
@@ -164,11 +165,8 @@ func (s *Service) retireTarget(ctx context.Context, tg target, gone bool) (Retir
 
 // handoffOf reads the pending handoffs afresh and applies A33 part 2a's
 // rule to tg. A row with one pending is refused (ErrHandoffPending). A pane
-// no row binds may be a pending handoff's replacement, which it returns,
-// found by the replacement's terminal, else by its pane id while herdr lists
-// the recorded terminal nowhere: a herdr live handoff renews a terminal and
-// keeps the pane id. A reissued pane id whose recorded terminal herdr lists
-// elsewhere is no replacement.
+// no row binds may be a pending handoff's replacement, which it returns, by
+// replacementOf's match, the ack's.
 func (s *Service) handoffOf(ctx context.Context, tg target) (store.Handoff, bool, error) {
 	pending, err := s.Store.PendingHandoffs(ctx)
 	if err != nil {
@@ -177,23 +175,14 @@ func (s *Service) handoffOf(ctx context.Context, tg target) (store.Handoff, bool
 	if tg.row != nil {
 		return store.Handoff{}, false, heldBy(pending, tg.row.LogicalID)
 	}
-	if i := slices.IndexFunc(pending, func(h store.Handoff) bool { return tg.terminal != "" && h.NewTerminal == tg.terminal }); i >= 0 {
-		return pending[i], true, nil
-	}
-	i := slices.IndexFunc(pending, func(h store.Handoff) bool { return h.NewPane == tg.paneID })
-	if i < 0 {
-		return store.Handoff{}, false, nil
-	}
-	if pending[i].NewTerminal != "" {
+	return replacementOf(pending, tg.paneID, tg.terminal, func(terminal string) (bool, error) {
 		panes, err := s.Herdr.ListPanes(ctx)
 		if err != nil {
-			return store.Handoff{}, false, herdrFailed("list panes", err)
+			return false, herdrFailed("list panes", err)
 		}
-		if _, listed := byTerminal(panes, pending[i].NewTerminal); listed {
-			return store.Handoff{}, false, nil
-		}
-	}
-	return pending[i], true, nil
+		_, listed := byTerminal(panes, terminal)
+		return listed, nil
+	})
 }
 
 // unmoved re-reads row, if there is one, under the workforce lock. A row

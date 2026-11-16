@@ -55,6 +55,7 @@ func TestSendFindsTheSenderAndTheRecipient(t *testing.T) {
 	f.markLost(t, "ha-coder-2") // the poll lost it once; its pane still shows its terminal
 	f.worker(t, "ha-coder-3", "coder")
 	f.exec(t, "UPDATE workers SET status = ? WHERE logical_id = 'ha-coder-3'", store.StatusStarting)
+	codex := f.workerAs(t, "ha-coder-4", "coder", "codex") // send goes by terminal, whatever the agent (NERD-5507)
 
 	worker := workforce.Party{Kind: store.KindWorker, ID: "ha-coder-1"}
 	named := func(id string) workforce.Party { return workforce.Party{Kind: store.KindWorker, ID: id} }
@@ -79,6 +80,8 @@ func TestSendFindsTheSenderAndTheRecipient(t *testing.T) {
 		"a lost row's pane":                    {workforce.SendRequest{To: "boss", CallerPane: lost.PaneID}, named("ha-coder-2"), haBoss},
 		"no pane, a lost worker's variable":    {workforce.SendRequest{To: "boss", Worker: "ha-coder-2"}, named("ha-coder-2"), haBoss},
 		"no pane, a starting worker's":         {workforce.SendRequest{To: "boss", Worker: "ha-coder-3"}, named("ha-coder-3"), haBoss},
+		"a Codex worker, to its boss":          {workforce.SendRequest{To: "boss", CallerPane: codex.PaneID}, named("ha-coder-4"), haBoss},
+		"the boss's pane, to a Codex worker":   {workforce.SendRequest{To: "ha-coder-4", CallerPane: f.boss}, haBoss, named("ha-coder-4")},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

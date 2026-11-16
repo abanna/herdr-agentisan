@@ -2,32 +2,33 @@
   "v": 1,
   "at": "2026-10-09T17:19:00Z",
   "team": "herdr-agentisan",
-  "boss": {"name": "ha-boss", "pane_id": "w1:p1", "tab_id": "w1:t1", "status": "working", "model": "claude-opus-5-5[1m]", "ctx": 31, "item": "codex parity", "stage": "dispatching R22",
+  "boss": {"name": "ha-boss", "pane_id": "w1:p1", "tab_id": "w1:t1", "status": "working", "agent": "claude", "model": "claude-opus-5-5[1m]", "ctx": 31, "item": "codex parity", "stage": "dispatching R22",
            "stage_started_at": "2026-10-09T17:12:00Z", "watchers": 1, "started_at": "2026-10-09T15:05:00Z"},
   "groups": [
     {"name": "coder", "description": "write the code", "agents": [
-      {"name": "ha-coder-1", "pane_id": "w1:p2", "status": "working", "model": "claude-opus-5-5[1m]", "ctx": 57, "item": "NERD-5504", "stage": "review loop cycle 1", "stage_started_at": "2026-10-09T17:05:00Z"},
-      {"name": "ha-coder-2", "pane_id": "w1:p3", "status": "working", "model": "gpt-6.1-sol", "ctx": 33, "item": "NERD-5289", "stage": "go-review Job 1", "stage_started_at": "2026-10-09T17:14:00Z"},
-      {"name": "ha-coder-3", "pane_id": "w1:p4", "status": "idle", "model": "gpt-6-sol", "ctx": 12, "item": "PR#118", "stage": "BOSS: PR #118 open", "stage_started_at": "2026-10-09T16:40:00Z", "idle_since": "2026-10-09T16:41:00Z"}
+      {"name": "ha-coder-1", "pane_id": "w1:p2", "status": "working", "agent": "claude", "model": "claude-opus-5-5[1m]", "ctx": 57, "item": "NERD-5504", "stage": "review loop cycle 1", "stage_started_at": "2026-10-09T17:05:00Z"},
+      {"name": "ha-coder-2", "pane_id": "w1:p3", "status": "working", "agent": "codex", "model": "gpt-6.1-sol", "ctx": 33, "item": "NERD-5289", "stage": "go-review Job 1", "stage_started_at": "2026-10-09T17:14:00Z"},
+      {"name": "ha-coder-3", "pane_id": "w1:p4", "status": "idle", "agent": "codex", "model": "gpt-6-sol", "ctx": 12, "item": "PR#118", "stage": "BOSS: PR #118 open", "stage_started_at": "2026-10-09T16:40:00Z", "idle_since": "2026-10-09T16:41:00Z"},
+      {"name": "ha-coder-4", "pane_id": "w1:pE", "status": "working", "agent": "codex", "item": "NERD-5524", "stage": "reading the issue", "stage_started_at": "2026-10-09T17:18:00Z"}
     ]},
     {"name": "qa", "description": "verify each handoff", "agents": [
-      {"name": "ha-qa-1", "pane_id": "w1:p5", "status": "working", "model": "claude-sonnet-5-5", "ctx": 41, "item": "PR#118", "stage": "merge check", "stage_started_at": "2026-10-09T17:10:00Z"},
-      {"name": "ha-qa-2", "pane_id": "w1:p6", "status": "working", "model": "gpt-5.5", "ctx": 22, "item": "PR#121", "stage": "QA PASS", "stage_started_at": "2026-10-09T17:18:00Z"}
+      {"name": "ha-qa-1", "pane_id": "w1:p5", "status": "working", "agent": "claude", "model": "claude-sonnet-5-5", "ctx": 41, "item": "PR#118", "stage": "merge check", "stage_started_at": "2026-10-09T17:10:00Z"},
+      {"name": "ha-qa-2", "pane_id": "w1:p6", "status": "working", "agent": "codex", "model": "gpt-5.5", "ctx": 22, "item": "PR#121", "stage": "QA PASS", "stage_started_at": "2026-10-09T17:18:00Z"}
     ]},
     {"name": "review", "agents": [
-      {"name": "ha-review-1", "pane_id": "w1:p7", "status": "working", "model": "gpt-6.1-sol", "ctx": 18, "item": "PR#120", "stage": "reading the diff", "stage_started_at": "2026-10-09T17:16:00Z"},
-      {"name": "ha-review-2", "pane_id": "w1:p8", "status": "idle", "model": "gpt-5.6-sol", "ctx": 9, "stage": "BOSS: no findings", "stage_started_at": "2026-10-09T16:55:00Z", "idle_since": "2026-10-09T16:56:00Z"}
+      {"name": "ha-review-1", "pane_id": "w1:p7", "status": "working", "agent": "codex", "model": "gpt-6.1-sol", "ctx": 18, "item": "PR#120", "stage": "reading the diff", "stage_started_at": "2026-10-09T17:16:00Z"},
+      {"name": "ha-review-2", "pane_id": "w1:p8", "status": "idle", "agent": "codex", "model": "gpt-5.6-sol", "ctx": 9, "stage": "BOSS: no findings", "stage_started_at": "2026-10-09T16:55:00Z", "idle_since": "2026-10-09T16:56:00Z"}
     ]},
     {"name": "librarian", "agents": [
-      {"name": "ha-librarian-1", "pane_id": "w1:p9", "status": "working", "model": "claude-haiku-5-5", "ctx": 15, "item": "NERD-5501", "stage": "filing sub-issues", "stage_started_at": "2026-10-09T17:17:00Z"},
-      {"name": "ha-librarian-2", "pane_id": "w1:pA", "status": "idle", "model": "gpt-6-luna", "ctx": 7, "stage": "archived g001", "stage_started_at": "2026-10-09T16:30:00Z", "idle_since": "2026-10-09T16:31:00Z"}
+      {"name": "ha-librarian-1", "pane_id": "w1:p9", "status": "working", "agent": "claude", "model": "claude-haiku-5-5", "ctx": 15, "item": "NERD-5501", "stage": "filing sub-issues", "stage_started_at": "2026-10-09T17:17:00Z"},
+      {"name": "ha-librarian-2", "pane_id": "w1:pA", "status": "idle", "agent": "codex", "model": "gpt-6-luna", "ctx": 7, "stage": "archived g001", "stage_started_at": "2026-10-09T16:30:00Z", "idle_since": "2026-10-09T16:31:00Z"}
     ]},
     {"name": "debugger", "agents": [
-      {"name": "ha-debugger-1", "pane_id": "w1:pB", "status": "idle", "model": "claude-fable-5-1", "ctx": 4},
-      {"name": "ha-debugger-2", "pane_id": "w1:pC", "status": "working", "model": "gpt-6-astra", "ctx": 26, "item": "NERD-5340", "stage": "reading the trail", "stage_started_at": "2026-10-09T17:09:00Z"}
+      {"name": "ha-debugger-1", "pane_id": "w1:pB", "status": "idle", "agent": "claude", "model": "claude-fable-5-1", "ctx": 4},
+      {"name": "ha-debugger-2", "pane_id": "w1:pC", "status": "working", "agent": "codex", "model": "gpt-6-astra", "ctx": 26, "item": "NERD-5340", "stage": "reading the trail", "stage_started_at": "2026-10-09T17:09:00Z"}
     ]},
     {"name": "research", "agents": [
-      {"name": "ha-research-1", "pane_id": "w1:pD", "status": "working", "model": "gpt-5.5-codex", "ctx": 48, "item": "codex 0.163", "stage": "hook review strings", "stage_started_at": "2026-10-09T17:01:00Z"}
+      {"name": "ha-research-1", "pane_id": "w1:pD", "status": "working", "agent": "codex", "model": "gpt-5.5-codex", "ctx": 48, "item": "codex 0.163", "stage": "hook review strings", "stage_started_at": "2026-10-09T17:01:00Z"}
     ]}
   ]
 }
