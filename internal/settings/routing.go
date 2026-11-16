@@ -73,7 +73,8 @@ var routingSchema = func() *node {
 // a model key while routing decides the model: the boss's --model and the
 // user's overrides name bindings instead. It also refuses a codex command
 // choosing a profile then, since a profile can set the model and effort
-// routing decides; the plugin never edits Codex's config (A43).
+// routing decides, or its model provider, which must be the one serving the
+// routed model; the plugin never edits Codex's config (A43).
 func (m merged) checkRouting() error {
 	d := deploymentOf(m.values)
 	rules := routing.V1()
@@ -121,6 +122,9 @@ func (m merged) checkRouting() error {
 		argv, _ := raw.([]string)
 		if flag := codexProfileFlag(argv); flag != "" {
 			return m.invalidf(agent+".command", "codex's %s chooses a profile, which can set the model and effort routing decides while %s is true: remove it", flag, routingEnabledPath)
+		}
+		if flag := codexProviderFlag(argv); flag != "" {
+			return m.invalidf(agent+".command", "codex's %s chooses the model provider, which must be the one serving the model routing decides while %s is true: remove it", flag, routingEnabledPath)
 		}
 	}
 	return nil
