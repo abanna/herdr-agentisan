@@ -239,11 +239,15 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   pending, and failing the handoff whose replacement pane it closes (A33);
   and `handoff ready` (`handoff.go`, A33), the daemon writing the `handoff`
   token on a worker's agent pane once `pane.get` proves its terminal, with no
-  row changed. The daemon runs them, with the plugin's dashboard pane and the
-  Codex hooks check `internal/cli` gives it; `internal/cli` only asks it, and
-  asks herdr only to confirm its own pane (`FindCallerPane`), when no
-  `--project` names the team, for `send`'s sender and for `handoff ready`
-  with no target.
+  row changed, and `handoff ack` (`ack.go`), completing a rotation once its
+  replacement reports the old pane's item and stage (I2), the herdr name
+  moved first, each step reported (`HandoffSteps`). The daemon runs them,
+  with the plugin's dashboard pane and the Codex hooks check `internal/cli`
+  gives it; `internal/cli` only asks it, and asks herdr only to confirm its
+  own pane (`FindCallerPane`), when no `--project` names the team, for
+  `send`'s sender and for `handoff ready` and `handoff ack` with no target;
+  under Codex, only from the pane's own Codex, else no pane and no
+  `HERDR_AGENTISAN_WORKER` (`FindCaller`, `caller_unverified`, A64).
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
@@ -301,10 +305,11 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   claimed one at a time, oldest first; the daemon's notices to a boss are
   added to the one still queued (`notify.go`, A44); and a pending handoff
   (`handoffs.go`) holds a worker's inbox until it completes, which rebinds
-  the worker in the same transaction, or fails; while it is pending no
-  ending is written to the worker's row, and a worker still starting
-  begins none (A33). A `workers` row binds its pane by terminal, with the
-  shell the team poll read (migration 0003, A35), and the routing decision
+  the worker in the same transaction, onto the terminal the ack proved, or
+  fails; while it is pending no ending is written to the worker's row, and
+  a worker still starting begins none (A33). A `workers` row binds its
+  pane by terminal, with the shell the team poll read (migration 0003,
+  A35), and the routing decision
   it was launched with (migration 0005, A50); the poll's
   writes are compare-and-sets on the row as it read it. The GitHub notices'
   seen-set, open PRs and seed marks, a kind's own included (`github.go`,
@@ -313,6 +318,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   posts and two read marks, the boss's and the user's; every post wakes
   each `board wait`. Tests open a fresh database in a temp
   dir; the store is never mocked.
+  `boardnotice.go` also provides the pure version-1 GitHub capture-ID helper
+  and its frozen envelope/receipt types (B0a.1), with no production callers
+  or storage/effect API; durable notice admission remains incomplete.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real
@@ -339,8 +347,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   their own against written lines and a stand-in `/proc`, and a
   page-at-a-time stand-in (`seqfile_test.go`) forces the skip.
 - `internal/snapshot/` — the versioned snapshot contract (ADR-001 D5/D6,
-  A18): the groups and agents, the boss, and the project's PRs, issues and
-  test slots. Decoding is strict: exact keys, closed enums, RFC 3339 times.
+  A18): the groups and agents, each with the agent herdr detects in its
+  pane (A68), the boss, and the project's PRs, issues and test slots.
+  Decoding is strict: exact keys, closed enums, RFC 3339 times.
   The daemon's `snapshot` op serves it; `FileSource` reads a fixture.
   Its optional `project.board_unread` is the user's unread count (A60),
   omitted at zero; post text never goes in a snapshot.

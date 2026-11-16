@@ -267,6 +267,24 @@ func ShortModel(model string) string {
 	return ansi.Truncate(words[0], wordCells, "")
 }
 
+// kindLabel is the agent herdr detects in a's pane as a row draws it: as
+// herdr sent it, made safe to draw, trimmed and cut to modelCells cells
+// (ADR-001 A68); "" when none is reported.
+func kindLabel(a snapshot.Agent) string {
+	return ansi.Truncate(strings.TrimSpace(clean(a.Kind)), modelCells, "")
+}
+
+// modelLabel is an overview row's model column and its style: the model as
+// ShortModel names it; else, before the agent reports one, the agent herdr
+// detects, dim, so the row still says which provider runs in it (A68); else
+// "".
+func modelLabel(a snapshot.Agent) (string, lipgloss.Style) {
+	if m := ShortModel(a.Model); m != "" {
+		return m, plainStyle
+	}
+	return kindLabel(a), dimStyle
+}
+
 // gptLabel is a gpt- model, rest being its name after gpt-, as a word and the
 // version in front of it: cdx and what comes before codex when the name says
 // codex (cdx5.5 for gpt-5.5-codex); else the last part, when it is letters
