@@ -222,22 +222,80 @@ func TestBoardGolden(t *testing.T) {
 //   - w 100: the widest the sweep drew before.
 var (
 	boardHeights = []int{1, 2, 3, 4, 5, 8, 9, 10, 11, 40}
-	boardWidths  = []int{1, 2, 3, 4, 5, 9, 10, 11, 12, 15, 16, 26, 27, 29, 30, 43, 45, 47, 48, 59, 61, 64, 65, 68, 70, 72, 73, 79, 81, 100}
+	boardWidths  = []int{1, 2, 3, 4, 5, 9, 10, 11, 12, 15, 16, 26, 27, 29, 30, 43, 45, 47, 48, 59, 61, 64, 65, 66, 68, 70, 72, 73, 74, 79, 81, 100}
 )
+
+// boardPostHeights and boardPostWidths are the sizes of the states that draw
+// posts. Their rows are the title, the top border, a row for each post
+// (and a row for each wrapped line of the expanded one) and the bottom
+// border, so the board overflows its room at most heights and the panel
+// scrolls. Every height from 1 to 24 puts room on each side of the rows'
+// end and of the scroll limit, and 40 holds them all. The widths are each
+// side of boardPrefix's two thresholds, which it reads from rowWidth, the
+// width less the box's 4 cells: kind and the wider name from a row width of
+// 62, w 66, and channel from 70, w 74. The rest are the box's few cells,
+// each prefix column dropping out, the wrapped body down to one cell, and
+// 100.
+var (
+	boardPostHeights = []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 40}
+	boardPostWidths  = []int{1, 2, 3, 4, 5, 9, 13, 17, 21, 25, 31, 45, 65, 66, 73, 74, 100}
+)
+
+// boardSweepPosts is ten posts that between them reach every branch of the
+// row's prefix: each of worker, subject and author as the name, a name
+// longer than either column, a time that is today's, another day's and
+// zero, both channels, a read and an unread mark, a kind longer than its
+// column, and bodies of wide clusters and of several long lines.
+func boardSweepPosts() []daemon.BoardPostView {
+	long := "a body of several words that has to wrap at most of the widths this sweep draws it at, so that its continuation lines are drawn too"
+	return []daemon.BoardPostView{
+		{Seq: 10, At: at, Channel: "daemon", Author: "daemon", Kind: "notice", Body: "merged\n" + long},
+		{Seq: 9, At: at.Add(-time.Hour), Channel: "team", Author: "boss", Worker: "coder-1", Kind: "post", Body: long},
+		{Seq: 8, At: at.Add(-48 * time.Hour), Channel: "team", Author: "boss", Subject: "NERD-5639 and a subject longer than the name column", Kind: "a kind longer than its column", Body: "界界界界界界界界界界界界界界界界界界界界界👩\u200d💻👩\u200d💻👩\u200d💻👩\u200d💻👩\u200d💻界界界界界界界界"},
+		{Seq: 7, Channel: "daemon", Author: "daemon", Kind: "notice", Body: "no time\n\n\nand blank lines"},
+		{Seq: 6, At: at, Channel: "team", Author: "qa", Kind: "review", Body: "read: " + long + "\n" + long},
+		{Seq: 5, At: at, Channel: "team", Author: "qa", Kind: "review", Body: "x"},
+		{Seq: 4, At: at, Channel: "daemon", Author: "daemon", Kind: "notice", Body: ""},
+		{Seq: 3, At: at, Channel: "team", Author: "coder-2", Kind: "post", Body: long},
+		{Seq: 2, At: at, Channel: "daemon", Author: "daemon", Kind: "notice", Body: "second to last"},
+		{Seq: 1, At: at, Channel: "team", Author: "coder-1", Kind: "post", Body: "last post"},
+	}
+}
 
 func TestBoardStatesAndGeometry(t *testing.T) {
 	t.Parallel()
+	posts := boardSweepPosts()
+	ready := func(b dashboard.BoardFrame) dashboard.BoardFrame {
+		b.Open, b.Available, b.Ready, b.Posts, b.OpenMark = true, true, true, posts, 6
+		return b
+	}
 	for _, tc := range []struct {
-		name string
-		b    dashboard.BoardFrame
-		want string
-	}{{"empty", dashboard.BoardFrame{Open: true, Ready: true}, "no posts yet"}, {"missing", dashboard.BoardFrame{Open: true}, "no board with this fixture"}, {"waiting", dashboard.BoardFrame{Open: true, Available: true}, "waiting for the daemon"}, {"refused", dashboard.BoardFrame{Open: true, Err: daemon.ErrNotAllowed}, "the board reads only"}, {"restart", dashboard.BoardFrame{Open: true, Err: daemon.ErrNotReady}, "waiting for the daemon"}} {
+		name          string
+		b             dashboard.BoardFrame
+		want          string
+		widths, highs []int
+	}{
+		{"empty", dashboard.BoardFrame{Open: true, Ready: true}, "no posts yet", boardWidths, boardHeights},
+		{"missing", dashboard.BoardFrame{Open: true}, "no board with this fixture", boardWidths, boardHeights},
+		{"waiting", dashboard.BoardFrame{Open: true, Available: true}, "waiting for the daemon", boardWidths, boardHeights},
+		{"refused", dashboard.BoardFrame{Open: true, Err: daemon.ErrNotAllowed}, "the board reads only", boardWidths, boardHeights},
+		{"restart", dashboard.BoardFrame{Open: true, Err: daemon.ErrNotReady}, "waiting for the daemon", boardWidths, boardHeights},
+		// The first row selected, then the last: the offset's two limits.
+		{"posts_first", ready(dashboard.BoardFrame{}), "last post", boardPostWidths, boardPostHeights},
+		{"posts_last", ready(dashboard.BoardFrame{Selected: 9}), "last post", boardPostWidths, boardPostHeights},
+		// An expansion scrolled inside its limit, past it and below zero.
+		{"expanded_scrolled", ready(dashboard.BoardFrame{Selected: 4, Expanded: true, Scroll: 2}), "last post", boardPostWidths, boardPostHeights},
+		{"expanded_past_the_end", ready(dashboard.BoardFrame{Selected: 9, Expanded: true, Scroll: 1000}), "last post", boardPostWidths, boardPostHeights},
+		{"expanded_below_zero", ready(dashboard.BoardFrame{Selected: 1, Expanded: true, Scroll: -5}), "last post", boardPostWidths, boardPostHeights},
+		// A filter that leaves fewer posts than Selected names.
+		{"filtered_selection_gone", ready(dashboard.BoardFrame{Selected: 9, Filter: "daemon", Expanded: true, Scroll: 3}), "second to last", boardPostWidths, boardPostHeights},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			f := dashboard.Frame{Snapshot: fixture(t, "full"), Now: at, Board: tc.b}
 			require.Contains(t, dashboard.Render(f, 97, 40, plain), tc.want)
-			for _, w := range boardWidths {
-				for _, h := range boardHeights {
+			for _, w := range tc.widths {
+				for _, h := range tc.highs {
 					out := dashboard.Render(f, w, h, plain)
 					lines := strings.Split(out, "\n")
 					require.Len(t, lines, h)
@@ -304,6 +362,7 @@ func TestBoardClicksAndReturnToGroup(t *testing.T) {
 }
 
 func TestBoardReopenWaitsForInflight(t *testing.T) {
+	t.Parallel()
 	b := &boardSource{result: daemon.BoardReadResult{Newest: 2, Posts: []daemon.BoardPostView{{Seq: 2, Channel: "team"}}}}
 	m := dashboard.New(t.Context(), dashboard.Config{Board: b})
 	m, old := boardKey(t, m, "b")

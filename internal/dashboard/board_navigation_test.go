@@ -94,8 +94,10 @@ func TestBoardTallExpansionNavigation(t *testing.T) {
 }
 
 func TestBoardRefusalAfterSuccessfulRead(t *testing.T) {
+	t.Parallel()
 	for _, refusal := range []error{daemon.ErrNotAllowed, daemon.ErrNotReady} {
 		t.Run(refusal.Error(), func(t *testing.T) {
+			t.Parallel()
 			b := &boardSource{result: daemon.BoardReadResult{Mark: 0, Newest: 1, Posts: []daemon.BoardPostView{{Seq: 1, Channel: "team", Author: "coder", Kind: "post", Body: "PRIVATE-BOARD-MARKER"}}}}
 			m := dashboard.New(t.Context(), dashboard.Config{Board: b})
 			m, read := boardKey(t, m, "b")
@@ -116,6 +118,7 @@ func TestBoardRefusalAfterSuccessfulRead(t *testing.T) {
 }
 
 func TestBoardExpansionRefreshAndResize(t *testing.T) {
+	t.Parallel()
 	b := &boardSource{result: daemon.BoardReadResult{Mark: 1, Newest: 1, Posts: []daemon.BoardPostView{{Seq: 1, Channel: "team", Body: strings.Repeat("body line\n", 100) + "TAIL-MARKER"}}}}
 	m := dashboard.New(t.Context(), dashboard.Config{Board: b})
 	m, read := boardKey(t, m, "b")
