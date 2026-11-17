@@ -261,15 +261,19 @@ func TestAdmitDedupesTheReceipt(t *testing.T) {
 
 // TestAdmitImportsExactlySeen (A5): an event github_seen holds is recorded
 // imported, with no payload. Anything differing in one byte, case
-// included, or a prefix either way, is not that event.
+// included, or a prefix or a suffix either way, is not that event.
 func TestAdmitImportsExactlySeen(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
 	const review = "chatgpt-codex-connector 2026-11-16T08:59:00.123Z"
+	// A deleted account's review has no login (B0a.1b): its key is the
+	// space and the time alone, as the daemon writes it to github_seen.
+	const ghost = " 2026-11-16T08:59:00Z"
 	long := headOID + "0123456789abcdef01234567"
 	seen(t, s, "ha",
 		store.GitHubEvent{PR: 50, Kind: "ci_failed", Key: headOID},
 		store.GitHubEvent{PR: 50, Kind: "review", Key: review},
+		store.GitHubEvent{PR: 50, Kind: "review", Key: ghost},
 		store.GitHubEvent{PR: 50, Kind: "dirty", Key: long},
 		store.GitHubEvent{PR: 50, Kind: "approved", Key: ""},
 	)
@@ -290,28 +294,32 @@ func TestAdmitImportsExactlySeen(t *testing.T) {
 		change   []func(*store.NoticeEnvelope)
 		imported bool
 	}{
-		"the head commit seen":    {imported: true},
-		"the review seen":         {change: []func(*store.NoticeEnvelope){kind("review"), withKey(review)}, imported: true},
-		"the approval seen":       {change: []func(*store.NoticeEnvelope){kind("approved"), withKey("")}, imported: true},
-		"one hex digit off":       {change: []func(*store.NoticeEnvelope){withKey(headOID[:39] + "e")}},
-		"the oid in capitals":     {change: []func(*store.NoticeEnvelope){withKey(strings.ToUpper(headOID))}},
-		"the login in capitals":   {change: []func(*store.NoticeEnvelope){kind("review"), withKey("ChatGPT-codex-connector 2026-11-16T08:59:00.123Z")}},
-		"a seen key's extension":  {change: []func(*store.NoticeEnvelope){withKey(headOID[:39] + "f" + strings.Repeat("0", 24))}},
-		"a prefix of a seen key":  {change: []func(*store.NoticeEnvelope){kind("dirty"), withKey(long[:40])}},
-		"another kind":            {change: []func(*store.NoticeEnvelope){kind("ci_passed")}},
-		"another PR":              {change: []func(*store.NoticeEnvelope){func(e *store.NoticeEnvelope) { e.Receipt.PR = 5 }}},
-		"another project":         {change: []func(*store.NoticeEnvelope){project("HA")}},
-		"the project in NFC":      {change: []func(*store.NoticeEnvelope){project("café")}, imported: true},
-		"the project in NFD":      {change: []func(*store.NoticeEnvelope){project("cafe\u0301")}},
-		"a LIKE wildcard":         {change: []func(*store.NoticeEnvelope){project("h_")}},
-		"a LIKE match-all":        {change: []func(*store.NoticeEnvelope){project("%")}},
-		"a GLOB match-all":        {change: []func(*store.NoticeEnvelope){project("*")}},
-		"the repo in NFC":         {change: []func(*store.NoticeEnvelope){repo("ownér/repo")}, imported: true},
-		"the repo in NFD":         {change: []func(*store.NoticeEnvelope){repo("owne\u0301r/repo")}},
-		"the login in NFC":        {change: []func(*store.NoticeEnvelope){repo("ownér/repo"), kind("review"), withKey("jöhn 2026-11-16T08:59:00Z")}, imported: true},
-		"the login in NFD":        {change: []func(*store.NoticeEnvelope){repo("ownér/repo"), kind("review"), withKey("jo\u0308hn 2026-11-16T08:59:00Z")}},
-		"the repo in capitals":    {change: []func(*store.NoticeEnvelope){func(e *store.NoticeEnvelope) { e.Receipt.Repo = "Abanna/herdr-agentisan" }}},
-		"the repo with a postfix": {change: []func(*store.NoticeEnvelope){func(e *store.NoticeEnvelope) { e.Receipt.Repo = ledgerRepo + "-x" }}},
+		"the head commit seen":                {imported: true},
+		"the review seen":                     {change: []func(*store.NoticeEnvelope){kind("review"), withKey(review)}, imported: true},
+		"the approval seen":                   {change: []func(*store.NoticeEnvelope){kind("approved"), withKey("")}, imported: true},
+		"one hex digit off":                   {change: []func(*store.NoticeEnvelope){withKey(headOID[:39] + "e")}},
+		"the oid in capitals":                 {change: []func(*store.NoticeEnvelope){withKey(strings.ToUpper(headOID))}},
+		"the login in capitals":               {change: []func(*store.NoticeEnvelope){kind("review"), withKey("ChatGPT-codex-connector 2026-11-16T08:59:00.123Z")}},
+		"a deleted account's review seen":     {change: []func(*store.NoticeEnvelope){kind("review"), withKey(ghost)}, imported: true},
+		"a deleted account's, another time":   {change: []func(*store.NoticeEnvelope){kind("review"), withKey(" 2026-11-16T08:59:01Z")}},
+		"a login at the deleted one's time":   {change: []func(*store.NoticeEnvelope){kind("review"), withKey("ghost" + ghost)}},
+		"a seen review's time, its login cut": {change: []func(*store.NoticeEnvelope){kind("review"), withKey(review[len("chatgpt-codex-connector"):])}},
+		"a seen key's extension":              {change: []func(*store.NoticeEnvelope){withKey(headOID[:39] + "f" + strings.Repeat("0", 24))}},
+		"a prefix of a seen key":              {change: []func(*store.NoticeEnvelope){kind("dirty"), withKey(long[:40])}},
+		"another kind":                        {change: []func(*store.NoticeEnvelope){kind("ci_passed")}},
+		"another PR":                          {change: []func(*store.NoticeEnvelope){func(e *store.NoticeEnvelope) { e.Receipt.PR = 5 }}},
+		"another project":                     {change: []func(*store.NoticeEnvelope){project("HA")}},
+		"the project in NFC":                  {change: []func(*store.NoticeEnvelope){project("café")}, imported: true},
+		"the project in NFD":                  {change: []func(*store.NoticeEnvelope){project("cafe\u0301")}},
+		"a LIKE wildcard":                     {change: []func(*store.NoticeEnvelope){project("h_")}},
+		"a LIKE match-all":                    {change: []func(*store.NoticeEnvelope){project("%")}},
+		"a GLOB match-all":                    {change: []func(*store.NoticeEnvelope){project("*")}},
+		"the repo in NFC":                     {change: []func(*store.NoticeEnvelope){repo("ownér/repo")}, imported: true},
+		"the repo in NFD":                     {change: []func(*store.NoticeEnvelope){repo("owne\u0301r/repo")}},
+		"the login in NFC":                    {change: []func(*store.NoticeEnvelope){repo("ownér/repo"), kind("review"), withKey("jöhn 2026-11-16T08:59:00Z")}, imported: true},
+		"the login in NFD":                    {change: []func(*store.NoticeEnvelope){repo("ownér/repo"), kind("review"), withKey("jo\u0308hn 2026-11-16T08:59:00Z")}},
+		"the repo in capitals":                {change: []func(*store.NoticeEnvelope){func(e *store.NoticeEnvelope) { e.Receipt.Repo = "Abanna/herdr-agentisan" }}},
+		"the repo with a postfix":             {change: []func(*store.NoticeEnvelope){func(e *store.NoticeEnvelope) { e.Receipt.Repo = ledgerRepo + "-x" }}},
 	} {
 		e := admissible(t, tc.change...)
 		before := ledgerRows(t, s)
@@ -387,6 +395,9 @@ func TestAdmitChecksTheSuppliedID(t *testing.T) {
 		"a login of 129 bytes": func(e *store.NoticeEnvelope) {
 			e.Kind, e.Receipt.Kind, e.Receipt.Key = "review", "review", strings.Repeat("l", 129)+" 2026-11-16T08:59:00Z"
 		},
+		"a review key of two spaces and a time": func(e *store.NoticeEnvelope) {
+			e.Kind, e.Receipt.Kind, e.Receipt.Key = "review", "review", "  2026-11-16T08:59:00Z"
+		},
 		"version 0":                 func(e *store.NoticeEnvelope) { e.Version = 0 },
 		"version 2":                 func(e *store.NoticeEnvelope) { e.Version = 2 },
 		"the largest version":       func(e *store.NoticeEnvelope) { e.Version = math.MaxUint64 },
@@ -456,6 +467,11 @@ func TestPendingNoticeRoundTrip(t *testing.T) {
 			e.Project, e.Subject, e.Worker = strings.Repeat("p", 256), strings.Repeat("s", 256), strings.Repeat("w", 256)
 			e.Text, e.Receipt.Repo = strings.Repeat("é", 256), "o/"+strings.Repeat("r", 254)
 			e.Kind, e.Receipt.Kind, e.Receipt.Key = "review", "review", strings.Repeat("l", 128)+" 2026-11-16T08:59:00.123456789Z"
+		}),
+		admissible(t, func(e *store.NoticeEnvelope) {
+			// A deleted account's review: no login, its key the space and time.
+			e.Kind, e.Receipt.Kind, e.Receipt.Key = "review", "review", " 2026-11-16T08:59:00.123456789Z"
+			e.Text = "#50 review by a deleted account at 1e0fb1b: commented"
 		}),
 	} {
 		admit(t, s, e)
