@@ -274,7 +274,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   the other (A66). The debugger
   refuses codex and review claude, as gaps, and a model whose name says the
   other provider runs it is refused by `config resolve --project`
-  (`CheckModelProviders`) and at spawn. Sample in
+  (`CheckModelProviders`) and at spawn. A `github` value past 245 bytes or
+  a project name past 256 (`MaxGitHubRepo`, `MaxProjectName`) is refused
+  as `ErrTooLong` with `ErrInvalid`: a GitHub notice could not carry it
+  (NERD-5632). Sample in
   `docs/config/herdr-agentisan.example.toml`.
 - `internal/routing/` — the model and effort each spawned worker starts
   with (ADR-001 A50, NERD-5289). It reads the user's routing rules,
@@ -334,8 +337,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
 - `internal/github/` — the dashboard header's GitHub reads (ADR-001 A29):
   `gh pr list` and a GraphQL open-issue count, run through the gh CLI with an
   explicit path, a timeout and a process group of its own, and mapped onto
-  the snapshot's PR states. `ghtest` is a checked-in stand-in gh: tests run
-  it with an environment they build, never the real gh or GitHub. The
+  the snapshot's PR states, each PR number 1 to 2^31-1 (`MaxPRNumber`,
+  GraphQL's Int and a GitHub notice's receipt). `ghtest` is a checked-in
+  stand-in gh: tests run it with an environment they build, never the real
+  gh or GitHub. The
   daemon's collector (`internal/daemon/github.go`) runs it every 60 s beside
   the team poll and caches each project's result for the snapshot, then
   diffs each list against state.db and hands the boss's GitHub notices to

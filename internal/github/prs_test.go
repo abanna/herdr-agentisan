@@ -347,6 +347,35 @@ func TestParsePRsBadOutput(t *testing.T) {
 	}
 }
 
+// TestParseOpenPRsNumberBounds: a PR number is 1 to 2^31-1, GraphQL's Int
+// and a GitHub notice's receipt (NERD-5632). The largest is kept; one past
+// it is ErrOutput, a release-please PR's included, since the bound is
+// checked before a PR is skipped.
+func TestParseOpenPRsNumberBounds(t *testing.T) {
+	t.Parallel()
+	got, err := github.ParseOpenPRs([]byte("[" + prJSON(1, "a", "CLEAN", `[]`, `[]`) + "," + prJSON(2147483647, "b", "CLEAN", `[]`, `[]`) + "]"))
+	require.NoError(t, err)
+	require.Len(t, got.PRs, 2)
+	assert.Equal(t, 1, got.PRs[0].Number)
+	assert.Equal(t, 2147483647, got.PRs[1].Number)
+	assert.Equal(t, 2147483647, github.MaxPRNumber)
+
+	for name, raw := range map[string]string{
+		"2^31":                     "[" + prJSON(2147483648, "a", "CLEAN", `[]`, `[]`) + "]",
+		"2^31 after a good PR":     "[" + prJSON(5, "a", "CLEAN", `[]`, `[]`) + "," + prJSON(2147483648, "b", "CLEAN", `[]`, `[]`) + "]",
+		"2^31 on release-please's": "[" + prJSON(2147483648, "release-please--branches--main", "CLEAN", `[]`, `[]`) + "]",
+		"the largest int64":        "[" + prJSON(9223372036854775807, "a", "CLEAN", `[]`, `[]`) + "]",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			got, err := github.ParseOpenPRs([]byte(raw))
+			require.ErrorIs(t, err, github.ErrOutput)
+			assert.Contains(t, err.Error(), "PR number")
+			assert.Empty(t, got.PRs)
+		})
+	}
+}
+
 // TestParseOpenIssues is the GraphQL issue count: exact, with no cap, and
 // ErrOutput for anything but a count.
 func TestParseOpenIssues(t *testing.T) {

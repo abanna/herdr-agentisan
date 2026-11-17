@@ -878,7 +878,10 @@ cannot read. With no Codex reviewer on a repo, the 👍 is yours.
 release-please's PRs are skipped. gh must be on the PATH herdr starts the
 daemon with; without it, `daemon.log` says so and the header shows no PRs.
 The daemon reads the repos when it starts, so run the `daemon-restart`
-action after changing them.
+action after changing them. A `github` value is at most 245 bytes and a
+project's name at most 256, the most a GitHub notice to the boss can carry;
+`config resolve` refuses a longer one and says the limit. Every real GitHub
+repo fits.
 
 ### Test slots and the boss's runtime in the header
 

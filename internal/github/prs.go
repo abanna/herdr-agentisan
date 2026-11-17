@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"regexp"
 	"slices"
 	"strings"
@@ -14,6 +15,11 @@ import (
 // releasePlease prefixes the head branch of release-please's PRs, which the
 // header skips, as herdr-status.sh did.
 const releasePlease = "release-please--"
+
+// MaxPRNumber is the largest PR number a list may hold: GraphQL's Int is 32
+// bits, and a GitHub notice's receipt (internal/store/boardnotice.go) holds
+// no more.
+const MaxPRNumber = math.MaxInt32
 
 // oidPattern is a commit oid as GitHub prints it: SHA-1, or SHA-256.
 var oidPattern = regexp.MustCompile(`^[0-9a-f]{40}([0-9a-f]{24})?$`)
@@ -109,7 +115,7 @@ func ParseOpenPRs(raw []byte) (Open, error) {
 	out := Open{PRs: []OpenPR{}, Full: len(*list) >= PRLimit}
 	seen := map[int]bool{}
 	for _, p := range *list {
-		if p.Number < 1 {
+		if p.Number < 1 || p.Number > MaxPRNumber {
 			return Open{}, fmt.Errorf("%w: PR number %d", ErrOutput, p.Number)
 		}
 		if strings.HasPrefix(p.HeadRefName, releasePlease) || seen[p.Number] {

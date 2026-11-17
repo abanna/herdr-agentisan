@@ -69,6 +69,10 @@ var (
 	// ErrInvalid means a value breaks a field rule (type, colour, GitHub
 	// repo, thresholds, groups, names, repo path) or a file does not parse.
 	ErrInvalid = errors.New("invalid config")
+	// ErrTooLong means a github repo or a project name is longer than a
+	// GitHub notice can carry (MaxGitHubRepo, MaxProjectName). It always
+	// comes with ErrInvalid.
+	ErrTooLong = errors.New("too long for a GitHub notice")
 	// ErrNoProject means the requested project is not in the shared file.
 	ErrNoProject = errors.New("no such project")
 	// ErrNoConfigDir means no plugin config directory was given.
@@ -205,3 +209,24 @@ type LoadOptions struct {
 // namePattern is the alphabet of project, group and integration names: they
 // become key path segments and herdr labels, so no dots, no spaces, no case.
 var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+// A GitHub notice, the version-1 envelope in internal/store/boardnotice.go,
+// holds its project, its subject repo#pr and its receipt's repo in at most
+// noticeField bytes each, and its line in at most 512, and a PR number has
+// up to prDigits digits (2^31-1, GraphQL's Int). A project or a repo past
+// these bounds could not be told of every PR, so config resolve refuses it.
+// TestNoticeBoundsAreTheEnvelopes, in internal/store, fails when the bounds
+// and the envelope drift apart. Both alphabets are ASCII, so a byte is a
+// character.
+const (
+	noticeField = 256
+	prDigits    = len("2147483647")
+	// MaxProjectName bounds a project's name, in bytes: the notice's
+	// project field.
+	MaxProjectName = noticeField
+	// MaxGitHubRepo bounds github, owner/name, in bytes. The subject,
+	// repo#pr, is the tightest of the three that hold it: the receipt's
+	// repo allows 256, and the merged line, which names the repo's name,
+	// leaves it more than 480 of its 512.
+	MaxGitHubRepo = noticeField - len("#") - prDigits
+)

@@ -142,8 +142,12 @@ func (m merged) checkColor() error {
 
 func (m merged) checkGitHub() error {
 	if v, ok := m.get("github"); ok {
-		if s, _ := v.(string); !githubPattern.MatchString(s) {
+		s, _ := v.(string)
+		if !githubPattern.MatchString(s) {
 			return m.invalidf("github", "%q is not owner/name", s)
+		}
+		if len(s) > MaxGitHubRepo {
+			return fmt.Errorf("%s: %w: %w: github is at most %d bytes, got %d", m.at("github"), ErrInvalid, ErrTooLong, MaxGitHubRepo, len(s))
 		}
 	}
 	return nil

@@ -168,11 +168,13 @@ func TestTeamsErrors(t *testing.T) {
 // any layer, so a worker's id, <short>-<group>-<n>, fits herdr's 32-character
 // agent names with any short code (8 at most) and n up to 99 (A53). The error
 // names the group with the lowest layer and file that set it, even an empty
-// table; a project and an integration name are not bounded.
+// table; an integration name is not bounded, and a project name only by a
+// GitHub notice's 256 bytes (TestProjectNameLengthBound).
 func TestGroupNamesFitAWorkerID(t *testing.T) {
 	t.Parallel()
 	const app = "[projects.app]\nrepo = \"REPO\"\n"
 	at20, at21, long := strings.Repeat("g", 20), strings.Repeat("g", 21), strings.Repeat("g", 300)
+	longProject := strings.Repeat("p", settings.MaxProjectName)
 	counts := "workers = 1\nslots = 1\n"
 	tests := map[string]struct {
 		file, repoFile string
@@ -192,7 +194,8 @@ func TestGroupNamesFitAWorkerID(t *testing.T) {
 		"21 from two layers": {
 			file: app + "[projects.app.groups." + at21 + "]\nslots = 1\n", repoFile: "[groups." + at21 + "]\nworkers = 1\n", wantIn: "groups." + at21 + " (project, ",
 		},
-		"a long project name": {file: "[projects." + long + "]\nrepo = \"REPO\"\n"},
+		// A project's own bound is a GitHub notice's, 256 (NERD-5632).
+		"a long project name": {file: "[projects." + longProject + "]\nrepo = \"REPO\"\n"},
 		"a long integration name": {
 			file: app + "[integrations." + long + "]\nurl = \"https://example.com\"\n",
 		},
@@ -207,7 +210,7 @@ func TestGroupNamesFitAWorkerID(t *testing.T) {
 			}
 			project := "app"
 			if name == "a long project name" {
-				project = long
+				project = longProject
 			}
 
 			_, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: project, Set: tc.set, LookupEnv: envOf(nil)})

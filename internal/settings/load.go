@@ -226,6 +226,9 @@ func loadShared(path string) (*source, map[string]*source, error) {
 		if !namePattern.MatchString(name) {
 			return nil, nil, fmt.Errorf("%s: %w: a project name must match %s", p.at(""), ErrInvalid, namePattern)
 		}
+		if len(name) > MaxProjectName {
+			return nil, nil, fmt.Errorf("%s: %w: %w: a project name is at most %d bytes, got %d", p.at(""), ErrInvalid, ErrTooLong, MaxProjectName, len(name))
+		}
 		body, ok := table[name].(map[string]any)
 		if !ok {
 			return nil, nil, p.wrongType("", "a table", table[name])

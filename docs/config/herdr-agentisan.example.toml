@@ -276,7 +276,8 @@ enabled = false
 env_file = "~/.config/herdr-agentisan/typesafe.env"
 
 # ---------------------------------------------------------------------------
-# Projects. The key is the project's name: lower case, digits and dashes.
+# Projects. The key is the project's name: lower case, digits and dashes,
+# at most 256 bytes, the most a GitHub notice to the boss can carry.
 #
 # Every project but the [spaces] project is a tabs team (ADR-001 A19): one
 # herdr workspace labelled with the project's name, holding the boss's tab,
@@ -292,9 +293,10 @@ env_file = "~/.config/herdr-agentisan/typesafe.env"
 [projects.agentisan]
 repo = "~/Development/nerdsrun/agentisan-skills"
 color = "#7c3aed"
-# The repo as owner/name. The daemon shows its open PRs and open-issue count
-# in the dashboard header, through gh's own login (ADR-001 A29); it reads
-# this when it starts.
+# The repo as owner/name, at most 245 bytes, so a GitHub notice's subject,
+# owner/name#pr, fits with any PR number. The daemon shows its open PRs and
+# open-issue count in the dashboard header, through gh's own login (ADR-001
+# A29); it reads this when it starts.
 github = "nerds-run/agentisan-skills"
 verify = [["task", "check"]]
 

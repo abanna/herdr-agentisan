@@ -49,8 +49,9 @@ func githubEventsOf(repo string, prs []gh.OpenPR, commits []string) []notice.Git
 // 39-character owner and a 100-character repo name, PR 2^31-1 (GraphQL's Int),
 // SHA-1 and SHA-256 oids, a 39-character login and a deleted account's "",
 // every CI, merge and review state, and counts at MaxInt; the project is at
-// the envelope's own 256 bytes. Settings and the gh parse bound none of these
-// yet (NERD-5632): TestNoticeEventsPastGitHubsBoundsAreRefused pins the rest.
+// the envelope's own 256 bytes. Settings and the gh parse bound these to the
+// envelope (NERD-5632, TestNoticeBoundsAreTheEnvelopes), and
+// TestNoticeEventsPastGitHubsBoundsAreRefused pins what lies past them.
 func TestNoticeEventsFitTheEnvelope(t *testing.T) {
 	sha1, sha256 := strings.Repeat("0123456789", 4), strings.Repeat("abcdef0123456789", 4)
 	commits := []string{"", sha1, sha256}
@@ -106,10 +107,11 @@ func TestNoticeEventsFitTheEnvelope(t *testing.T) {
 	assert.Empty(t, notice.GitHubEvents([]gh.OpenPR{quiet}), "unknown CI tells nothing")
 }
 
-// The other side of C1's line: inputs main's settings and gh parse accept but
-// real GitHub cannot produce (NERD-5632) build an envelope version 1 refuses,
-// whole, with no truncation and the input unchanged, so admission fails
-// closed. One case for each: a repo, a project, a merged line and a PR number.
+// The other side of C1's line: inputs real GitHub cannot produce, which
+// settings and the gh parse now refuse too (NERD-5632), build an envelope
+// version 1 refuses, whole, with no truncation and the input unchanged, so
+// admission fails closed. One case for each: a repo, a project, a merged line
+// and a PR number.
 func TestNoticeEventsPastGitHubsBoundsAreRefused(t *testing.T) {
 	sha1 := strings.Repeat("0123456789", 4)
 	failed := func(n int) []notice.GitHubEvent {
