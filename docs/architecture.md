@@ -126,7 +126,8 @@ to the board nor wakes `board wait`, and neither writes a `github_*` table;
 `TestLedgerHasNoProductionCaller` fails on any use of the ledger's names, or
 B0a.1's, in a non-test file of `internal/` or `cmd/` but `noticeledger.go` and
 `boardnotice.go`, and on any string naming a ledger table, in any case, in one
-but `noticeledger.go`. The migration is one-way: an older build
+but `noticeledger.go`. It also fails on any non-test Go string that names a
+ledger table and contains REPLACE. The migration is one-way: an older build
 refuses the database (`ErrSchemaTooNew`), so no build holding it is installed
 before the board's activation, and the first install is the activation build.
 
@@ -160,10 +161,49 @@ when each is written (deviation (g), decided by the user).
 
 The schema already holds every source (`github`, `daemon`, `team`), every
 state (`pending`, `imported`, `posted`, `dropped`) and the settle columns, so
-the quotas (B0a.3), other sources' allocated IDs and the payload prune
-(B0a.4) need no migration. That holds for the GitHub and daemon sources: a
-`team` post's author has no column yet. The board's writes (B0b onward) and
-its activation remain, each after human merge and separate authorization.
+other sources' allocated IDs and the payload prune (B0a.4) need no migration.
+The quotas (B0a.3-limits) need one, 0010, for their running totals. That holds
+for the GitHub and daemon sources: a `team` post's author has no column yet.
+The board's writes (B0b onward) and its activation remain, each after human
+merge and separate authorization.
+
+## The notice ledger's totals (B0a.3-totals)
+
+Migration 0010 keeps each project's and the store's identity totals by
+trigger, in `notice_counts` and `notice_store_counts`, backfilled from 0009's
+rows. It follows a delete or a project move rather than refusing it, since
+permanence is B0b's, and keeps a project's row at 0 once it is empty. A
+REPLACE's hidden delete is followed only on a connection with
+`recursive_triggers` on. The store sets it on every connection and refuses to
+open without it (`ErrPragma`). On any other connection, a sqlite3 shell
+included, a REPLACE leaves the totals high until the recount below, and B0b's
+guard triggers close REPLACE everywhere.
+
+The totals serve the identity quotas Q6 (100,000 a project) and Q7 (500,000
+in the store): each check reads one row instead of counting
+`notice_identities` under the write lock. Until B0a.3-limits, nothing reads
+them.
+
+Only a hand edit, or a REPLACE on another connection, makes the totals drift,
+and this recount repairs them, in one transaction (it drops the kept zero
+rows, which is harmless):
+
+```sql
+BEGIN IMMEDIATE;
+DELETE FROM notice_counts;
+INSERT INTO notice_counts (project, identities)
+    SELECT project, count(*) FROM notice_identities GROUP BY project;
+DELETE FROM notice_store_counts;
+INSERT INTO notice_store_counts (id, identities)
+    SELECT 1, count(*) FROM notice_identities;
+COMMIT;
+```
+
+0010 is one-way, so the install rule stands: no build holding it is installed
+before the board's activation. It is dormant: only 0010's triggers write the
+totals, and `TestLedgerHasNoProductionCaller` fails on any non-test Go string
+naming them outside the ledger's files. The connection setting is the one live
+change.
 
 ## Deliberate limits
 
