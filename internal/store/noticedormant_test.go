@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"io/fs"
 	"maps"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -25,8 +26,9 @@ var ledgerNames = []string{
 	"GitHubNoticeCaptureID", "NoticeEnvelope", "NoticeReceipt",
 }
 
-// ledgerTables are the tables 0009 adds. Only the ledger names them in SQL.
-var ledgerTables = []string{"notice_identities", "notice_payloads"}
+// ledgerTables are the tables 0009 and 0010 add. Only the ledger names them
+// in SQL.
+var ledgerTables = []string{"notice_identities", "notice_payloads", "notice_counts", "notice_store_counts"}
 
 // The ledger's own files, relative to the module root: B0a.1's helper and
 // the ledger may use its names, and only the ledger may name its tables.
@@ -39,8 +41,10 @@ const (
 // file relative to root, each use of a ledger name (an identifier spelled
 // so, a selector, a method, an interface's method or a dot-import's bare
 // name alike) and each string literal naming a ledger table, in any case, as
-// SQL reads it. It also returns how many files it parsed.
-func ledgerUses(t *testing.T, root, dir string) (names, tables map[string][]string, files int) {
+// SQL reads it. It also returns each of those literals that contains
+// REPLACE, in any case and in any file, the ledger's own included, and how
+// many files it parsed.
+func ledgerUses(t *testing.T, root, dir string) (names, tables map[string][]string, replaces []string, files int) {
 	t.Helper()
 	names, tables = map[string][]string{}, map[string][]string{}
 	fset := token.NewFileSet()
@@ -74,10 +78,14 @@ func ledgerUses(t *testing.T, root, dir string) (names, tables map[string][]stri
 					names[rel] = append(names[rel], fset.Position(n.Pos()).String()+" "+n.Name)
 				}
 			case *ast.BasicLit:
+				lit := strings.ToLower(n.Value)
 				if n.Kind == token.STRING && slices.ContainsFunc(ledgerTables, func(table string) bool {
-					return strings.Contains(strings.ToLower(n.Value), table)
+					return strings.Contains(lit, table)
 				}) {
 					tables[rel] = append(tables[rel], fset.Position(n.Pos()).String())
+					if strings.Contains(lit, "replace") {
+						replaces = append(replaces, fset.Position(n.Pos()).String())
+					}
 				}
 			}
 			return true
@@ -85,22 +93,33 @@ func ledgerUses(t *testing.T, root, dir string) (names, tables map[string][]stri
 		return nil
 	})
 	require.NoError(t, err)
-	return names, tables, files
+	return names, tables, replaces, files
 }
 
 // TestLedgerHasNoProductionCaller (D1): the ledger is dormant. No non-test
 // file in internal/ or cmd/ but the ledger's own uses any of its names, and
-// none but the ledger names its tables in SQL, so nothing in production
-// admits, reads or builds a notice for it, or reaches its rows around it.
+// none but the ledger names its tables in SQL, 0010's totals included, so
+// nothing in production admits, reads or builds a notice for it, or reaches
+// its rows around it.
+//
+// No non-test Go string, the ledger's own included, names a ledger table
+// with REPLACE in it either: on a connection without recursive_triggers, a
+// REPLACE's hidden delete leaves 0010's totals one too high for each row it
+// replaces. The scan sees only a single string literal that holds both a
+// ledger table's name and REPLACE. It misses a REPLACE built from separate
+// literals or constants, and any .sql migration; B0b's guard triggers close
+// both at the schema level.
 func TestLedgerHasNoProductionCaller(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join("..", "..")
 	names, tables := map[string][]string{}, map[string][]string{}
+	var replaces []string
 	parsed := 0
 	for _, dir := range []string{"internal", "cmd"} {
-		n, tb, files := ledgerUses(t, root, dir)
+		n, tb, r, files := ledgerUses(t, root, dir)
 		maps.Copy(names, n)
 		maps.Copy(tables, tb)
+		replaces = append(replaces, r...)
 		parsed += files
 	}
 	assert.Greater(t, parsed, 100, "the scan reached the module's packages")
@@ -121,4 +140,27 @@ func TestLedgerHasNoProductionCaller(t *testing.T) {
 	delete(tables, ledgerFile)
 	assert.Empty(t, names, "the notice ledger is dormant until the board's activation (NERD-5533 B1)")
 	assert.Empty(t, tables, "only the ledger names its tables in SQL")
+	assert.Empty(t, replaces, "no Go string names a ledger table with REPLACE in it")
+}
+
+// TestLedgerScanFindsAReplace (D1-R): D1's REPLACE scan, run over one
+// non-test file, reports a REPLACE on a ledger table in capitals, in lower
+// case and in a raw string alike, so D1 cannot pass by seeing none.
+func TestLedgerScanFindsAReplace(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	dir := filepath.Join(root, "internal", "fixture")
+	require.NoError(t, os.MkdirAll(dir, 0o750))
+	file := filepath.Join(dir, "fixture.go")
+	src := "package fixture\n\nconst (\n" +
+		"\tupper = \"INSERT OR REPLACE INTO notice_identities (capture_id) VALUES (?)\"\n" +
+		"\tlower = \"insert or replace into notice_identities (capture_id) values (?)\"\n" +
+		"\traw   = \x60INSERT OR REPLACE INTO notice_identities (capture_id) VALUES (?)\x60\n" +
+		")\n"
+	require.NoError(t, os.WriteFile(file, []byte(src), 0o600))
+
+	_, tables, replaces, files := ledgerUses(t, root, "internal")
+	require.Equal(t, 1, files)
+	require.Len(t, tables["internal/fixture/fixture.go"], 3, "the scan finds each literal naming the table")
+	assert.Equal(t, []string{file + ":4:10", file + ":5:10", file + ":6:10"}, replaces)
 }

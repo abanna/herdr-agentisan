@@ -82,7 +82,7 @@ func TestOpenSetsAndVerifiesPragmas(t *testing.T) {
 
 	got, err := s.Pragmas(t.Context())
 	require.NoError(t, err)
-	assert.Equal(t, store.Pragmas{JournalMode: "wal", Synchronous: 2, ForeignKeys: true, BusyTimeout: 5 * time.Second}, got)
+	assert.Equal(t, store.Pragmas{JournalMode: "wal", Synchronous: 2, ForeignKeys: true, BusyTimeout: 5 * time.Second, RecursiveTriggers: true}, got)
 	assert.Equal(t, 5*time.Second, store.BusyTimeout)
 
 	require.NoError(t, s.RecordFocus(t.Context(), "w1:p1", time.Now()))
@@ -100,10 +100,11 @@ func TestVerifyPragmasRefusesAConnectionMissingOne(t *testing.T) {
 	t.Parallel()
 
 	all := map[string]string{
-		"busy_timeout": "busy_timeout(5000)",
-		"foreign_keys": "foreign_keys(1)",
-		"journal_mode": "journal_mode(WAL)",
-		"synchronous":  "synchronous(FULL)",
+		"busy_timeout":       "busy_timeout(5000)",
+		"foreign_keys":       "foreign_keys(1)",
+		"journal_mode":       "journal_mode(WAL)",
+		"recursive_triggers": "recursive_triggers(1)",
+		"synchronous":        "synchronous(FULL)",
 	}
 	dsn := func(path string, override map[string]string) string {
 		var q []string
@@ -122,13 +123,14 @@ func TestVerifyPragmasRefusesAConnectionMissingOne(t *testing.T) {
 		dsn     func(path string) string
 		wantErr string // "" means the pragmas verify
 	}{
-		"every pragma set":     {dsn: func(p string) string { return dsn(p, nil) }},
-		"rollback journal":     {dsn: func(p string) string { return dsn(p, map[string]string{"journal_mode": "journal_mode(DELETE)"}) }, wantErr: "journal_mode"},
-		"synchronous NORMAL":   {dsn: func(p string) string { return dsn(p, map[string]string{"synchronous": "synchronous(NORMAL)"}) }, wantErr: "synchronous"},
-		"foreign keys off":     {dsn: func(p string) string { return dsn(p, map[string]string{"foreign_keys": ""}) }, wantErr: "foreign_keys"},
-		"no busy timeout":      {dsn: func(p string) string { return dsn(p, map[string]string{"busy_timeout": ""}) }, wantErr: "busy_timeout"},
-		"a shorter timeout":    {dsn: func(p string) string { return dsn(p, map[string]string{"busy_timeout": "busy_timeout(10)"}) }, wantErr: "busy_timeout"},
-		"an in-memory journal": {dsn: func(string) string { return ":memory:" }, wantErr: "journal_mode"},
+		"every pragma set":       {dsn: func(p string) string { return dsn(p, nil) }},
+		"rollback journal":       {dsn: func(p string) string { return dsn(p, map[string]string{"journal_mode": "journal_mode(DELETE)"}) }, wantErr: "journal_mode"},
+		"synchronous NORMAL":     {dsn: func(p string) string { return dsn(p, map[string]string{"synchronous": "synchronous(NORMAL)"}) }, wantErr: "synchronous"},
+		"foreign keys off":       {dsn: func(p string) string { return dsn(p, map[string]string{"foreign_keys": ""}) }, wantErr: "foreign_keys"},
+		"no busy timeout":        {dsn: func(p string) string { return dsn(p, map[string]string{"busy_timeout": ""}) }, wantErr: "busy_timeout"},
+		"a shorter timeout":      {dsn: func(p string) string { return dsn(p, map[string]string{"busy_timeout": "busy_timeout(10)"}) }, wantErr: "busy_timeout"},
+		"recursive triggers off": {dsn: func(p string) string { return dsn(p, map[string]string{"recursive_triggers": ""}) }, wantErr: "recursive_triggers"},
+		"an in-memory journal":   {dsn: func(string) string { return ":memory:" }, wantErr: "journal_mode"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -157,9 +159,9 @@ func TestOpenMigratesAndIsIdempotent(t *testing.T) {
 
 	s, err := store.Open(t.Context(), path)
 	require.NoError(t, err)
-	assert.Equal(t, 9, store.SchemaVersion(), "0001, 0002, messaging's inbox, 0003, the workers' identity, 0004, the GitHub notices' state, 0005, the workers' routing, 0006, the GitHub notices' seed per kind, 0007, the board, 0008, the workers' provider, and 0009, the notice ledger")
+	assert.Equal(t, 10, store.SchemaVersion(), "0001, 0002, messaging's inbox, 0003, the workers' identity, 0004, the GitHub notices' state, 0005, the workers' routing, 0006, the GitHub notices' seed per kind, 0007, the board, 0008, the workers' provider, and 0009, the notice ledger, and 0010, the notice ledger's totals")
 	assert.Equal(t, store.SchemaVersion(), s.UserVersion())
-	assert.Equal(t, []string{"table:board_marks", "table:board_posts", "table:focus", "table:github_open", "table:github_seeded", "table:github_seeded_kinds", "table:github_seen", "table:handoffs", "table:messages", "table:notice_identities", "table:notice_payloads", "table:workers", "trigger:focus_cap"}, objects(t, store.DB(s)))
+	assert.Equal(t, []string{"table:board_marks", "table:board_posts", "table:focus", "table:github_open", "table:github_seeded", "table:github_seeded_kinds", "table:github_seen", "table:handoffs", "table:messages", "table:notice_counts", "table:notice_identities", "table:notice_payloads", "table:notice_store_counts", "table:workers", "trigger:focus_cap", "trigger:notice_counts_delete", "trigger:notice_counts_insert", "trigger:notice_counts_move"}, objects(t, store.DB(s)))
 	at := time.Date(2026, 10, 9, 12, 0, 0, 123456789, time.UTC)
 	require.NoError(t, s.RecordFocus(t.Context(), "w1:p1", at))
 	require.NoError(t, s.Close())

@@ -85,10 +85,13 @@ type Pragmas struct {
 	ForeignKeys bool
 	// BusyTimeout is how long a statement waits for another connection's lock.
 	BusyTimeout time.Duration
+	// RecursiveTriggers is on: a REPLACE's hidden delete fires delete
+	// triggers, so the notice ledger's totals stay exact.
+	RecursiveTriggers bool
 }
 
 // want is what verifyPragmas requires.
-var want = Pragmas{JournalMode: "wal", Synchronous: 2, ForeignKeys: true, BusyTimeout: BusyTimeout}
+var want = Pragmas{JournalMode: "wal", Synchronous: 2, ForeignKeys: true, BusyTimeout: BusyTimeout, RecursiveTriggers: true}
 
 // Focus is one entry in the recent-focus history.
 type Focus struct {
@@ -224,6 +227,7 @@ func dsn(path string) string {
 	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", BusyTimeout.Milliseconds()))
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Add("_pragma", "synchronous(FULL)")
+	q.Add("_pragma", "recursive_triggers(1)")
 	// BEGIN IMMEDIATE: a transaction takes the write lock when it starts,
 	// never by upgrading a read lock part way through.
 	q.Set("_txlock", "immediate")
@@ -271,7 +275,7 @@ func busy(err error) bool {
 // readPragmas reads the live settings of db's connection.
 func readPragmas(ctx context.Context, db *sql.DB) (Pragmas, error) {
 	var p Pragmas
-	var fk, busy int64
+	var fk, busy, recursive int64
 	for _, r := range []struct {
 		query string
 		dst   any
@@ -280,6 +284,7 @@ func readPragmas(ctx context.Context, db *sql.DB) (Pragmas, error) {
 		{"PRAGMA synchronous", &p.Synchronous},
 		{"PRAGMA foreign_keys", &fk},
 		{"PRAGMA busy_timeout", &busy},
+		{"PRAGMA recursive_triggers", &recursive},
 	} {
 		if err := db.QueryRowContext(ctx, r.query).Scan(r.dst); err != nil {
 			return Pragmas{}, fmt.Errorf("%w: %s: %w", ErrStore, r.query, err)
@@ -288,6 +293,7 @@ func readPragmas(ctx context.Context, db *sql.DB) (Pragmas, error) {
 	p.JournalMode = strings.ToLower(p.JournalMode)
 	p.ForeignKeys = fk == 1
 	p.BusyTimeout = time.Duration(busy) * time.Millisecond
+	p.RecursiveTriggers = recursive == 1
 	return p, nil
 }
 
@@ -311,6 +317,9 @@ func verifyPragmas(ctx context.Context, db *sql.DB) error {
 	}
 	if got.BusyTimeout != want.BusyTimeout {
 		bad = append(bad, fmt.Sprintf("busy_timeout is %v, want %v", got.BusyTimeout, want.BusyTimeout))
+	}
+	if got.RecursiveTriggers != want.RecursiveTriggers {
+		bad = append(bad, "recursive_triggers is off, want on")
 	}
 	if len(bad) > 0 {
 		return fmt.Errorf("%w: %s", ErrPragma, strings.Join(bad, "; "))

@@ -77,9 +77,10 @@ func seen(t *testing.T, s *store.Store, project string, events ...store.GitHubEv
 	require.NoError(t, s.UpdateGitHub(t.Context(), store.GitHubUpdate{Project: project, Repo: ledgerRepo, Seen: events}, ledgerSeen))
 }
 
-// wholeTables reads each table of schema 9, whole, in rowid order: one
-// fixed query a table, since SQL takes no table name as a parameter.
-// otherTables fails on a table missing here, so a new one is never skipped.
+// wholeTables reads each table of schema 10 but the ledger's totals, whole,
+// in rowid order: one fixed query a table, since SQL takes no table name as
+// a parameter. otherTables fails on a table missing here, so a new one is
+// never skipped.
 var wholeTables = map[string]string{
 	"board_marks":         "SELECT * FROM board_marks ORDER BY rowid",
 	"board_posts":         "SELECT * FROM board_posts ORDER BY rowid",
@@ -129,7 +130,7 @@ func queryRows(t *testing.T, db *sql.DB, query string, args ...any) [][]any {
 func otherTables(t *testing.T, db *sql.DB) map[string][][]any {
 	t.Helper()
 	out := map[string][][]any{}
-	for _, row := range queryRows(t, db, "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT IN ('notice_identities', 'notice_payloads')") {
+	for _, row := range queryRows(t, db, "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT IN ('notice_identities', 'notice_payloads', 'notice_counts', 'notice_store_counts')") {
 		name, ok := row[0].(string)
 		require.True(t, ok, "a table's name: %v", row[0])
 		out[name] = tableRows(t, db, name)

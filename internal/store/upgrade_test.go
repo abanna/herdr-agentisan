@@ -2,8 +2,10 @@ package store_test
 
 import (
 	"database/sql"
+	"maps"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 
@@ -38,7 +40,7 @@ func TestUpgradeFromTheFirstSchema(t *testing.T) {
 
 	s := open(t, path)
 	assert.Equal(t, store.SchemaVersion(), s.UserVersion())
-	assert.Equal(t, 9, s.UserVersion())
+	assert.Equal(t, 10, s.UserVersion())
 	row, err := s.WorkerRow(t.Context(), "w")
 	require.NoError(t, err)
 	assert.Nil(t, row.Routing, "a worker bound before 0005 was not launched by routing")
@@ -171,13 +173,13 @@ func TestUpgradeFrom8(t *testing.T) {
 		require.NotEmpty(t, rows, "%s has a row before the upgrade", table)
 	}
 	schema := func(db *sql.DB) [][]any {
-		return queryRows(t, db, "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name NOT IN ('notice_identities', 'notice_payloads') ORDER BY type, name")
+		return queryRows(t, db, "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name NOT IN ('notice_identities', 'notice_payloads', 'notice_counts', 'notice_store_counts') ORDER BY type, name")
 	}
 	objectsBefore := schema(store.DB(v8))
 	require.NoError(t, v8.Close())
 
 	s := open(t, path)
-	assert.Equal(t, 9, s.UserVersion())
+	assert.Equal(t, 10, s.UserVersion())
 	assert.Equal(t, before, otherTables(t, store.DB(s)), "every row of schema 8 survives as it was")
 	assert.Equal(t, objectsBefore, schema(store.DB(s)), "every object of schema 8 is as it was")
 	assert.Equal(t, [2]int{0, 0}, ledgerRows(t, s), "the ledger starts empty")
@@ -221,7 +223,7 @@ func TestUpgradeFrom7(t *testing.T) {
 	require.NoError(t, v7.Close())
 
 	s := open(t, path)
-	assert.Equal(t, 9, s.UserVersion(), "one Open applies 0008, then 0009")
+	assert.Equal(t, 10, s.UserVersion(), "one Open applies 0008, 0009 and 0010")
 	told := admissible(t)
 	assert.Equal(t, store.NoticeAdmission{CaptureID: told.CaptureID, State: "imported", Imported: true}, admit(t, s, told))
 	fresh := admissible(t, func(e *store.NoticeEnvelope) { e.Receipt.PR = 51 })
@@ -230,4 +232,86 @@ func TestUpgradeFrom7(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, fresh.Text, got.Text)
 	assert.Equal(t, [2]int{2, 1}, ledgerRows(t, s))
+}
+
+// TestUpgradeFrom9 (K3) is the path into 0010: a database at schema 9 whose
+// ledger holds GitHub rows in each state, the pending one with its payload,
+// and a daemon row in the empty project, migrates to 10 with its totals
+// backfilled from those rows and every row and object of 9 unchanged. The
+// rows are raw SQL, not AdmitNotice, so the test holds once the quotas make
+// AdmitNotice read the totals, which do not exist at 9.
+func TestUpgradeFrom9(t *testing.T) {
+	t.Parallel()
+	nine := fstest.MapFS{}
+	for _, name := range []string{
+		"0001_init.sql", "0002_messages.sql", "0003_worker_identity.sql", "0004_github_notices.sql",
+		"0005_worker_routing.sql", "0006_github_seeded_kinds.sql", "0007_board.sql", "0008_worker_provider.sql",
+		"0009_notice_ledger.sql",
+	} {
+		raw, err := os.ReadFile(filepath.Join("migrations", name)) // #nosec G304 -- this package's own migrations
+		require.NoError(t, err)
+		nine[name] = &fstest.MapFile{Data: raw}
+	}
+	path := dbPath(t)
+	v9, err := store.OpenWith(t.Context(), path, nine)
+	require.NoError(t, err)
+	require.Equal(t, 9, v9.UserVersion())
+	ctx := t.Context()
+	db9 := store.DB(v9)
+	github := func(id, state string, pr int, over map[string]any) map[string]any {
+		row := map[string]any{
+			"capture_id": id, "project": "ha", "source": "github", "kind": "ci_failed",
+			"repo": ledgerRepo, "pr": pr, "receipt_key": headOID, "state": state, "admitted_at": 1, "attempts": 0,
+		}
+		maps.Copy(row, over)
+		return row
+	}
+	for name, row := range map[string]map[string]any{
+		"pending":  github("gh1:pending", "pending", 71, nil),
+		"imported": github("gh1:imported", "imported", 72, nil),
+		"posted":   github("gh1:posted", "posted", 73, map[string]any{"settled_at": 2, "post_seq": 7}),
+		"dropped":  github("gh1:dropped", "dropped", 74, map[string]any{"settled_at": 2, "drop_reason": "muted"}),
+		"daemon":   daemonIdentity,
+	} {
+		require.NoError(t, insertRow(t, db9, insertIdentity, identityColumns, row), name)
+	}
+	require.NoError(t, insertRow(t, db9, insertPayload, payloadColumns, map[string]any{
+		"capture_id": "gh1:pending", "version": 1, "receipt_version": 1, "subject": ledgerRepo + "#71", "worker": "ha-coder-1",
+		"observed_at": 1, "text": "#71 CI failed", "bytes": 13, "digest": strings.Repeat("0123456789abcdef", 4),
+	}))
+	ledger := func(db *sql.DB) [][][]any {
+		return [][][]any{queryRows(t, db, "SELECT * FROM notice_identities ORDER BY rowid"), tableRows(t, db, "notice_payloads")}
+	}
+	// 0010's objects: its two tables, the totals' key's index, and its three
+	// triggers, which are on notice_identities.
+	schema := func(db *sql.DB) [][]any {
+		return queryRows(t, db, `SELECT type, name, tbl_name, sql FROM sqlite_schema
+WHERE tbl_name NOT IN ('notice_counts', 'notice_store_counts')
+AND name NOT IN ('notice_counts_insert', 'notice_counts_delete', 'notice_counts_move') ORDER BY type, name`)
+	}
+	ledgerBefore, othersBefore, objectsBefore := ledger(db9), otherTables(t, db9), schema(db9)
+	require.Len(t, ledgerBefore[0], 5)
+	require.Len(t, ledgerBefore[1], 1)
+	require.NoError(t, v9.Close())
+
+	s := open(t, path)
+	db := store.DB(s)
+	assert.Equal(t, 10, s.UserVersion())
+	assertNoticeTotals(t, db)
+	projects, total := noticeTotals(t, db)
+	assert.Equal(t, map[string]int64{"": 1, "ha": 4}, projects, "every state counts")
+	assert.Equal(t, int64(5), total)
+	assert.Equal(t, ledgerBefore, ledger(db), "every ledger row of schema 9 survives as it was")
+	assert.Equal(t, othersBefore, otherTables(t, db), "every other row of schema 9 survives as it was")
+	assert.Equal(t, objectsBefore, schema(db), "every object of schema 9 is as it was")
+	var check string
+	require.NoError(t, db.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&check))
+	assert.Equal(t, "ok", check)
+	assert.Empty(t, queryRows(t, db, "PRAGMA foreign_key_check"))
+
+	require.Equal(t, "pending", admit(t, s, admissible(t)).State)
+	projects, total = noticeTotals(t, db)
+	assert.Equal(t, map[string]int64{"": 1, "ha": 5}, projects, "the next admission moves its project's total by one")
+	assert.Equal(t, int64(6), total, "and the store's")
+	assertNoticeTotals(t, db)
 }
