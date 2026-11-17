@@ -356,6 +356,14 @@ func TestAdmitChecksTheSuppliedID(t *testing.T) {
 		require.ErrorIs(t, err, store.ErrInvalid, name)
 		assert.Equal(t, store.NoticeAdmission{}, got, name)
 	}
+	// invalid is refused for an envelope B0a.1's grammar refuses on its own:
+	// each row below keeps the right ID, so without this check a row the
+	// grammar came to accept would still pass, refused only for its ID.
+	invalid := func(name string, e store.NoticeEnvelope) {
+		_, err := store.GitHubNoticeCaptureID(e)
+		require.ErrorIs(t, err, store.ErrInvalid, "%s: the grammar refuses it", name)
+		refused(name, e, ledgerAt)
+	}
 	for name, e := range map[string]store.NoticeEnvelope{
 		"another notice's ID": with(func(e *store.NoticeEnvelope) { e.Receipt.Key = strings.Repeat("b", 40) }),
 		"no ID":               with(func(e *store.NoticeEnvelope) { e.CaptureID = "" }),
@@ -366,6 +374,7 @@ func TestAdmitChecksTheSuppliedID(t *testing.T) {
 		"the team's source":   with(func(e *store.NoticeEnvelope) { e.Source = "team" }),
 		"no project":          admissible(t, func(e *store.NoticeEnvelope) { e.Project = "" }),
 		"an invalid envelope": with(func(e *store.NoticeEnvelope) { e.Text = "two\nlines" }),
+		"an ID not UTF-8":     with(func(e *store.NoticeEnvelope) { e.CaptureID = "gh1:\xff" }),
 	} {
 		refused(name, e, ledgerAt)
 	}
@@ -403,9 +412,8 @@ func TestAdmitChecksTheSuppliedID(t *testing.T) {
 		"the largest version":       func(e *store.NoticeEnvelope) { e.Version = math.MaxUint64 },
 		"receipt version 2":         func(e *store.NoticeEnvelope) { e.Receipt.Version = 2 },
 		"observed at the zero time": func(e *store.NoticeEnvelope) { e.ObservedAt = time.Time{} },
-		"an ID not UTF-8":           func(e *store.NoticeEnvelope) { e.CaptureID = "gh1:\xff" },
 	} {
-		refused(name, with(change), ledgerAt)
+		invalid(name, with(change))
 	}
 	// Every field B0a.1 bounds is refused through AdmitNotice as the
 	// capture ID refuses it: bytes that are not UTF-8, a truncated or
@@ -421,7 +429,7 @@ func TestAdmitChecksTheSuppliedID(t *testing.T) {
 				e.Kind, e.Receipt.Kind, e.Receipt.Key = "review", "review", bad+" 2026-11-16T08:59:00Z"
 			},
 		} {
-			refused(fmt.Sprintf("%s %q", field, bad), with(set), ledgerAt)
+			invalid(fmt.Sprintf("%s %q", field, bad), with(set))
 		}
 	}
 	last := time.Unix(0, math.MaxInt64)
