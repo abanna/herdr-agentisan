@@ -129,6 +129,48 @@ func TestSpawnRefusesAProviderTheTypeCannotRun(t *testing.T) {
 	assert.Empty(t, f.h.params("tab.create"), "nothing opens")
 }
 
+// TestSpawnReadsTheComposerOfTheProviderAsked: a Codex worker spawned with
+// --provider into a group whose default is claude has its own screen read
+// twice, the composer or the hook review for 1.5 s and then the hook review
+// alone for 500 ms (A65), while the claude worker spawned beside it in that
+// group has none read. The read follows the agent launched, never the
+// group's default (A66).
+func TestSpawnReadsTheComposerOfTheProviderAsked(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, mixedConfig)
+
+	codex, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1, Provider: "codex"})
+	require.NoError(t, err)
+	require.Len(t, codex.Workers, 1)
+	claude, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1})
+	require.NoError(t, err)
+	require.Len(t, claude.Workers, 1)
+
+	require.Equal(t, "codex", codex.Workers[0].Agent)
+	require.Equal(t, "claude", claude.Workers[0].Agent)
+	require.NotEqual(t, codex.Workers[0].PaneID, claude.Workers[0].PaneID)
+
+	var codexReads []map[string]any
+	for _, r := range f.h.params("pane.wait_for_output") {
+		assert.NotEqual(t, claude.Workers[0].PaneID, r["pane_id"], "a claude worker's screen is never read")
+		if r["pane_id"] == codex.Workers[0].PaneID {
+			codexReads = append(codexReads, r)
+		}
+	}
+	require.Len(t, codexReads, 2, "the codex worker's own pane is read twice")
+	for i, want := range []struct {
+		pattern string
+		ms      float64
+	}{
+		{"Ask Codex to do anything|Hooks need review|Trust all and continue", 1500},
+		{"Hooks need review|Trust all and continue", 500},
+	} {
+		assert.Equal(t, "visible", codexReads[i]["source"])
+		assert.Equal(t, map[string]any{"type": "regex", "value": want.pattern}, codexReads[i]["match"])
+		assert.InDelta(t, want.ms, codexReads[i]["timeout_ms"], 0)
+	}
+}
+
 // TestAMixedGroupSharesItsSlots: a group's slots count every worker of it,
 // whichever provider each runs, so a claude and a codex worker fill a group
 // of two, and a third of either is refused (A66).
