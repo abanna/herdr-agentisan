@@ -97,7 +97,13 @@ a canonical UTC RFC3339Nano timestamp, together at most 256 bytes. The login is
 empty for a deleted account's review, whose key is the space and time alone
 (B0a.1b): only keys B0a.1 refused are newly accepted, so no existing ID changes.
 A conformance test builds every event the notice constructors make, at GitHub's
-own bounds, into a valid envelope; inputs past them are refused (NERD-5632).
+own bounds, into a valid envelope; inputs past them are refused. Those inputs
+are bounded where they enter (NERD-5632): `config resolve` refuses a `github`
+past 245 bytes, so `repo#pr` fits the subject with any PR number, and a project
+name past 256, each with `settings.ErrTooLong`; `ParseOpenPRs` refuses a PR
+number past 2^31-1 as `ErrOutput`. A test at those bounds fails when they and
+the envelope drift apart. What the daemon does with a notice admission refuses
+is slice B1's.
 
 Encoding is four unsigned 64-bit big-endian words: envelope version, receipt
 version, PR, then the signed nanosecond instant's two's-complement bits. The instant
