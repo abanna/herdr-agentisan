@@ -703,67 +703,103 @@ func TestLedgerSchemaChecks(t *testing.T) {
 	} {
 		require.NoError(t, identity(over), name)
 	}
-	for name, over := range map[string]map[string]any{
-		"a NULL capture ID":                  {"capture_id": nil},
-		"an empty capture ID":                {"capture_id": ""},
-		"the first row's capture ID":         {"capture_id": fmt.Sprintf("gh1:%064d", 1), "pr": 99},
-		"no project":                         {"project": nil},
-		"an unknown source":                  {"source": "watch"},
-		"an unknown state":                   {"state": "acked"},
-		"no kind":                            {"kind": ""},
-		"a kind of 65 bytes, 33 characters":  {"kind": strings.Repeat("é", 32) + "x"},
-		"a GitHub row with no receipt":       noReceipt,
-		"a daemon row with a receipt":        {"source": "daemon"},
-		"a receipt with no PR":               {"pr": nil},
-		"a receipt with no key":              {"receipt_key": nil},
-		"a receipt with no repo":             {"repo": nil},
-		"PR 0":                               {"pr": 0},
-		"PR 2^31":                            {"pr": 1 << 31},
-		"a PR as words":                      {"pr": "fifty"},
-		"a pending row settled":              {"settled_at": 2},
-		"an imported row settled":            {"state": "imported", "settled_at": 2},
-		"a posted row unsettled":             {"state": "posted", "post_seq": 7},
-		"a posted row with no post_seq":      {"state": "posted", "settled_at": 2},
-		"a dropped row with no reason":       {"state": "dropped", "settled_at": 2},
-		"a dropped row for no known reason":  {"state": "dropped", "settled_at": 2, "drop_reason": "lost"},
-		"a dropped row with a post_seq":      {"state": "dropped", "settled_at": 2, "drop_reason": "muted", "post_seq": 7},
-		"a pending row with a reason":        {"drop_reason": "muted"},
-		"a pending row with a post_seq":      {"post_seq": 7},
-		"negative attempts":                  {"attempts": -1},
-		"no admission time":                  {"admitted_at": nil},
-		"a second row with the same receipt": {"pr": 1},
+	// Each refusal names the one constraint SQLite must report, a CHECK by
+	// its text in 0009, and breaks that constraint and no other: with it
+	// gone, the row is admitted.
+	check := func(expr string) string { return "CHECK constraint failed: " + expr }
+	var (
+		receipt  = check("(repo IS NULL) = (pr IS NULL) AND (repo IS NULL) = (receipt_key IS NULL)")
+		github   = check("(source = 'github') = (repo IS NOT NULL)")
+		named    = check("source <> 'github' OR (project <> '' AND repo <> '')")
+		kind     = check("kind <> '' AND length(CAST(kind AS BLOB)) <= 64")
+		pr       = check("pr BETWEEN 1 AND 2147483647")
+		settled  = check("(state IN ('pending', 'imported')) = (settled_at IS NULL)")
+		posted   = check("(state = 'posted') = (post_seq IS NOT NULL)")
+		dropped  = check("(state = 'dropped') = (drop_reason IS NOT NULL)")
+		digest   = check("length(digest) = 64 AND digest NOT GLOB '*[^0-9a-f]*' AND length(CAST(digest AS BLOB)) = 64")
+		identKey = "UNIQUE constraint failed: notice_identities.capture_id"
+	)
+	type refusal struct {
+		over map[string]any
+		by   string
+	}
+	for name, tc := range map[string]refusal{
+		"a NULL capture ID":                  {map[string]any{"capture_id": nil}, "NOT NULL constraint failed: notice_identities.capture_id"},
+		"an empty capture ID":                {map[string]any{"capture_id": ""}, check("capture_id <> ''")},
+		"the first row's capture ID":         {map[string]any{"capture_id": fmt.Sprintf("gh1:%064d", 1), "pr": 99}, identKey},
+		"no project":                         {map[string]any{"project": nil}, "NOT NULL constraint failed: notice_identities.project"},
+		"an unknown source":                  {with(noReceipt, map[string]any{"source": "watch"}), check("source IN ('github', 'daemon', 'team')")},
+		"an unknown state":                   {map[string]any{"state": "acked", "settled_at": 2}, check("state IN ('pending', 'imported', 'posted', 'dropped')")},
+		"no kind":                            {map[string]any{"kind": ""}, kind},
+		"a kind of 65 bytes, 33 characters":  {map[string]any{"kind": strings.Repeat("é", 32) + "x"}, kind},
+		"a GitHub row with no receipt":       {noReceipt, github},
+		"a daemon row with a receipt":        {map[string]any{"source": "daemon"}, github},
+		"a GitHub row with no project":       {map[string]any{"project": ""}, named},
+		"a GitHub row with an empty repo":    {map[string]any{"repo": ""}, named},
+		"a receipt with no PR":               {map[string]any{"pr": nil}, receipt},
+		"a receipt with no key":              {map[string]any{"receipt_key": nil}, receipt},
+		"a receipt with no repo":             {map[string]any{"source": "daemon", "repo": nil}, receipt},
+		"PR 0":                               {map[string]any{"pr": 0}, pr},
+		"PR 2^31":                            {map[string]any{"pr": 1 << 31}, pr},
+		"a PR not a whole number":            {map[string]any{"pr": 1.5}, "cannot store REAL value in INTEGER column notice_identities.pr"},
+		"a pending row settled":              {map[string]any{"settled_at": 2}, settled},
+		"an imported row settled":            {map[string]any{"state": "imported", "settled_at": 2}, settled},
+		"a posted row unsettled":             {map[string]any{"state": "posted", "post_seq": 7}, settled},
+		"a posted row with no post_seq":      {map[string]any{"state": "posted", "settled_at": 2}, posted},
+		"a dropped row with no reason":       {map[string]any{"state": "dropped", "settled_at": 2}, dropped},
+		"a dropped row for no known reason":  {map[string]any{"state": "dropped", "settled_at": 2, "drop_reason": "lost"}, check("drop_reason IN ('skipped', 'muted', 'repeat')")},
+		"a dropped row with a post_seq":      {map[string]any{"state": "dropped", "settled_at": 2, "drop_reason": "muted", "post_seq": 7}, posted},
+		"a pending row with a reason":        {map[string]any{"drop_reason": "muted"}, dropped},
+		"a pending row with a post_seq":      {map[string]any{"post_seq": 7}, posted},
+		"negative attempts":                  {map[string]any{"attempts": -1}, check("attempts >= 0")},
+		"no admission time":                  {map[string]any{"admitted_at": nil}, "NOT NULL constraint failed: notice_identities.admitted_at"},
+		"a second row with the same receipt": {map[string]any{"pr": 1}, "UNIQUE constraint failed: notice_identities.project, notice_identities.repo, notice_identities.pr, notice_identities.kind, notice_identities.receipt_key"},
 	} {
-		constraintFailed(t, identity(over), name)
+		err := identity(tc.over)
+		constraintFailed(t, err, name)
+		assert.ErrorContains(t, err, tc.by, name)
 	}
 
-	require.NoError(t, identity(map[string]any{"capture_id": "gh1:with-payload"}))
+	// Each payload goes on an identity of its own, so a refusal row the
+	// schema wrongly admitted could not turn the next into a duplicate.
 	payload := func(over map[string]any) error {
+		id := fmt.Sprintf("gh1:payload-%d", n)
+		require.NoError(t, identity(map[string]any{"capture_id": id}))
 		row := map[string]any{
-			"capture_id": "gh1:with-payload", "version": 1, "receipt_version": 1, "subject": "", "worker": "",
+			"capture_id": id, "version": 1, "receipt_version": 1, "subject": "", "worker": "",
 			"observed_at": 1, "text": "x", "bytes": 1, "digest": strings.Repeat("0123456789abcdef", 4),
 		}
 		maps.Copy(row, over)
 		return insertRow(t, db, insertPayload, payloadColumns, row)
 	}
-	for name, over := range map[string]map[string]any{
-		"a payload with no identity":  {"capture_id": "gh1:nobody"},
-		"a NULL capture ID":           {"capture_id": nil},
-		"version 2":                   {"version": 2},
-		"receipt version 2":           {"receipt_version": 2},
-		"no text":                     {"text": ""},
-		"no bytes":                    {"bytes": 0},
-		"a digest of 63 characters":   {"digest": strings.Repeat("a", 63)},
-		"a digest of 65 characters":   {"digest": strings.Repeat("a", 65)},
-		"a digest in capitals":        {"digest": strings.Repeat("A", 64)},
-		"a digest that is not hex":    {"digest": strings.Repeat("g", 64)},
-		"a digest with a GLOB escape": {"digest": strings.Repeat("a", 63) + "]"},
+	for name, tc := range map[string]refusal{
+		"a payload with no identity":          {map[string]any{"capture_id": "gh1:nobody"}, "FOREIGN KEY constraint failed"},
+		"a payload's NULL capture ID":         {map[string]any{"capture_id": nil}, "NOT NULL constraint failed: notice_payloads.capture_id"},
+		"version 2":                           {map[string]any{"version": 2}, check("version = 1")},
+		"receipt version 2":                   {map[string]any{"receipt_version": 2}, check("receipt_version = 1")},
+		"no text":                             {map[string]any{"text": ""}, check("text <> ''")},
+		"no bytes":                            {map[string]any{"bytes": 0}, check("bytes > 0")},
+		"a digest of 63 characters":           {map[string]any{"digest": strings.Repeat("a", 63)}, digest},
+		"a digest of 65 characters":           {map[string]any{"digest": strings.Repeat("a", 65)}, digest},
+		"a digest in capitals":                {map[string]any{"digest": strings.Repeat("A", 64)}, digest},
+		"a digest that is not hex":            {map[string]any{"digest": strings.Repeat("g", 64)}, digest},
+		"a digest with a GLOB escape":         {map[string]any{"digest": strings.Repeat("a", 63) + "]"}, digest},
+		"a NUL inside the digest's 64 bytes":  {map[string]any{"digest": strings.Repeat("a", 63) + "\x00"}, digest},
+		"64 hex characters, a NUL, then more": {map[string]any{"digest": strings.Repeat("a", 64) + "\x00zz"}, digest},
 	} {
-		constraintFailed(t, payload(over), name)
+		err := payload(tc.over)
+		constraintFailed(t, err, name)
+		assert.ErrorContains(t, err, tc.by, name)
 	}
-	require.NoError(t, payload(map[string]any{"receipt_version": nil}), "a payload with no receipt, as another source's")
-	constraintFailed(t, payload(nil), "a second payload for one identity")
-	_, err := db.ExecContext(t.Context(), "DELETE FROM notice_identities WHERE capture_id = 'gh1:with-payload'")
+	require.NoError(t, identity(map[string]any{"capture_id": "gh1:with-payload"}))
+	once := map[string]any{"capture_id": "gh1:with-payload", "receipt_version": nil}
+	require.NoError(t, payload(once), "a payload with no receipt, as another source's")
+	err := payload(once)
+	constraintFailed(t, err, "a second payload for one identity")
+	assert.ErrorContains(t, err, "UNIQUE constraint failed: notice_payloads.capture_id", "a second payload for one identity")
+	_, err = db.ExecContext(t.Context(), "DELETE FROM notice_identities WHERE capture_id = 'gh1:with-payload'")
 	constraintFailed(t, err, "an identity deleted from under its payload")
+	assert.ErrorContains(t, err, "FOREIGN KEY constraint failed", "an identity deleted from under its payload")
 
 	// A walk of one state across the store uses store_state (deviation c):
 	// B0a.3's pending count and bytes with the state bound, and B0a.4's

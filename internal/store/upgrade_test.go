@@ -195,3 +195,39 @@ func TestUpgradeFrom8(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, fresh.Text, got.Text)
 }
+
+// TestUpgradeFrom7 is the live state.db's own path: it is at schema 7, so
+// one Open applies 0008 and then 0009. An event github_seen held at 7 is
+// then imported, never told again, and an unseen one admits as pending.
+func TestUpgradeFrom7(t *testing.T) {
+	t.Parallel()
+	seven := fstest.MapFS{}
+	for _, name := range []string{
+		"0001_init.sql", "0002_messages.sql", "0003_worker_identity.sql", "0004_github_notices.sql",
+		"0005_worker_routing.sql", "0006_github_seeded_kinds.sql", "0007_board.sql",
+	} {
+		raw, err := os.ReadFile(filepath.Join("migrations", name)) // #nosec G304 -- this package's own migrations
+		require.NoError(t, err)
+		seven[name] = &fstest.MapFile{Data: raw}
+	}
+	path := dbPath(t)
+	v7, err := store.OpenWith(t.Context(), path, seven)
+	require.NoError(t, err)
+	require.Equal(t, 7, v7.UserVersion())
+	require.NoError(t, v7.UpdateGitHub(t.Context(), store.GitHubUpdate{
+		Project: "ha", Repo: ledgerRepo, Collected: true, Open: []int{50},
+		Seen: []store.GitHubEvent{{PR: 50, Kind: "ci_failed", Key: headOID}, {PR: 50, Kind: "review", Key: " 2026-11-16T08:59:00Z"}},
+	}, ledgerSeen))
+	require.NoError(t, v7.Close())
+
+	s := open(t, path)
+	assert.Equal(t, 9, s.UserVersion(), "one Open applies 0008, then 0009")
+	told := admissible(t)
+	assert.Equal(t, store.NoticeAdmission{CaptureID: told.CaptureID, State: "imported", Imported: true}, admit(t, s, told))
+	fresh := admissible(t, func(e *store.NoticeEnvelope) { e.Receipt.PR = 51 })
+	assert.Equal(t, store.NoticeAdmission{CaptureID: fresh.CaptureID, State: "pending"}, admit(t, s, fresh))
+	got, err := s.PendingNotice(t.Context(), fresh.CaptureID)
+	require.NoError(t, err)
+	assert.Equal(t, fresh.Text, got.Text)
+	assert.Equal(t, [2]int{2, 1}, ledgerRows(t, s))
+}

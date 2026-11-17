@@ -10,7 +10,9 @@
 -- ID, and the receipt still catches it. A row is pending until it is
 -- settled: posted to the board, or dropped (skipped, muted or a repeat). An
 -- imported row is an event the boss was already told before the ledger
--- (github_seen), recorded so it is never told again; it has no payload.
+-- (github_seen), recorded so it is never told again; it has no payload. A
+-- GitHub identity has a project and a repo, as github_seen requires, so it
+-- can always be settled there.
 CREATE TABLE notice_identities (
     capture_id  TEXT    NOT NULL PRIMARY KEY CHECK (capture_id <> ''),
     project     TEXT    NOT NULL,
@@ -26,6 +28,7 @@ CREATE TABLE notice_identities (
     drop_reason TEXT    CHECK (drop_reason IN ('skipped', 'muted', 'repeat')),
     attempts    INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     CHECK ((source = 'github') = (repo IS NOT NULL)),
+    CHECK (source <> 'github' OR (project <> '' AND repo <> '')),
     CHECK ((repo IS NULL) = (pr IS NULL) AND (repo IS NULL) = (receipt_key IS NULL)),
     CHECK ((state IN ('pending', 'imported')) = (settled_at IS NULL)),
     CHECK ((state = 'dropped') = (drop_reason IS NOT NULL)),
@@ -45,8 +48,9 @@ CREATE INDEX notice_identities_store_state ON notice_identities (state);
 
 -- notice_payloads holds the frozen envelope of each identity not yet
 -- settled. bytes is the length of its source's canonical encoding and digest
--- that encoding's SHA-256, lowercase hex: a read recomputes both, so a row
--- edited by hand is never handed on.
+-- that encoding's SHA-256, lowercase hex and nothing after it (SQL's
+-- length() and GLOB stop at a NUL; the byte length does not): a read
+-- recomputes both, so a row edited by hand is never handed on.
 CREATE TABLE notice_payloads (
     capture_id      TEXT    NOT NULL PRIMARY KEY REFERENCES notice_identities (capture_id) ON DELETE RESTRICT,
     version         INTEGER NOT NULL CHECK (version = 1),
@@ -56,5 +60,5 @@ CREATE TABLE notice_payloads (
     observed_at     INTEGER NOT NULL,
     text            TEXT    NOT NULL CHECK (text <> ''),
     bytes           INTEGER NOT NULL CHECK (bytes > 0),
-    digest          TEXT    NOT NULL CHECK (length(digest) = 64 AND digest NOT GLOB '*[^0-9a-f]*')
+    digest          TEXT    NOT NULL CHECK (length(digest) = 64 AND digest NOT GLOB '*[^0-9a-f]*' AND length(CAST(digest AS BLOB)) = 64)
 ) STRICT;

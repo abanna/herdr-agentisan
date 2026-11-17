@@ -118,7 +118,9 @@ frozen envelope of each identity not yet settled. It is dormant. Nothing in
 production calls `store.AdmitNotice` or `store.PendingNotice`, neither posts
 to the board nor wakes `board wait`, and neither writes a `github_*` table;
 `TestLedgerHasNoProductionCaller` fails on any use of the ledger's names, or
-B0a.1's, in a non-test file of `internal/` or `cmd/` outside `internal/store`. The migration is one-way: an older build
+B0a.1's, in a non-test file of `internal/` or `cmd/` but `noticeledger.go` and
+`boardnotice.go`, and on any string naming a ledger table, in any case, in one
+but `noticeledger.go`. The migration is one-way: an older build
 refuses the database (`ErrSchemaTooNew`), so no build holding it is installed
 before the board's activation, and the first install is the activation build.
 
@@ -135,6 +137,13 @@ with its payload: its canonical encoding's size and SHA-256. `PendingNotice`
 returns a pending notice's envelope only after recomputing its capture ID,
 digest and size from the rows; a row edited by hand is ErrStore, never handed
 on. No error carries the notice's content.
+
+The schema refuses on its own what the ledger must never hold, whoever
+writes it, and its test pins each refusal to the one constraint that makes
+it. A GitHub identity has a project and a repo, as `github_seen` does, so it
+can always be settled there, and a digest is 64 lowercase hex bytes with
+nothing after them: SQL's `length()` and `GLOB` stop at a NUL, so the CHECK
+also counts its bytes.
 
 The schema already holds every source (`github`, `daemon`, `team`), every
 state (`pending`, `imported`, `posted`, `dropped`) and the settle columns, so
