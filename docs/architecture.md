@@ -116,8 +116,54 @@ The 2-KiB encoding ceiling is enforced; a conservative valid bound is 32 numeric
 bytes + 32 prefixes + five 256-byte fields + 512 text + 6 source + 9 kind = 1871,
 so fully valid inputs cannot reach 2048. Tests cover reachable field boundaries.
 
-Durable admission, supplied capture-ID validation, metadata and schema changes
-remain B0a.2, after human merge and separate authorization. Board B is incomplete.
+## The notice admission ledger (B0a.2)
+
+Migration 0009 adds the ledger that will record each notice once, before the
+board tells it: `notice_identities`, permanent, and `notice_payloads`, the
+frozen envelope of each identity not yet settled. It is dormant. Nothing in
+production calls `store.AdmitNotice` or `store.PendingNotice`, neither posts
+to the board nor wakes `board wait`, and neither writes a `github_*` table;
+`TestLedgerHasNoProductionCaller` fails on any use of the ledger's names, or
+B0a.1's, in a non-test file of `internal/` or `cmd/` but `noticeledger.go` and
+`boardnotice.go`, and on any string naming a ledger table, in any case, in one
+but `noticeledger.go`. The migration is one-way: an older build
+refuses the database (`ErrSchemaTooNew`), so no build holding it is installed
+before the board's activation, and the first install is the activation build.
+
+`AdmitNotice` takes only a GitHub envelope, with a project, whose CaptureID is
+the one `GitHubNoticeCaptureID` derives; anything else is ErrInvalid. In one
+transaction it then dedupes, by capture ID and by receipt (project, repo, PR,
+kind, key), which the schema also holds `UNIQUE`: the capture ID covers the
+time observed and the text, so the same event seen after a restart is caught
+by its receipt, and the first capture wins, its payload never rewritten. An
+event `github_seen` already holds, compared exactly (BINARY: no case folding,
+no prefix), was told on the typed path: it is recorded `imported`, with no
+payload, and `github_seen` is only read. Anything else is recorded `pending`
+with its payload: its canonical encoding's size and SHA-256. `PendingNotice`
+returns a pending notice's envelope only after recomputing its capture ID,
+digest and size from the rows; a row edited by hand is ErrStore, never handed
+on. No error carries the notice's content.
+
+The schema refuses on its own what the ledger must never hold, whoever
+writes it, and its test pins each refusal to the one constraint that makes
+it. A GitHub identity has a project and a repo, as `github_seen` does, so it
+can always be settled there, and a digest is 64 lowercase hex bytes with
+nothing after them: SQL's `length()` and `GLOB` stop at a NUL, so the CHECK
+also counts its bytes.
+
+A dropped row gives its reason: `skipped`, `muted` or `repeat`, or one of
+two terminal reasons, so no notice stays pending for ever and counts against
+the quotas. `failed` is a notice that could not be posted: its retries ran
+out, or its stored copy no longer verifies. `expired` is one whose team or
+project is gone, or that is too old. Nothing writes either yet: B0b decides
+when each is written (deviation (g), decided by the user).
+
+The schema already holds every source (`github`, `daemon`, `team`), every
+state (`pending`, `imported`, `posted`, `dropped`) and the settle columns, so
+the quotas (B0a.3), other sources' allocated IDs and the payload prune
+(B0a.4) need no migration. That holds for the GitHub and daemon sources: a
+`team` post's author has no column yet. The board's writes (B0b onward) and
+its activation remain, each after human merge and separate authorization.
 
 ## Deliberate limits
 

@@ -328,8 +328,14 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   each `board wait`. Tests open a fresh database in a temp
   dir; the store is never mocked.
   `boardnotice.go` also provides the pure version-1 GitHub capture-ID helper
-  and its frozen envelope/receipt types (B0a.1), with no production callers
-  or storage/effect API; durable notice admission remains incomplete.
+  and its frozen envelope/receipt types (B0a.1), and `noticeledger.go` the
+  dormant notice admission ledger (B0a.2, migration 0009, one-way):
+  `AdmitNotice` dedupes a GitHub notice by capture ID and receipt and
+  imports one `github_seen` holds, `PendingNotice` re-checks its digest.
+  No production caller, post, wake or `github_*` write;
+  `noticedormant_test.go` fails on any use in a non-test file of
+  `internal/` or `cmd/` but those two, and on SQL naming its tables in one
+  but `noticeledger.go`.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real
