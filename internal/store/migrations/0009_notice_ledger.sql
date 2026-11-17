@@ -8,11 +8,15 @@
 -- receipt (project, repo, PR, kind, key): its capture ID covers when it was
 -- observed and its text, so the same event seen after a restart gets a new
 -- ID, and the receipt still catches it. A row is pending until it is
--- settled: posted to the board, or dropped (skipped, muted or a repeat). An
--- imported row is an event the boss was already told before the ledger
--- (github_seen), recorded so it is never told again; it has no payload. A
--- GitHub identity has a project and a repo, as github_seen requires, so it
--- can always be settled there.
+-- settled: posted to the board, or dropped. A drop is skipped, muted or a
+-- repeat, or one of two terminal reasons, so no notice stays pending for
+-- ever: failed, one that could not be posted (its retries ran out, or its
+-- stored copy no longer verifies), and expired, one whose team or project
+-- is gone, or that is too old. Nothing writes either yet: B0b decides when
+-- each is written. An imported row is an event the boss was already told
+-- before the ledger (github_seen), recorded so it is never told again; it
+-- has no payload. A GitHub identity has a project and a repo, as
+-- github_seen requires, so it can always be settled there.
 CREATE TABLE notice_identities (
     capture_id  TEXT    NOT NULL PRIMARY KEY CHECK (capture_id <> ''),
     project     TEXT    NOT NULL,
@@ -25,7 +29,7 @@ CREATE TABLE notice_identities (
     admitted_at INTEGER NOT NULL,
     settled_at  INTEGER,
     post_seq    INTEGER,
-    drop_reason TEXT    CHECK (drop_reason IN ('skipped', 'muted', 'repeat')),
+    drop_reason TEXT    CHECK (drop_reason IN ('skipped', 'muted', 'repeat', 'failed', 'expired')),
     attempts    INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
     CHECK ((source = 'github') = (repo IS NOT NULL)),
     CHECK (source <> 'github' OR (project <> '' AND repo <> '')),

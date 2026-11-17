@@ -145,6 +145,13 @@ can always be settled there, and a digest is 64 lowercase hex bytes with
 nothing after them: SQL's `length()` and `GLOB` stop at a NUL, so the CHECK
 also counts its bytes.
 
+A dropped row gives its reason: `skipped`, `muted` or `repeat`, or one of
+two terminal reasons, so no notice stays pending for ever and counts against
+the quotas. `failed` is a notice that could not be posted: its retries ran
+out, or its stored copy no longer verifies. `expired` is one whose team or
+project is gone, or that is too old. Nothing writes either yet: B0b decides
+when each is written (deviation (g), decided by the user).
+
 The schema already holds every source (`github`, `daemon`, `team`), every
 state (`pending`, `imported`, `posted`, `dropped`) and the settle columns, so
 the quotas (B0a.3), other sources' allocated IDs and the payload prune
