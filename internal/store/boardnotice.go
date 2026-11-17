@@ -48,9 +48,12 @@ func checkNoticeReceipt(r NoticeReceipt) bool {
 	case "approved":
 		return r.Key == ""
 	case "review":
+		// The login may be empty: a deleted account's review has none
+		// (github.Review.Login), and its key is " " plus the time. Only the
+		// first space splits, so a second one fails the canonical time.
 		login, stamp, ok := strings.Cut(r.Key, " ")
 		at, err := time.Parse(time.RFC3339Nano, stamp)
-		return ok && login != "" && len(login) <= 128 && utf8.ValidString(login) && !strings.ContainsFunc(login, func(r rune) bool { return invisible(r) || unicode.IsSpace(r) }) && err == nil && at.UTC().Format(time.RFC3339Nano) == stamp
+		return ok && len(login) <= 128 && utf8.ValidString(login) && !strings.ContainsFunc(login, func(r rune) bool { return invisible(r) || unicode.IsSpace(r) }) && err == nil && at.UTC().Format(time.RFC3339Nano) == stamp
 	case "merged":
 		if r.Key == "" {
 			return true
