@@ -36,7 +36,8 @@ func TestGitHubNoticeCaptureIDTypes(t *testing.T) {
 	}
 }
 
-func TestGitHubNoticeCaptureIDCanonicalVectors(t *testing.T) {
+// G1: B0a.1's vectors, byte for byte; B0a.1b's widening changes no digest.
+func TestGitHubNoticeCaptureIDVectorsUnchanged(t *testing.T) {
 	// Frozen digests from an independent Python struct.pack/hashlib oracle.
 	// Fields are project, subject, worker, repo, key, text, all deliberately distinct.
 	for _, tc := range []struct {
@@ -204,7 +205,7 @@ func TestGitHubNoticeCaptureIDReceiptGrammar(t *testing.T) {
 	for _, kind := range []string{"merged", "ci_failed", "ci_passed", "dirty", "review"} {
 		keys := []string{"", strings.Repeat("a", 39), strings.Repeat("g", 40), strings.Repeat("a", 41), strings.Repeat("a", 63), strings.Repeat("a", 65), strings.Repeat("a", 257)}
 		if kind == "review" {
-			keys = []string{"", "alice", " 2026-10-23T00:00:00Z", "a b 2026-10-23T00:00:00Z", "a\tb 2026-10-23T00:00:00Z", "a\u00a0b 2026-10-23T00:00:00Z", "a\u200db 2026-10-23T00:00:00Z", "\xff 2026-10-23T00:00:00Z", strings.Repeat("a", 129) + " 2026-10-23T00:00:00Z", "a invalid", "a 2026-10-23T00:00:00+00:00", "a 2026-10-23T00:00:00.100Z", "a 2026-10-23T00:00:00Z extra"}
+			keys = []string{"", "alice", "a b 2026-10-23T00:00:00Z", "a\tb 2026-10-23T00:00:00Z", "a\u00a0b 2026-10-23T00:00:00Z", "a\u200db 2026-10-23T00:00:00Z", "\xff 2026-10-23T00:00:00Z", strings.Repeat("a", 129) + " 2026-10-23T00:00:00Z", "a invalid", "a 2026-10-23T00:00:00+00:00", "a 2026-10-23T00:00:00.100Z", "a 2026-10-23T00:00:00Z extra"}
 		}
 		for _, key := range keys {
 			e := githubEnvelope()
@@ -229,6 +230,42 @@ func TestGitHubNoticeCaptureIDReceiptGrammar(t *testing.T) {
 	id, err := store.GitHubNoticeCaptureID(e)
 	require.NoError(t, err)
 	assert.Len(t, id, 68)
+}
+
+// G2: a deleted account's review, whose login is "" (github.Review.Login), is
+// keyed " <time>". Version 1 accepts it with the same encoding; every key it
+// newly accepts was refused before, so no existing ID changes. Digests from
+// the same Python struct.pack/hashlib oracle, which reproduces the alice row.
+func TestGitHubNoticeCaptureIDEmptyReviewLogin(t *testing.T) {
+	review := func(key string) store.NoticeEnvelope {
+		e := githubEnvelope()
+		e.Kind, e.Receipt.Kind, e.Receipt.PR, e.ObservedAt = "review", "review", 5, time.Unix(0, 1000000001)
+		e.Project, e.Subject, e.Worker, e.Receipt.Repo, e.Text = "p", "s", "w", "o/r", "review"
+		e.Receipt.Key = key
+		return e
+	}
+	for key, digest := range map[string]string{
+		" 2026-10-23T00:00:00.123456789Z": "6718c0f771b39264e295343e091ff2f2bf692d6ca4a522d45abf86f2fd1a738a",
+		" 2026-10-23T00:00:00Z":           "edfe0be4c6f5dc23f5a50dcf1cd0bc318b5331e79cdac9c702c9e8de4deb3dd9",
+	} {
+		e := review(key)
+		before, receipt := e, *e.Receipt
+		id, err := store.GitHubNoticeCaptureID(e)
+		require.NoError(t, err, key)
+		assert.Equal(t, "gh1:"+digest, id, key)
+		assert.Equal(t, before, e)
+		assert.Equal(t, receipt, *e.Receipt)
+	}
+	for _, key := range []string{
+		" ", "  ", "   ", strings.Repeat(" ", 256),
+		"  2026-10-23T00:00:00Z", " 2026-10-23T00:00:00Z ", "\t2026-10-23T00:00:00Z", " 2026-10-23T00:00:00Z",
+		"2026-10-23T00:00:00Z", " 2026-10-23T00:00:00", " 2026-10-23T00:00:00+00:00", " 2026-10-23T06:00:00+06:00",
+		" 2026-10-23T00:00:00.100Z", " 2026-10-23t00:00:00z", " invalid", " 2026-10-23T00:00:00Z extra",
+	} {
+		id, err := store.GitHubNoticeCaptureID(review(key))
+		require.ErrorIs(t, err, store.ErrInvalid, "%q", key)
+		assert.Empty(t, id)
+	}
 }
 
 func TestGitHubNoticeCaptureIDEncodingClasses(t *testing.T) {

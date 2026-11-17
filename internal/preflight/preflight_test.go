@@ -1,7 +1,6 @@
 package preflight_test
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -676,8 +675,47 @@ type ownedProcess struct {
 	start string
 }
 
-func processStart(pid int) (string, error) {
-	raw, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
+// procReads are the reads the survivors scan makes of /proc, behind a seam so
+// a test can make any one of them fail as Linux does when a process exits
+// between two of them. pause separates the retries of a denied read.
+type procReads struct {
+	readFile func(name string) ([]byte, error)
+	stat     func(name string) (os.FileInfo, error)
+	readDir  func(name string) ([]os.DirEntry, error)
+	pause    func()
+}
+
+// osProc is the real /proc.
+var osProc = procReads{
+	readFile: os.ReadFile,
+	stat:     os.Stat,
+	readDir:  os.ReadDir,
+	pause:    func() { time.Sleep(10 * time.Millisecond) },
+}
+
+// denialTries bounds how often a denied read of a live same-user process is
+// retried before the denial is a failure.
+const denialTries = 100
+
+// gone says err means the process left between two reads. Linux answers a
+// read of an exited process with ENOENT when it can no longer open the file
+// and with ESRCH when it opened it first and the process went before the read
+// (open and read of /proc/PID/stat, /proc/PID/environ and the stat of
+// /proc/PID).
+func gone(err error) bool {
+	return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH)
+}
+
+// denied says err is EACCES or EPERM. Linux can deny a read of a process
+// that is exiting before it is gone, so a denial alone says nothing.
+func denied(err error) bool { return errors.Is(err, fs.ErrPermission) }
+
+func processStart(pid int) (string, error) { return osProc.processStart(pid) }
+
+// processStart is the start time of pid, "" for a zombie, which has no
+// running code or readable environment.
+func (p procReads) processStart(pid int) (string, error) {
+	raw, err := p.readFile(filepath.Join("/proc", strconv.Itoa(pid), "stat"))
 	if err != nil {
 		return "", fmt.Errorf("process start: %w", err)
 	}
@@ -691,74 +729,455 @@ func processStart(pid int) (string, error) {
 	}
 	if fields[0] == "Z" {
 		return "", nil
-	} // Zombies have no running code or readable environment.
+	}
 	return fields[19], nil
+}
+
+// observe runs read, one of the scan's reads of process pid, which started at
+// start ("" while that is what is being read). It reports left when the
+// process is gone, or cannot be ours: an exit mid-read is not a failure. A
+// denial is retried, boundedly, while the process still shows as the same one;
+// a denial that persists on a live process of our user is the error returned,
+// since it cannot be told from a process that hides our marker. Any other
+// error is returned.
+func (p procReads) observe(pid int, start string, read func() (string, error)) (val string, left bool, err error) {
+	val, err = read()
+	switch {
+	case err == nil:
+		return val, false, nil
+	case gone(err):
+		return "", true, nil
+	case !denied(err):
+		return "", false, err
+	}
+	info, statErr := p.stat(filepath.Join("/proc", strconv.Itoa(pid)))
+	switch {
+	case gone(statErr):
+		return "", true, nil
+	case statErr != nil:
+		return "", false, fmt.Errorf("stat process %d: %w", pid, statErr)
+	}
+	if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Uid != uint32(os.Geteuid()) {
+		return "", true, nil // another user's process cannot carry our private marker
+	}
+	for range denialTries {
+		if start != "" {
+			now, startErr := p.processStart(pid)
+			switch {
+			case gone(startErr):
+				return "", true, nil
+			case startErr == nil && (now == "" || now != start):
+				return "", true, nil // a zombie, or the PID reused
+			case startErr != nil && !denied(startErr):
+				return "", false, startErr
+			}
+		}
+		p.pause()
+		val, err = read()
+		switch {
+		case err == nil:
+			return val, false, nil
+		case gone(err):
+			return "", true, nil
+		case !denied(err):
+			return "", false, err
+		}
+	}
+	return "", false, err
 }
 
 // survivors uses Linux /proc; unavailable observation must fail, never prove
 // absence. Other users' unreadable processes cannot inherit our private marker.
 func survivors(t *testing.T, rec string) []ownedProcess {
 	t.Helper()
-	marker := []byte("\x00FAKE_TDADDY_DIR=" + rec + "\x00")
-	_, err := os.ReadFile("/proc/self/environ")
-	require.NoError(t, err, "Linux survivor observation requires readable /proc")
-	selfStart, err := processStart(os.Getpid())
+	out, err := osProc.survivors(rec)
 	require.NoError(t, err)
+	return out
+}
+
+// survivors is the processes started after this binary whose environment
+// carries the marker rec makes, with a process that exits during the scan
+// skipped, whichever read it was in.
+func (p procReads) survivors(rec string) ([]ownedProcess, error) {
+	marker := "\x00FAKE_TDADDY_DIR=" + rec + "\x00"
+	if _, err := p.readFile("/proc/self/environ"); err != nil {
+		return nil, fmt.Errorf("linux survivor observation requires readable /proc: %w", err)
+	}
+	selfStart, err := p.processStart(os.Getpid())
+	if err != nil {
+		return nil, err
+	}
 	floor, err := strconv.ParseUint(selfStart, 10, 64)
-	require.NoError(t, err)
-	entries, err := os.ReadDir("/proc")
-	require.NoError(t, err)
+	if err != nil {
+		return nil, fmt.Errorf("own start time: %w", err)
+	}
+	entries, err := p.readDir("/proc")
+	if err != nil {
+		return nil, fmt.Errorf("list /proc: %w", err)
+	}
 	var out []ownedProcess
-processes:
 	for _, e := range entries {
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil {
 			continue
 		}
-		start, err := processStart(pid)
-		if errors.Is(err, fs.ErrNotExist) || err == nil && start == "" {
+		start, left, err := p.observe(pid, "", func() (string, error) { return p.processStart(pid) })
+		if err != nil {
+			return nil, err
+		}
+		if left || start == "" {
 			continue
 		}
-		require.NoError(t, err)
 		tick, err := strconv.ParseUint(start, 10, 64)
-		require.NoError(t, err)
+		if err != nil {
+			return nil, fmt.Errorf("start time of %d: %w", pid, err)
+		}
 		if tick < floor {
 			continue
 		} // A process older than this binary cannot be its descendant.
-		env, err := os.ReadFile(filepath.Join("/proc", e.Name(), "environ"))
-		if errors.Is(err, fs.ErrNotExist) {
-			continue
+		env, left, err := p.observe(pid, start, func() (string, error) {
+			raw, err := p.readFile(filepath.Join("/proc", e.Name(), "environ"))
+			return string(raw), err
+		})
+		if err != nil {
+			return nil, fmt.Errorf("cannot observe a same-user process: %w", err)
 		}
-		if errors.Is(err, fs.ErrPermission) {
-			info, statErr := os.Stat(filepath.Join("/proc", e.Name()))
-			if errors.Is(statErr, fs.ErrNotExist) {
-				continue
-			}
-			require.NoError(t, statErr)
-			if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Uid != uint32(os.Geteuid()) {
-				continue
-			}
-			// During exit Linux can deny environ before stat becomes Z.
-			// Retry that transition boundedly; persistent denial still fails.
-			for tries := 0; tries < 100 && errors.Is(err, fs.ErrPermission); tries++ {
-				now, startErr := processStart(pid)
-				if errors.Is(startErr, fs.ErrNotExist) || startErr == nil && (now == "" || now != start) {
-					continue processes
-				}
-				require.NoError(t, startErr)
-				time.Sleep(10 * time.Millisecond)
-				env, err = os.ReadFile(filepath.Join("/proc", e.Name(), "environ"))
-				if errors.Is(err, fs.ErrNotExist) {
-					continue processes
-				}
-			}
-		}
-		require.NoError(t, err, "cannot observe a same-user process")
-		if bytes.Contains(append([]byte{0}, env...), marker) {
+		if !left && strings.Contains("\x00"+env, marker) {
 			out = append(out, ownedProcess{pid, start})
 		}
 	}
-	return out
+	return out, nil
+}
+
+// step is one answer a fake /proc read gives; the last one of a read repeats.
+type step struct {
+	text string
+	err  error
+}
+
+func answer(text string) step { return step{text: text} }
+func fail(err error) step     { return step{err: err} }
+
+// procErr is err as Linux reports it from a read of name.
+func procErr(name string, errno syscall.Errno) error {
+	return &fs.PathError{Op: "open", Path: name, Err: errno}
+}
+
+// statText is /proc/PID/stat of a process in state that started at tick.
+func statText(state, tick string) string {
+	return "1 (proc) " + state + strings.Repeat(" 0", 18) + " " + tick
+}
+
+// fakeInfo is the stat of /proc/PID, owned by uid.
+type fakeInfo struct {
+	name string
+	uid  uint32
+}
+
+func (i fakeInfo) Name() string       { return i.name }
+func (fakeInfo) Size() int64          { return 0 }
+func (fakeInfo) Mode() fs.FileMode    { return fs.ModeDir }
+func (fakeInfo) ModTime() time.Time   { return time.Time{} }
+func (fakeInfo) IsDir() bool          { return true }
+func (i fakeInfo) Sys() any           { return &syscall.Stat_t{Uid: i.uid} }
+func (i fakeInfo) entry() os.DirEntry { return fs.FileInfoToDirEntry(i) }
+
+// fakeProcess is what one PID answers: its stat, its environ, and the stat of
+// its directory. A read with no steps answers ENOENT, as an exited process.
+type fakeProcess struct {
+	stat, environ, dir []step
+}
+
+// fakeProc is a /proc of fakeProcesses, listed in order, that counts reads.
+type fakeProc struct {
+	order  []int
+	procs  map[int]*fakeProcess
+	uid    uint32
+	reads  map[string]int
+	pauses int
+}
+
+const (
+	// A process older than the test binary (start 100) is not its descendant.
+	selfTick  = "100"
+	newerTick = "150"
+)
+
+func newFakeProc() *fakeProc {
+	f := &fakeProc{procs: map[int]*fakeProcess{}, uid: uint32(os.Geteuid()), reads: map[string]int{}}
+	f.procs[os.Getpid()] = &fakeProcess{stat: []step{answer(statText("S", selfTick))}}
+	return f
+}
+
+// add lists a process, ours (uid of the test) unless the caller changes f.uid
+// in the process's dir answer.
+func (f *fakeProc) add(pid int, p fakeProcess) *fakeProc {
+	f.order = append(f.order, pid)
+	f.procs[pid] = &p
+	return f
+}
+
+// live is a process of ours that started after the test binary, with env.
+func live(env string) fakeProcess {
+	return fakeProcess{
+		stat:    []step{answer(statText("S", newerTick))},
+		environ: []step{answer(env)},
+		dir:     []step{{}},
+	}
+}
+
+func (f *fakeProc) next(pid int, kind string) step {
+	f.reads[strconv.Itoa(pid)+"/"+kind]++
+	p, ok := f.procs[pid]
+	if !ok {
+		return fail(procErr("/proc/"+strconv.Itoa(pid), syscall.ENOENT))
+	}
+	steps := map[string]*[]step{"stat": &p.stat, "environ": &p.environ, "dir": &p.dir}[kind]
+	if len(*steps) == 0 {
+		return fail(procErr("/proc/"+strconv.Itoa(pid)+"/"+kind, syscall.ENOENT))
+	}
+	s := (*steps)[0]
+	if len(*steps) > 1 {
+		*steps = (*steps)[1:]
+	}
+	return s
+}
+
+func (f *fakeProc) reader() procReads {
+	return procReads{
+		readFile: func(name string) ([]byte, error) {
+			if name == "/proc/self/environ" {
+				return []byte("PATH=/usr/bin\x00"), nil
+			}
+			parts := strings.Split(strings.TrimPrefix(name, "/proc/"), "/")
+			pid, err := strconv.Atoi(parts[0])
+			if err != nil || len(parts) != 2 {
+				return nil, procErr(name, syscall.ENOENT)
+			}
+			s := f.next(pid, parts[1])
+			return []byte(s.text), s.err
+		},
+		stat: func(name string) (os.FileInfo, error) {
+			pid, err := strconv.Atoi(strings.TrimPrefix(name, "/proc/"))
+			if err != nil {
+				return nil, procErr(name, syscall.ENOENT)
+			}
+			if s := f.next(pid, "dir"); s.err != nil {
+				return nil, s.err
+			}
+			return fakeInfo{name: strconv.Itoa(pid), uid: f.uid}, nil
+		},
+		readDir: func(string) ([]os.DirEntry, error) {
+			out := []os.DirEntry{fakeInfo{name: "self"}.entry(), fakeInfo{name: "cpuinfo"}.entry()}
+			for _, pid := range f.order {
+				out = append(out, fakeInfo{name: strconv.Itoa(pid)}.entry())
+			}
+			return out, nil
+		},
+		pause: func() { f.pauses++ },
+	}
+}
+
+const (
+	survivorPID = 7002
+	victimPID   = 7001
+	afterPID    = 7003
+)
+
+// withVictim is a /proc of three processes in PID order: the victim whose
+// reads the case scripts, a marked survivor that is really there, and a live
+// process of ours with no marker, which the scan must not report.
+func withVictim(victim fakeProcess) *fakeProc {
+	return newFakeProc().
+		add(victimPID, victim).
+		add(survivorPID, live("A=1\x00FAKE_TDADDY_DIR=/rec\x00")).
+		add(afterPID, live("A=1\x00"))
+}
+
+// TestSurvivorsScanSkipsAProcessThatExits: a process that exits between two of
+// the scan's reads is gone, not a failure, at every read the scan makes of it
+// (its stat, its environ, and, after a denial, the stat of its directory and
+// its start time and environ again), whether Linux says ENOENT or ESRCH, and
+// whether a denial (EACCES or EPERM) came before. The marked survivor beside it
+// is still found, and the live process with no marker is not.
+func TestSurvivorsScanSkipsAProcessThatExits(t *testing.T) {
+	t.Parallel()
+	const stat, environ, dir = "/proc/7001/stat", "/proc/7001/environ", "/proc/7001"
+	exits := map[string]syscall.Errno{"ENOENT": syscall.ENOENT, "ESRCH": syscall.ESRCH}
+	denials := map[string]syscall.Errno{"EACCES": syscall.EACCES, "EPERM": syscall.EPERM}
+	cases := map[string]fakeProcess{}
+	for en, exit := range exits {
+		cases["stat: "+en] = fakeProcess{stat: []step{fail(procErr(stat, exit))}}
+		cases["environ: "+en] = fakeProcess{
+			stat:    []step{answer(statText("S", newerTick))},
+			environ: []step{fail(procErr(environ, exit))},
+		}
+		for dn, denial := range denials {
+			cases["stat: "+dn+" then "+en] = fakeProcess{
+				stat: []step{fail(procErr(stat, denial)), fail(procErr(stat, exit))},
+				dir:  []step{{}},
+			}
+			cases["environ: "+dn+" then "+en] = fakeProcess{
+				stat:    []step{answer(statText("S", newerTick))},
+				environ: []step{fail(procErr(environ, denial)), fail(procErr(environ, exit))},
+				dir:     []step{{}},
+			}
+			cases["environ: "+dn+", its directory then "+en] = fakeProcess{
+				stat:    []step{answer(statText("S", newerTick))},
+				environ: []step{fail(procErr(environ, denial))},
+				dir:     []step{fail(procErr(dir, exit))},
+			}
+			cases["environ: "+dn+", its stat then "+en] = fakeProcess{
+				stat:    []step{answer(statText("S", newerTick)), fail(procErr(stat, exit))},
+				environ: []step{fail(procErr(environ, denial))},
+				dir:     []step{{}},
+			}
+			cases["environ: "+dn+", its stat denied then "+en] = fakeProcess{
+				stat:    []step{answer(statText("S", newerTick)), fail(procErr(stat, denial)), fail(procErr(stat, exit))},
+				environ: []step{fail(procErr(environ, denial))},
+				dir:     []step{{}},
+			}
+		}
+	}
+	for dn, denial := range denials {
+		cases["environ: "+dn+", then a zombie"] = fakeProcess{
+			stat:    []step{answer(statText("S", newerTick)), answer(statText("Z", newerTick))},
+			environ: []step{fail(procErr(environ, denial))},
+			dir:     []step{{}},
+		}
+		cases["environ: "+dn+", then its PID reused"] = fakeProcess{
+			stat:    []step{answer(statText("S", newerTick)), answer(statText("S", "999"))},
+			environ: []step{fail(procErr(environ, denial))},
+			dir:     []step{{}},
+		}
+	}
+	for name, victim := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := withVictim(victim)
+			got, err := f.reader().survivors("/rec")
+			require.NoError(t, err)
+			assert.Equal(t, []ownedProcess{{survivorPID, newerTick}}, got, "the marked survivor, and only it")
+		})
+	}
+}
+
+// TestSurvivorsScanKeepsWhatItIsFor: an unreadable process of another user
+// cannot carry our marker and is skipped, a process older than the binary is
+// skipped (one tick older, not one as old), the marker matches only as a whole
+// NUL-delimited entry, and a marked process is found whichever order the scan
+// meets it in.
+func TestSurvivorsScanKeepsWhatItIsFor(t *testing.T) {
+	t.Parallel()
+	f := newFakeProc().
+		add(7001, fakeProcess{
+			stat:    []step{answer(statText("S", newerTick))},
+			environ: []step{fail(procErr("/proc/7001/environ", syscall.EACCES))},
+			dir:     []step{{}},
+		}).
+		add(7002, live("A=1\x00FAKE_TDADDY_DIR=/rec\x00")).
+		add(7004, fakeProcess{
+			stat:    []step{answer(statText("S", "50"))},
+			environ: []step{answer("FAKE_TDADDY_DIR=/rec\x00")},
+		}).
+		add(7005, live("FAKE_TDADDY_DIR=/rec\x00")).
+		add(7006, live("A=1\x00FAKE_TDADDY_DIR=/other\x00")).
+		add(7007, fakeProcess{ // as old as the binary itself: not older
+			stat:    []step{answer(statText("S", selfTick))},
+			environ: []step{answer("FAKE_TDADDY_DIR=/rec\x00")},
+		}).
+		add(7008, fakeProcess{ // one tick older
+			stat:    []step{answer(statText("S", "99"))},
+			environ: []step{answer("FAKE_TDADDY_DIR=/rec\x00")},
+		}).
+		add(7009, live("")).
+		add(7010, live("XFAKE_TDADDY_DIR=/rec\x00")).
+		add(7011, live("FAKE_TDADDY_DIR=/rec2\x00"))
+	f.uid = uint32(os.Geteuid()) + 1 // /proc/7001 belongs to someone else
+	got, err := f.reader().survivors("/rec")
+	require.NoError(t, err)
+	assert.Equal(t, []ownedProcess{{7002, newerTick}, {7005, newerTick}, {7007, selfTick}}, got)
+	assert.Zero(t, f.pauses, "another user's process is not retried")
+
+	none, err := newFakeProc().reader().survivors("/rec")
+	require.NoError(t, err)
+	assert.Empty(t, none, "an empty listing has no survivor")
+}
+
+// TestSurvivorsScanFailsOnWhatItCannotObserve: a denial that persists on a live
+// process of our user is a failure after denialTries retries, never silence,
+// and so is any error that is neither an exit nor a denial.
+func TestSurvivorsScanFailsOnWhatItCannotObserve(t *testing.T) {
+	t.Parallel()
+	t.Run("a persistent denial", func(t *testing.T) {
+		t.Parallel()
+		f := withVictim(fakeProcess{
+			stat:    []step{answer(statText("S", newerTick))},
+			environ: []step{fail(procErr("/proc/7001/environ", syscall.EACCES))},
+			dir:     []step{{}},
+		})
+		_, err := f.reader().survivors("/rec")
+		require.ErrorIs(t, err, fs.ErrPermission)
+		assert.Contains(t, err.Error(), "cannot observe a same-user process")
+		assert.Equal(t, denialTries+1, f.reads["7001/environ"], "one read and denialTries retries")
+		assert.Equal(t, denialTries, f.pauses)
+	})
+	t.Run("a persistent denial of the stat", func(t *testing.T) {
+		t.Parallel()
+		f := withVictim(fakeProcess{
+			stat: []step{fail(procErr("/proc/7001/stat", syscall.EPERM))},
+			dir:  []step{{}},
+		})
+		_, err := f.reader().survivors("/rec")
+		require.ErrorIs(t, err, fs.ErrPermission)
+		assert.Equal(t, denialTries+1, f.reads["7001/stat"])
+	})
+	for name, victim := range map[string]fakeProcess{
+		"an I/O error on environ": {
+			stat:    []step{answer(statText("S", newerTick))},
+			environ: []step{fail(procErr("/proc/7001/environ", syscall.EIO))},
+		},
+		"an I/O error on stat": {
+			stat: []step{fail(procErr("/proc/7001/stat", syscall.EIO))},
+		},
+		"an I/O error on a denied process's directory": {
+			stat:    []step{answer(statText("S", newerTick))},
+			environ: []step{fail(procErr("/proc/7001/environ", syscall.EACCES))},
+			dir:     []step{fail(procErr("/proc/7001", syscall.EIO))},
+		},
+		"an I/O error on a denied process's start": {
+			stat:    []step{answer(statText("S", newerTick)), fail(procErr("/proc/7001/stat", syscall.EIO))},
+			environ: []step{fail(procErr("/proc/7001/environ", syscall.EACCES))},
+			dir:     []step{{}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := withVictim(victim).reader().survivors("/rec")
+			require.ErrorIs(t, err, syscall.EIO)
+		})
+	}
+}
+
+// TestSurvivorsFindsAMarkedProcess is the scan on the real /proc: a process
+// started with the marker is reported, with its start time, until it ends.
+func TestSurvivorsFindsAMarkedProcess(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS != "linux" {
+		t.Skip("survivor observation requires Linux /proc")
+	}
+	rec := t.TempDir()
+	cmd := exec.CommandContext(t.Context(), "/bin/sleep", "30")
+	cmd.Env = []string{"FAKE_TDADDY_DIR=" + rec, "PATH=/usr/bin:/bin"}
+	require.NoError(t, cmd.Start())
+	done := make(chan struct{})
+	go func() { _ = cmd.Wait(); close(done) }()
+	t.Cleanup(func() { _ = cmd.Process.Kill(); <-done })
+
+	start, err := processStart(cmd.Process.Pid)
+	require.NoError(t, err)
+	assert.Contains(t, survivors(t, rec), ownedProcess{cmd.Process.Pid, start})
+	assert.Empty(t, survivors(t, t.TempDir()), "another marker finds nothing")
 }
 
 // TestRunnerTimeoutEndsTheRun: a tdaddy that hangs is ended at the timeout,
