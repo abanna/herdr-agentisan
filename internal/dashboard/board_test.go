@@ -183,17 +183,61 @@ func TestBoardGolden(t *testing.T) {
 	}
 }
 
+// boardHeights and boardWidths are the sizes TestBoardStatesAndGeometry
+// draws. Its checks are exactly h lines, none wider than w, and Render
+// builds h lines and ends each with cut(0, w), so only an index or a
+// strings.Repeat count gone out of range, or a broken last cut, can fail
+// them. With no posts the board's rows are its title, its top border, one
+// state message and its bottom border. The sizes are each side of the
+// thresholds where an index or a count can go wrong:
+//
+//   - h 1: the project line alone, no footer, no room for the board.
+//   - h 2: the footer too, still no room.
+//   - h 3: one header line, room 1: the bottom border replaces the only row.
+//   - h 4, 5: two bare header lines, room 1 and 2.
+//   - h 8: bare, room 5, one more than the rows: the loop stops at their end.
+//   - h 9, 10, 11: boxedHeight, a boxed header, room 3, 4 and 5: one row
+//     short, the rows exactly, one row more.
+//   - h 40: far taller than the rows.
+//
+// Heights 6 and 7 are room 3 and 4 under a bare header, the board's path at
+// 9 and 10; 12 to 39 add only blank lines.
+//
+//   - w 1, 2: a border's w-2 dashes below zero and at zero (the board's and
+//     the boxed header's).
+//   - w 3, 4, 5: rowWidth (w-4) below zero, at zero and one cell, for the
+//     state message; the boxed header's text (w-4) the same.
+//   - w 9, 10 and 11, 12: the boss line's room (its text less the clock and
+//     a gap) at 0 and 1, bare (text w-2) and boxed (text w-4).
+//   - w 15, 16; 26, 27; 29, 30; 64, 65: each state message cut and whole in
+//     its box: "no posts yet" 12 cells, "waiting for the daemon…" 23, "no
+//     board with this fixture" 26, the refusal 61.
+//   - w 47, 48: the board's title, 48 cells, cut by the last cut and whole.
+//   - w 72, 73: the footer's 72 cells cut to w-1 and whole.
+//   - w 43, 45, 59, 61, 68, 70, 79, 81 (and 73): for the full fixture, bare
+//     and boxed, the project line's count (text 41) and compact PRs (71)
+//     and each of the boss line's drop levels (text 42, 57, 66, 77).
+//     Nothing there can go out of range, since each is cut to its text, but
+//     each level is drawn once in each header.
+//   - w 100: the widest the sweep drew before.
+var (
+	boardHeights = []int{1, 2, 3, 4, 5, 8, 9, 10, 11, 40}
+	boardWidths  = []int{1, 2, 3, 4, 5, 9, 10, 11, 12, 15, 16, 26, 27, 29, 30, 43, 45, 47, 48, 59, 61, 64, 65, 68, 70, 72, 73, 79, 81, 100}
+)
+
 func TestBoardStatesAndGeometry(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name string
 		b    dashboard.BoardFrame
 		want string
 	}{{"empty", dashboard.BoardFrame{Open: true, Ready: true}, "no posts yet"}, {"missing", dashboard.BoardFrame{Open: true}, "no board with this fixture"}, {"waiting", dashboard.BoardFrame{Open: true, Available: true}, "waiting for the daemon"}, {"refused", dashboard.BoardFrame{Open: true, Err: daemon.ErrNotAllowed}, "the board reads only"}, {"restart", dashboard.BoardFrame{Open: true, Err: daemon.ErrNotReady}, "waiting for the daemon"}} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			f := dashboard.Frame{Snapshot: fixture(t, "full"), Now: at, Board: tc.b}
 			require.Contains(t, dashboard.Render(f, 97, 40, plain), tc.want)
-			for w := 1; w <= 100; w++ {
-				for h := 1; h <= 40; h++ {
+			for _, w := range boardWidths {
+				for _, h := range boardHeights {
 					out := dashboard.Render(f, w, h, plain)
 					lines := strings.Split(out, "\n")
 					require.Len(t, lines, h)
