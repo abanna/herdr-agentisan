@@ -706,9 +706,12 @@ func TestLedgerSchemaChecks(t *testing.T) {
 		require.NoError(t, identity(over), name)
 	}
 	// Each refusal names the one constraint SQLite must report, a CHECK by
-	// its text in 0009, and breaks that constraint and no other: with it
-	// gone, the row is admitted.
+	// its text in 0009, and breaks that constraint and no other, so with it
+	// gone the row is admitted. A NULL is refused by NOT NULL alone, since a
+	// CHECK passes it. The NULL capture IDs are the one exception: STRICT
+	// makes a key NOT NULL as well as 0009's own NOT NULL (deviation a).
 	check := func(expr string) string { return "CHECK constraint failed: " + expr }
+	notNull := func(column string) string { return "NOT NULL constraint failed: " + column }
 	var (
 		receipt  = check("(repo IS NULL) = (pr IS NULL) AND (repo IS NULL) = (receipt_key IS NULL)")
 		github   = check("(source = 'github') = (repo IS NOT NULL)")
@@ -726,13 +729,17 @@ func TestLedgerSchemaChecks(t *testing.T) {
 		by   string
 	}
 	for name, tc := range map[string]refusal{
-		"a NULL capture ID":                  {map[string]any{"capture_id": nil}, "NOT NULL constraint failed: notice_identities.capture_id"},
+		"a NULL capture ID":                  {map[string]any{"capture_id": nil}, notNull("notice_identities.capture_id")},
 		"an empty capture ID":                {map[string]any{"capture_id": ""}, check("capture_id <> ''")},
 		"the first row's capture ID":         {map[string]any{"capture_id": fmt.Sprintf("gh1:%064d", 1), "pr": 99}, identKey},
-		"no project":                         {map[string]any{"project": nil}, "NOT NULL constraint failed: notice_identities.project"},
+		"no project":                         {map[string]any{"project": nil}, notNull("notice_identities.project")},
+		"a NULL source":                      {map[string]any{"source": nil}, notNull("notice_identities.source")},
+		"a NULL kind":                        {map[string]any{"kind": nil}, notNull("notice_identities.kind")},
+		"a NULL state":                       {map[string]any{"state": nil}, notNull("notice_identities.state")},
+		"NULL attempts":                      {map[string]any{"attempts": nil}, notNull("notice_identities.attempts")},
 		"an unknown source":                  {with(noReceipt, map[string]any{"source": "watch"}), check("source IN ('github', 'daemon', 'team')")},
 		"an unknown state":                   {map[string]any{"state": "acked", "settled_at": 2}, check("state IN ('pending', 'imported', 'posted', 'dropped')")},
-		"no kind":                            {map[string]any{"kind": ""}, kind},
+		"an empty kind":                      {map[string]any{"kind": ""}, kind},
 		"a kind of 65 bytes, 33 characters":  {map[string]any{"kind": strings.Repeat("é", 32) + "x"}, kind},
 		"a GitHub row with no receipt":       {noReceipt, github},
 		"a daemon row with a receipt":        {map[string]any{"source": "daemon"}, github},
@@ -754,7 +761,7 @@ func TestLedgerSchemaChecks(t *testing.T) {
 		"a pending row with a reason":        {map[string]any{"drop_reason": "muted"}, dropped},
 		"a pending row with a post_seq":      {map[string]any{"post_seq": 7}, posted},
 		"negative attempts":                  {map[string]any{"attempts": -1}, check("attempts >= 0")},
-		"no admission time":                  {map[string]any{"admitted_at": nil}, "NOT NULL constraint failed: notice_identities.admitted_at"},
+		"no admission time":                  {map[string]any{"admitted_at": nil}, notNull("notice_identities.admitted_at")},
 		"a second row with the same receipt": {map[string]any{"pr": 1}, "UNIQUE constraint failed: notice_identities.project, notice_identities.repo, notice_identities.pr, notice_identities.kind, notice_identities.receipt_key"},
 	} {
 		err := identity(tc.over)
@@ -776,7 +783,15 @@ func TestLedgerSchemaChecks(t *testing.T) {
 	}
 	for name, tc := range map[string]refusal{
 		"a payload with no identity":          {map[string]any{"capture_id": "gh1:nobody"}, "FOREIGN KEY constraint failed"},
-		"a payload's NULL capture ID":         {map[string]any{"capture_id": nil}, "NOT NULL constraint failed: notice_payloads.capture_id"},
+		"a payload's NULL capture ID":         {map[string]any{"capture_id": nil}, notNull("notice_payloads.capture_id")},
+		"a NULL version":                      {map[string]any{"version": nil}, notNull("notice_payloads.version")},
+		"a NULL subject":                      {map[string]any{"subject": nil}, notNull("notice_payloads.subject")},
+		"a NULL worker":                       {map[string]any{"worker": nil}, notNull("notice_payloads.worker")},
+		"a NULL observation time":             {map[string]any{"observed_at": nil}, notNull("notice_payloads.observed_at")},
+		"observed at a fraction":              {map[string]any{"observed_at": 1.5}, "cannot store REAL value in INTEGER column notice_payloads.observed_at"},
+		"a NULL text":                         {map[string]any{"text": nil}, notNull("notice_payloads.text")},
+		"a NULL size":                         {map[string]any{"bytes": nil}, notNull("notice_payloads.bytes")},
+		"a NULL digest":                       {map[string]any{"digest": nil}, notNull("notice_payloads.digest")},
 		"version 2":                           {map[string]any{"version": 2}, check("version = 1")},
 		"receipt version 2":                   {map[string]any{"receipt_version": 2}, check("receipt_version = 1")},
 		"no text":                             {map[string]any{"text": ""}, check("text <> ''")},
