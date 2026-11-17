@@ -156,7 +156,8 @@ func TestHandoffReadyOverTheSocket(t *testing.T) {
 	coder := workforce.HandoffReadyResult{ID: "w14:p2", Project: "ha", Group: "coder", PaneID: "w14:p2", Ready: true, Changed: true}
 	assert.Equal(t, coder, mark(workforce.HandoffReadyRequest{Target: "ha-coder-1"}))
 	t.Run("retained_pane_list_keeps_original_tokens", func(t *testing.T) {
-		paneTokens := func(reply herdrtest.Reply) map[string]string {
+		// paneTokens are id's tokens in a pane.list reply, nil when it has none.
+		paneTokens := func(reply herdrtest.Reply, id string) map[string]string {
 			t.Helper()
 			require.Nil(t, reply.Error)
 			data, err := json.Marshal(reply.Result)
@@ -167,17 +168,37 @@ func TestHandoffReadyOverTheSocket(t *testing.T) {
 			}
 			require.NoError(t, json.Unmarshal(data, &list))
 			require.Equal(t, "pane_list", list.Type)
-			i := slices.IndexFunc(list.Panes, func(p herdr.PaneInfo) bool { return p.PaneID == "w14:p2" })
-			require.NotEqual(t, -1, i, "the reply contains the coder pane")
+			i := slices.IndexFunc(list.Panes, func(p herdr.PaneInfo) bool { return p.PaneID == id })
+			require.NotEqual(t, -1, i, "the reply contains pane %s", id)
+			if len(list.Panes[i].Tokens) == 0 {
+				return nil
+			}
 			return list.Panes[i].Tokens
 		}
-		// Retain the handler's unencoded reply, as the fake server does
-		// after the handler unlocks. Encode only after this same update.
-		old := th.h(herdrtest.Request{Method: "pane.list"})
-		th.setToken("w14:p2", "handoff", "⟳ READY TO RESTART")
-		assert.Equal(t, map[string]string{"ctx": "31"}, paneTokens(old), "retained pane.list snapshot changed")
-		fresh := th.h(herdrtest.Request{Method: "pane.list"})
-		assert.Equal(t, map[string]string{"ctx": "31", "handoff": "⟳ READY TO RESTART"}, paneTokens(fresh), "the next reply preserves ctx and shows the handoff mark")
+		// update retains the handler's unencoded reply, as the fake server
+		// does after the handler unlocks, applies one setToken and encodes
+		// the retained reply only after it: it must still show the tokens
+		// the pane had, while the next reply shows the update. An empty
+		// value clears the key.
+		update := func(name, id, key, value string, before, after map[string]string) {
+			t.Helper()
+			old := th.h(herdrtest.Request{Method: "pane.list"})
+			th.setToken(id, key, value)
+			assert.Equal(t, before, paneTokens(old, id), name+": retained pane.list snapshot changed")
+			fresh := th.h(herdrtest.Request{Method: "pane.list"})
+			assert.Equal(t, after, paneTokens(fresh, id), name+": the next reply shows the update")
+		}
+		const handoffMark = "⟳ READY TO RESTART"
+		// A token added to a pane that has tokens, the mark the rest of the
+		// test goes on to expect.
+		update("add", "w14:p2", "handoff", handoffMark, map[string]string{"ctx": "31"}, map[string]string{"ctx": "31", "handoff": handoffMark})
+		// The rest use a key of their own and leave w14:p2 as it was.
+		update("add a second key", "w14:p2", "probe", "a", map[string]string{"ctx": "31", "handoff": handoffMark}, map[string]string{"ctx": "31", "handoff": handoffMark, "probe": "a"})
+		update("overwrite an existing key", "w14:p2", "probe", "b", map[string]string{"ctx": "31", "handoff": handoffMark, "probe": "a"}, map[string]string{"ctx": "31", "handoff": handoffMark, "probe": "b"})
+		update("clear a key", "w14:p2", "probe", "", map[string]string{"ctx": "31", "handoff": handoffMark, "probe": "b"}, map[string]string{"ctx": "31", "handoff": handoffMark})
+		// The boss's pane starts with no tokens at all.
+		update("add to a pane with no tokens", "w14:p1", "probe", "a", nil, map[string]string{"probe": "a"})
+		update("clear the last key", "w14:p1", "probe", "", map[string]string{"probe": "a"}, nil)
 	})
 	coder.Changed = false
 	assert.Equal(t, coder, mark(workforce.HandoffReadyRequest{Target: "w14:p2"}), "the pane shows the mark already")
