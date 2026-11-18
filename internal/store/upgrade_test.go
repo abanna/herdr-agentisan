@@ -136,10 +136,10 @@ INSERT INTO github_seen VALUES ('agentisan', 'nerds-run/agentisan-skills', 1006,
 	}, got)
 }
 
-// TestUpgradeFrom8 (A10) is the live state.db's path into 0009: a database
-// at schema 8 with rows in every table migrates to 9 with every row and
-// every object it had unchanged, and an empty ledger, which then imports
-// what github_seen already held and admits the rest.
+// TestUpgradeFrom8 (A10) is the live state.db's path into 0009 and 0010: a
+// database at schema 8 with rows in every table migrates to 10 with every
+// row and every object it had unchanged, and an empty ledger, which then
+// imports what github_seen already held and admits the rest.
 func TestUpgradeFrom8(t *testing.T) {
 	t.Parallel()
 	eight := fstest.MapFS{}
@@ -199,7 +199,7 @@ func TestUpgradeFrom8(t *testing.T) {
 }
 
 // TestUpgradeFrom7 is the live state.db's own path: it is at schema 7, so
-// one Open applies 0008 and then 0009. An event github_seen held at 7 is
+// one Open applies 0008, 0009 and 0010. An event github_seen held at 7 is
 // then imported, never told again, and an unseen one admits as pending.
 func TestUpgradeFrom7(t *testing.T) {
 	t.Parallel()

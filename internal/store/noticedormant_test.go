@@ -172,7 +172,9 @@ func TestLedgerHasNoProductionCaller(t *testing.T) {
 
 // TestLedgerScanFindsAReplace (D1-R): D1's REPLACE scan, run over one
 // non-test file, reports a REPLACE on a ledger table in capitals, in lower
-// case and in a raw string alike, so D1 cannot pass by seeing none.
+// case and in a raw string alike, an UPDATE OR REPLACE as an INSERT OR
+// REPLACE, and one on 0010's notice_counts as on 0009's notice_identities,
+// so D1 cannot pass by seeing none.
 func TestLedgerScanFindsAReplace(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -183,11 +185,13 @@ func TestLedgerScanFindsAReplace(t *testing.T) {
 		"\tupper = \"INSERT OR REPLACE INTO notice_identities (capture_id) VALUES (?)\"\n" +
 		"\tlower = \"insert or replace into notice_identities (capture_id) values (?)\"\n" +
 		"\traw   = \x60INSERT OR REPLACE INTO notice_identities (capture_id) VALUES (?)\x60\n" +
+		"\tmoved = \"UPDATE OR REPLACE notice_identities SET project = ? WHERE capture_id = ?\"\n" +
+		"\tcount = \"INSERT OR REPLACE INTO notice_counts (project, identities) VALUES (?, ?)\"\n" +
 		")\n"
 	require.NoError(t, os.WriteFile(file, []byte(src), 0o600))
 
 	_, tables, replaces, files := ledgerUses(t, root, "internal")
 	require.Equal(t, 1, files)
-	require.Len(t, tables["internal/fixture/fixture.go"], 3, "the scan finds each literal naming the table")
-	assert.Equal(t, []string{file + ":4:10", file + ":5:10", file + ":6:10"}, replaces)
+	require.Len(t, tables["internal/fixture/fixture.go"], 5, "the scan finds each literal naming a ledger table")
+	assert.Equal(t, []string{file + ":4:10", file + ":5:10", file + ":6:10", file + ":7:10", file + ":8:10"}, replaces)
 }

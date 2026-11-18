@@ -529,7 +529,7 @@ B0a.1 supplies a pure GitHub notice capture-ID helper and frozen input types,
 B0a.2 the ledger that will admit each notice once (migration 0009),
 B0a.3-totals its running totals (migration 0010), and B0a.3-limits its eight
 quotas. All are dormant: nothing calls them, and nothing is posted or woken by
-them. Migrations 0009 and 0010 are one-way, so no build holding it is
+them. Migrations 0009 and 0010 are one-way, so no build holding either is
 installed before the board's activation, the first install being the
 activation build. Board B remains incomplete.
 
@@ -653,9 +653,11 @@ digit, then letters, digits and `. _ - : / @ [ ]`, such as `opus[1m]`.
 Every worker runs claude or codex, its provider (ADR-001 A62). A type runs
 its default provider: its group's `agent.provider`, else its group's own
 command's, else codex for `review`, else `[agent]`'s command's. Each
-provider has a command and a model of its own, for every type
-(`[agent.claude]`, `[agent.codex]`) and per type
-(`[groups.<g>.agent.codex]`), so a group can move to Codex with one line:
+provider has a command and a model of its own, for every type that runs it
+(`[agent.claude]`, `[agent.codex]`; the exceptions are `review`, whose
+built-in command outranks `[agent.codex]`, and the debugger, which ignores
+`[agent.claude]`'s command) and per type (`[groups.<g>.agent.codex]`), so a
+group can move to Codex with one line:
 
 ```toml
 [agent.codex]
