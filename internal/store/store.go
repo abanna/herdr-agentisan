@@ -73,6 +73,9 @@ type Store struct {
 	closed    atomic.Bool
 	// wake is woken at each post on the board (A60).
 	wake boardWake
+	// quotas are the notice ledger's (noticequota.go); open sets the
+	// defaults.
+	quotas noticeQuotas
 }
 
 // Pragmas are the connection settings Open sets and verifies.
@@ -157,7 +160,7 @@ func open(ctx context.Context, path string, migrations fs.FS) (*Store, error) {
 	db.SetConnMaxLifetime(0)
 	db.SetConnMaxIdleTime(0)
 
-	s := &Store{db: db, closeWait: BusyTimeout}
+	s := &Store{db: db, closeWait: BusyTimeout, quotas: defaultNoticeQuotas}
 	if err := s.init(ctx, path, set); err != nil {
 		_ = db.Close()
 		return nil, err

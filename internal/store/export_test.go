@@ -23,6 +23,32 @@ func OpenWith(ctx context.Context, path string, migrations fs.FS) (*Store, error
 // VerifyPragmas checks the pragmas Open relies on against db's connection.
 func VerifyPragmas(ctx context.Context, db *sql.DB) error { return verifyPragmas(ctx, db) }
 
+// NoticeQuotas are the notice ledger's quotas, Q1 to Q8.
+type NoticeQuotas = noticeQuotas
+
+// SetNoticeQuotas sets s's quotas, before s is used.
+func SetNoticeQuotas(s *Store, q NoticeQuotas) { s.quotas = q }
+
+// NoticeQuotasOf is s's quotas.
+func NoticeQuotasOf(s *Store) NoticeQuotas { return s.quotas }
+
+// NoticeRateWindow is Q8's window.
+const NoticeRateWindow = noticeRateWindow
+
+// NoticeQuotaQueries are the quotas' queries, by quota.
+var NoticeQuotaQueries = map[string]string{
+	"Q1": selectPendingPerProject, "Q2": selectPendingInStore, "Q3": selectPendingPerPR,
+	"Q4": selectBytesPerProject, "Q5": selectBytesInStore,
+	"Q6": selectProjectIdentities, "Q7": selectStoreIdentities, "Q8": selectAdmissionsInWindow,
+}
+
+// NoticeBytes is the size the ledger stores for e: its canonical
+// encoding's length, which Q4 and Q5 sum.
+func NoticeBytes(e NoticeEnvelope) (int64, error) {
+	c, err := captureOf(e)
+	return c.bytes, err
+}
+
 // InUTC is r with its times in UTC, for comparing with a test's literals.
 func (r Row) InUTC() Row {
 	r.CreatedAt = r.CreatedAt.UTC()

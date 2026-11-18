@@ -97,6 +97,9 @@ VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`
 //     before the ledger: it is recorded imported, with no payload.
 //     github_seen is only read.
 //   - Anything else is recorded pending, with its payload.
+//   - A pending notice that would exceed a quota, or an import that would
+//     exceed Q6 to Q8, is refused with that quota's error, which wraps
+//     ErrNoticeQuota; nothing is written.
 //
 // It writes no table but the ledger's and wakes no reader.
 func (s *Store) AdmitNotice(ctx context.Context, e NoticeEnvelope, at time.Time) (NoticeAdmission, error) {
@@ -138,6 +141,9 @@ func (s *Store) AdmitNotice(ctx context.Context, e NoticeEnvelope, at time.Time)
 	var seen bool
 	if err := tx.QueryRowContext(ctx, selectNoticeSeen, e.Project, r.Repo, r.PR, e.Kind, r.Key).Scan(&seen); err != nil {
 		return NoticeAdmission{}, ledgerFailed("read the github seen-set", err)
+	}
+	if err := checkNoticeQuotas(ctx, tx, s.quotas, e.Project, e.Receipt, c.bytes, !seen, ns); err != nil {
+		return NoticeAdmission{}, err
 	}
 	got = NoticeAdmission{CaptureID: c.id, State: noticePending}
 	if seen {

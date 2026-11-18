@@ -124,10 +124,11 @@ frozen envelope of each identity not yet settled. It is dormant. Nothing in
 production calls `store.AdmitNotice` or `store.PendingNotice`, neither posts
 to the board nor wakes `board wait`, and neither writes a `github_*` table;
 `TestLedgerHasNoProductionCaller` fails on any use of the ledger's names, or
-B0a.1's, in a non-test file of `internal/` or `cmd/` but `noticeledger.go` and
-`boardnotice.go`, and on any string naming a ledger table, in any case, in one
-but `noticeledger.go`. It also fails on any non-test Go string that names a
-ledger table and contains REPLACE. The migration is one-way: an older build
+B0a.1's, in a non-test file of `internal/` or `cmd/` but `noticeledger.go`,
+`noticequota.go` and `boardnotice.go`, and on any string naming a ledger
+table, in any case, in one but `noticeledger.go` and `noticequota.go`. It also
+fails on any non-test Go string that names a ledger table and contains
+REPLACE. The migration is one-way: an older build
 refuses the database (`ErrSchemaTooNew`), so no build holding it is installed
 before the board's activation, and the first install is the activation build.
 
@@ -181,8 +182,8 @@ guard triggers close REPLACE everywhere.
 
 The totals serve the identity quotas Q6 (100,000 a project) and Q7 (500,000
 in the store): each check reads one row instead of counting
-`notice_identities` under the write lock. Until B0a.3-limits, nothing reads
-them.
+`notice_identities` under the write lock. Q6 and Q7 read them, in the
+admission's transaction.
 
 Only a hand edit, or a REPLACE on another connection, makes the totals drift,
 and this recount repairs them, in one transaction (it drops the kept zero
@@ -204,6 +205,38 @@ before the board's activation. It is dormant: only 0010's triggers write the
 totals, and `TestLedgerHasNoProductionCaller` fails on any non-test Go string
 naming them outside the ledger's files. The connection setting is the one live
 change.
+
+## The notice quotas (B0a.3-limits)
+
+`noticequota.go` refuses an admission past one of eight quotas; it never makes
+room by evicting what was admitted. Q1 to Q3 count pending notices: 1,000 a
+project, 5,000 in the store and 32 a pull request. Q4 and Q5 sum their bytes,
+as `notice_payloads.bytes` stores them: 8 MiB a project and 32 MiB in the
+store. Q6 and Q7 count notices in every state: 100,000 a project and 500,000
+in the store. Q8 counts a project's admissions, in every state: 600 an hour.
+
+A pending notice faces all eight, an import (an event `github_seen` already
+holds) Q6 to Q8, and a duplicate or an invalid envelope none, since
+`AdmitNotice` returns both before the quotas run. So a duplicate stays a
+duplicate however full the ledger is.
+
+Each refusal is its quota's own error, which wraps `ErrNoticeQuota`. It names
+only the quota and its limit, never the notice, and writes nothing: the
+transaction rolls back, and the totals with it. Which quota is reported when
+several are full is not part of the contract.
+
+The checks run in the admission's transaction, after the dedupe and the
+`github_seen` lookup, on the store's one connection, so no admission overtakes
+another between a count and its insert. Each reads at most its cap's rows,
+however large the ledger grows. Q8's window is one hour, bounded below only:
+an admission exactly an hour old is out, and one stamped after the admission
+being checked counts.
+
+Q6 and Q7 read the totals of the section above. A missing total is
+`ErrStore`, never 0; the recount above repairs it.
+
+It is dormant: `TestLedgerHasNoProductionCaller` covers `noticequota.go`, its
+names and its SQL.
 
 ## Deliberate limits
 
