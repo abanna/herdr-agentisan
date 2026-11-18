@@ -559,6 +559,76 @@ func TestNoEndingWhileAHandoffIsPending(t *testing.T) {
 	}
 }
 
+// TestEndWorkerIsACompareAndSetOnTheTerminal (NERD-5534): EndWorker ends a
+// row only while it binds the terminal it was read with. A row the team
+// poll re-keyed since is left live (ErrWorkerChanged); one retired or
+// rebound at another generation since is ErrNoWorker, which retire
+// ignores; a pending handoff is ErrHandoffPending, re-keyed or not; and a
+// status that ends nothing is refused. A lost row still ends.
+func TestEndWorkerIsACompareAndSetOnTheTerminal(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	for _, status := range []string{store.StatusRetired, store.StatusFailed, store.StatusGone} {
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+			s := open(t, dbPath(t))
+			seedWorker(t, s, "w", "w14:p2", 3)
+			read := liveRow(t, s, "w")
+
+			require.NoError(t, s.RekeyWorker(ctx, read, "w14:p2", "term_renewed"))
+			require.ErrorIs(t, s.EndWorker(ctx, read, status, t1), store.ErrWorkerChanged)
+			row := liveRow(t, s, "w")
+			assert.Equal(t, store.StatusActive, row.Status, "the re-keyed row stays live")
+			assert.Equal(t, "term_renewed", row.TerminalID)
+
+			require.NoError(t, s.EndWorker(ctx, row, status, t1), "the row as it is now ends")
+			ended, err := s.WorkerRow(ctx, "w")
+			require.NoError(t, err)
+			assert.Equal(t, status, ended.Status)
+			require.ErrorIs(t, s.EndWorker(ctx, row, status, t1), store.ErrNoWorker, "retired since: no live row")
+		})
+	}
+	t.Run("another generation", func(t *testing.T) {
+		t.Parallel()
+		s := open(t, dbPath(t))
+		seedWorker(t, s, "w", "w14:p2", 3)
+		read := liveRow(t, s, "w")
+		read.Generation, read.TerminalID = 2, "term_other"
+		require.ErrorIs(t, s.EndWorker(ctx, read, store.StatusRetired, t1), store.ErrNoWorker)
+	})
+	t.Run("a pending handoff", func(t *testing.T) {
+		t.Parallel()
+		s := open(t, dbPath(t))
+		seedWorker(t, s, "w", "w14:p2", 3)
+		read := liveRow(t, s, "w")
+		_, err := s.BeginHandoff(ctx, "w", "w14:p7", terminal("w14:p7"), t1)
+		require.NoError(t, err)
+		require.ErrorIs(t, s.EndWorker(ctx, read, store.StatusGone, t1), store.ErrHandoffPending)
+		changed := read
+		changed.TerminalID = "term_elsewhere"
+		require.ErrorIs(t, s.EndWorker(ctx, changed, store.StatusGone, t1), store.ErrHandoffPending, "the handoff's backstop comes first")
+		row, err := s.WorkerRow(ctx, "w")
+		require.NoError(t, err)
+		assert.True(t, row.RetiredAt.IsZero(), "still live")
+	})
+	t.Run("lost", func(t *testing.T) {
+		t.Parallel()
+		s := open(t, dbPath(t))
+		seedWorker(t, s, "w", "w14:p2", 3)
+		read := liveRow(t, s, "w")
+		require.NoError(t, s.MarkWorkerLost(ctx, read))
+		require.NoError(t, s.EndWorker(ctx, read, store.StatusRetired, t1))
+	})
+	t.Run("no ending", func(t *testing.T) {
+		t.Parallel()
+		s := open(t, dbPath(t))
+		seedWorker(t, s, "w", "w14:p2", 3)
+		for _, status := range []string{store.StatusActive, store.StatusStarting, "lost", ""} {
+			require.ErrorIs(t, s.EndWorker(ctx, liveRow(t, s, "w"), status, t1), store.ErrInvalid, "%q", status)
+		}
+	})
+}
+
 // TestWorkerWritesRefuseWhatTheyCannotRecord: an empty id, pane or
 // terminal, an unknown status, a time nanoseconds cannot hold, an unknown id
 // and a closed store each fail with their own sentinel.
@@ -586,6 +656,8 @@ func TestWorkerWritesRefuseWhatTheyCannotRecord(t *testing.T) {
 	require.ErrorIs(t, s.SetWorkerStatus(ctx, w, "paused", t0), store.ErrInvalid)
 	require.ErrorIs(t, s.SetWorkerStatus(ctx, w, store.StatusActive, time.Time{}), store.ErrInvalid)
 	require.ErrorIs(t, s.SetWorkerStatus(ctx, w, store.StatusActive, t0), store.ErrNoWorker)
+	require.ErrorIs(t, s.EndWorker(ctx, w, store.StatusRetired, time.Time{}), store.ErrInvalid, "a time nanoseconds cannot hold")
+	require.ErrorIs(t, s.EndWorker(ctx, w, store.StatusRetired, t0), store.ErrNoWorker)
 	_, err = s.WorkerRow(ctx, "x-qa-1")
 	require.ErrorIs(t, err, store.ErrNoWorker)
 
@@ -593,6 +665,7 @@ func TestWorkerWritesRefuseWhatTheyCannotRecord(t *testing.T) {
 	_, err = s.BindWorker(context.Background(), w, t0)
 	require.ErrorIs(t, err, store.ErrStore)
 	require.ErrorIs(t, s.SetWorkerStatus(context.Background(), w, store.StatusActive, t0), store.ErrStore)
+	require.ErrorIs(t, s.EndWorker(context.Background(), w, store.StatusRetired, t0), store.ErrStore)
 	_, err = s.WorkerRow(context.Background(), "x-qa-1")
 	require.ErrorIs(t, err, store.ErrStore)
 }

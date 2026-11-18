@@ -113,6 +113,11 @@ type Service struct {
 	// Now is the clock rows are stamped and idle times read with; nil means
 	// time.Now.
 	Now func() time.Time
+	// StartTime returns a process's start time, in the units a workers row
+	// records its shell's in: the team poll's own hook, so retire proves a
+	// worker's shell on a pane as the poll's re-key does (A35). nil proves
+	// it by its pid alone.
+	StartTime func(pid int) (uint64, error)
 	// Preflight is the check a spawn's repo must pass before any pane opens
 	// (A34); nil means preflight.HostCheck.
 	Preflight preflight.Check
