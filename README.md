@@ -529,7 +529,7 @@ B0a.1 supplies a pure GitHub notice capture-ID helper and frozen input types,
 B0a.2 the ledger that will admit each notice once (migration 0009), and
 B0a.3-totals its running totals (migration 0010). All are dormant: nothing
 calls them, and nothing is posted or woken by them. Migrations 0009 and 0010
-are one-way, so no build holding it is installed before the board's
+are one-way, so no build holding either is installed before the board's
 activation, the first install being the activation build. Board B remains
 incomplete.
 
