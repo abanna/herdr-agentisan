@@ -28,7 +28,9 @@ const (
 	// closed.
 	OutcomeGone = "gone"
 	// OutcomeUnbound is a live row bound to no pane, lost or with its
-	// terminal listed nowhere (A35): retired, with nothing closed.
+	// terminal listed nowhere (A35): retired, with nothing closed. A row
+	// with a shell that a pane herdr lists is proven to run is refused
+	// instead (unkeyed, NERD-5534).
 	OutcomeUnbound = "unbound"
 	// OutcomeAlreadyRetired is a logical id retired before.
 	OutcomeAlreadyRetired = "already_retired"
@@ -119,7 +121,7 @@ func (s *Service) finish(ctx context.Context, tg target, gone bool) (RetireResul
 	if err != nil {
 		return RetireResult{}, err
 	}
-	if err := s.unmoved(ctx, tg.row); err != nil {
+	if err := s.unmoved(ctx, tg); err != nil {
 		return RetireResult{}, err
 	}
 	if tg.unlisted && !replaced {
@@ -171,7 +173,7 @@ func (s *Service) retireTarget(ctx context.Context, tg target, gone, replaced bo
 	if gone {
 		return s.markGone(ctx, tg)
 	}
-	if err := s.endRow(ctx, tg.row, store.StatusRetired); err != nil {
+	if err := s.endClosed(ctx, tg.row); err != nil {
 		return RetireResult{}, err
 	}
 	return RetireResult{ID: tg.id, PaneID: tg.paneID, Changed: true, Outcome: OutcomeRetired}, nil
@@ -199,15 +201,18 @@ func (s *Service) handoffOf(ctx context.Context, tg target) (store.Handoff, bool
 	})
 }
 
-// unmoved re-reads row, if there is one, under the workforce lock. A row
-// rebound since retire read it, while it waited without the lock, is another
-// session's now: a handoff completed meanwhile, or the team poll's re-key
-// after a herdr live handoff renewed its terminal (A35). Nothing of it is
-// closed or ended (ErrPaneChanged), and a retry reads it afresh. A row
-// retired meanwhile is left to endRow, which ignores it.
-func (s *Service) unmoved(ctx context.Context, row *store.Worker) error {
+// unmoved re-reads tg's row under the workforce lock. A row rebound since
+// retire read it, while it waited without the lock, is another session's
+// now: a handoff completed meanwhile, or the team poll's re-key after a
+// herdr live handoff renewed its terminal (A35). Nothing of it is closed or
+// ended (ErrPaneChanged), and a retry reads it afresh. A row retired
+// meanwhile is left to endRow, which ignores it. A pane no row bound when
+// retire read it is read again too (bound): a live row may bind its terminal
+// now.
+func (s *Service) unmoved(ctx context.Context, tg target) error {
+	row := tg.row
 	if row == nil {
-		return nil
+		return s.bound(ctx, tg)
 	}
 	now, err := s.Store.WorkerRow(ctx, row.LogicalID)
 	if errors.Is(err, store.ErrNoWorker) {
@@ -220,6 +225,35 @@ func (s *Service) unmoved(ctx context.Context, row *store.Worker) error {
 		return fmt.Errorf("%w: %s moved to %s since retire read it; nothing was closed", ErrPaneChanged, row.LogicalID, now.PaneID)
 	}
 	return nil
+}
+
+// bound refuses a pane no row bound when retire read it, whose terminal a
+// live row binds under the workforce lock (NERD-5534): the team poll
+// re-keyed a worker onto it after a herdr live handoff, while retire waited
+// for its handoff or for the lock. The pane is that worker's now, so it is
+// refused as the worker would be: ErrHandoffPending while its handoff is
+// pending, else ErrPaneChanged, with nothing closed or ended, and a retry
+// retires it as that worker.
+func (s *Service) bound(ctx context.Context, tg target) error {
+	if tg.terminal == "" {
+		return nil
+	}
+	rows, err := s.Store.Workers(ctx)
+	if err != nil {
+		return fmt.Errorf("read workers: %w", err)
+	}
+	id := team.Bindings(rows)[tg.terminal]
+	if id == "" {
+		return nil
+	}
+	pending, err := s.Store.PendingHandoffs(ctx)
+	if err != nil {
+		return fmt.Errorf("read pending handoffs: %w", err)
+	}
+	if err := heldBy(pending, id); err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: %s is bound to %s since retire read it; nothing was closed or ended, and a retry retires it as %s", ErrPaneChanged, tg.paneID, id, id)
 }
 
 // heldBy is ErrHandoffPending, naming the replacement, while id has a
@@ -299,6 +333,27 @@ func (s *Service) endRow(ctx context.Context, row *store.Worker, status string) 
 	return nil
 }
 
+// endClosed retires row, if there is one, once retire has closed the pane
+// pane.get proved showed its terminal. The pane is closed, so the worker
+// went with it whatever the row binds now: a re-key landing between the
+// proof and this write (a herdr live handoff in those milliseconds, which
+// A35 accepts) still retires it, by logical id and generation, rather than
+// leave a row bound to a closed pane for the poll to mark lost. A row retired
+// or bound at another generation meanwhile is left as it is.
+func (s *Service) endClosed(ctx context.Context, row *store.Worker) error {
+	if row == nil {
+		return nil
+	}
+	err := ignoreGone(s.Store.SetWorkerStatus(ctx, *row, store.StatusRetired, s.now()))
+	if errors.Is(err, store.ErrHandoffPending) {
+		return fmt.Errorf("%w: %w", ErrHandoffPending, err)
+	}
+	if err != nil {
+		return fmt.Errorf("record %s retired: %w", row.LogicalID, err)
+	}
+	return nil
+}
+
 // markGone records a worker whose pane went before retire closed it, unless
 // a herdr live handoff may have left it running on another terminal
 // (unkeyed).
@@ -365,33 +420,32 @@ func (s *Service) unkeyed(ctx context.Context, id, pane string) error {
 					return err
 				}
 			}
-			return fmt.Errorf("%w: herdr lists %s's terminal %s nowhere, and %s runs its shell: a herdr live handoff the team poll has not re-keyed yet; nothing was closed or ended, and a retry after the poll's next pass retires it", ErrPaneChanged, r.LogicalID, r.TerminalID, p.PaneID)
+			return fmt.Errorf("%w: herdr lists %s's terminal %s nowhere, and %s runs its shell: a herdr live handoff the team poll has not re-keyed yet; nothing was closed or ended. Retry after the poll's next pass; the live handoff erased the pane's tokens, so with --after-handoff the worker must run handoff ready again first", ErrPaneChanged, r.LogicalID, r.TerminalID, p.PaneID)
 		}
 	}
 	return nil
 }
 
-// holdsShell reports whether pane runs r's shell: herdr's shell pid for it is
-// r's, and, with a StartTime hook, so is that process's start time. A pane
-// gone holds nothing, nor does a shell whose start cannot be read, which has
-// exited. A pane herdr cannot describe, or knows no shell of yet, may hold
-// it: ErrHerdr, for a retry.
+// holdsShell reports whether pane is proven to run r's shell: herdr's shell
+// pid for it is r's, and so is that process's start time, read with the
+// team poll's own hook (A35). Only a proof refuses retire. A pane gone holds
+// nothing. So, unproven, does a pane herdr answers for without describing
+// its shell (an error body, a reply the schema does not allow, or no shell
+// pid yet), a service with no StartTime hook, and a shell whose start cannot
+// be read, which has exited: retire then keeps A35's rule for it, as for a
+// row with no shell, and a pane herdr never describes cannot block it. Only
+// a call that did not get herdr's answer (herdr unreachable, the op's
+// budget spent, the daemon stopping) is ErrHerdr, for a retry.
 func (s *Service) holdsShell(ctx context.Context, pane string, r store.Worker) (bool, error) {
 	info, err := s.Herdr.PaneProcessInfo(ctx, pane)
-	if errors.Is(err, herdr.ErrPaneNotFound) {
-		return false, nil
+	if errors.Is(err, herdr.ErrAPI) || errors.Is(err, herdr.ErrProtocol) {
+		return false, nil //nolint:nilerr // herdr answered without describing the pane's shell: unproven, not a failure
 	}
 	if err != nil {
 		return false, herdrFailed("read the shell of "+pane, err)
 	}
-	if info.ShellPID == 0 {
-		return false, fmt.Errorf("%w: herdr knows no shell of %s yet, which may hold %s; nothing was closed or ended", ErrHerdr, pane, r.LogicalID)
-	}
-	if info.ShellPID != r.ShellPID {
+	if info.ShellPID == 0 || info.ShellPID != r.ShellPID || s.StartTime == nil {
 		return false, nil
-	}
-	if s.StartTime == nil {
-		return true, nil
 	}
 	start, err := s.StartTime(int(info.ShellPID))
 	if err != nil {

@@ -241,46 +241,63 @@ func TestRetireRefusesAPendingHandoffAcrossALiveHandoff(t *testing.T) {
 	assert.Equal(t, "pending", handoffState(t, f, h))
 }
 
-// TestRetireCannotTellAPaneItCannotRead: a pane that may hold a worker whose
-// terminal herdr lists nowhere, which herdr cannot describe or knows no
-// shell of yet, is no proof either way: retire ends nothing and answers
-// ErrHerdr, for a retry.
-func TestRetireCannotTellAPaneItCannotRead(t *testing.T) {
+// TestRetireTreatsAPaneItCannotReadAsUnproven: only a proof that a pane runs
+// the worker's shell refuses retire. A pane herdr answers for without
+// describing its shell (an error body, or no shell pid yet) proves nothing,
+// so retire keeps A35's rule, as for a row with no shell, and a pane herdr
+// never describes cannot block the worker's retirement. A call that never
+// got herdr's answer, out of time, is ErrHerdr with nothing ended, for a
+// retry.
+func TestRetireTreatsAPaneItCannotReadAsUnproven(t *testing.T) {
 	t.Parallel()
-	t.Run("herdr fails", func(t *testing.T) {
-		t.Parallel()
-		f := newFixture(t, teamConfig)
-		w := shellWorker(t, f, "ha-coder-1", "coder")
-		f.h.mu.Lock()
-		liveHandoff(f.h, w.PaneID)
-		f.h.fail["pane.process_info"] = "internal_error"
-		f.h.mu.Unlock()
-
-		_, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID})
-		require.ErrorIs(t, err, workforce.ErrHerdr)
-		assert.Equal(t, store.StatusActive, f.row(t, w.ID).Status)
-		assert.Empty(t, f.h.params("pane.close"))
-	})
-	t.Run("no shell pid yet", func(t *testing.T) {
-		t.Parallel()
-		f := newFixture(t, teamConfig)
-		w := shellWorker(t, f, "ha-coder-1", "coder")
-		f.h.mu.Lock()
-		liveHandoff(f.h, w.PaneID)
-		f.h.mu.Unlock()
-		wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
-			reply := next()
-			if r.Method == "pane.process_info" && reply.Error == nil {
-				reply.Result.(map[string]any)["process_info"].(map[string]any)["shell_pid"] = 0
+	for name, tc := range map[string]struct {
+		reply   func(herdrtest.Reply) herdrtest.Reply
+		timeout bool
+	}{
+		"herdr answers an error": {reply: func(herdrtest.Reply) herdrtest.Reply {
+			return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "internal_error", Message: "internal_error"}}
+		}},
+		"no shell pid yet": {reply: func(r herdrtest.Reply) herdrtest.Reply {
+			r.Result.(map[string]any)["process_info"].(map[string]any)["shell_pid"] = 0
+			return r
+		}},
+		"a call that times out": {timeout: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, teamConfig)
+			w := shellWorker(t, f, "ha-coder-1", "coder")
+			f.h.mu.Lock()
+			liveHandoff(f.h, w.PaneID)
+			f.h.mu.Unlock()
+			wrapHerdr(t, f, func(r herdrtest.Request, next func() herdrtest.Reply) herdrtest.Reply {
+				if r.Method != "pane.process_info" {
+					return next()
+				}
+				if tc.timeout {
+					time.Sleep(400 * time.Millisecond)
+					return next()
+				}
+				return tc.reply(next())
+			})
+			if tc.timeout {
+				f.svc.Herdr.Timeout = 100 * time.Millisecond
 			}
-			return reply
-		})
 
-		_, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID})
-		require.ErrorIs(t, err, workforce.ErrHerdr)
-		assert.Equal(t, store.StatusActive, f.row(t, w.ID).Status)
-		assert.Empty(t, f.h.params("pane.close"))
-	})
+			res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID})
+			if tc.timeout {
+				require.ErrorIs(t, err, workforce.ErrHerdr)
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				assert.Equal(t, store.StatusActive, f.row(t, w.ID).Status, "nothing ended")
+				assert.True(t, f.row(t, w.ID).RetiredAt.IsZero(), "still live")
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, workforce.RetireResult{ID: w.ID, Changed: true, Outcome: workforce.OutcomeUnbound}, res)
+			assert.Equal(t, store.StatusRetired, f.row(t, w.ID).Status)
+			assert.Empty(t, f.h.params("pane.close"), "nothing closed, as A35 has it")
+		})
+	}
 }
 
 // TestRetireTellsAShellByItsStart: a pane at the worker's id that runs a
@@ -400,17 +417,19 @@ func TestRetireEndsNothingWhenItsContextEndsMidCheck(t *testing.T) {
 	})
 
 	_, err := f.svc.Retire(ctx, workforce.RetireRequest{Target: w.ID})
-	require.Error(t, err)
+	require.ErrorIs(t, err, workforce.ErrHerdr)
+	require.ErrorIs(t, err, context.Canceled, "the check ended on the cancel, not on a proof")
 	assert.Equal(t, store.StatusActive, f.row(t, w.ID).Status)
 	assert.True(t, f.row(t, w.ID).RetiredAt.IsZero(), "still live")
 	assert.Empty(t, f.h.params("pane.close"))
 }
 
-// TestRetireWithoutAStartTimeHookProvesByPid: a service given no StartTime
-// hook proves a worker's shell on a pane by its pid alone, so a candidate
-// with the row's shell pid is still the worker (ErrPaneChanged). The daemon
-// always gives the poll's hook (TestTheWorkforceProvesShellsWithThePollsHook).
-func TestRetireWithoutAStartTimeHookProvesByPid(t *testing.T) {
+// TestRetireWithoutAStartTimeHookProvesNothing: a service given no
+// StartTime hook proves no shell, as the team poll re-keys nothing without
+// one (A35): a candidate with the row's shell pid is unproven, and retire
+// keeps A35's rule. The daemon always gives the poll's hook
+// (TestTheWorkforceProvesShellsWithThePollsHook).
+func TestRetireWithoutAStartTimeHookProvesNothing(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, teamConfig)
 	f.svc.StartTime = nil
@@ -419,7 +438,129 @@ func TestRetireWithoutAStartTimeHookProvesByPid(t *testing.T) {
 	liveHandoff(f.h, w.PaneID)
 	f.h.mu.Unlock()
 
-	_, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID})
-	require.ErrorIs(t, err, workforce.ErrPaneChanged)
-	assert.Equal(t, store.StatusActive, f.row(t, w.ID).Status)
+	res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID})
+	require.NoError(t, err)
+	assert.Equal(t, workforce.RetireResult{ID: w.ID, Changed: true, Outcome: workforce.OutcomeUnbound}, res)
+	assert.Equal(t, store.StatusRetired, f.row(t, w.ID).Status)
+}
+
+// TestRetireByPaneIDRefusesAPaneRekeyedMeanwhile (NERD-5534, pre-check M1):
+// a pane named by its id that no row bound when retire read it, because a
+// herdr live handoff had renewed its terminal, can be the worker's again by
+// the time retire takes the workforce lock: the team poll re-keys the row
+// onto it while retire waits for its handoff. Under the lock retire reads
+// the rows again and refuses the pane as that worker's: ErrHandoffPending
+// while its handoff is pending, else ErrPaneChanged. Nothing is closed, and
+// the row stays live and bound.
+func TestRetireByPaneIDRefusesAPaneRekeyedMeanwhile(t *testing.T) {
+	t.Parallel()
+	for name, pending := range map[string]bool{"no handoff pending": false, "its handoff pending": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, teamConfig)
+			w := shellWorker(t, f, "ha-coder-1", "coder")
+			var next string
+			if pending {
+				next, _ = replacing(t, f, w)
+			}
+			row := f.row(t, w.ID).Worker
+			f.h.mu.Lock()
+			liveHandoff(f.h, w.PaneID)
+			lists := 0
+			var rekeyed error
+			f.h.onCall = func(method string) { // under the fake's lock
+				if method == "pane.list" {
+					if lists++; lists == 2 { // the wait's first poll
+						f.h.pane(w.PaneID).tokens = map[string]string{team.HandoffKey: "⟳ READY"}
+						rekeyed = f.st.RekeyWorker(context.Background(), row, w.PaneID, "term_renewed")
+					}
+				}
+			}
+			f.h.mu.Unlock()
+
+			res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.PaneID, AfterHandoff: true})
+			f.h.mu.Lock()
+			assert.NoError(t, rekeyed)
+			f.h.mu.Unlock()
+			if pending {
+				assert.ErrorIs(t, err, workforce.ErrHandoffPending, "answered %+v", res)
+				if err != nil {
+					assert.Contains(t, err.Error(), next, "it names the replacement")
+				}
+			} else {
+				assert.ErrorIs(t, err, workforce.ErrPaneChanged, "answered %+v", res)
+			}
+			assert.Empty(t, f.h.params("pane.close"), "the worker's pane is not closed")
+			now := f.row(t, w.ID)
+			assert.Equal(t, store.StatusActive, now.Status)
+			assert.True(t, now.RetiredAt.IsZero(), "still live")
+			assert.Equal(t, "term_renewed", now.TerminalID, "bound to the pane retire was asked to close")
+		})
+	}
+}
+
+// TestRetireEndsTheRowOfAPaneItClosed (pre-check N1): once retire has closed
+// the pane pane.get proved showed the worker's terminal, the worker went
+// with it. A re-key landing between the proof and the row's write still
+// retires the row, rather than leave it bound to a closed pane for the poll
+// to mark lost.
+func TestRetireEndsTheRowOfAPaneItClosed(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	w := shellWorker(t, f, "ha-coder-1", "coder")
+	row := f.row(t, w.ID).Worker
+	var rekeyed error
+	f.h.onCall = func(method string) { // under the fake's lock
+		if method == "pane.close" {
+			rekeyed = f.st.RekeyWorker(context.Background(), row, w.PaneID, "term_renewed")
+		}
+	}
+
+	res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID})
+	require.NoError(t, err)
+	f.h.mu.Lock()
+	require.NoError(t, rekeyed)
+	f.h.mu.Unlock()
+	assert.Equal(t, workforce.RetireResult{ID: w.ID, PaneID: w.PaneID, Changed: true, Outcome: workforce.OutcomeRetired}, res)
+	assert.Equal(t, store.StatusRetired, f.row(t, w.ID).Status)
+}
+
+// TestRetireALiveHandoffOfARowWithNoShell (pre-check N4): what NERD-5534
+// leaves to A35's rule. A row bound less than a poll before a herdr live
+// handoff has no shell, so nothing proves which pane runs its worker: retire
+// by its logical id ends it unbound with nothing closed, and by the renewed
+// pane's id closes that pane as one no row binds, the row left live for the
+// poll to mark lost. Covering it needs a rule A35 does not have.
+func TestRetireALiveHandoffOfARowWithNoShell(t *testing.T) {
+	t.Parallel()
+	t.Run("by its logical id", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t, teamConfig)
+		w := f.worker(t, "ha-coder-1", "coder")
+		f.h.mu.Lock()
+		liveHandoff(f.h, w.PaneID)
+		f.h.mu.Unlock()
+
+		res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID})
+		require.NoError(t, err)
+		assert.Equal(t, workforce.RetireResult{ID: w.ID, Changed: true, Outcome: workforce.OutcomeUnbound}, res)
+		assert.Equal(t, store.StatusRetired, f.row(t, w.ID).Status)
+		f.h.mu.Lock()
+		assert.NotNil(t, f.h.pane(w.PaneID), "the worker's pane is still open")
+		f.h.mu.Unlock()
+	})
+	t.Run("by the renewed pane's id", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t, teamConfig)
+		w := f.worker(t, "ha-coder-1", "coder")
+		f.h.mu.Lock()
+		liveHandoff(f.h, w.PaneID)
+		f.h.mu.Unlock()
+
+		res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.PaneID})
+		require.NoError(t, err)
+		assert.Equal(t, workforce.RetireResult{PaneID: w.PaneID, Changed: true, Outcome: workforce.OutcomeRetired}, res)
+		assert.Equal(t, []map[string]any{{"pane_id": w.PaneID}}, f.h.params("pane.close"))
+		assert.Equal(t, store.StatusActive, f.row(t, w.ID).Status, "left live, for the poll to mark lost")
+	})
 }
