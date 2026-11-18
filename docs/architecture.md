@@ -162,8 +162,9 @@ when each is written (deviation (g), decided by the user).
 The schema already holds every source (`github`, `daemon`, `team`), every
 state (`pending`, `imported`, `posted`, `dropped`) and the settle columns, so
 other sources' allocated IDs and the payload prune (B0a.4) need no migration.
-The quotas (B0a.3-limits) need one, 0010, for their running totals. That holds
-for the GitHub and daemon sources: a `team` post's author has no column yet.
+That holds for the GitHub and daemon sources: a `team` post's author has no
+column yet. The quotas (B0a.3-limits) need one, 0010, for their running
+totals.
 The board's writes (B0b onward) and its activation remain, each after human
 merge and separate authorization.
 
@@ -202,7 +203,7 @@ COMMIT;
 0010 is one-way, so the install rule stands: no build holding it is installed
 before the board's activation. It is dormant: only 0010's triggers write the
 totals, and `TestLedgerHasNoProductionCaller` fails on any non-test Go string
-naming them outside the ledger's files. The connection setting is the one live
+naming them outside `noticeledger.go`. The connection setting is the one live
 change.
 
 ## Deliberate limits

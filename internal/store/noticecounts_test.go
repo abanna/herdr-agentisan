@@ -77,9 +77,16 @@ type replacement struct {
 	identities int
 }
 
+// importedIdentity is an imported GitHub identity's columns, in
+// identityColumns' order: ci_failed on pr in ledgerRepo, with no payload.
+func importedIdentity(captureID, project string, pr int) []any {
+	return []any{captureID, project, "github", "ci_failed", ledgerRepo, pr, headOID, "imported", 1, nil, nil, nil, 0}
+}
+
 // replacements imports four notices in project ha and admits one pending,
 // then returns the three REPLACEs K6 and K7 run, in order. Each replaces
-// one import, an identity with no payload: the only rows a REPLACE can
+// one import, an identity with no payload: on a connection with
+// foreign_keys on, as K6's and K7's are, the only rows a REPLACE can
 // delete, since a payload's foreign key is RESTRICT. Each replaced row is
 // in project ha.
 func replacements(t *testing.T, s *store.Store) []replacement {
@@ -90,13 +97,10 @@ func replacements(t *testing.T, s *store.Store) []replacement {
 		imports[i] = importNotice(t, s, 60+i)
 	}
 	require.Equal(t, [2]int{5, 1}, ledgerRows(t, s))
-	identity := func(captureID, project string, pr int) []any {
-		return []any{captureID, project, "github", "ci_failed", ledgerRepo, pr, headOID, "imported", 1, nil, nil, nil, 0}
-	}
 	insertOrReplace := strings.Replace(insertIdentity, "INSERT INTO", "INSERT OR REPLACE INTO", 1)
 	return []replacement{
-		{"INSERT OR REPLACE of an existing capture ID into another project", insertOrReplace, identity(imports[0].CaptureID, "hb", 60), 5},
-		{"INSERT OR REPLACE colliding on the receipt", insertOrReplace, identity("gh1:replaces-a-receipt", "ha", 61), 5},
+		{"INSERT OR REPLACE of an existing capture ID into another project", insertOrReplace, importedIdentity(imports[0].CaptureID, "hb", 60), 5},
+		{"INSERT OR REPLACE colliding on the receipt", insertOrReplace, importedIdentity("gh1:replaces-a-receipt", "ha", 61), 5},
 		{"UPDATE OR REPLACE colliding on the capture ID", "UPDATE OR REPLACE notice_identities SET capture_id = ? WHERE capture_id = ?", []any{imports[3].CaptureID, imports[2].CaptureID}, 4},
 	}
 }
@@ -130,10 +134,12 @@ INSERT INTO notice_store_counts (id, identities)
 COMMIT;`
 
 // TestReplaceWithoutRecursiveTriggersOverCounts (K7) pins the limit 0010's
-// comment and the docs state: on a connection without recursive_triggers, a
-// sqlite3 shell's say, a REPLACE's hidden delete fires no trigger, so the
-// replaced row's project total and the store's stay one too high for each
-// replaced row. The docs' recount then repairs them.
+// comment and the docs state: on a connection without recursive_triggers,
+// as a sqlite3 shell's is, a REPLACE's hidden delete fires no trigger, so
+// the replaced row's project total and the store's stay one too high for
+// each replaced row. The docs' recount then repairs them. K7's connection
+// has foreign_keys on, which a shell's does not, so it cannot replace an
+// identity that has a payload.
 func TestReplaceWithoutRecursiveTriggersOverCounts(t *testing.T) {
 	t.Parallel()
 	path := dbPath(t)
@@ -179,10 +185,11 @@ var daemonIdentity = map[string]any{
 
 // TestNoticeCountsFollowEveryWrite (K1): the triggers keep each project's
 // total and the store's equal to a recount through every write the ledger
-// takes: an admission, an import, a daemon row in the empty project, a
-// delete and three moves, into a project with no identities, into one with
-// some, and of a project's last row. The project left empty keeps its row,
-// at 0 (M5).
+// takes: an admission, an import, a daemon row in the empty project, two
+// deletes, the second of the empty project's only identity, and three
+// moves, into a project with no identities, into one with some, and of a
+// project's last row. A project left empty, by the delete or the move,
+// keeps its row at 0 (M5).
 func TestNoticeCountsFollowEveryWrite(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
@@ -211,6 +218,7 @@ func TestNoticeCountsFollowEveryWrite(t *testing.T) {
 		args  []any
 	}{
 		{"the delete of an identity with no payload", "DELETE FROM notice_identities WHERE capture_id = ?", []any{deleted.CaptureID}},
+		{"the delete of the empty project's only identity", "DELETE FROM notice_identities WHERE capture_id = ?", []any{daemonIdentity["capture_id"]}},
 		{"a move into a project with no identities yet", move, []any{"hc", toNew.CaptureID}},
 		{"a move into a project that already has some", move, []any{"hb", pending.CaptureID}},
 		{"a move of a project's last row out", move, []any{"hc", last.CaptureID}},
@@ -223,8 +231,58 @@ func TestNoticeCountsFollowEveryWrite(t *testing.T) {
 		assertNoticeTotals(t, db)
 	}
 	projects, total = noticeTotals(t, db)
-	assert.Equal(t, map[string]int64{"": 1, "ha": 0, "hb": 2, "hc": 2}, projects, "ha, left empty, keeps its row at exactly 0")
-	assert.Equal(t, int64(5), total)
+	assert.Equal(t, map[string]int64{"": 0, "ha": 0, "hb": 2, "hc": 2}, projects, "ha, left empty by a move, and the empty project, by a delete, keep their rows at exactly 0")
+	assert.Equal(t, int64(4), total)
+}
+
+// TestNoticeCountsCountOnlyWhatIsWritten (K8): the triggers run after a row
+// is written, never before, so a write that writes no row leaves both
+// totals as they were, and an upsert that takes its DO UPDATE counts a
+// move, not an insert. The writes that write no row: an INSERT OR IGNORE of
+// an existing capture ID, into a new project, and of an existing receipt;
+// an INSERT ... ON CONFLICT DO NOTHING on a receipt; and an UPDATE OR
+// IGNORE move onto another row's receipt.
+func TestNoticeCountsCountOnlyWhatIsWritten(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	db := store.DB(s)
+	for _, row := range [][]any{
+		importedIdentity("gh1:k8-a", "ha", 70),
+		importedIdentity("gh1:k8-b", "ha", 71),
+		importedIdentity("gh1:k8-c", "hb", 71),
+	} {
+		_, err := db.ExecContext(t.Context(), insertIdentity, row...)
+		require.NoError(t, err)
+	}
+	assertNoticeTotals(t, db)
+
+	insertOrIgnore := strings.Replace(insertIdentity, "INSERT INTO", "INSERT OR IGNORE INTO", 1)
+	for _, step := range []struct {
+		name  string
+		query string
+		args  []any
+		rows  int64
+	}{
+		{"an INSERT OR IGNORE of an existing capture ID into a new project", insertOrIgnore, importedIdentity("gh1:k8-a", "hc", 72), 0},
+		{"an INSERT OR IGNORE of an existing receipt", insertOrIgnore, importedIdentity("gh1:k8-d", "ha", 70), 0},
+		{"an INSERT ... ON CONFLICT DO NOTHING on a receipt", insertIdentity + " ON CONFLICT DO NOTHING", importedIdentity("gh1:k8-e", "hb", 71), 0},
+		{"an UPDATE OR IGNORE move onto another row's receipt", "UPDATE OR IGNORE notice_identities SET project = ? WHERE capture_id = ?", []any{"hb", "gh1:k8-b"}, 0},
+		{"an upsert whose DO UPDATE moves the project", insertIdentity + " ON CONFLICT (capture_id) DO UPDATE SET project = excluded.project", importedIdentity("gh1:k8-a", "hc", 70), 1},
+	} {
+		res, err := db.ExecContext(t.Context(), step.query, step.args...)
+		require.NoError(t, err, step.name)
+		n, err := res.RowsAffected()
+		require.NoError(t, err)
+		require.Equal(t, step.rows, n, "%s wrote %d rows", step.name, step.rows)
+		require.Equal(t, [2]int{3, 0}, ledgerRows(t, s), "%s added no identity", step.name)
+		assertNoticeTotals(t, db)
+	}
+	assert.Equal(t, [][]any{{"gh1:k8-a", "hc"}, {"gh1:k8-b", "ha"}, {"gh1:k8-c", "hb"}},
+		queryRows(t, db, "SELECT capture_id, project FROM notice_identities ORDER BY capture_id"),
+		"only the upsert moved a row")
+	projects, total := noticeTotals(t, db)
+	assert.Equal(t, map[string]int64{"ha": 1, "hb": 1, "hc": 1}, projects)
+	assert.Equal(t, int64(3), total)
 }
 
 // TestNoticeCountsRollBackWithTheAdmission (K2): the totals move in the
