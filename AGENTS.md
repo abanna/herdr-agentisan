@@ -334,7 +334,12 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   `AdmitNotice` dedupes a GitHub notice by capture ID and receipt and
   imports one `github_seen` holds, `PendingNotice` re-checks its digest.
   Migration 0010 (B0a.3-totals, one-way) keeps the ledger's identity totals
-  by triggers.
+  by triggers. `spawnkeys.go` is worker spawn's retry keys (A73,
+  NERD-5254): migration 0011 (one-way) adds `spawn_requests` and
+  `spawn_request_workers`, which `BeginSpawn` writes, `SpawnRecord` reads
+  with each planned id's row now and its briefs, and `DropSpawn` drops
+  while nothing is bound; dormant until `worker spawn` takes a key, and
+  `TestSpawnKeysHaveNoProductionCaller` fails on any use outside it.
   No production caller, post, wake or `github_*` write;
   `noticedormant_test.go` fails on any use in a non-test file of
   `internal/` or `cmd/` but those two, and on SQL naming its tables in one

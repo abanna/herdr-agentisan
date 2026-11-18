@@ -206,6 +206,35 @@ totals, and `TestLedgerHasNoProductionCaller` fails on any non-test Go string
 naming them outside `noticeledger.go`. The connection setting is the one live
 change.
 
+## worker spawn's retry keys (NERD-5254)
+
+The retry keys' migration adds the store a retried `worker spawn` will answer
+from (ADR-001 A73). `spawn_requests` holds one record per retry key: the
+request it was first used for, as asked, `running` until its answer is stored,
+then `done` with it. `spawn_request_workers` holds the ids that request
+planned, in order, each with the generation it was bound at once bound. A link
+pins an id and its generation, so an answer can tell a worker retired since
+from one whose id was bound again; a column on `workers` could not, since a
+reused id rebinds its row.
+
+They are dormant until `worker spawn` reads them for a key (A73's part
+C-read). `BeginSpawn` writes a record and its planned ids in one transaction,
+and the insert itself refuses a known key (`ErrSpawnKeyExists`), never a read
+before it, so no replace can pass unnoticed. `SpawnRecord` reads one with each
+planned id's `workers` row now, while still at its linked generation, and its
+briefs: the messages to it at that generation from a boss or a pane, in any
+state. `DropSpawn` deletes a running record none of whose ids is bound.
+`TestSpawnKeysHaveNoProductionCaller` fails on any use of their names in a
+non-test file of `internal/` or `cmd/` but `spawnkeys.go`, on any string
+naming their tables outside it, and on any naming one with REPLACE.
+
+The schema refuses on its own what a record must never hold, whoever writes
+it: a key, effort, digest or outcome off its grammar, each compared by its
+byte length too, since SQL's `length()` and `GLOB` stop at a NUL; a count
+outside 1 to 64; a done record without its time or its answer; an answer
+that is not JSON. The migration is one-way and runs at `Open`: an older build
+then refuses the database (`ErrSchemaTooNew`).
+
 ## Deliberate limits
 
 - **Tracing exports only when told to.** `HERDR_AGENTISAN_OTLP_ENDPOINT` is empty by
