@@ -80,8 +80,9 @@ type target struct {
 // its handoff is pending, and retiring a pending handoff's replacement fails
 // that handoff. Nor is a worker a herdr live handoff left running, before
 // the team poll re-keyed its row, ended or closed as gone, unbound or a
-// pane no row binds (ErrPaneChanged, NERD-5534); its row is ended only
-// while it binds the terminal retire read.
+// pane no row binds (ErrPaneChanged, NERD-5534); a row whose pane retire
+// did not close is ended only while it binds the terminal retire read, and
+// one whose proven pane it closed is retired by logical id and generation.
 func (s *Service) Retire(ctx context.Context, req RetireRequest) (RetireResult, error) {
 	if strings.TrimSpace(req.Target) == "" {
 		return RetireResult{}, fmt.Errorf("%w: retire needs a logical id or a pane id", ErrBadRequest)
@@ -434,8 +435,9 @@ func (s *Service) unkeyed(ctx context.Context, id, pane string) error {
 // pid yet), a service with no StartTime hook, and a shell whose start cannot
 // be read, which has exited: retire then keeps A35's rule for it, as for a
 // row with no shell, and a pane herdr never describes cannot block it. Only
-// a call that did not get herdr's answer (herdr unreachable, the op's
-// budget spent, the daemon stopping) is ErrHerdr, for a retry.
+// a call that did not get herdr's answer (herdr unreachable, a call or the
+// op's budget timing out, the daemon stopping) is ErrHerdr, for a retry;
+// the daemon answers one past the op's own budget as timeout (A23).
 func (s *Service) holdsShell(ctx context.Context, pane string, r store.Worker) (bool, error) {
 	info, err := s.Herdr.PaneProcessInfo(ctx, pane)
 	if errors.Is(err, herdr.ErrAPI) || errors.Is(err, herdr.ErrProtocol) {
