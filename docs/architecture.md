@@ -204,8 +204,8 @@ COMMIT;
 0010 is one-way, so the install rule stands: no build holding it is installed
 before the board's activation. It is dormant: only 0010's triggers write the
 totals, and `TestLedgerHasNoProductionCaller` fails on any non-test Go string
-naming them outside `noticeledger.go`. The connection setting is the one live
-change.
+naming them outside `noticeledger.go` and `noticequota.go`. The connection
+setting is the one live change.
 
 ## The notice quotas (B0a.3-limits)
 
