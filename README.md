@@ -653,9 +653,11 @@ digit, then letters, digits and `. _ - : / @ [ ]`, such as `opus[1m]`.
 Every worker runs claude or codex, its provider (ADR-001 A62). A type runs
 its default provider: its group's `agent.provider`, else its group's own
 command's, else codex for `review`, else `[agent]`'s command's. Each
-provider has a command and a model of its own, for every type
-(`[agent.claude]`, `[agent.codex]`) and per type
-(`[groups.<g>.agent.codex]`), so a group can move to Codex with one line:
+provider has a command and a model of its own, for every type that runs it
+(`[agent.claude]`, `[agent.codex]`; the exceptions are `review`, whose
+built-in command outranks `[agent.codex]`, and the debugger, which ignores
+`[agent.claude]`'s command) and per type (`[groups.<g>.agent.codex]`), so a
+group can move to Codex with one line:
 
 ```toml
 [agent.codex]
