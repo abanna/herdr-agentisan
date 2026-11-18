@@ -564,3 +564,44 @@ func TestRetireALiveHandoffOfARowWithNoShell(t *testing.T) {
 		assert.Equal(t, store.StatusActive, f.row(t, w.ID).Status, "left live, for the poll to mark lost")
 	})
 }
+
+// TestRetireJudgesOnlyItsOwnTarget (pre-check S4): another worker's live
+// handoff the poll has not re-keyed refuses no other retire. A worker whose
+// pane really went is still retired unbound, and a pane no row binds still
+// closes, while a second worker's pane runs that worker's shell on a renewed
+// terminal: unkeyed judges only the target's row by logical id, and only the
+// named pane by pane id.
+func TestRetireJudgesOnlyItsOwnTarget(t *testing.T) {
+	t.Parallel()
+	t.Run("another worker, its pane gone", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t, teamConfig)
+		unkeyed := shellWorker(t, f, "ha-coder-1", "coder")
+		gone := shellWorker(t, f, "ha-coder-2", "coder")
+		f.h.mu.Lock()
+		liveHandoff(f.h, unkeyed.PaneID)
+		f.h.dropPane(gone.PaneID)
+		f.h.mu.Unlock()
+
+		res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: gone.ID})
+		require.NoError(t, err)
+		assert.Equal(t, workforce.RetireResult{ID: gone.ID, Changed: true, Outcome: workforce.OutcomeUnbound}, res)
+		assert.Equal(t, store.StatusRetired, f.row(t, gone.ID).Status)
+		assert.Equal(t, store.StatusActive, f.row(t, unkeyed.ID).Status, "the other worker is untouched")
+	})
+	t.Run("a pane no row binds", func(t *testing.T) {
+		t.Parallel()
+		f := newFixture(t, teamConfig)
+		unkeyed := shellWorker(t, f, "ha-coder-1", "coder")
+		stranger := f.h.addTab(f.ws, "scratch", "claude", "idle")
+		f.h.mu.Lock()
+		liveHandoff(f.h, unkeyed.PaneID)
+		f.h.mu.Unlock()
+
+		res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: stranger})
+		require.NoError(t, err)
+		assert.Equal(t, workforce.RetireResult{PaneID: stranger, Changed: true, Outcome: workforce.OutcomeRetired}, res)
+		assert.Equal(t, []map[string]any{{"pane_id": stranger}}, f.h.params("pane.close"), "only the stranger closes")
+		assert.Equal(t, store.StatusActive, f.row(t, unkeyed.ID).Status, "the other worker is untouched")
+	})
+}

@@ -439,7 +439,7 @@ func (s *Service) unkeyed(ctx context.Context, id, pane string) error {
 func (s *Service) holdsShell(ctx context.Context, pane string, r store.Worker) (bool, error) {
 	info, err := s.Herdr.PaneProcessInfo(ctx, pane)
 	if errors.Is(err, herdr.ErrAPI) || errors.Is(err, herdr.ErrProtocol) {
-		return false, nil //nolint:nilerr // herdr answered without describing the pane's shell: unproven, not a failure
+		return false, nil // herdr answered without describing the pane's shell: unproven, not a failure
 	}
 	if err != nil {
 		return false, herdrFailed("read the shell of "+pane, err)

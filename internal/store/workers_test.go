@@ -586,6 +586,8 @@ func TestEndWorkerIsACompareAndSetOnTheTerminal(t *testing.T) {
 			require.NoError(t, err)
 			assert.Equal(t, status, ended.Status)
 			require.ErrorIs(t, s.EndWorker(ctx, row, status, t1), store.ErrNoWorker, "retired since: no live row")
+			require.ErrorIs(t, s.EndWorker(ctx, read, status, t1), store.ErrNoWorker,
+				"re-keyed, then retired, since it was read: no live row, not a changed one (pre-check S4)")
 		})
 	}
 	t.Run("another generation", func(t *testing.T) {
