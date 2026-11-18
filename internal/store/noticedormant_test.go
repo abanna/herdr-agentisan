@@ -24,26 +24,37 @@ var ledgerNames = []string{
 	"AdmitNotice", "PendingNotice", "PendingNotices", "NoticeStats", "PruneNoticePayloads",
 	"NoticeAdmission", "ErrNoNotice",
 	"GitHubNoticeCaptureID", "NoticeEnvelope", "NoticeReceipt",
+	"ErrNoticeQuota", "ErrNoticePendingPerProject", "ErrNoticePendingInStore", "ErrNoticePendingPerPR",
+	"ErrNoticeBytesPerProject", "ErrNoticeBytesInStore", "ErrNoticeIdentitiesPerProject",
+	"ErrNoticeIdentitiesInStore", "ErrNoticeAdmissionRate",
 }
 
 // ledgerTables are the tables 0009 and 0010 add. Only the ledger names them
 // in SQL.
 var ledgerTables = []string{"notice_identities", "notice_payloads", "notice_counts", "notice_store_counts"}
 
-// The ledger's own files, relative to the module root: B0a.1's helper and
-// the ledger may use its names, and only the ledger may name its tables.
+// The ledger's own files, relative to the module root: B0a.1's helper, the
+// ledger and its quotas may use its names, and only the ledger and its
+// quotas may name its tables.
 const (
 	ledgerHelper = "internal/store/boardnotice.go"
 	ledgerFile   = "internal/store/noticeledger.go"
+	quotaFile    = "internal/store/noticequota.go"
+)
+
+var (
+	ledgerNameFiles  = []string{ledgerHelper, ledgerFile, quotaFile}
+	ledgerTableFiles = []string{ledgerFile, quotaFile}
 )
 
 // productionUses parses every non-test Go file under root/dir. It returns,
 // by file relative to root, each use of one of wantNames (an identifier
 // spelled so, a selector, a method, an interface's method or a dot-import's
 // bare name alike) and each string literal naming one of wantTables, in any
-// case, as SQL reads it. It also returns each of those literals that
-// contains REPLACE, in any case and in any file, and how many files it
-// parsed. The ledger's dormancy test and the retry keys' share it.
+// case, as SQL reads it, once for each table it names, with that table's
+// name. It also returns each of those literals that contains REPLACE, in any
+// case and in any file, and how many files it parsed. The ledger's dormancy
+// test and the retry keys' share it.
 func productionUses(t *testing.T, root, dir string, wantNames, wantTables []string) (names, tables map[string][]string, replaces []string, files int) {
 	t.Helper()
 	names, tables = map[string][]string{}, map[string][]string{}
@@ -78,14 +89,19 @@ func productionUses(t *testing.T, root, dir string, wantNames, wantTables []stri
 					names[rel] = append(names[rel], fset.Position(n.Pos()).String()+" "+n.Name)
 				}
 			case *ast.BasicLit:
-				lit := strings.ToLower(n.Value)
-				if n.Kind == token.STRING && slices.ContainsFunc(wantTables, func(table string) bool {
-					return strings.Contains(lit, table)
-				}) {
-					tables[rel] = append(tables[rel], fset.Position(n.Pos()).String())
-					if strings.Contains(lit, "replace") {
-						replaces = append(replaces, fset.Position(n.Pos()).String())
+				if n.Kind != token.STRING {
+					break
+				}
+				lit, pos := strings.ToLower(n.Value), fset.Position(n.Pos()).String()
+				named := false
+				for _, table := range wantTables {
+					if strings.Contains(lit, table) {
+						tables[rel] = append(tables[rel], pos+" "+table)
+						named = true
 					}
+				}
+				if named && strings.Contains(lit, "replace") {
+					replaces = append(replaces, pos)
 				}
 			}
 			return true
@@ -97,10 +113,11 @@ func productionUses(t *testing.T, root, dir string, wantNames, wantTables []stri
 }
 
 // TestLedgerHasNoProductionCaller (D1): the ledger is dormant. No non-test
-// file in internal/ or cmd/ but the ledger's own uses any of its names, and
-// none but the ledger names its tables in SQL, 0010's totals included, so
-// nothing in production admits, reads or builds a notice for it, or reaches
-// its rows around it.
+// file in internal/ or cmd/ but the ledger's own (boardnotice.go,
+// noticeledger.go and noticequota.go) uses any of its names, its quotas'
+// errors included, and none but noticeledger.go and noticequota.go names
+// its tables in SQL, 0010's totals included, so nothing in production
+// admits, reads or builds a notice for it, or reaches its rows around it.
 //
 // No non-test Go string, the ledger's own included, names a ledger table
 // with REPLACE in it either: on a connection without recursive_triggers, a
@@ -134,10 +151,20 @@ func TestLedgerHasNoProductionCaller(t *testing.T) {
 		assert.True(t, found[name], "the scan finds %s in the ledger's files", name)
 	}
 	assert.NotEmpty(t, tables[ledgerFile], "the scan finds the ledger's SQL")
+	inQuotas := map[string]bool{}
+	for _, use := range slices.Concat(names[quotaFile], tables[quotaFile]) {
+		inQuotas[use[strings.LastIndexByte(use, ' ')+1:]] = true
+	}
+	for _, name := range []string{"ErrNoticeQuota", "ErrNoticeAdmissionRate", "notice_counts"} {
+		assert.True(t, inQuotas[name], "the scan finds %s in %s", name, quotaFile)
+	}
 
-	delete(names, ledgerHelper)
-	delete(names, ledgerFile)
-	delete(tables, ledgerFile)
+	for _, file := range ledgerNameFiles {
+		delete(names, file)
+	}
+	for _, file := range ledgerTableFiles {
+		delete(tables, file)
+	}
 	assert.Empty(t, names, "the notice ledger is dormant until the board's activation (NERD-5533 B1)")
 	assert.Empty(t, tables, "only the ledger names its tables in SQL")
 	assert.Empty(t, replaces, "no Go string names a ledger table with REPLACE in it")

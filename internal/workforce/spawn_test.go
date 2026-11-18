@@ -41,7 +41,7 @@ func TestSpawnOpensOneTabPerWorker(t *testing.T) {
 	tabs := f.h.params("tab.create")
 	require.Len(t, tabs, 2)
 	for i, id := range []string{"ha-coder-1", "ha-coder-2"} {
-		assert.Equal(t, map[string]any{"workspace_id": f.ws, "cwd": f.repo, "label": id, "focus": false, "env": map[string]any{workforce.WorkerEnv: id}}, tabs[i])
+		assert.Equal(t, map[string]any{"workspace_id": f.ws, "cwd": f.repo, "label": id, "focus": false, "env": claudeEnv(id)}, tabs[i])
 	}
 	starts := f.h.params("agent.start")
 	require.Len(t, starts, 2)
@@ -488,7 +488,7 @@ func TestSpawnOpensTheTeamWorkspace(t *testing.T) {
 
 	res, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Selector: workforce.Selector{Project: "assay"}, Group: "qa", Count: 2})
 	require.NoError(t, err)
-	assert.Equal(t, []map[string]any{{"cwd": f.repo, "label": "assay", "focus": false, "env": map[string]any{workforce.WorkerEnv: "as-qa-1"}}}, f.h.params("workspace.create"))
+	assert.Equal(t, []map[string]any{{"cwd": f.repo, "label": "assay", "focus": false, "env": claudeEnv("as-qa-1")}}, f.h.params("workspace.create"))
 	renames := f.h.params("tab.rename")
 	require.Len(t, renames, 1)
 	assert.Equal(t, "as-qa-1", renames[0]["label"])

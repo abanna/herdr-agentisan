@@ -234,7 +234,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   pane is bound to (A35); opening a tab per worker and waiting for its agent,
   of the provider `--provider` or the packet's preference asks for, else the
   type's default (`provider.go`, A66), a Claude one launched with A42's turn
-  hooks as `--settings`,
+  hooks as `--settings` and, in its tab's environment, Claude Code's agents
+  view and prompt suggestions off (`CLAUDE_CODE_DISABLE_AGENT_VIEW=1`,
+  `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0`; the debugger's included, no
+  Codex worker's, and never the user's own boss; NERD-5650),
   after `internal/preflight`'s check and, for a coder with a task packet,
   Jev's answer (`jev.go`, A57), each group up to its count for
   `team up`, which also opens the team's dashboard above the boss
@@ -333,18 +336,20 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   dormant notice admission ledger (B0a.2, migration 0009, one-way):
   `AdmitNotice` dedupes a GitHub notice by capture ID and receipt and
   imports one `github_seen` holds, `PendingNotice` re-checks its digest.
-  Migration 0010 (B0a.3-totals, one-way) keeps the ledger's identity totals
-  by triggers. `spawnkeys.go` is worker spawn's retry keys (A73,
-  NERD-5254): migration 0011 (one-way) adds `spawn_requests` and
-  `spawn_request_workers`, which `BeginSpawn` writes, `SpawnRecord` reads
-  with each planned id's row now and its briefs, and `DropSpawn` drops
-  while nothing is bound; dormant until `worker spawn` takes a key, and
-  `TestSpawnKeysHaveNoProductionCaller` fails on any use outside it.
+  `noticequota.go` refuses an admission past one of eight quotas
+  (B0a.3-limits, migration 0010, one-way, its identity totals kept by
+  triggers).
   No production caller, post, wake or `github_*` write;
   `noticedormant_test.go` fails on any use in a non-test file of
-  `internal/` or `cmd/` but those two, and on SQL naming its tables in one
-  but `noticeledger.go`; it also fails on any non-test Go string naming a
-  ledger table with REPLACE in it.
+  `internal/` or `cmd/` but those three, and on SQL naming its tables in one
+  but `noticeledger.go` and `noticequota.go`; it also fails on any non-test
+  Go string naming a ledger table with REPLACE in it. `spawnkeys.go` is
+  worker spawn's retry keys (A73, NERD-5254): migration 0011 (one-way) adds
+  `spawn_requests` and `spawn_request_workers`, which `BeginSpawn` writes,
+  `SpawnRecord` reads with each planned id's row now and its briefs, and
+  `DropSpawn` drops while nothing is bound; dormant until `worker spawn`
+  takes a key, and `TestSpawnKeysHaveNoProductionCaller` fails on any use
+  outside it.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real

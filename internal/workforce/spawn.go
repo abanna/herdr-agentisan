@@ -517,8 +517,11 @@ func (s *Service) bringUp(ctx context.Context, cfg settings.Spawn, ws []opened) 
 	return out, fmt.Errorf("%w: %w", ErrSpawnFailed, errors.Join(failed...))
 }
 
-// codexKind is herdr's kind for Codex.
-const codexKind = "codex"
+// claudeKind and codexKind are herdr's kinds for Claude and Codex.
+const (
+	claudeKind = "claude"
+	codexKind  = "codex"
+)
 
 // noDaemon runs Codex embedded, off the shared app-server, which A22 needs
 // for its ctx; Codex refuses the flag twice, so it is added only when absent.
@@ -534,6 +537,15 @@ type launch struct {
 	env         map[string]string
 	ownSettings bool
 }
+
+// A Claude worker's tab sets Claude Code's agents view off, so a left arrow
+// cannot move its conversation into a background session that a message typed
+// into the pane then reaches instead of it, and prompt suggestions off
+// (NERD-5650, A72). Never a Codex worker's, nor the user's own boss.
+const (
+	disableAgentViewEnv = "CLAUDE_CODE_DISABLE_AGENT_VIEW"
+	promptSuggestionEnv = "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION"
+)
 
 // settingsFlag is Claude Code's --settings. It applies only the last one it
 // is given, whole: a launch with two would drop one (Claude Code 2.1.309).
@@ -618,7 +630,8 @@ var effortPattern = regexp.MustCompile(`^[a-z]{1,16}$`)
 // c's model and effort and, for Claude only, --name with the id (herdr names
 // a Codex), then the turn hooks as --settings, unless the command passes its
 // own; the debugger's go into its launch's one --settings object instead
-// (withTurnHooks). A debugger's tab also gets its launch's environment.
+// (withTurnHooks). A debugger's tab also gets its launch's environment, and
+// every Claude worker's the two switches above.
 func plan(p *settings.Profile, typ string, c choice, ids []string, dbg *debugger.Command) ([]planned, error) {
 	agent, err := agentOf(p, typ, c.asked)
 	if err != nil {
@@ -660,11 +673,19 @@ func plan(p *settings.Profile, typ string, c choice, ids []string, dbg *debugger
 	if err := checkFamily(typ, c.model, kind); err != nil {
 		return nil, err
 	}
+	if kind == claudeKind {
+		// A copy: the debugger's launch shares its map across workers.
+		env = maps.Clone(env)
+		if env == nil {
+			env = map[string]string{}
+		}
+		env[disableAgentViewEnv], env[promptSuggestionEnv] = "1", "0"
+	}
 	// own is a command passing a --settings of the user's, which starts
 	// without the turn hooks; the debugger's is the plugin's fence, which
 	// carries them already.
 	hooked := typ == settings.DebuggerType
-	own := kind == "claude" && !hooked && passesSettings(agent.Command[1:])
+	own := kind == claudeKind && !hooked && passesSettings(agent.Command[1:])
 	out := make([]planned, 0, len(ids))
 	for _, id := range ids {
 		args := slices.Clone(agent.Command[1:])
@@ -684,7 +705,7 @@ func plan(p *settings.Profile, typ string, c choice, ids []string, dbg *debugger
 		default:
 			args = append(args, "--effort", c.effort)
 		}
-		if kind == "claude" {
+		if kind == claudeKind {
 			args = append(args, "--name", id)
 			if !own && !hooked {
 				args = append(args, settingsFlag, turnHooks)

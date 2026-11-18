@@ -308,6 +308,13 @@ start yourself, such as the boss's; Claude Code runs a handler installed
 twice only once. A group whose agent command passes its own `--settings`
 gets none, since Claude Code applies only one, and spawn warns of it.
 
+They also open each Claude worker's tab, the debugger's included, with
+`CLAUDE_CODE_DISABLE_AGENT_VIEW=1` and `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0`
+in its environment, so a left arrow cannot move the worker's conversation
+into the background-sessions list, where a message typed into the pane would
+start a new session, and no suggestion greys its composer. A Codex worker gets
+neither, and your own boss keeps both. Earlier workers keep them until they rotate.
+
 For Codex, run `herdr-agentisan codex hooks --turn`. It installs the
 [Codex turn hooks](docs/config/codex-turn-hooks.example.toml) with the `ctx`
 hooks above, in `~/.codex/hooks.json`, each in a group of its own, and
@@ -526,12 +533,12 @@ from the shared file, the project's table and the repo file. `skip` can name
 ## The team board
 
 B0a.1 supplies a pure GitHub notice capture-ID helper and frozen input types,
-B0a.2 the ledger that will admit each notice once (migration 0009), and
-B0a.3-totals its running totals (migration 0010). All are dormant: nothing
-calls them, and nothing is posted or woken by them. Migrations 0009 and 0010
-are one-way, so no build holding either is installed before the board's
-activation, the first install being the activation build. Board B remains
-incomplete.
+B0a.2 the ledger that will admit each notice once (migration 0009),
+B0a.3-totals its running totals (migration 0010), and B0a.3-limits its eight
+quotas. All are dormant: nothing calls them, and nothing is posted or woken by
+them. Migrations 0009 and 0010 are one-way, so no build holding either is
+installed before the board's activation, the first install being the
+activation build. Board B remains incomplete.
 
 Each team has a board in `state.db`: its workers' posts and the daemon's
 notices. Only the team's boss and the user read it; workers only post. The
