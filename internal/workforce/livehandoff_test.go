@@ -243,7 +243,8 @@ func TestRetireRefusesAPendingHandoffAcrossALiveHandoff(t *testing.T) {
 
 // TestRetireTreatsAPaneItCannotReadAsUnproven: only a proof that a pane runs
 // the worker's shell refuses retire. A pane herdr answers for without
-// describing its shell (an error body, or no shell pid yet) proves nothing,
+// describing its shell (an error body, a reply outside its schema, or no
+// shell pid yet) proves nothing,
 // so retire keeps A35's rule, as for a row with no shell, and a pane herdr
 // never describes cannot block the worker's retirement. A call that never
 // got herdr's answer, out of time, is ErrHerdr with nothing ended, for a
@@ -256,6 +257,9 @@ func TestRetireTreatsAPaneItCannotReadAsUnproven(t *testing.T) {
 	}{
 		"herdr answers an error": {reply: func(herdrtest.Reply) herdrtest.Reply {
 			return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "internal_error", Message: "internal_error"}}
+		}},
+		"herdr answers outside its schema": {reply: func(herdrtest.Reply) herdrtest.Reply {
+			return herdrtest.Reply{Result: map[string]any{"type": "not_process_info"}}
 		}},
 		"no shell pid yet": {reply: func(r herdrtest.Reply) herdrtest.Reply {
 			r.Result.(map[string]any)["process_info"].(map[string]any)["shell_pid"] = 0
