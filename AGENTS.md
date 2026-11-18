@@ -234,7 +234,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   pane is bound to (A35); opening a tab per worker and waiting for its agent,
   of the provider `--provider` or the packet's preference asks for, else the
   type's default (`provider.go`, A66), a Claude one launched with A42's turn
-  hooks as `--settings`,
+  hooks as `--settings` and, in its tab's environment, Claude Code's agents
+  view and prompt suggestions off (`CLAUDE_CODE_DISABLE_AGENT_VIEW=1`,
+  `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0`; the debugger's included, no
+  Codex worker's, and never the user's own boss; NERD-5650),
   after `internal/preflight`'s check and, for a coder with a task packet,
   Jev's answer (`jev.go`, A57), each group up to its count for
   `team up`, which also opens the team's dashboard above the boss
