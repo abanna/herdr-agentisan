@@ -233,8 +233,9 @@ however large the ledger grows. Q8's window is one hour, bounded below only:
 an admission exactly an hour old is out, and one stamped after the admission
 being checked counts.
 
-Q6 and Q7 read the totals of the section above. A missing total is
-`ErrStore`, never 0; the recount above repairs it.
+Q6 and Q7 read the totals of the section above. A missing store total, or a
+missing total of a project that has identities, is `ErrStore`; a project with
+neither reads 0. The recount above repairs a missing total.
 
 It is dormant: `TestLedgerHasNoProductionCaller` covers `noticequota.go`, its
 names and its SQL.

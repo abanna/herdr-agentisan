@@ -115,14 +115,24 @@ func ledgerSnapshot(t *testing.T, s *store.Store) [][][]any {
 	}
 }
 
+// quotaLimit is Qquota's limit in q.
+func quotaLimit(q store.NoticeQuotas, quota int) int64 {
+	return []int64{
+		q.PendingPerProject, q.PendingInStore, q.PendingPerPR, q.BytesPerProject, q.BytesInStore,
+		q.IdentitiesPerProject, q.IdentitiesInStore, q.AdmissionsPerHour,
+	}[quota-1]
+}
+
 // refused admits e at at, which Qquota must refuse with its own error, one
-// that wraps ErrNoticeQuota and no other quota's, writing nothing.
+// that wraps ErrNoticeQuota and no other quota's and names the limit it
+// refused at, writing nothing.
 func (f *quotaFixture) refused(e store.NoticeEnvelope, at time.Time, quota int) {
 	f.t.Helper()
 	before := ledgerSnapshot(f.t, f.s)
 	got, err := f.s.AdmitNotice(f.t.Context(), e, at)
 	require.ErrorIs(f.t, err, quotaErrs[quota-1], "Q%d refuses", quota)
 	f.t.Logf("Q%d refuses the next: %v", quota, err)
+	assert.EqualError(f.t, err, fmt.Sprintf("%v (limit %d)", quotaErrs[quota-1], quotaLimit(store.NoticeQuotasOf(f.s), quota)))
 	assert.ErrorIs(f.t, err, store.ErrNoticeQuota)
 	for i, other := range quotaErrs {
 		if i != quota-1 {
@@ -364,8 +374,9 @@ func TestDuplicateWinsOverAFullQuota(t *testing.T) {
 // TestRateWindowIsBoundedBelow (Q-window): Q8 counts a project's
 // admissions of the last hour, every state, from one a nanosecond younger
 // than an hour to any stamped after the one being checked, and its lower
-// bound saturates at the oldest time the store holds. Q8 is 1, so each
-// project is refused exactly when its one earlier row counts.
+// bound saturates at the oldest time the store holds, through the last
+// nanosecond whose bound would wrap. Q8 is 1, so each project is refused
+// exactly when its one earlier row counts.
 func TestRateWindowIsBoundedBelow(t *testing.T) {
 	t.Parallel()
 	f := newQuotaFixture(t)
@@ -397,9 +408,92 @@ func TestRateWindowIsBoundedBelow(t *testing.T) {
 	}
 
 	oldest := time.Unix(0, math.MinInt64)
-	f.admitAt(f.notice("oldest", 50), oldest, "pending")
-	f.refused(f.notice("oldest", 51), oldest, 8)
+	for project, at := range map[string]time.Time{
+		"oldest":            oldest,
+		"oldest-and-1ns":    oldest.Add(time.Nanosecond),
+		"last-saturating":   oldest.Add(store.NoticeRateWindow - 2*time.Nanosecond),
+		"first-unsaturated": oldest.Add(store.NoticeRateWindow - time.Nanosecond),
+	} {
+		f.admitAt(f.notice(project, 50), oldest, "pending")
+		f.refused(f.notice(project, 51), at, 8)
+	}
 	f.admitAt(f.notice("oldest", 52), oldest.Add(store.NoticeRateWindow), "pending")
+}
+
+// TestByteQuotasDoNotWrap (Q-wrap): Q4 and Q5 compare the pending sum with
+// the limit less this notice's bytes, so a payload whose bytes a hand edit
+// has set to the most int64 holds refuses the next pending notice, its
+// project's at Q4 and another project's at Q5, instead of wrapping the sum
+// negative and admitting it.
+func TestByteQuotasDoNotWrap(t *testing.T) {
+	t.Parallel()
+	f := newQuotaFixture(t)
+	edited := f.pending("A", 50)
+	_, err := store.DB(f.s).ExecContext(t.Context(), "UPDATE notice_payloads SET bytes = ? WHERE capture_id = ?", int64(math.MaxInt64), edited.CaptureID)
+	require.NoError(t, err)
+	f.refused(f.notice("A", 51), ledgerAt, 4)
+	f.refused(f.notice("B", 50), ledgerAt, 5)
+}
+
+// fillPending inserts n pending identities of project, by raw SQL in one
+// transaction, each on a receipt of its own, admitted at at, on PR pr, or
+// each on a PR of its own from 1,000 when pr is 0. The triggers move the
+// totals; no payload is stored, so Q4 and Q5 sum nothing for them.
+func fillPending(t *testing.T, s *store.Store, project string, n int, pr int64, at time.Time) {
+	t.Helper()
+	tx, err := store.DB(s).BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	for i := range n {
+		p := pr
+		if p == 0 {
+			p = 1000 + int64(i)
+		}
+		_, err := tx.ExecContext(t.Context(), insertIdentity, fmt.Sprintf("fill:%s:%d", project, i), project, "github", "ci_failed",
+			ledgerRepo, p, fmt.Sprintf("fill-%s-%d", project, i), "pending", at.UnixNano(), nil, nil, nil, 0)
+		require.NoError(t, err)
+	}
+	require.NoError(t, tx.Commit())
+}
+
+// TestQuotasHoldAtTheirDefaults (Q-default): Q1, Q2, Q3 and Q8 at the
+// defaults open sets, each filled to cap-1 by raw SQL: the cap-th admission
+// is accepted and the next is refused with that quota's own error. It pins
+// each walk's LIMIT, which a test at a small cap cannot: a walk bound to a
+// smaller quota's cap stops short of the default and never refuses. Q1's to
+// Q3's rows are two hours old, outside Q8's window.
+func TestQuotasHoldAtTheirDefaults(t *testing.T) {
+	t.Parallel()
+	old := ledgerAt.Add(-2 * time.Hour)
+	for quota, fill := range map[int]func(*quotaFixture) (accepted, next store.NoticeEnvelope){
+		1: func(f *quotaFixture) (store.NoticeEnvelope, store.NoticeEnvelope) {
+			fillPending(f.t, f.s, "A", 999, 0, old)
+			return f.notice("A", 50), f.notice("A", 51)
+		},
+		2: func(f *quotaFixture) (store.NoticeEnvelope, store.NoticeEnvelope) {
+			for i, n := range []int{1000, 1000, 1000, 1000, 999} {
+				fillPending(f.t, f.s, fmt.Sprintf("P%d", i), n, 0, old)
+			}
+			return f.notice("C", 50), f.notice("D", 50)
+		},
+		3: func(f *quotaFixture) (store.NoticeEnvelope, store.NoticeEnvelope) {
+			fillPending(f.t, f.s, "A", 31, 50, old)
+			return f.notice("A", 50), f.notice("A", 50)
+		},
+		8: func(f *quotaFixture) (store.NoticeEnvelope, store.NoticeEnvelope) {
+			fillPending(f.t, f.s, "A", 599, 0, ledgerAt)
+			return f.notice("A", 50), f.notice("A", 51)
+		},
+	} {
+		t.Run(fmt.Sprintf("Q%d", quota), func(t *testing.T) {
+			t.Parallel()
+			f := newQuotaFixture(t)
+			accepted, next := fill(f)
+			f.admitAt(accepted, ledgerAt, "pending")
+			t.Logf("Q%d at its default cap of %d: the cap-th admission is accepted", quota, quotaLimit(store.NoticeQuotasOf(f.s), quota))
+			f.refused(next, ledgerAt, quota)
+		})
+	}
 }
 
 // TestQuotaHoldsUnderConcurrency (Q-race): the quotas are read in the

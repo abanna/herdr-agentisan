@@ -153,7 +153,10 @@ func checkNoticeQuotas(ctx context.Context, tx *sql.Tx, q noticeQuotas, project 
 }
 
 // checkPendingQuotas checks Q1 to Q5, the quotas only a pending notice
-// faces.
+// faces. A byte quota compares the pending sum with its limit less this
+// notice's bytes, which a canonical encoding's length keeps small, so a sum
+// a hand edit has made as large as int64 holds refuses instead of wrapping
+// past it and admitting.
 func checkPendingQuotas(ctx context.Context, tx *sql.Tx, q noticeQuotas, project string, r *NoticeReceipt, bytes int64) error {
 	n, err := readQuota(ctx, tx, selectPendingPerProject, project, q.PendingPerProject)
 	if err != nil {
@@ -177,13 +180,13 @@ func checkPendingQuotas(ctx context.Context, tx *sql.Tx, q noticeQuotas, project
 	if n, err = readQuota(ctx, tx, selectBytesPerProject, project, q.PendingPerProject); err != nil {
 		return err
 	}
-	if n+bytes > q.BytesPerProject {
+	if n > q.BytesPerProject-bytes {
 		return quotaRefused(ErrNoticeBytesPerProject, q.BytesPerProject)
 	}
 	if n, err = readQuota(ctx, tx, selectBytesInStore, q.PendingInStore); err != nil {
 		return err
 	}
-	if n+bytes > q.BytesInStore {
+	if n > q.BytesInStore-bytes {
 		return quotaRefused(ErrNoticeBytesInStore, q.BytesInStore)
 	}
 	return nil
