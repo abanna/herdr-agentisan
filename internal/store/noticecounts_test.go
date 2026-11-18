@@ -273,7 +273,7 @@ func TestNoticeCountsCountOnlyWhatIsWritten(t *testing.T) {
 		require.NoError(t, err, step.name)
 		n, err := res.RowsAffected()
 		require.NoError(t, err)
-		require.Equal(t, step.rows, n, "%s wrote %d rows", step.name, step.rows)
+		require.Equal(t, step.rows, n, "the rows %s writes", step.name)
 		require.Equal(t, [2]int{3, 0}, ledgerRows(t, s), "%s added no identity", step.name)
 		assertNoticeTotals(t, db)
 	}

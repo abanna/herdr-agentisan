@@ -146,8 +146,8 @@ func TestLedgerHasNoProductionCaller(t *testing.T) {
 // TestLedgerScanFindsAReplace (D1-R): D1's REPLACE scan, run over one
 // non-test file, reports a REPLACE on a ledger table in capitals, in lower
 // case and in a raw string alike, an UPDATE OR REPLACE as an INSERT OR
-// REPLACE, and one on 0010's tables as on 0009's, so D1 cannot pass by
-// seeing none.
+// REPLACE, and one on 0010's notice_counts as on 0009's notice_identities,
+// so D1 cannot pass by seeing none.
 func TestLedgerScanFindsAReplace(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
