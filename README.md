@@ -308,6 +308,13 @@ start yourself, such as the boss's; Claude Code runs a handler installed
 twice only once. A group whose agent command passes its own `--settings`
 gets none, since Claude Code applies only one, and spawn warns of it.
 
+They also open each Claude worker's tab, the debugger's included, with
+`CLAUDE_CODE_DISABLE_AGENT_VIEW=1` and `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=0`
+in its environment, so a left arrow cannot move the worker's conversation
+into the background-sessions list, where a message typed into the pane would
+start a new session, and no suggestion greys its composer. A Codex worker gets
+neither, and your own boss keeps both. Earlier workers keep them until they rotate.
+
 For Codex, run `herdr-agentisan codex hooks --turn`. It installs the
 [Codex turn hooks](docs/config/codex-turn-hooks.example.toml) with the `ctx`
 hooks above, in `~/.codex/hooks.json`, each in a group of its own, and

@@ -106,7 +106,7 @@ func TestSpawnLaunchesTheDebugger(t *testing.T) {
 	require.Len(t, tabs, 1)
 	assert.Equal(t, map[string]any{
 		"workspace_id": f.ws, "cwd": want.Dir, "label": "ha-debugger-1", "focus": false,
-		"env": map[string]any{workforce.WorkerEnv: "ha-debugger-1", trail.ConfigDirEnv: f.config},
+		"env": map[string]any{workforce.WorkerEnv: "ha-debugger-1", trail.ConfigDirEnv: f.config, agentViewOff: "1", suggestionsOff: "0"},
 	}, tabs[0])
 	starts := f.h.params("agent.start")
 	require.Len(t, starts, 1)
@@ -286,7 +286,7 @@ func TestUpOpensTheDebugger(t *testing.T) {
 	require.GreaterOrEqual(t, i, 0, "the debugger's tab opens")
 	tab := f.h.params("tab.create")[i]
 	assert.Equal(t, want.Dir, tab["cwd"])
-	assert.Equal(t, map[string]any{workforce.WorkerEnv: "ha-debugger-1", trail.ConfigDirEnv: f.config}, tab["env"])
+	assert.Equal(t, map[string]any{workforce.WorkerEnv: "ha-debugger-1", trail.ConfigDirEnv: f.config, agentViewOff: "1", suggestionsOff: "0"}, tab["env"])
 	j := slices.IndexFunc(f.h.params("agent.start"), func(m map[string]any) bool { return m["name"] == "ha-debugger-1" })
 	require.GreaterOrEqual(t, j, 0, "the debugger's agent starts")
 	start := f.h.params("agent.start")[j]
