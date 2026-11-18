@@ -79,10 +79,9 @@ func stats(t *testing.T, s *store.Store, project string, at time.Time) store.Not
 func TestNoticeMetadataShapesAreClosed(t *testing.T) {
 	t.Parallel()
 	fields := func(v any) []string {
-		typ := reflect.TypeOf(v)
-		out := make([]string, 0, typ.NumField())
-		for i := range typ.NumField() {
-			out = append(out, typ.Field(i).Name+" "+typ.Field(i).Type.String())
+		var out []string
+		for f := range reflect.TypeOf(v).Fields() {
+			out = append(out, f.Name+" "+f.Type.String())
 		}
 		return out
 	}

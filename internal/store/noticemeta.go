@@ -10,8 +10,9 @@ import (
 
 // The notice ledger's metadata (NERD-5533 B0a.3-queries): what it holds,
 // read without changing it. Each count is read with its quota's own query,
-// so it is the number that quota compares. It is dormant, as the ledger is:
-// nothing in production reads it yet.
+// so it is the number that quota compares, but for the hour: it is counted
+// per source, as Q8 counts it from B0a.4-hour on. It is dormant, as the
+// ledger is: nothing in production reads it yet.
 
 // NoticeMeta is what the ledger tells about a pending notice without its
 // content: never its text and never its receipt key.
