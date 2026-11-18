@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -100,16 +101,43 @@ func TestDebuggerArgsFailedCdNeverStartsClaude(t *testing.T) {
 
 // runLine runs a printed launch line through sh, from a directory of its
 // own, with a stand-in claude first on PATH that prints its working
-// directory, HERDR_PLUGIN_CONFIG_DIR and each argument, one per line.
+// directory, HERDR_PLUGIN_CONFIG_DIR and each argument, one per line. The
+// stand-in is written once, by TestMain: one written here would be open for
+// writing in any fork a parallel test makes meanwhile, and the shell's exec
+// of it would fail with "Text file busy" (NERD-5645). A failed line carries
+// the shell's stderr, which names why.
 func runLine(t *testing.T, line string) ([]byte, error) {
 	t.Helper()
-	stub := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(stub, "claude"),
-		[]byte("#!/bin/sh\npwd\nprintf '%s\\n' \"$HERDR_PLUGIN_CONFIG_DIR\"\nfor a; do printf '%s\\n' \"$a\"; done\n"), 0o700)) //nolint:gosec // an executable stand-in
 	sh := exec.CommandContext(t.Context(), "sh", "-c", line)
 	sh.Dir = t.TempDir()
-	sh.Env = []string{"PATH=" + stub + ":/usr/bin:/bin"}
-	return sh.Output()
+	sh.Env = []string{"PATH=" + stubDir + ":/usr/bin:/bin"}
+	out, err := sh.Output()
+	if exit := (*exec.ExitError)(nil); errors.As(err, &exit) {
+		err = fmt.Errorf("%w: stderr %q", err, exit.Stderr)
+	}
+	return out, err
+}
+
+// TestRunLineStubIsNeverBusy: running the stand-in claude from many parallel
+// tests never fails with "Text file busy" (ETXTBSY, NERD-5645). A stub that
+// is written while another goroutine forks can be inherited, still open for
+// writing, by that fork's child until the child execs; a shell that execs the
+// stub in that window gets exit status 126. About one exec in 150 met it with
+// sixteen runners, so sixteen runners of a hundred execs each fail a stub
+// written per run almost every time, and never fail a stub written before any
+// test starts.
+func TestRunLineStubIsNeverBusy(t *testing.T) {
+	t.Parallel()
+	for i := range 16 {
+		t.Run(fmt.Sprintf("runner %d", i), func(t *testing.T) {
+			t.Parallel()
+			for range 100 {
+				ran, err := runLine(t, "claude")
+				require.NoError(t, err)
+				require.NotEmpty(t, ran, "the stand-in claude ran")
+			}
+		})
+	}
 }
 
 // TestDebuggerArgsNeedsItsInputs: no role under the root, no config dir, or
