@@ -333,13 +333,14 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   dormant notice admission ledger (B0a.2, migration 0009, one-way):
   `AdmitNotice` dedupes a GitHub notice by capture ID and receipt and
   imports one `github_seen` holds, `PendingNotice` re-checks its digest.
-  Migration 0010 (B0a.3-totals, one-way) keeps the ledger's identity totals
-  by triggers.
+  `noticequota.go` refuses an admission past one of eight quotas
+  (B0a.3-limits, migration 0010, one-way, its identity totals kept by
+  triggers).
   No production caller, post, wake or `github_*` write;
   `noticedormant_test.go` fails on any use in a non-test file of
-  `internal/` or `cmd/` but those two, and on SQL naming its tables in one
-  but `noticeledger.go`; it also fails on any non-test Go string naming a
-  ledger table with REPLACE in it.
+  `internal/` or `cmd/` but those three, and on SQL naming its tables in one
+  but `noticeledger.go` and `noticequota.go`; it also fails on any non-test
+  Go string naming a ledger table with REPLACE in it.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real
