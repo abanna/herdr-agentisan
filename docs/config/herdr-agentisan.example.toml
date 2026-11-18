@@ -52,8 +52,11 @@ command = ["claude"]
 model = "opus"
 
 # Each provider's own command and model, for every type that runs it
-# (ADR-001 A62): [agent.claude] and [agent.codex]. A type runs its default
-# provider: [agent]'s command's, unless its group says otherwise (below).
+# (ADR-001 A62): [agent.claude] and [agent.codex]. Two types are exceptions:
+# review's built-in read-only codex command outranks [agent.codex], and the
+# debugger ignores [agent.claude]'s command (its launch is its own, A32). A
+# type runs its default provider: [agent]'s command's, unless its group says
+# otherwise (below).
 # A provider's command names it bare, then flags only: herdr starts the agent
 # by kind from the shell's PATH with arguments alone, so no path, no other
 # program and no per-worker environment such as CODEX_HOME; codex's
