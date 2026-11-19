@@ -222,6 +222,12 @@ func TestDaemonNoticeGetsAnAllocatedID(t *testing.T) {
 		require.NoError(t, db.QueryRowContext(t.Context(), "SELECT state, source FROM notice_identities WHERE capture_id = ?", id).Scan(&state, &source))
 		assert.Equal(t, []string{"pending", "daemon"}, []string{state, source})
 	}
+	var admitted, observed int64
+	require.NoError(t, db.QueryRowContext(t.Context(),
+		"SELECT i.admitted_at, p.observed_at FROM notice_identities AS i JOIN notice_payloads AS p USING (capture_id) WHERE capture_id = ?",
+		first).Scan(&admitted, &observed))
+	assert.Equal(t, at.UnixNano(), admitted, "admitted_at is the admission's nanosecond, not the observed time")
+	assert.Equal(t, e.ObservedAt.UnixNano(), observed)
 	assert.NotEqual(t, first, second, "no dedupe by content")
 	assert.Equal(t, first[31:], second[31:], "the same content has the same digest")
 	assert.Equal(t, [2]int{2, 2}, ledgerRows(t, s))
@@ -478,6 +484,28 @@ func TestDaemonNoticeFacesTheQuotas(t *testing.T) {
 		admitDaemon(t, f.s, daemonNotice(), daemonAt)
 		f.refused(f.notice("ha", 50), ledgerAt, 3)
 	})
+	// Q8's window edge. daemonNotice's ObservedAt is a second before
+	// daemonAt, so a window counted from it, or a row admitted at it, moves
+	// the edge.
+	for name, tc := range map[string]struct {
+		earlier time.Time
+		refused bool
+	}{
+		"a window before":           {daemonAt.Add(-store.NoticeRateWindow), false},
+		"a window less 1 ns before": {daemonAt.Add(-store.NoticeRateWindow + time.Nanosecond), true},
+	} {
+		t.Run("Q8 edge, "+name, func(t *testing.T) {
+			t.Parallel()
+			f := newQuotaFixture(t)
+			admitDaemon(t, f.s, daemonNotice(), tc.earlier)
+			f.set(func(q *store.NoticeQuotas) { q.AdmissionsPerHour = 1 })
+			if tc.refused {
+				f.refused(daemonNotice(), daemonAt, 8)
+				return
+			}
+			admitDaemon(t, f.s, daemonNotice(), daemonAt)
+		})
+	}
 }
 
 // TestDaemonNoticeHasNoEffect (S6): admitting a daemon notice, or refusing

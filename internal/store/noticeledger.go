@@ -123,8 +123,8 @@ VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`
 //     millisecond and 80 random bits, the digest its encoding's SHA-256.
 //   - It is never a Duplicate: two equal notices are two identities. What
 //     keeps a daemon notice from being told twice after a restart is the
-//     daemon's memory of what it recorded, not the ID. An ID drawn twice is
-//     ErrStore, and nothing is written.
+//     daemon's memory of what it recorded (B0a.4's memory, still to come),
+//     not the ID. An ID drawn twice is ErrStore, and nothing is written.
 //   - It is recorded pending, with its payload, unless it would exceed a
 //     quota: it faces what a pending GitHub notice faces but Q3, since it
 //     has no pull request, and a refusal writes nothing.

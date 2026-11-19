@@ -270,9 +270,9 @@ GitHub's; a project, subject and worker each empty or a line of at most 256
 bytes; a text `Send` would queue (1 to 8,192 bytes of UTF-8 with no NUL;
 line breaks are allowed); an observed time the store can hold; and an
 admission time the store can hold, not before 1970, since a ULID holds
-milliseconds since then. The project may be empty: the ◆ spaces' boss files
-its notices under `""` until the spaces are named. Anything else is
-ErrInvalid, carrying none of it.
+milliseconds since then. The project may be empty (`""`), the ◆ spaces'
+project while it has no name. Anything else is ErrInvalid, carrying none of
+it.
 
 There is no dedupe by ID or content: two equal daemon notices are two
 identities. What keeps a daemon notice from being told twice after a
