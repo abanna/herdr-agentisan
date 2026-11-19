@@ -328,8 +328,14 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   seen-set, open PRs and seed marks, a kind's own included (`github.go`,
   migrations 0004 and 0006, A45), make each event told once across
   restarts. Each team's board (`board.go`, migration 0007, A60) holds its
-  posts and two read marks, the boss's and the user's; every post wakes
-  each `board wait`. Tests open a fresh database in a temp
+  posts and two read marks, the boss's and the user's; the user's
+  acknowledgements of posts, a record per post that moves no mark and goes
+  with its post at the prune, and of the messages waiting in a boss's
+  inbox, one record per project and boss that a later one replaces
+  (`boardack.go`, migration 0011, A74), dormant until PR 3c: nothing writes
+  either table, and `ReadBoard` and `LatestPosts` read one primary-key
+  lookup per post they return, which `board.read` does not serve; every
+  post wakes each `board wait`. Tests open a fresh database in a temp
   dir; the store is never mocked.
   `boardnotice.go` also provides the pure version-1 GitHub capture-ID helper
   and its frozen envelope/receipt types (B0a.1), and `noticeledger.go` the
