@@ -251,13 +251,14 @@ pins an id and its generation, so an answer can tell a worker retired since
 from one whose id was bound again; a column on `workers` could not, since a
 reused id rebinds its row.
 
-They are dormant until `worker spawn` reads them for a key (A73's part
-C-read). `BeginSpawn` writes a record and its planned ids in one transaction,
-and the insert itself refuses a known key (`ErrSpawnKeyExists`), never a read
-before it, so no replace can pass unnoticed. `SpawnRecord` reads one with each
-planned id's `workers` row now, while still at its linked generation, and its
-briefs: the messages to it at that generation from a boss or a pane, in any
-state. `DropSpawn` deletes a running record none of whose ids is bound.
+They are dormant until a keyed `worker spawn` reaches them (A73: the socket
+refuses a key until part F). `BeginSpawn` writes a record and its planned ids
+in one transaction, and the insert itself refuses a known key
+(`ErrSpawnKeyExists`), never a read before it, so no replace can pass
+unnoticed. `SpawnRecord` reads one with each planned id's `workers` row now,
+while still at its linked generation, and its briefs: the messages to it at
+that generation from a boss or a pane, in any state. `DropSpawn` deletes a
+running record none of whose ids is bound.
 `TestSpawnKeysHaveNoProductionCaller` fails on any use of their names in a
 non-test file of `internal/` or `cmd/` but `spawnkeys.go`, on any string
 naming their tables outside it, and on any naming one with REPLACE.

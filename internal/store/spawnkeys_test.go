@@ -483,8 +483,9 @@ func TestBeginSpawnRefusesABadPlan(t *testing.T) {
 func k63() string { return spawnKey().TaskDigest[:63] }
 
 // fullWorker is id's worker with every field BindWorker writes set, each
-// override, digest and provider to a value of its own, so a column read
-// into the wrong field shows.
+// override, digest, provider and time to a value of its own, so a column
+// read into the wrong field shows. It is routed a second before it is
+// bound at spawnAt.
 func fullWorker(id string) store.Worker {
 	pane := "w14:p" + id[len(id)-1:]
 	return store.Worker{
@@ -492,7 +493,7 @@ func fullWorker(id string) store.Worker {
 		Routing: &store.Routing{
 			Role: "coder", Provider: "codex", Binding: "claude_mid", ModelID: "claude-sonnet-5-5", Effort: "high",
 			OverrideBinding: "claude_top", OverrideBy: "user", OverrideEffort: "xhigh",
-			AssignmentDigest: strings.Repeat("ad", 32), PolicyVersion: "v1-0123456789ab", RoutedAt: spawnAt,
+			AssignmentDigest: strings.Repeat("ad", 32), PolicyVersion: "v1-0123456789ab", RoutedAt: spawnAt.Add(-time.Second),
 		},
 	}
 }
@@ -538,6 +539,7 @@ func TestSpawnLinkRowIsWorkerRow(t *testing.T) {
 	// Workers reads the shell and the pending handoff; WorkerRow never does.
 	require.Empty(t, zeroFields(reflect.ValueOf(row), "ShellPID", "ShellStart", "HandoffPending"), "fields the fixture leaves zero")
 	assert.NotEqual(t, row.Provider, row.Routing.Provider, "the launch and routing providers differ, so a swap of the two columns shows")
+	assert.NotEqual(t, row.CreatedAt, row.Routing.RoutedAt, "the bind and routing times differ, so a swap of the two shows")
 	rec, err := s.SpawnRecord(ctx, retryKey)
 	require.NoError(t, err)
 	require.Len(t, rec.Planned, 1)
