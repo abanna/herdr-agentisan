@@ -338,7 +338,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   migrations 0004 and 0006, A45), make each event told once across
   restarts. Each team's board (`board.go`, migration 0007, A60) holds its
   posts and two read marks, the boss's and the user's; every post wakes
-  each `board wait`. Tests open a fresh database in a temp
+  each `board wait`; `BoardPending` counts what a boss has left unread and
+  waiting, for the alert (A74). Tests open a fresh database in a temp
   dir; the store is never mocked.
   `boardnotice.go` also provides the pure version-1 GitHub capture-ID helper
   and its frozen envelope/receipt types (B0a.1), and `noticeledger.go` the

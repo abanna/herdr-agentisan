@@ -354,3 +354,77 @@ func (s *Store) PruneBoard(ctx context.Context, now time.Time) (int64, error) {
 	}
 	return n, nil
 }
+
+// BoardPending is what a board-mode boss has left waiting (ADR-001 A74).
+type BoardPending struct {
+	Pending               int       // posts after the boss's mark
+	Oldest, OldestCeiling time.Time // zero: none
+	BossMark              int64
+	Held                  int       // messages queued for the boss in its inbox
+	OldestHeld            time.Time // zero: none
+	OldestHeldCeiling     time.Time // the oldest held daemon row holding ceilingMark; zero: none
+	NewestCeiling         time.Time // the latest ceiling change pending: max(created_at) of the ceiling posts, max(updated_at) of the held daemon rows holding ceilingMark; zero: none
+}
+
+// pendingPosts is the posts after the boss's mark on a project's board
+// (?1), with its ceilings, ?2 being the ceiling mark: a daemon post of kind
+// ctx_ceiling, or a daemon notices post holding the mark. It runs on
+// board_posts_by_project (project = ? AND seq > ?).
+const pendingPosts = `SELECT count(*), min(created_at),
+  min(CASE WHEN channel = 'daemon' AND (kind = 'ctx_ceiling' OR (kind = 'notices' AND instr(body, ?2) > 0)) THEN created_at END),
+  max(CASE WHEN channel = 'daemon' AND (kind = 'ctx_ceiling' OR (kind = 'notices' AND instr(body, ?2) > 0)) THEN created_at END),
+  (SELECT coalesce(max(seq), 0) FROM board_marks WHERE project = ?1 AND reader = 'boss')
+FROM board_posts
+WHERE project = ?1 AND seq > (SELECT coalesce(max(seq), 0) FROM board_marks WHERE project = ?1 AND reader = 'boss')`
+
+// pendingHeld is the messages queued for a boss (?1) in its inbox, with its
+// held ceilings, ?2 being the ceiling mark: a daemon notice holding the
+// mark, the oldest timed by its creation, at or before its ceiling line,
+// the newest change by its last update, which an appended line moves. It
+// runs on messages_inbox. PR 3c adds its acknowledgement filter to this
+// WHERE, and the ceilings are then read over the same rows.
+const pendingHeld = `SELECT count(*), min(created_at),
+  min(CASE WHEN sender_kind = 'daemon' AND instr(body, ?2) > 0 THEN created_at END),
+  max(CASE WHEN sender_kind = 'daemon' AND instr(body, ?2) > 0 THEN updated_at END)
+FROM messages
+WHERE recipient_kind = 'boss' AND recipient = ?1 AND state = 'queued'`
+
+// BoardPending is what the boss of project has left waiting on its board
+// and in its inbox, in one read transaction (ADR-001 A74). ceilingMark is
+// notice.CeilingMark. The user's read mark is never read: the dashboard's
+// panel moves it. An empty ceilingMark is refused (ErrInvalid): it would be
+// in every body, and every daemon notice would read as a ceiling.
+func (s *Store) BoardPending(ctx context.Context, project, boss, ceilingMark string) (BoardPending, error) {
+	if ceilingMark == "" {
+		return BoardPending{}, fmt.Errorf("%w: an empty ceiling mark matches every notice", ErrInvalid)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return BoardPending{}, fmt.Errorf("%w: read what %q has pending: %w", ErrStore, boss, err)
+	}
+	defer tx.Rollback() //nolint:errcheck // a read: nothing to commit
+	var p BoardPending
+	var oldest, oldestCeiling, newestCeiling, oldestHeld, oldestHeldCeiling, newestHeldCeiling sql.NullInt64
+	err = tx.QueryRowContext(ctx, pendingPosts, project, ceilingMark).Scan(&p.Pending, &oldest, &oldestCeiling, &newestCeiling, &p.BossMark)
+	if err != nil {
+		return BoardPending{}, fmt.Errorf("%w: read %q's pending posts: %w", ErrStore, project, err)
+	}
+	err = tx.QueryRowContext(ctx, pendingHeld, boss, ceilingMark).Scan(&p.Held, &oldestHeld, &oldestHeldCeiling, &newestHeldCeiling)
+	if err != nil {
+		return BoardPending{}, fmt.Errorf("%w: read %q's held messages: %w", ErrStore, boss, err)
+	}
+	p.Oldest, p.OldestCeiling, p.OldestHeld, p.OldestHeldCeiling = pendingTime(oldest), pendingTime(oldestCeiling), pendingTime(oldestHeld), pendingTime(oldestHeldCeiling)
+	p.NewestCeiling = pendingTime(newestCeiling)
+	if newest := pendingTime(newestHeldCeiling); newest.After(p.NewestCeiling) {
+		p.NewestCeiling = newest
+	}
+	return p, nil
+}
+
+// pendingTime is a pending read's time, zero for NULL: none.
+func pendingTime(ns sql.NullInt64) time.Time {
+	if !ns.Valid {
+		return time.Time{}
+	}
+	return time.Unix(0, ns.Int64).UTC()
+}
