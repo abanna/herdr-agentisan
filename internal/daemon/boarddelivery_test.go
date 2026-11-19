@@ -421,6 +421,26 @@ func TestNoticesArePostedNotTyped(t *testing.T) {
 	assert.Empty(t, r.pr.all())
 }
 
+// TestEndPollRemembersBeforeItFlushes is §5's order: a poll remembers its
+// boss agents before it flushes its notices, and so before the wake that
+// ends it, so the flush and the pass that wake starts read a memory already
+// updated with this poll; the other way round, a boss that just switched to
+// Claude would be typed one more time.
+func TestEndPollRemembersBeforeItFlushes(t *testing.T) {
+	t.Parallel()
+	cfgs := boardOn("ha")
+	b := notice.NewBatcher(cfgs)
+	b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Blocked, Text: "ha-coder-1 is blocked"}})
+	var p *daemon.Poller
+	var atFlush []notice.Delivery
+	p = daemon.NewPoller(daemon.Options{Logger: zerolog.Nop()}, scratchStore(t), []settings.Team{haTabs}, cfgs, b, sinkFunc(func(notice.Message) error {
+		atFlush = append(atFlush, p.Delivery("ha"))
+		return nil
+	}))
+	p.EndPoll(haModel(bossPane("ha-boss", "claude")))
+	assert.Equal(t, []notice.Delivery{notice.DeliverBoard}, atFlush, "the flush reads this poll's memory")
+}
+
 // TestCodexBossIsStillTyped: on a team whose key is board, a boss running
 // Codex is typed, as A30 says, and nothing is posted.
 func TestCodexBossIsStillTyped(t *testing.T) {
