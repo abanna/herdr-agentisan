@@ -7,6 +7,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -209,6 +210,13 @@ func TestSpawnRequestsChecks(t *testing.T) {
 		"a digest with a NUL tail":           {map[string]any{"task_digest": hex64 + "\x00X"}, digest},
 		"a NUL inside a 64-character digest": {map[string]any{"task_digest": hex64[:10] + "\x00" + hex64[11:]}, digest},
 		"a digest in upper case":             {map[string]any{"task_digest": strings.ToUpper(hex64)}, digest},
+		"a key with a NUL tail":              {map[string]any{"retry_key": retryKey + "\x00X"}, key},
+		"a key with a g":                     {map[string]any{"retry_key": retryKey[:31] + "g"}, key},
+		"an effort with a digit":             {map[string]any{"effort": "high2"}, effort},
+		"a digest with a g":                  {map[string]any{"task_digest": hex64[:63] + "g"}, digest},
+		"an empty outcome":                   {done("", nil), outcome},
+		"an outcome with a digit":            {done("spawn_failed2", nil), outcome},
+		"a running row with an outcome":      {map[string]any{"outcome": "spawn_failed", "message": "m"}, decided},
 		"an unknown state":                   {map[string]any{"state": "settled"}, checkFailed("state IN ('running', 'done')")},
 		"an outcome with a NUL tail":         {done("spawn_failed\x00X", nil), outcome},
 		"an outcome in upper case":           {done("SPAWN_FAILED", nil), outcome},
@@ -380,6 +388,22 @@ func TestBeginSpawnRefusesAKnownKey(t *testing.T) {
 	assert.Equal(t, [2]int{2, 3}, spawnRows(t, s), "one record and one planned row more")
 }
 
+// TestBeginSpawnIsOneTransaction: a planned id the store refuses after the
+// request row is written fails the whole request, as ErrStore and not as a
+// known key, and leaves no row in either table.
+func TestBeginSpawnIsOneTransaction(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	_, err := store.DB(s).ExecContext(t.Context(), `CREATE TRIGGER refuse_second BEFORE INSERT ON spawn_request_workers
+WHEN NEW.seq = 2 BEGIN SELECT RAISE(ABORT, 'injected'); END`)
+	require.NoError(t, err)
+	err = s.BeginSpawn(t.Context(), spawnKey(), []string{"ha-coder-1", "ha-coder-2"}, spawnAt)
+	require.ErrorIs(t, err, store.ErrStore)
+	require.NotErrorIs(t, err, store.ErrSpawnKeyExists)
+	require.ErrorContains(t, err, "injected")
+	assert.Equal(t, [2]int{}, spawnRows(t, s), "nothing of the request is kept")
+}
+
 // TestBeginSpawnRefusesABadPlan (A6): a request or plan the schema would
 // refuse is ErrInvalid before anything is written, and the error names the
 // field, never its value.
@@ -458,6 +482,67 @@ func TestBeginSpawnRefusesABadPlan(t *testing.T) {
 // k63 is the first 63 characters of spawnKey's task digest.
 func k63() string { return spawnKey().TaskDigest[:63] }
 
+// fullWorker is id's worker with every field BindWorker writes set, each
+// override and digest to a value of its own, so a column read into the
+// wrong field shows.
+func fullWorker(id string) store.Worker {
+	pane := "w14:p" + id[len(id)-1:]
+	return store.Worker{
+		LogicalID: id, Project: "agentisan", Group: "coders", PaneID: pane, TerminalID: terminal(pane), Provider: store.ProviderClaude,
+		Routing: &store.Routing{
+			Role: "coder", Provider: "claude", Binding: "claude_mid", ModelID: "claude-sonnet-5-5", Effort: "high",
+			OverrideBinding: "claude_top", OverrideBy: "user", OverrideEffort: "xhigh",
+			AssignmentDigest: strings.Repeat("ad", 32), PolicyVersion: "v1-0123456789ab", RoutedAt: spawnAt,
+		},
+	}
+}
+
+// zeroFields names each field of v that holds its zero value, walking
+// embedded structs and non-nil pointers, but the fields named in skip.
+func zeroFields(v reflect.Value, skip ...string) []string {
+	var zero []string
+	for i := range v.NumField() {
+		f, fv := v.Type().Field(i), v.Field(i)
+		switch {
+		case slices.Contains(skip, f.Name):
+		case f.Anonymous:
+			zero = append(zero, zeroFields(fv, skip...)...)
+		case fv.Kind() == reflect.Pointer && !fv.IsNil():
+			zero = append(zero, zeroFields(fv.Elem(), skip...)...)
+		case fv.IsZero():
+			zero = append(zero, f.Name)
+		}
+	}
+	return zero
+}
+
+// TestSpawnLinkRowIsWorkerRow: a link's Row is WorkerRow's, field for field,
+// for a worker bound twice and retired with every field WorkerRow reads
+// set. A field the fixture leaves zero fails, so a workers column added
+// later fails here until fullWorker sets it and the link reads it.
+func TestSpawnLinkRowIsWorkerRow(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	w := fullWorker("ha-coder-2")
+	for range 2 {
+		gen, err := s.BindWorker(ctx, w, spawnAt)
+		require.NoError(t, err)
+		w.Generation = gen
+		require.NoError(t, s.SetWorkerStatus(ctx, w, store.StatusRetired, spawnAt.Add(time.Minute)))
+	}
+	require.NoError(t, s.BeginSpawn(ctx, spawnKey(func(k *store.SpawnKey) { k.Count = 1 }), []string{w.LogicalID}, spawnAt))
+	link(t, s, retryKey, w.LogicalID, w.Generation)
+	row, err := s.WorkerRow(ctx, w.LogicalID)
+	require.NoError(t, err)
+	// Workers reads the shell and the pending handoff; WorkerRow never does.
+	assert.Empty(t, zeroFields(reflect.ValueOf(row), "ShellPID", "ShellStart", "HandoffPending"), "fields the fixture leaves zero")
+	rec, err := s.SpawnRecord(ctx, retryKey)
+	require.NoError(t, err)
+	require.Len(t, rec.Planned, 1)
+	assert.Equal(t, &row, rec.Planned[0].Row)
+}
+
 // TestSpawnRecordShowsEachWorkerNow (A7): each planned id's link shows its
 // workers row now, as WorkerRow reads it, while the row is still at the
 // linked generation: active, retired or lost. A never bound id has none,
@@ -467,14 +552,7 @@ func TestSpawnRecordShowsEachWorkerNow(t *testing.T) {
 	s := open(t, dbPath(t))
 	ctx := t.Context()
 	bind := func(id string) store.Worker {
-		pane := "w14:p" + id[len(id)-1:]
-		w := store.Worker{
-			LogicalID: id, Project: "agentisan", Group: "coders", PaneID: pane, TerminalID: terminal(pane), Provider: store.ProviderClaude,
-			Routing: &store.Routing{
-				Role: "coder", Provider: "claude", Binding: "claude_mid", ModelID: "claude-sonnet-5-5", Effort: "high",
-				OverrideBy: "user", PolicyVersion: "v1-0123456789ab", RoutedAt: spawnAt,
-			},
-		}
+		w := fullWorker(id)
 		gen, err := s.BindWorker(ctx, w, spawnAt)
 		require.NoError(t, err)
 		w.Generation = gen
@@ -640,4 +718,27 @@ func TestDropSpawnOnlyWhenNothingBound(t *testing.T) {
 	assert.False(t, dropped, "a key with no record")
 	_, err = s.DropSpawn(ctx, "not a key")
 	require.ErrorIs(t, err, store.ErrInvalid)
+}
+
+// TestA73NamesEveryPart: A73's head lists every part retry-safe spawn is
+// built in, in order, and counts none, since a part may split. Only the
+// last makes the keys live, so the CLI's --retry-key is in F's entry alone.
+func TestA73NamesEveryPart(t *testing.T) {
+	t.Parallel()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "docs", "adr", "0001", "A73.md"))
+	require.NoError(t, err)
+	_, list, ok := strings.Cut(string(raw), "Built in")
+	require.True(t, ok, "A73's head says what it is built in")
+	assert.True(t, strings.HasPrefix(list, " parts,"), "A73 counts no parts")
+	var names []string
+	for _, line := range strings.Split(list, "\n")[1:] {
+		entry, ok := strings.CutPrefix(line, "- ")
+		if !ok {
+			break
+		}
+		name, _, _ := strings.Cut(entry, ",")
+		names = append(names, name)
+		assert.Equal(t, name == "F", strings.Contains(entry, "--retry-key"), "%s's entry and --retry-key", name)
+	}
+	assert.Equal(t, []string{"A", "B", "C-read", "C-write", "D", "E", "F"}, names)
 }
