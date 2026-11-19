@@ -339,11 +339,13 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   `noticequota.go` refuses an admission past one of eight quotas
   (B0a.3-limits, migration 0010, one-way, its identity totals kept by
   triggers). A daemon notice gets an `nt1` ID the store allocates (B0a.4).
+  `noticemeta.go` reads pending notices' metadata and the quotas' exact
+  counts, per source for the hour (B0a.3-queries), never a notice's text.
   No production caller, post, wake or `github_*` write;
   `noticedormant_test.go` fails on any use in a non-test file of
-  `internal/` or `cmd/` but those three, and on SQL naming its tables in one
-  but `noticeledger.go` and `noticequota.go`; it also fails on any non-test
-  Go string naming a ledger table with REPLACE in it.
+  `internal/` or `cmd/` but those four, and on SQL naming its tables in one
+  but `noticeledger.go`, `noticequota.go` and `noticemeta.go`; it also
+  fails on any non-test Go string naming a ledger table with REPLACE in it.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real

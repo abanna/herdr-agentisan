@@ -32,8 +32,9 @@ const (
 
 // The sources AdmitNotice admits: GitHub's, each notice identified by its
 // receipt and the ID its content derives, and the daemon's, each by an ID
-// the store allocates (B0a.4). A team post is never a notice: it goes to
-// the board by Post, which records its author.
+// the store allocates (B0a.4). The metadata counts each (noticemeta.go). A
+// team post is never a notice: it goes to the board by Post, which records
+// its author.
 const (
 	noticeFromGitHub = "github"
 	noticeFromDaemon = "daemon"

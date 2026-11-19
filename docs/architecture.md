@@ -125,8 +125,9 @@ production calls `store.AdmitNotice` or `store.PendingNotice`, neither posts
 to the board nor wakes `board wait`, and neither writes a `github_*` table;
 `TestLedgerHasNoProductionCaller` fails on any use of the ledger's names, or
 B0a.1's, in a non-test file of `internal/` or `cmd/` but `noticeledger.go`,
-`noticequota.go` and `boardnotice.go`, and on any string naming a ledger
-table, in any case, in one but `noticeledger.go` and `noticequota.go`. It also
+`noticequota.go`, `noticemeta.go` and `boardnotice.go`, and on any string
+naming a ledger table, in any case, in one but `noticeledger.go`,
+`noticequota.go` and `noticemeta.go`. It also
 fails on any non-test Go string that names a ledger table and contains
 REPLACE. The migration is one-way: an older build
 refuses the database (`ErrSchemaTooNew`), so no build holding it is installed
@@ -205,8 +206,8 @@ COMMIT;
 0010 is one-way, so the install rule stands: no build holding it is installed
 before the board's activation. It is dormant: only 0010's triggers write the
 totals, and `TestLedgerHasNoProductionCaller` fails on any non-test Go string
-naming them outside `noticeledger.go` and `noticequota.go`. The connection
-setting is the one live change.
+naming them outside `noticeledger.go`, `noticequota.go` and `noticemeta.go`.
+The connection setting is the one live change.
 
 ## The notice quotas (B0a.3-limits)
 
@@ -241,6 +242,15 @@ neither reads 0. The recount above repairs a missing total.
 
 It is dormant: `TestLedgerHasNoProductionCaller` covers `noticequota.go`, its
 names and its SQL.
+
+`noticemeta.go` reads the ledger without changing it (B0a.3-queries).
+`PendingNotices` lists a project's pending notices, oldest first, at most 200,
+with their metadata, never their text or receipt key; a pending notice with no
+payload is `ErrStore`. `NoticeStats` returns the exact counts the quotas
+compare, for a project and for the store, from the quotas' own queries without
+their caps. It counts the project's hour per source, GitHub and daemon, as Q8
+does from B0a.4-hour on; before it, Q8 counts the two together. Both only
+read, and are dormant.
 
 ## Allocated notice IDs, the prune and the daemon's memory (B0a.4)
 
