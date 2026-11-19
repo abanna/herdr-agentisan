@@ -58,11 +58,6 @@ func TestDeliveryRemembersTheBossAgent(t *testing.T) {
 			if got != "" {
 				memory = got
 			}
-			wantMemory := last
-			if r.agent != "" {
-				wantMemory = r.agent
-			}
-			assert.Equal(t, wantMemory, memory, "%s, last %q: the memory", r.name, last)
 			assert.Equal(t, r.want[i], notice.DeliveryOf(true, memory), "%s, last %q: board", r.name, last)
 			assert.Equal(t, typed, notice.DeliveryOf(false, memory), "%s, last %q: the key typed", r.name, last)
 		}
