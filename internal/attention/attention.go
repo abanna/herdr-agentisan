@@ -150,16 +150,16 @@ func (t *Tracker) Shown(project string, shown bool, now time.Time) {
 }
 
 // keepBound keeps the ceiling's bound: while the newest pending ceiling is
-// newer than the last shown alert (before any, than the episode's start)
-// and than the ceiling pending at the last try, the next alert is due no
+// newer than the last shown alert (before any, not older than the episode's
+// start) and newer than the ceiling pending at the last try, the next alert is due no
 // later than it + CeilingAfter, and a later ceiling never moves that later.
 // A cap on alerts a ceiling repeats would go here.
 func (e *episode) keepBound(c Config, s State) {
-	since := e.lastShown
-	if since.IsZero() {
-		since = e.start
+	newer := s.NewestCeiling.After(e.lastShown)
+	if e.lastShown.IsZero() {
+		newer = !s.NewestCeiling.Before(e.start)
 	}
-	if !s.NewestCeiling.After(since) || !s.NewestCeiling.After(e.tried) {
+	if !newer || !s.NewestCeiling.After(e.tried) {
 		e.bound = time.Time{}
 		return
 	}

@@ -578,6 +578,27 @@ func TestCeilingAfterAReactionAlertsAtCeilingAfter(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []time.Duration{2*m + 40*time.Second, 7*m + 40*time.Second}, alerts, "a ceiling pending when the episode opens")
+
+	// The boss's ruling (Q4, 2026-11-19): before any shown alert the bound
+	// arms for a ceiling at the episode's start too. A held row holding a
+	// ceiling from its creation at 0:40 is the oldest pending item; a post
+	// from 0:50 is read at 1:30. The ceiling alerts at 2:40, not at 6:30.
+	tr, alerts = attention.NewTracker(), nil
+	for d := 40 * time.Second; d <= 8*m; d += 10 * time.Second {
+		s := held(1, 40*time.Second)
+		s.OldestHeldCeiling, s.NewestCeiling = at(40*time.Second), at(40*time.Second)
+		switch {
+		case d >= 90*time.Second:
+			s.BossMark = 1
+		case d >= 50*time.Second:
+			s.Pending, s.Oldest = 1, at(50*time.Second)
+		}
+		if _, ok := tr.Observe("app", defaults(), s, at(d)); ok {
+			alerts = append(alerts, d)
+			tr.Shown("app", true, at(d))
+		}
+	}
+	assert.Equal(t, []time.Duration{2*m + 40*time.Second, 7*m + 40*time.Second}, alerts, "a ceiling that is the oldest pending item")
 }
 
 // TestCeilingBetweenRemindersAlertsAtCeilingAfter (C1, b3): a ceiling
