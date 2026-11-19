@@ -77,6 +77,11 @@ func (p *Poller) Pass() {
 	p.d.pass(context.Background())
 }
 
+// Delivery is how the inbox delivers to project's boss now (A74).
+func (p *Poller) Delivery(project string) notice.Delivery {
+	return p.in.delivery(project)
+}
+
 type wakeSpy struct {
 	s     notice.Sink
 	in    *inbox
