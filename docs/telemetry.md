@@ -307,6 +307,22 @@ id> handoff <step>`.
 | `agentisan.handoff.old_pane` | string | The pane the worker was on; only on `completed` and `failed` |
 | `agentisan.handoff.old` | string | `matched` when the old pane's item and stage equal the replacement's, `unread` when the old pane is gone or reports only one or neither; only on `completed` |
 
+### `agentisan.board.posted`
+
+One flush of a board-mode team's notices posted on its board (ADR-001
+A74): one post per notice, in one transaction. It is one event per board
+flush; a notice a board flush posts gives no `agentisan.message.*` event.
+The body reads `<posts> posts on <project>'s board`, and never carries a
+post's body.
+
+| Attribute | Type | Value |
+| --- | --- | --- |
+| `agentisan.board.project` | string | The team whose board it is |
+| `agentisan.board.channel` | string | The channel posted on: `daemon` for notices |
+| `agentisan.board.posts` | int | How many posts the flush made |
+| `agentisan.board.first_seq` | int | The first post's seq |
+| `agentisan.board.last_seq` | int | The last post's seq |
+
 ## Coming
 
 The same helper carries these when their items land: stage changes (fast

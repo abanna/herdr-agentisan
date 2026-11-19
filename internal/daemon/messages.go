@@ -179,6 +179,8 @@ func (in *inbox) view() (*team.Model, map[string]string) {
 // dispatcher delivers state.db's queued messages, one prompt in flight at a
 // time (Q2). Only its goroutine touches it.
 type dispatcher struct {
+	// o is the Options it was built from, which postQueue runs with (A74).
+	o      Options
 	st     *store.Store
 	c      herdr.Client
 	in     *inbox
@@ -198,7 +200,7 @@ type dispatcher struct {
 func (o Options) newDispatcher(st *store.Store, in *inbox) *dispatcher {
 	c, _ := o.Herdr.(herdr.Client)
 	return &dispatcher{
-		st: st, c: c, in: in, events: o.Team.Events, log: o.Logger, now: o.Now,
+		o: o, st: st, c: c, in: in, events: o.Team.Events, log: o.Logger, now: o.Now,
 		warned: map[store.Address]string{},
 	}
 }

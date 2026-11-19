@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/store"
@@ -54,36 +55,48 @@ func bossProject(bosses map[string]string, boss string) (string, bool) {
 }
 
 // post posts to's whole queue on project's board instead of typing it
-// (A74), in one transaction that marks each row delivered, or failed where
-// the board refuses it. Like claim, a stop does not cut it short, and it is
-// bounded on its own. A post that fails leaves every row queued for the
-// next pass, never typed, and is warned of once while it lasts.
+// (A74), through postQueue. A post that fails leaves every row queued for
+// the next pass, never typed, and is warned of once while it lasts.
 func (d *dispatcher) post(ctx context.Context, to store.Address, project string) {
-	ctx = context.WithoutCancel(ctx)
-	sctx, cancel := context.WithTimeout(ctx, settleTimeout)
-	defer cancel()
-	out, err := d.st.PostQueued(sctx, to, project, d.now())
-	if err != nil {
+	if _, err := d.o.postQueue(ctx, d.st, to, project); err != nil {
 		d.note(to, "board", "messages wait: posting them to the board failed", err)
 		return
 	}
 	delete(d.warned, to)
+}
+
+// postQueue posts to's whole queue on project's board (A74), in one
+// transaction that marks each row delivered, or failed where the board
+// refuses it, with one .delivered or .failed event per row and one log
+// line. Like claim, a stop does not cut it short, and it is bounded on its
+// own. The dispatcher's pass and a board-mode flush both post through it,
+// so a row either posts is told the same way; it touches no dispatcher
+// state, since the flush runs on the poll's goroutine.
+func (o Options) postQueue(ctx context.Context, st *store.Store, to store.Address, project string) (store.PostedQueue, error) { //nolint:unparam // the signature NERD-5533 PR 2 specifies (A74), kept as the boss approved; no caller reads the posts yet
+	ctx = context.WithoutCancel(ctx)
+	sctx, cancel := context.WithTimeout(ctx, settleTimeout)
+	defer cancel()
+	out, err := st.PostQueued(sctx, to, project, o.Now())
+	if err != nil {
+		return store.PostedQueue{}, fmt.Errorf("on %q's board: %w", project, err)
+	}
 	if len(out.Posts) == 0 {
-		return
+		return out, nil
 	}
 	ids := make([]string, 0, len(out.Delivered)+len(out.Failed))
 	for _, m := range out.Delivered {
 		ids = append(ids, m.ID)
-		d.events.MessageDelivered(ctx, messageEvent(m, ""))
+		o.Team.Events.MessageDelivered(ctx, messageEvent(m, ""))
 	}
 	for _, m := range out.Failed {
 		ids = append(ids, m.ID)
-		d.events.MessageFailed(ctx, messageEvent(m, m.Reason))
+		o.Team.Events.MessageFailed(ctx, messageEvent(m, m.Reason))
 	}
 	seqs := make([]int64, 0, len(out.Posts))
 	for _, p := range out.Posts {
 		seqs = append(seqs, p.Seq)
 	}
-	d.log.Info().Str("recipient", to.ID).Str("project", project).Strs("messages", ids).Ints64("posts", seqs).
+	o.Logger.Info().Str("recipient", to.ID).Str("project", project).Strs("messages", ids).Ints64("posts", seqs).
 		Msg("messages: posted to the board")
+	return out, nil
 }

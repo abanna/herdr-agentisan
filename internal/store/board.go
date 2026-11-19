@@ -117,24 +117,71 @@ RETURNING seq`
 // Its body is checked as a message's is (CheckBody), its channel is one of
 // the board's, its author an address that can send, and its kind, subject
 // and worker ids a line could carry (ErrInvalid, ErrTooLarge). Every waiter
-// on BoardChanged is woken once it is committed.
+// on BoardChanged is woken once it is committed. It is PostAll of one.
 func (s *Store) Post(ctx context.Context, p BoardPost) (BoardPost, error) {
-	if err := checkPost(p); err != nil {
-		return BoardPost{}, err
-	}
-	ns, err := nanos(p.At)
+	got, err := s.PostAll(ctx, []BoardPost{p})
 	if err != nil {
 		return BoardPost{}, err
 	}
-	if p.ID, err = newULID(p.At, entropy); err != nil {
-		return BoardPost{}, err
+	return got[0], nil
+}
+
+// PostAll adds ps to their boards, in order, in one transaction (A74), and
+// returns them with their Seqs and IDs. Every post is checked as Post
+// checks one before any is written, and one refused refuses them all
+// (ErrInvalid, ErrTooLarge). A statement that fails rolls them all back
+// (ErrStore). Every waiter on BoardChanged is woken once, after the commit;
+// an empty ps writes and wakes nothing.
+func (s *Store) PostAll(ctx context.Context, ps []BoardPost) ([]BoardPost, error) {
+	if len(ps) == 0 {
+		return nil, nil
 	}
-	err = s.db.QueryRowContext(ctx, insertPost, p.ID, p.Project, p.Channel, p.Author.Kind, p.Author.ID, p.Kind, p.Subject, p.Worker, p.Body, ns).Scan(&p.Seq)
-	if err != nil {
-		return BoardPost{}, fmt.Errorf("%w: post to %q's board: %w", ErrStore, p.Project, err)
+	out := make([]BoardPost, len(ps))
+	for i, p := range ps {
+		if err := checkPost(p); err != nil {
+			return nil, err
+		}
+		if _, err := nanos(p.At); err != nil {
+			return nil, err
+		}
+		var err error
+		if p.ID, err = newULID(p.At, entropy); err != nil {
+			return nil, err
+		}
+		out[i] = p
+	}
+	if err := s.postAll(ctx, out); err != nil {
+		return nil, fmt.Errorf("%w: post to %q's board: %w", ErrStore, out[0].Project, err)
 	}
 	s.wake.signal()
-	return p, nil
+	return out, nil
+}
+
+// postAll is PostAll's transaction: it inserts each of ps, setting its Seq.
+func (s *Store) postAll(ctx context.Context, ps []BoardPost) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op once committed
+	for i := range ps {
+		if err := insertBoardPost(ctx, tx, &ps[i]); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+// FitID is v when a post's subject or worker may be v, else "": a notice
+// whose id the board would refuse is posted without it (A74).
+func FitID(v string) string {
+	if checkLine("id", v, true) != nil {
+		return ""
+	}
+	return v
 }
 
 // checkPost refuses a post the board must not hold.

@@ -35,10 +35,10 @@ func EndPoll(o Options, b *notice.Batcher, s notice.Sink) (wokenAtSend []bool, w
 // inbox, one notices and one dispatcher, configured as the daemon
 // configures them: in.configure(teamConfigOf(teams, "")), the inbox's
 // delivery settings from cfgs, o.newDispatcher(st, in), and
-// notices{batch: b, configs: cfgs, sink: s}. s nil: the inbox sink the
-// daemon builds, on st and p's inbox. b nil: a Batcher on cfgs. Each call
-// keeps the same inbox, memory and notices, so a test can run poll, pass,
-// poll and pass.
+// notices{batch: b, configs: cfgs, sink: s}, with the board sink newNotices
+// builds. s nil: the inbox sink the daemon builds, on st and p's inbox. b
+// nil: a Batcher on cfgs. Each call keeps the same inbox, memory and
+// notices, so a test can run poll, pass, poll and pass.
 type Poller struct {
 	o  Options
 	in *inbox
@@ -63,7 +63,8 @@ func NewPoller(o Options, st *store.Store, teams []settings.Team, cfgs notice.Co
 	if s == nil {
 		s = inboxSink{st: st, in: in, log: o.Logger, events: o.Team.Events, now: o.Now}
 	}
-	return &Poller{o: o, in: in, n: &notices{batch: b, configs: cfgs, sink: s}, d: o.newDispatcher(st, in)}
+	board := boardSink{st: st, log: o.Logger, events: o.Team.Events, now: o.Now}
+	return &Poller{o: o, in: in, n: &notices{batch: b, configs: cfgs, sink: s, board: board}, d: o.newDispatcher(st, in)}
 }
 
 // EndPoll ends a poll on m as pollTeam does: o.endPoll, which remembers

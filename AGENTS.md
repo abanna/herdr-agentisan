@@ -192,9 +192,11 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   It types each queued message into its recipient with `agent.prompt`, by
   the agent name the poll's last model shows where it belongs, or a pane
   sender's by the pane showing its terminal, posts a board-mode boss's
-  whole queue on its board instead, and holds it, never typed, while that
-  boss's agent has not been seen since the start; the ◆ spaces stay typed
-  (`boarddelivery.go`, A74), returns an ended binding's
+  whole queue on its board instead, then its notices one post each, the
+  queue first, a flush in one transaction and the inbox when that fails,
+  and holds them, never typed, while that boss's agent has not been seen
+  since the start; the ◆ spaces stay typed (`boarddelivery.go`, A74),
+  returns an ended binding's
   queue to its boss, and fails, never retrying, whatever a timeout or a
   crash may have typed (`messages.go`, A2, A30). The `send` op queues them
   (`docs/messaging.md`).
@@ -225,7 +227,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   (`github.go`, A45: merged, CI failed or passed, a conflict, a 👍, a
   review with its P-badge counts, each with its seen-set key), the
   per-boss pacing (`Batcher`: coalesced, at most
-  one message per gap, repeats and muted workers dropped, 8 KiB a message),
+  one message per gap, repeats and muted workers dropped, 8 KiB a message);
+  each message keeps every notice's fields for the board, the cut ones
+  included (A74),
   the boss's mutes (`Mutes`) and the `Sink` that delivers it: the daemon's
   appends each message to the boss's notice still queued in the inbox
   (`AppendTo`, `store.Notify`), and logs it to daemon.log; and the
@@ -338,7 +342,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   migrations 0004 and 0006, A45), make each event told once across
   restarts. Each team's board (`board.go`, migration 0007, A60) holds its
   posts and two read marks, the boss's and the user's; every post wakes
-  each `board wait`. Tests open a fresh database in a temp
+  each `board wait`; `PostAll` posts a flush in one transaction with one
+  wake (A74). Tests open a fresh database in a temp
   dir; the store is never mocked.
   `boardnotice.go` also provides the pure version-1 GitHub capture-ID helper
   and its frozen envelope/receipt types (B0a.1), and `noticeledger.go` the

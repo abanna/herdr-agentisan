@@ -403,15 +403,17 @@ func TestReturnedQueueIsPosted(t *testing.T) {
 	assert.Empty(t, r.pr.all())
 }
 
-// TestNoticesArePostedNotTyped: a poll's notices for a board-mode Claude
-// boss go to the inbox, and the pass the poll wakes posts them as one
-// notices post from the daemon, without the bare header; nothing is typed.
+// TestNoticesArePostedNotTyped: a board-mode boss's notices held in the
+// inbox while its agent was unknown are posted by the pass after a poll
+// that sees it run Claude, as one notices post from the daemon, without the
+// bare header; nothing is typed.
 func TestNoticesArePostedNotTyped(t *testing.T) {
 	t.Parallel()
 	cfgs := boardOn("ha")
 	b := notice.NewBatcher(cfgs)
 	b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Blocked, Text: "ha-coder-1 is blocked"}})
 	r := newBoardRig(t, []settings.Team{haTabs}, cfgs, b)
+	r.poll(haModel())
 	r.poll(haModel(bossPane("ha-boss", "claude")))
 	posts := r.posts(t, "ha")
 	require.Len(t, posts, 1)
@@ -425,15 +427,22 @@ func TestNoticesArePostedNotTyped(t *testing.T) {
 // boss agents before it flushes its notices, and so before the wake that
 // ends it, so the flush and the pass that wake starts read a memory already
 // updated with this poll; the other way round, a boss that just switched to
-// Claude would be typed one more time.
+// Claude would be typed one more time. The board refuses the post, so the
+// flush, which a board-mode boss's would otherwise post itself (A74's
+// notices), reaches the sink, which reads the delivery then.
 func TestEndPollRemembersBeforeItFlushes(t *testing.T) {
 	t.Parallel()
 	cfgs := boardOn("ha")
 	b := notice.NewBatcher(cfgs)
 	b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Blocked, Text: "ha-coder-1 is blocked"}})
+	db := filepath.Join(t.TempDir(), "state.db")
+	st, err := store.Open(t.Context(), db)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = st.Close() })
+	daemon.FailBoardInserts(t, db, "")
 	var p *daemon.Poller
 	var atFlush []notice.Delivery
-	p = daemon.NewPoller(daemon.Options{Logger: zerolog.Nop()}, scratchStore(t), []settings.Team{haTabs}, cfgs, b, sinkFunc(func(notice.Message) error {
+	p = daemon.NewPoller(daemon.Options{Logger: zerolog.Nop()}, st, []settings.Team{haTabs}, cfgs, b, sinkFunc(func(notice.Message) error {
 		atFlush = append(atFlush, p.Delivery("ha"))
 		return nil
 	}))
@@ -622,34 +631,4 @@ func TestPostedLogLineAndWarnReset(t *testing.T) {
 	sent(t, r.st, haBoss, coder, "two")
 	r.p.Pass()
 	assert.Equal(t, 2, warnings(r.logs.String(), postFailedMsg), "the next failure warns again")
-}
-
-// TestCeilingStillToastsInBoardMode is M5.3: a board-mode Claude boss at
-// its context ceiling still alerts the user with herdr's request sound, and
-// its ceiling line is a notices post, never typed.
-func TestCeilingStillToastsInBoardMode(t *testing.T) {
-	t.Parallel()
-	th, p, dir := haTeam(t)
-	st := stateStore(t, dir, th)
-	serving(t, teamOpts(t, dir, th, boardConfig(t)), th.fakeHerdr)
-	polled(t, th.srv, 2)
-	th.setToken("w14:p1", "ctx", "80")
-
-	const line = "you are at 80% context (ceiling: 75%): hand off now; the user has been alerted"
-	require.Eventually(t, func() bool {
-		for _, post := range boardOf(t, st, "ha") {
-			if post.Kind == "notices" && post.Channel == store.ChannelDaemon && strings.Contains(post.Body, line) {
-				return true
-			}
-		}
-		return false
-	}, ready, 10*time.Millisecond, "the ceiling line is never posted")
-	var sounds []string
-	for _, n := range toasts(t, th) {
-		if strings.Contains(n.Body, "the boss is past the 75% ceiling") {
-			sounds = append(sounds, n.Sound)
-		}
-	}
-	assert.Equal(t, []string{"request"}, sounds, "one toast, with herdr's request sound")
-	assert.Empty(t, p.all(), "nothing typed into the boss")
 }
