@@ -5,7 +5,9 @@ import (
 	"go/parser"
 	"go/token"
 	"io/fs"
+	"maps"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -411,14 +413,109 @@ func TestAckChecksItsInput(t *testing.T) {
 	}
 }
 
+// TestAckTablesRefuseBadRows (A74): the tables refuse, on their own, the
+// rows the Go checks never let through. Each bad row differs from a good one
+// in one column, refused by that column's rule, and the good one is taken.
+func TestAckTablesRefuseBadRows(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	db := store.DB(s)
+	const (
+		insertAck  = "INSERT INTO board_acks (seq, project, acked_at) VALUES (?, ?, ?)"
+		insertHeld = "INSERT INTO board_held_acks (project, boss, through_seq, through_at, acked_at) VALUES (?, ?, ?, ?, ?)"
+	)
+	for name, c := range map[string]struct {
+		held bool
+		bad  map[string]any
+		rule string
+	}{
+		"an acknowledgement with no project":    {false, map[string]any{"project": nil}, "NOT NULL constraint failed: board_acks.project"},
+		"an acknowledgement's time as text":     {false, map[string]any{"acked_at": "noon"}, "cannot store TEXT value in INTEGER column board_acks.acked_at"},
+		"a held acknowledgement with no boss":   {true, map[string]any{"boss": ""}, "CHECK constraint failed: boss <> ''"},
+		"a held acknowledgement through seq -1": {true, map[string]any{"through_seq": -1}, "CHECK constraint failed: through_seq >= 0"},
+		"a held acknowledgement through -1 ns":  {true, map[string]any{"through_at": -1}, "CHECK constraint failed: through_at >= 0"},
+		"a held acknowledgement's time as text": {true, map[string]any{"acked_at": "noon"}, "cannot store TEXT value in INTEGER column board_held_acks.acked_at"},
+	} {
+		insert, columns := insertHeld, []string{"project", "boss", "through_seq", "through_at", "acked_at"}
+		good := map[string]any{"project": name, "boss": boss.ID, "through_seq": 1, "through_at": 1, "acked_at": ackAt.UnixNano()}
+		if !c.held {
+			insert, columns = insertAck, []string{"seq", "project", "acked_at"}
+			good = map[string]any{"seq": post(t, s, teamPost("ha", "ha-coder-1", name)).Seq, "project": "ha", "acked_at": ackAt.UnixNano()}
+		}
+		bad := maps.Clone(good)
+		maps.Copy(bad, c.bad)
+		err := insertRow(t, db, insert, columns, bad)
+		constraintFailed(t, err, name)
+		assert.ErrorContains(t, err, c.rule, name)
+		assert.NoError(t, insertRow(t, db, insert, columns, good), "%s, made good, is taken", name)
+	}
+}
+
+// TestAckWakesNoReader (A74): an acknowledgement is not a post, so neither
+// AckPost nor AckUpto wakes a board wait. The next post does.
+func TestAckWakesNoReader(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	one := post(t, s, teamPost("ha", "ha-coder-1", "one"))
+	two := post(t, s, teamPost("ha", "ha-coder-1", "two"))
+	_, err := s.Send(t.Context(), boss, pane, "held", t1)
+	require.NoError(t, err)
+	changed := s.BoardChanged()
+	waiting := func() bool {
+		select {
+		case <-changed:
+			return false
+		default:
+			return true
+		}
+	}
+
+	assert.Equal(t, 1, ackPost(t, s, "ha", one.Seq).Acked)
+	assert.True(t, waiting(), "AckPost wakes no waiter")
+	r := ackUpto(t, s, "ha", two.Seq, "")
+	assert.Equal(t, 1, r.Acked)
+	assert.NotZero(t, r.HeldThrough, "AckUpto recorded the held message")
+	assert.True(t, waiting(), "AckUpto wakes no waiter")
+	post(t, s, teamPost("ha", "ha-coder-1", "three"))
+	assert.False(t, waiting(), "a post wakes the waiter")
+}
+
+// TestAckUptoIsOneTransaction (A74): AckUpto writes the posts' records and
+// the held record in one transaction. When the held record fails, the posts'
+// records written before it go back with it.
+func TestAckUptoIsOneTransaction(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	p := post(t, s, teamPost("ha", "ha-coder-1", "one"))
+	_, err := store.DB(s).ExecContext(t.Context(), `CREATE TRIGGER refuse_held BEFORE INSERT ON board_held_acks
+BEGIN SELECT RAISE(ABORT, 'injected'); END`)
+	require.NoError(t, err)
+
+	r, err := s.AckUpto(t.Context(), "ha", boss.ID, p.Seq, "", ackAt)
+	require.ErrorIs(t, err, store.ErrStore)
+	require.ErrorContains(t, err, "injected")
+	assert.Equal(t, store.AckResult{}, r)
+	assert.Empty(t, ackRows(t, s), "the post's record went back with the held one")
+	assert.Empty(t, heldAcks(t, s))
+
+	_, err = store.DB(s).ExecContext(t.Context(), "DROP TRIGGER refuse_held")
+	require.NoError(t, err)
+	assert.Equal(t, 1, ackUpto(t, s, "ha", p.Seq, "").Acked, "without the failure, the post is acknowledged")
+}
+
 // TestAcksHaveNoProductionCaller: the acknowledgements are dormant until the
 // board's PR 3c. No non-test file in internal/ or cmd/ but boardack.go uses
-// AckPost, AckUpto or AckResult, none but boardack.go and board.go names
-// board_acks in a string, and none but boardack.go names board_held_acks.
+// AckPost, AckUpto or AckResult, or the statements and helper behind them;
+// none but boardack.go names board_held_acks in a string; and none but
+// boardack.go and board.go names board_acks, board.go only to read it, for
+// ReadBoard and LatestPosts. A write split across joined strings is past
+// what a scan of single strings can see.
 func TestAcksHaveNoProductionCaller(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join("..", "..")
 	const ackFile, boardFile = "internal/store/boardack.go", "internal/store/board.go"
+	names := []string{"AckPost", "AckUpto", "AckResult", "ackPosts", "ackOnePost", "ackUptoPost", "ackHeld", "ackRows"}
+	write := regexp.MustCompile(`\b(insert|update|delete|replace)\b`)
 	uses := map[string][]string{}
 	found := map[string]bool{}
 	parsed := 0
@@ -442,7 +539,7 @@ func TestAcksHaveNoProductionCaller(t *testing.T) {
 				switch n := n.(type) {
 				case *ast.Ident:
 					switch {
-					case !slices.Contains([]string{"AckPost", "AckUpto", "AckResult"}, n.Name):
+					case !slices.Contains(names, n.Name):
 					case rel == ackFile:
 						found[n.Name] = true
 					default:
@@ -459,6 +556,8 @@ func TestAcksHaveNoProductionCaller(t *testing.T) {
 					} {
 						switch {
 						case !strings.Contains(lit, table):
+						case rel == boardFile && write.MatchString(lit):
+							uses[rel] = append(uses[rel], fset.Position(n.Pos()).String()+" a write to "+table)
 						case slices.Contains(allowed, rel):
 							found[table+" in "+rel] = true
 						default:
@@ -475,7 +574,7 @@ func TestAcksHaveNoProductionCaller(t *testing.T) {
 	assert.Greater(t, parsed, 100, "the scan reached the module's packages")
 	// The scan finds the names and the table where they are: it cannot pass
 	// by seeing nothing.
-	for _, name := range []string{"AckPost", "AckUpto", "AckResult", "board_acks in " + ackFile, "board_acks in " + boardFile, "board_held_acks in " + ackFile} {
+	for _, name := range append(names, "board_acks in "+ackFile, "board_acks in "+boardFile, "board_held_acks in "+ackFile) {
 		assert.True(t, found[name], "the scan finds %s", name)
 	}
 	assert.Empty(t, uses, "the acknowledgements are dormant until PR 3c")

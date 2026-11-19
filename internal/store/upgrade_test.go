@@ -330,6 +330,26 @@ func withoutBoardAcks(t *testing.T, tables map[string][][]any) map[string][][]an
 	return tables
 }
 
+// The acknowledgements' objects as their migration writes them, copied here,
+// so a slip in the migration fails the test: once it has run on the live
+// database, it cannot be taken back.
+const (
+	ackTableSQL = `CREATE TABLE board_acks (
+    seq      INTEGER PRIMARY KEY REFERENCES board_posts (seq) ON DELETE CASCADE,
+    project  TEXT    NOT NULL,
+    acked_at INTEGER NOT NULL
+) STRICT`
+	ackIndexSQL     = `CREATE INDEX board_acks_by_project ON board_acks (project, acked_at)`
+	heldAckTableSQL = `CREATE TABLE board_held_acks (
+    project     TEXT    NOT NULL,
+    boss        TEXT    NOT NULL CHECK (boss <> ''),
+    through_seq INTEGER NOT NULL CHECK (through_seq >= 0),
+    through_at  INTEGER NOT NULL CHECK (through_at >= 0),
+    acked_at    INTEGER NOT NULL,
+    PRIMARY KEY (project, boss)
+) STRICT`
+)
+
 // TestUpgradeToTheAcks (A1, A74) is the path into the acknowledgements'
 // migration (0011): a database at schema 10 with rows in every table, the
 // notice ledger's and its totals included, migrates to 11 with every row and
@@ -401,11 +421,11 @@ func TestUpgradeToTheAcks(t *testing.T) {
 	assert.Equal(t, othersBefore, withoutBoardAcks(t, otherTables(t, db)), "every other row of schema 10 survives as it was")
 	assert.Equal(t, objectsBefore, schema(db), "every object of schema 10 is as it was")
 	assert.Equal(t, [][]any{
-		{"index", "board_acks_by_project", "board_acks"},
-		{"index", "sqlite_autoindex_board_held_acks_1", "board_held_acks"},
-		{"table", "board_acks", "board_acks"},
-		{"table", "board_held_acks", "board_held_acks"},
-	}, queryRows(t, db, "SELECT type, name, tbl_name FROM sqlite_schema WHERE tbl_name IN ('board_acks', 'board_held_acks') ORDER BY type, name"), "0011 adds its two tables and their indexes, nothing else")
+		{"index", "board_acks_by_project", "board_acks", ackIndexSQL},
+		{"index", "sqlite_autoindex_board_held_acks_1", "board_held_acks", nil},
+		{"table", "board_acks", "board_acks", ackTableSQL},
+		{"table", "board_held_acks", "board_held_acks", heldAckTableSQL},
+	}, queryRows(t, db, "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name IN ('board_acks', 'board_held_acks') ORDER BY type, name"), "0011 adds its two tables and their indexes, nothing else")
 	var check string
 	require.NoError(t, db.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&check))
 	assert.Equal(t, "ok", check)
