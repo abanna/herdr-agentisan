@@ -660,6 +660,19 @@ func TestTheWorkforceGetsThePreflightHook(t *testing.T) {
 	assert.Nil(t, daemon.WorkforceOf(daemon.Options{Team: &daemon.TeamOptions{}}, daemon.Identity{}).Preflight)
 }
 
+// TestTheWorkforceProvesShellsWithThePollsHook (NERD-5534): retire proves a
+// worker's shell on a pane with the start-time hook the team poll's re-key
+// uses (A35), so the two never disagree on whose shell a pane holds.
+func TestTheWorkforceProvesShellsWithThePollsHook(t *testing.T) {
+	t.Parallel()
+	o := daemon.Options{Team: &daemon.TeamOptions{}, Hooks: daemon.Hooks{StartTime: func(pid int) (uint64, error) { return uint64(pid) * 7, nil }}}
+	svc := daemon.WorkforceOf(o, daemon.Identity{})
+	require.NotNil(t, svc.StartTime)
+	start, err := svc.StartTime(6)
+	require.NoError(t, err)
+	assert.Equal(t, uint64(42), start)
+}
+
 // TestTheWorkforceAsksJevThroughOneKeyCache: a daemon's spawns ask Jev
 // through jev.Asker, at System One's own endpoint, with the one key cache the
 // service holds for the daemon's life (A57), ready to read a key: a nil
