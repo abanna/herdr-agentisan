@@ -134,8 +134,8 @@ before the board's activation, and the first install is the activation build.
 
 A GitHub envelope must have a project and the CaptureID
 `GitHubNoticeCaptureID` derives; a daemon envelope is described under B0a.4
-below; a team post is refused. In one transaction it then dedupes, by capture
-ID and by receipt (project, repo, PR,
+below; a team post is refused. In one transaction `AdmitNotice` then dedupes
+a GitHub notice, by capture ID and by receipt (project, repo, PR,
 kind, key), which the schema also holds `UNIQUE`: the capture ID covers the
 time observed and the text, so the same event seen after a restart is caught
 by its receipt, and the first capture wins, its payload never rewritten. An

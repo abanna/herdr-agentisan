@@ -14,10 +14,10 @@ import (
 )
 
 // The notice admission ledger (NERD-5533 B0a.2, migration 0009) records
-// each notice once, before anything tells it: a notice admitted once is
-// never admitted again. It is dormant: nothing in production calls it yet,
-// it posts nothing to the board and wakes no reader, and it never writes a
-// github_* table.
+// each notice once, before anything tells it: a GitHub notice admitted once
+// is never admitted again; the ledger does not dedupe a daemon notice. It is
+// dormant: nothing in production calls it yet, it posts nothing to the board
+// and wakes no reader, and it never writes a github_* table.
 
 // ErrNoNotice means no notice with that capture ID is pending: none was
 // admitted, or it was imported, or it is settled.
