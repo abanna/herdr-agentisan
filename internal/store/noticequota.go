@@ -80,6 +80,12 @@ const (
 	selectProjectIdentities  = `SELECT (SELECT identities FROM notice_counts WHERE project = ?1), EXISTS (SELECT 1 FROM notice_identities WHERE project = ?1)`
 	selectStoreIdentities    = `SELECT identities FROM notice_store_counts WHERE id = 1`
 	selectAdmissionsInWindow = `SELECT count(*) FROM (SELECT 1 FROM notice_identities WHERE project = ?1 AND state IN ('pending', 'imported', 'posted', 'dropped') AND admitted_at >= ?2 LIMIT ?3)`
+	// selectSourceAdmissionsInWindow is Q8 per source: a project's admissions
+	// of one source, in every state, at or after ?2. B0a.4-hour points Q8 at
+	// it and pins it to notice_identities_by_state.
+	selectSourceAdmissionsInWindow = `SELECT count(*) FROM (SELECT 1 FROM notice_identities
+  WHERE project = ?1 AND source = ?4 AND state IN ('pending', 'imported', 'posted', 'dropped')
+    AND admitted_at >= ?2 LIMIT ?3)`
 )
 
 // checkingQuotas is what a failed quota query was doing.

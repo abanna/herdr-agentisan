@@ -22,7 +22,7 @@ import (
 // its own.
 var ledgerNames = []string{
 	"AdmitNotice", "PendingNotice", "PendingNotices", "NoticeStats", "PruneNoticePayloads",
-	"NoticeAdmission", "ErrNoNotice",
+	"NoticeAdmission", "ErrNoNotice", "NoticeMeta",
 	"GitHubNoticeCaptureID", "NoticeEnvelope", "NoticeReceipt",
 	"ErrNoticeQuota", "ErrNoticePendingPerProject", "ErrNoticePendingInStore", "ErrNoticePendingPerPR",
 	"ErrNoticeBytesPerProject", "ErrNoticeBytesInStore", "ErrNoticeIdentitiesPerProject",
@@ -34,17 +34,18 @@ var ledgerNames = []string{
 var ledgerTables = []string{"notice_identities", "notice_payloads", "notice_counts", "notice_store_counts"}
 
 // The ledger's own files, relative to the module root: B0a.1's helper, the
-// ledger and its quotas may use its names, and only the ledger and its
-// quotas may name its tables.
+// ledger, its quotas and its metadata queries may use its names, and only
+// the ledger, its quotas and its metadata queries may name its tables.
 const (
 	ledgerHelper = "internal/store/boardnotice.go"
 	ledgerFile   = "internal/store/noticeledger.go"
 	quotaFile    = "internal/store/noticequota.go"
+	metaFile     = "internal/store/noticemeta.go"
 )
 
 var (
-	ledgerNameFiles  = []string{ledgerHelper, ledgerFile, quotaFile}
-	ledgerTableFiles = []string{ledgerFile, quotaFile}
+	ledgerNameFiles  = []string{ledgerHelper, ledgerFile, quotaFile, metaFile}
+	ledgerTableFiles = []string{ledgerFile, quotaFile, metaFile}
 )
 
 // ledgerUses parses every non-test Go file under root/dir. It returns, by
@@ -114,10 +115,11 @@ func ledgerUses(t *testing.T, root, dir string) (names, tables map[string][]stri
 
 // TestLedgerHasNoProductionCaller (D1): the ledger is dormant. No non-test
 // file in internal/ or cmd/ but the ledger's own (boardnotice.go,
-// noticeledger.go and noticequota.go) uses any of its names, its quotas'
-// errors included, and none but noticeledger.go and noticequota.go names
-// its tables in SQL, 0010's totals included, so nothing in production
-// admits, reads or builds a notice for it, or reaches its rows around it.
+// noticeledger.go, noticequota.go and noticemeta.go) uses any of its names,
+// its quotas' errors and its metadata's included, and none but
+// noticeledger.go, noticequota.go and noticemeta.go names its tables in SQL,
+// 0010's totals included, so nothing in production admits, reads or builds a
+// notice for it, or reaches its rows around it.
 //
 // No non-test Go string, the ledger's own included, names a ledger table
 // with REPLACE in it either: on a connection without recursive_triggers, a
@@ -157,6 +159,13 @@ func TestLedgerHasNoProductionCaller(t *testing.T) {
 	}
 	for _, name := range []string{"ErrNoticeQuota", "ErrNoticeAdmissionRate", "notice_counts"} {
 		assert.True(t, inQuotas[name], "the scan finds %s in %s", name, quotaFile)
+	}
+	inMeta := map[string]bool{}
+	for _, use := range slices.Concat(names[metaFile], tables[metaFile]) {
+		inMeta[use[strings.LastIndexByte(use, ' ')+1:]] = true
+	}
+	for _, name := range []string{"PendingNotices", "NoticeStats", "NoticeMeta", "notice_payloads"} {
+		assert.True(t, inMeta[name], "the scan finds %s in %s", name, metaFile)
 	}
 
 	for _, file := range ledgerNameFiles {
