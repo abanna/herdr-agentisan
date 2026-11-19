@@ -322,6 +322,7 @@ short = "a"
 	assert.Equal(t, map[string]string{
 		"agent.command":       settings.LayerDefault,
 		"agent.model":         settings.LayerShared,
+		"notices.delivery":    settings.LayerDefault,
 		"notices.gap":         settings.LayerDefault,
 		"notices.repeat":      settings.LayerDefault,
 		"rotation.thresholds": settings.LayerFlag,
@@ -330,7 +331,7 @@ short = "a"
 	for _, l := range got.Leaves() {
 		paths = append(paths, l.Path)
 	}
-	assert.Equal(t, []string{"agent.command", "agent.model", "notices.gap", "notices.repeat", "rotation.thresholds"}, paths, "leaves are sorted")
+	assert.Equal(t, []string{"agent.command", "agent.model", "notices.delivery", "notices.gap", "notices.repeat", "rotation.thresholds"}, paths, "leaves are sorted")
 }
 
 // TestLoadMissingFilesAreNotErrors: with no shared file only the defaults
@@ -344,6 +345,7 @@ func TestLoadMissingFilesAreNotErrors(t *testing.T) {
 	assert.Empty(t, got.Projects)
 	assert.Equal(t, map[string]string{
 		"agent.command":       settings.LayerDefault,
+		"notices.delivery":    settings.LayerDefault,
 		"notices.gap":         settings.LayerDefault,
 		"notices.repeat":      settings.LayerDefault,
 		"rotation.thresholds": settings.LayerDefault,

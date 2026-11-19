@@ -201,6 +201,8 @@ The body reads `<message id> queued for <recipient>` (or `delivered to`,
 `failed to`, `returned to`) and never carries the message's body. A `.queued` record's time is the message's
 own queued time, so a trail sorted by `@timestamp` puts it first, even
 when the dispatcher delivers the message before `send` emits its event.
+For a boss on the board (A74), `.delivered` means posted, and `.failed`
+that the board refused it.
 
 | Attribute | Type | Value |
 | --- | --- | --- |
