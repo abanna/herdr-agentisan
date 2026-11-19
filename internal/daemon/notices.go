@@ -56,6 +56,7 @@ func (o Options) newNotices(st *store.Store, in *inbox, mutes *notice.Mutes) *no
 	for name, c := range ns.Projects {
 		cfgs.Projects[name] = noticeConfig(c)
 	}
+	in.setConfigs(cfgs)
 	batch := notice.NewBatcher(cfgs)
 	batch.Mutes = mutes
 	sink := inboxSink{st: st, in: in, log: o.Logger, events: o.Team.Events, now: o.Now}
@@ -83,7 +84,7 @@ func noticeConfig(c settings.NoticeConfig) notice.Config {
 	for _, k := range c.Skip {
 		skip[notice.Kind(k)] = true
 	}
-	return notice.Config{Skip: skip, Gap: c.Gap, Repeat: c.Repeat}
+	return notice.Config{Skip: skip, Gap: c.Gap, Repeat: c.Repeat, Board: c.Delivery == settings.DeliveryBoard}
 }
 
 // observe takes one poll's model and, when agent.list answered it (named),
@@ -131,12 +132,15 @@ func (o Options) alert(ctx context.Context, c herdr.Client, cr notice.Crossing) 
 	return res.Shown
 }
 
-// endPoll ends a poll: it queues the poll's notices, then gives the
-// dispatcher the poll's model, which wakes it. In that order, so a boss in
-// its place is typed a notice in the pass the poll that queued it wakes
-// (A44); the other way round, that pass could read the inbox first and leave
-// the notice for the next poll's.
+// endPoll ends a poll: it remembers the agent on each tabs team's boss pane
+// (A74), queues the poll's notices, then gives the dispatcher the poll's
+// model, which wakes it. In that order, so the flush and the dispatcher read
+// one memory, already updated with this poll, and a boss in its place is
+// typed a notice in the pass the poll that queued it wakes (A44); the other
+// way round, that pass could read the inbox first and leave the notice for
+// the next poll's.
 func (o Options) endPoll(ctx context.Context, n *notices, in *inbox, built *team.Model) {
+	in.remember(built)
 	o.flushNotices(ctx, n)
 	in.polled(built)
 }
