@@ -483,14 +483,14 @@ func TestBeginSpawnRefusesABadPlan(t *testing.T) {
 func k63() string { return spawnKey().TaskDigest[:63] }
 
 // fullWorker is id's worker with every field BindWorker writes set, each
-// override and digest to a value of its own, so a column read into the
-// wrong field shows.
+// override, digest and provider to a value of its own, so a column read
+// into the wrong field shows.
 func fullWorker(id string) store.Worker {
 	pane := "w14:p" + id[len(id)-1:]
 	return store.Worker{
 		LogicalID: id, Project: "agentisan", Group: "coders", PaneID: pane, TerminalID: terminal(pane), Provider: store.ProviderClaude,
 		Routing: &store.Routing{
-			Role: "coder", Provider: "claude", Binding: "claude_mid", ModelID: "claude-sonnet-5-5", Effort: "high",
+			Role: "coder", Provider: "codex", Binding: "claude_mid", ModelID: "claude-sonnet-5-5", Effort: "high",
 			OverrideBinding: "claude_top", OverrideBy: "user", OverrideEffort: "xhigh",
 			AssignmentDigest: strings.Repeat("ad", 32), PolicyVersion: "v1-0123456789ab", RoutedAt: spawnAt,
 		},
@@ -536,7 +536,8 @@ func TestSpawnLinkRowIsWorkerRow(t *testing.T) {
 	row, err := s.WorkerRow(ctx, w.LogicalID)
 	require.NoError(t, err)
 	// Workers reads the shell and the pending handoff; WorkerRow never does.
-	assert.Empty(t, zeroFields(reflect.ValueOf(row), "ShellPID", "ShellStart", "HandoffPending"), "fields the fixture leaves zero")
+	require.Empty(t, zeroFields(reflect.ValueOf(row), "ShellPID", "ShellStart", "HandoffPending"), "fields the fixture leaves zero")
+	assert.NotEqual(t, row.Provider, row.Routing.Provider, "the launch and routing providers differ, so a swap of the two columns shows")
 	rec, err := s.SpawnRecord(ctx, retryKey)
 	require.NoError(t, err)
 	require.Len(t, rec.Planned, 1)
