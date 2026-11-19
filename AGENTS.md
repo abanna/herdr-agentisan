@@ -191,7 +191,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   the A28 addendum, A49).
   It types each queued message into its recipient with `agent.prompt`, by
   the agent name the poll's last model shows where it belongs, or a pane
-  sender's by the pane showing its terminal, returns an ended binding's
+  sender's by the pane showing its terminal, posts a board-mode boss's
+  whole queue on its board instead, and holds it, never typed, while that
+  boss's agent has not been seen since the start; the ◆ spaces stay typed
+  (`boarddelivery.go`, A74), returns an ended binding's
   queue to its boss, and fails, never retrying, whatever a timeout or a
   crash may have typed (`messages.go`, A2, A30). The `send` op queues them
   (`docs/messaging.md`).
@@ -225,8 +228,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   one message per gap, repeats and muted workers dropped, 8 KiB a message),
   the boss's mutes (`Mutes`) and the `Sink` that delivers it: the daemon's
   appends each message to the boss's notice still queued in the inbox
-  (`AppendTo`, `store.Notify`), and logs it to daemon.log. Pure: tests
-  build models by hand.
+  (`AppendTo`, `store.Notify`), and logs it to daemon.log; and the
+  delivery a board-mode team's boss gets from the agent last seen on its
+  pane (`delivery.go`, A74). Pure: tests build models by hand.
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
   `team status`, `team up`, `worker spawn` and `worker retire`, and `send`'s
   sender and recipient (A30): each group's counts and members on a tabs team
@@ -263,7 +267,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   project's test-slot lock files, which the daemon reads once at start
   (`tests.go`, A40), and every project's rotation thresholds, a group's
   own included, which the daemon reads once at start, the repo file
-  included (`rotation.go`, A33). A repo file is committed, so it sets only
+  included (`rotation.go`, A33), and its notices keys, `notices.delivery`
+  (typed or board, A74) included. A repo file is committed, so it sets only
   colour, github, group counts, models and rotation (A46, `repoFileKeys`,
   refused by default, an empty table adding an entry included, A53), and
   the merged model, whichever layer sets it, is checked as safe to pass to

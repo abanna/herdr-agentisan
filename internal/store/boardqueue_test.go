@@ -4,11 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"io/fs"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -468,52 +463,4 @@ func TestPostQueuedRefusesANonBoss(t *testing.T) {
 	}
 	assert.Zero(t, postCount(t, s), "nothing is posted")
 	assertState(t, s, store.MessageQueued, m)
-}
-
-// postQueuedFile is PostQueued's own file, relative to the module root.
-const postQueuedFile = "internal/store/boardqueue.go"
-
-// TestPostQueuedHasNoProductionCaller: PostQueued is dormant until PR 1b's
-// dispatcher calls it (NERD-5533, A74), which deletes this test. No non-test
-// file in internal/ or cmd/ but its own uses the name, a selector, a method
-// value or an interface's method alike.
-func TestPostQueuedHasNoProductionCaller(t *testing.T) {
-	t.Parallel()
-	root := filepath.Join("..", "..")
-	uses := map[string][]string{}
-	parsed := 0
-	fset := token.NewFileSet()
-	for _, dir := range []string{"internal", "cmd"} {
-		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
-			switch {
-			case err != nil:
-				return err
-			case d.IsDir() && d.Name() == "testdata":
-				return filepath.SkipDir
-			case d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go"):
-				return nil
-			}
-			f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-			if err != nil {
-				return err
-			}
-			parsed++
-			rel, err := filepath.Rel(root, path)
-			if err != nil {
-				return err
-			}
-			ast.Inspect(f, func(n ast.Node) bool {
-				if id, ok := n.(*ast.Ident); ok && id.Name == "PostQueued" {
-					uses[filepath.ToSlash(rel)] = append(uses[filepath.ToSlash(rel)], fset.Position(id.Pos()).String())
-				}
-				return true
-			})
-			return nil
-		})
-		require.NoError(t, err)
-	}
-	assert.Greater(t, parsed, 100, "the scan reached the module's packages")
-	assert.NotEmpty(t, uses[postQueuedFile], "the scan finds PostQueued in %s", postQueuedFile)
-	delete(uses, postQueuedFile)
-	assert.Empty(t, uses, "PostQueued has no production caller until PR 1b")
 }
