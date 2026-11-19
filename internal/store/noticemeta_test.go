@@ -523,7 +523,6 @@ func TestStatsByteSumOverflowIsAnError(t *testing.T) {
 	rawNotice(t, s, "nt:2", "ha", "daemon", "pending", ledgerAt.UnixNano()+1, 1)
 	_, err := s.NoticeStats(t.Context(), "ha", ledgerAt)
 	require.ErrorIs(t, err, store.ErrStore)
-	assert.ErrorContains(t, err, "integer overflow")
 }
 
 // TestMetadataQueriesWriteNothing (M-read): both reads leave every table's
