@@ -67,8 +67,8 @@ func NewTracker() *Tracker { return &Tracker{episodes: map[string]*episode{}} }
 // episode is one project's run of alerts, while anything is pending.
 type episode struct {
 	// start is the oldest post or held message pending when the episode
-	// opened, so a ceiling already pending then is newer than it, after a
-	// restart too; now when the state gives no time.
+	// opened, so a ceiling already pending then is not older than it,
+	// after a restart too; now when the state gives no time.
 	start time.Time
 	mark  int64 // BossMark at the last Observe
 	// count is the alerts shown since the episode opened or the boss last
