@@ -156,8 +156,9 @@ func TestBoardPendingFindsACeilingInAHeldNotice(t *testing.T) {
 }
 
 // TestBoardPendingRefusesAnEmptyCeilingMark: an empty mark would be in every
-// body (SQLite's instr(x, '') is 1), so every daemon notice would read as a
-// ceiling, alerting at ceiling_after; it is refused before any read.
+// body (SQLite's instr finds an empty needle at 1), so every daemon notice
+// would read as a ceiling, alerting at ceiling_after; it is refused before
+// any read.
 func TestBoardPendingRefusesAnEmptyCeilingMark(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
