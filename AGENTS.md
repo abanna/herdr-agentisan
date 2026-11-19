@@ -227,6 +227,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   appends each message to the boss's notice still queued in the inbox
   (`AppendTo`, `store.Notify`), and logs it to daemon.log. Pure: tests
   build models by hand.
+- `internal/attention/` — the alert that tells the user a board-mode boss
+  has left posts unread, or messages waiting, too long (ADR-001 A74): when
+  an episode opens, its reminders, what resets, pauses or ends it. Pure:
+  tests build its inputs by hand.
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
   `team status`, `team up`, `worker spawn` and `worker retire`, and `send`'s
   sender and recipient (A30): each group's counts and members on a tabs team
