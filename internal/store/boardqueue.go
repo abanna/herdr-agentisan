@@ -16,10 +16,10 @@ const partRoom = 32
 
 // MaxQueuePost is the most rows one PostQueued call posts. A call holds the
 // store's one connection for its whole transaction, and its caller gives it
-// 5 s. Measured under -race, a batch of 8 KiB rows took 0.85 s, and one of
-// the largest rows, failure notices of two posts each (8,800 bytes), 1.03 s:
-// about a second. A backlog drains a batch a call (NERD-5533 1245ef8b, the
-// boss's ruling on the cap's value).
+// 5 s. Measured under -race, a batch of 8 KiB rows took 0.85 s, and a batch
+// of 8,800-byte failure notices, two posts each, 1.03 s: about a second. A
+// backlog drains a batch a call (NERD-5533 1245ef8b, the boss's ruling on
+// the cap's value).
 const MaxQueuePost = 100
 
 // noticesHeader is the first line of A44's notices to a boss. Their post
