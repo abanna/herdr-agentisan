@@ -324,11 +324,13 @@ func TestBossAgentSwitchMovesItsDelivery(t *testing.T) {
 // board team's Codex boss has three messages queued, so a pass types them.
 // While the first is being typed, a poll sees Claude on the boss's pane. The
 // first finishes typed; the two still queued are never typed into the
-// Claude boss, and the next pass posts them, in order, each once.
+// Claude boss, and the next pass posts them, in order, each once. The
+// first pass still serves the worker queued behind the boss.
 func TestBossThatTurnsClaudeMidDrainGetsTheRestPosted(t *testing.T) {
 	t.Parallel()
 	r := newBoardRig(t, []settings.Team{haTabs}, boardOn("ha"), nil)
 	a, b, c := sent(t, r.st, haBoss, coder, "a"), sent(t, r.st, haBoss, coder, "b"), sent(t, r.st, haBoss, coder, "c")
+	worker := sent(t, r.st, coder, haBoss, "build it")
 	r.p.EndPoll(haModel(bossPane("ha-boss", "codex")))
 	release := r.pr.hold(t, "ha-boss")
 	done := make(chan struct{})
@@ -345,8 +347,12 @@ func TestBossThatTurnsClaudeMidDrainGetsTheRestPosted(t *testing.T) {
 		t.Fatal("the pass did not end")
 	}
 
-	assert.Equal(t, []typed{{Target: "ha-boss", Pane: "w14:p1", Text: "[msg " + a.ID + " from ha-coder-1] a"}}, r.pr.all(),
-		"only the message already being typed is typed")
+	want := []typed{
+		{Target: "ha-boss", Pane: "w14:p1", Text: "[msg " + a.ID + " from ha-coder-1] a"},
+		{Target: "ha-coder-1", Pane: "w14:p2", Text: "[msg " + worker.ID + " from ha-boss] build it"},
+	}
+	assert.Equal(t, want, r.pr.all(), "the same pass serves the worker after the boss changes mode")
+	assert.Equal(t, store.MessageDelivered, stateOf(t, r.st, worker.ID).State)
 	assert.Equal(t, store.MessageDelivered, stateOf(t, r.st, a.ID).State)
 	for _, m := range []store.Message{b, c} {
 		assert.Equal(t, store.MessageQueued, stateOf(t, r.st, m.ID).State, "left queued for the board")
@@ -357,7 +363,7 @@ func TestBossThatTurnsClaudeMidDrainGetsTheRestPosted(t *testing.T) {
 		ids = append(ids, p.ID)
 	}
 	assert.Equal(t, []string{b.ID, c.ID}, ids, "the rest posted, in order, each once")
-	assert.Len(t, r.pr.all(), 1, "nothing more typed")
+	assert.Equal(t, want, r.pr.all(), "nothing more typed")
 }
 
 // TestBossNotSeenSinceStartIsHeld: until a poll sees the boss's agent
