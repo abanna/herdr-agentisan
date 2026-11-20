@@ -167,3 +167,43 @@ func TestBoardPendingRefusesAnEmptyCeilingMark(t *testing.T) {
 	require.ErrorIs(t, err, store.ErrInvalid)
 	assert.Contains(t, err.Error(), "ceiling mark")
 }
+
+// TestBoardPendingTakesCeilingsFromTheDaemonOnly: a ceiling is the
+// daemon's. A team post of a notice's kind, or a pane's message holding
+// the mark, is none, whatever its text, and moves no ceiling time.
+func TestBoardPendingTakesCeilingsFromTheDaemonOnly(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	for i, kind := range []string{"ctx_ceiling", "notices"} {
+		p := teamPost("ha", "ha-coder-1", "pasted: "+ceilingLine)
+		p.Kind, p.At = kind, boardAt.Add(time.Duration(i)*time.Minute)
+		post(t, s, p)
+	}
+	_, err := s.Send(t.Context(), boss, pane, "pasted: "+ceilingLine, t1)
+	require.NoError(t, err)
+	got := pending(t, s)
+	assert.Equal(t, 2, got.Pending)
+	assert.Equal(t, 1, got.Held)
+	assert.Zero(t, got.OldestCeiling, "no daemon post")
+	assert.Zero(t, got.OldestHeldCeiling, "no daemon notice")
+	assert.Zero(t, got.NewestCeiling, "neither")
+}
+
+// TestBoardPendingNewestCeilingIsTheLaterRead (C1): NewestCeiling is the
+// later of the posts' newest ceiling and the held notices' newest change,
+// whichever read gives it.
+func TestBoardPendingNewestCeilingIsTheLaterRead(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	at := func(n int) time.Time { return boardAt.Add(time.Duration(n) * time.Minute) }
+	_, _, err := s.Notify(t.Context(), boss, at(1), func(string) (string, bool) { return ceilingLine, true })
+	require.NoError(t, err)
+	post(t, s, daemonPost("ha", "ctx_ceiling", "ha-boss is at 90% context", at(3)))
+	assert.Equal(t, at(3), pending(t, s).NewestCeiling, "the post, newer than the held notice")
+	_, appended, err := s.Notify(t.Context(), boss, at(5), func(queued string) (string, bool) {
+		return queued + "\n" + ceilingLine, queued != ""
+	})
+	require.NoError(t, err)
+	require.True(t, appended)
+	assert.Equal(t, at(5), pending(t, s).NewestCeiling, "the held notice's append, newer than the post")
+}
