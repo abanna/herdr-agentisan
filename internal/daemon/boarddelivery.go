@@ -40,45 +40,16 @@ func (d *dispatcher) untyped(ctx context.Context, bosses map[string]string, to s
 	return false
 }
 
-// claimTyped claims to's next message to type, if it has one, as claim
-// does. It claims nothing once to is the boss of a board-mode team that a
-// poll has turned from typed since the pass decided to type it: the rest
-// wait for the next pass's board path (A74; #183's review and PR 2's
-// pre-check, NERD-5533 cbf65a5e).
-//
-// For the boss of one tabs team whose key is board, the delivery is read
-// and the row claimed under in.route, the lock remember takes, so a poll's
-// switch falls wholly before the claim, and nothing is claimed, or wholly
-// after it, and the row is already dispatching, which A44 never appends to:
-// a notice the poll flushes after it remembers Claude is never typed. route
-// is released before the prompt. Lock order: route, then in.mu, then the
-// store; route is taken nowhere else but remember, and neither holds
-// another lock when it takes it.
-//
-// Every other recipient, and every boss with the key unset, is claimed as
-// on the typed path alone, with no route taken.
-func (d *dispatcher) claimTyped(ctx context.Context, bosses map[string]string, to store.Address) (store.Message, bool, error) {
-	project, board := d.boardBoss(bosses, to)
-	if !board {
-		return d.claim(ctx, to)
-	}
-	d.in.route.Lock()
-	defer d.in.route.Unlock()
-	if d.in.delivery(project) != notice.DeliverTyped {
-		return store.Message{}, false, nil
-	}
-	return d.claim(ctx, to)
-}
-
-// boardBoss is the project to is the boss of, and whether its key is board:
-// false for any other recipient, a name no team or two teams have, and
-// every boss with the key unset.
-func (d *dispatcher) boardBoss(bosses map[string]string, to store.Address) (string, bool) {
+// stillTyped reports whether to's messages are still typed now. A boss of
+// one board-mode team is not once a poll has seen Claude on its pane since
+// the pass decided to type it: serve checks it before each claim, so a
+// switch mid-drain types nothing more into that Claude boss (#183's review).
+func (d *dispatcher) stillTyped(bosses map[string]string, to store.Address) bool {
 	if to.Kind != store.KindBoss {
-		return "", false
+		return true
 	}
 	project, ok := bossProject(bosses, to.ID)
-	return project, ok && d.in.boardKey(project)
+	return !ok || d.in.delivery(project) == notice.DeliverTyped
 }
 
 // bossProject is the one configured project whose boss is named boss. It
