@@ -212,8 +212,9 @@ func TestBoardPendingNewestCeilingIsTheLaterRead(t *testing.T) {
 
 // TestBoardPendingIgnoresACeilingQuotedInAFailureNotice (S2, NERD-5533
 // 34ed8294): a notice of a failed delivery quotes the message whole, and a
-// row returned from an ended binding is the sender's own; either can hold a
-// ceiling line and is no ceiling, held or posted. The held read takes only
+// row returned from an ended binding was another's, a daemon row to a
+// worker included; any can hold a ceiling line and is no ceiling, held or
+// posted. The held read takes only
 // the daemon's own notices, as the posts read takes only the notices kind,
 // which rowPosts gives no such row.
 func TestBoardPendingIgnoresACeilingQuotedInAFailureNotice(t *testing.T) {
@@ -233,19 +234,21 @@ func TestBoardPendingIgnoresACeilingQuotedInAFailureNotice(t *testing.T) {
 	}
 	failed(boss, t1)                                  // its notice is the boss's
 	failed(worker("ha-coder-2"), t1.Add(time.Minute)) // ha-coder-2's, then returned to the boss
+	_, err := s.Send(ctx, worker("ha-coder-2"), store.Daemon, ceilingLine, t1.Add(time.Minute))
+	require.NoError(t, err) // a daemon row, no failure's notice, returned too
 	retire(t, s, "ha-coder-2")
 	returned, err := s.ReturnToBoss(ctx, "ha-coder-2", "agentisan", boss, t1.Add(2*time.Minute))
 	require.NoError(t, err)
-	require.Len(t, returned, 1)
+	require.Len(t, returned, 2)
 	got := pending(t, s)
-	assert.Equal(t, 2, got.Held)
+	assert.Equal(t, 3, got.Held)
 	assert.Zero(t, got.OldestHeldCeiling, "held")
 	assert.Zero(t, got.NewestCeiling, "held")
 	posted, err := s.PostQueued(ctx, boss, "ha", t1.Add(3*time.Minute))
 	require.NoError(t, err)
-	require.Len(t, posted.Delivered, 2)
+	require.Len(t, posted.Delivered, 3)
 	got = pending(t, s)
-	assert.Equal(t, 2, got.Pending)
+	assert.Equal(t, 3, got.Pending)
 	assert.Zero(t, got.Held)
 	assert.Zero(t, got.OldestCeiling, "posted")
 	assert.Zero(t, got.NewestCeiling, "posted")
