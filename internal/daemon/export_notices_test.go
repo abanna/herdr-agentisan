@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/notice"
@@ -91,6 +92,14 @@ func (p *Poller) TakeWake() bool {
 	default:
 		return false
 	}
+}
+
+// HoldRoute takes the inbox's route, the lock a board-mode boss's typed
+// claim and a poll's remember take, until release is called.
+func (p *Poller) HoldRoute() (release func()) {
+	p.in.route.Lock()
+	var once sync.Once
+	return func() { once.Do(p.in.route.Unlock) }
 }
 
 // Delivery is how the inbox delivers to project's boss now (A74).
