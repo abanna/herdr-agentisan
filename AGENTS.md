@@ -192,7 +192,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   It types each queued message into its recipient with `agent.prompt`, by
   the agent name the poll's last model shows where it belongs, or a pane
   sender's by the pane showing its terminal, posts a board-mode boss's
-  whole queue on its board instead, and holds it, never typed, while that
+  queue on its board instead, oldest first, 100 rows a call, passes back to
+  back while more remain, and holds it, never typed, while that
   boss's agent has not been seen since the start; the ◆ spaces stay typed
   (`boarddelivery.go`, A74), returns an ended binding's
   queue to its boss, and fails, never retrying, whatever a timeout or a
