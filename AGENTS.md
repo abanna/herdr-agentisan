@@ -227,6 +227,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   appends each message to the boss's notice still queued in the inbox
   (`AppendTo`, `store.Notify`), and logs it to daemon.log. Pure: tests
   build models by hand.
+- `internal/attention/` — the alert that tells the user a board-mode boss
+  has left posts unread, or messages waiting, too long (ADR-001 A74): when
+  an episode opens, its reminders, what resets, pauses or ends it. Pure:
+  tests build its inputs by hand.
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
   `team status`, `team up`, `worker spawn` and `worker retire`, and `send`'s
   sender and recipient (A30): each group's counts and members on a tabs team
@@ -315,10 +319,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   the only write connection. `state.db` also holds messaging's inbox
   (`messages.go`, migration 0002, D8 and I3): a recipient's messages are
   claimed one at a time, oldest first; a board-mode boss's queue is
-  posted on its board instead, oldest first, at most 100 rows a call, each
-  row marked delivered in the same transaction, a body over 8 KiB in parts
-  and a row the board refuses failed on its own, with no notice to its
-  sender (`boardqueue.go`, A74);
+  posted on its board instead, oldest first, at most 100 rows a call, or
+  fewer when its budget runs short, each row marked delivered in the same
+  transaction, a body over 8 KiB in parts and a row the board refuses
+  failed on its own, with no notice to its sender (`boardqueue.go`, A74);
   the daemon's notices to a boss are
   added to the one still queued (`notify.go`, A44); and a pending handoff
   (`handoffs.go`) holds a worker's inbox until it completes, which rebinds
