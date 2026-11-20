@@ -185,9 +185,13 @@ func TestFinishSpawnWritesOnce(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, dropped)
 		}, answer: refused, at: spawnAt.Add(time.Minute), want: store.ErrNoSpawnKey},
-		"a code off the grammar":    {answer: store.SpawnAnswer{Code: "Pane_changed", Message: "m"}, at: spawnAt, want: store.ErrInvalid},
-		"an empty code":             {answer: store.SpawnAnswer{Message: "m"}, at: spawnAt, want: store.ErrInvalid},
-		"a code of 33 characters":   {answer: store.SpawnAnswer{Code: strings.Repeat("a", 33), Message: "m"}, at: spawnAt, want: store.ErrInvalid},
+		"a code off the grammar":  {answer: store.SpawnAnswer{Code: "Pane_changed", Message: "m"}, at: spawnAt, want: store.ErrInvalid},
+		"an empty code":           {answer: store.SpawnAnswer{Message: "m"}, at: spawnAt, want: store.ErrInvalid},
+		"a code of 33 characters": {answer: store.SpawnAnswer{Code: strings.Repeat("a", 33), Message: "m"}, at: spawnAt, want: store.ErrInvalid},
+		"a code of 32 characters": {
+			answer: store.SpawnAnswer{Code: strings.Repeat("a", 32), Message: "m"}, at: spawnAt,
+			stored: store.SpawnAnswer{Code: strings.Repeat("a", 32), Message: "m"}, finished: spawnAt,
+		},
 		"a refusal with no message": {answer: store.SpawnAnswer{Code: "spawn_failed"}, at: spawnAt, want: store.ErrInvalid},
 		"a refusal with a result":   {answer: store.SpawnAnswer{Code: "spawn_failed", Message: "m", Result: []byte(`{}`)}, at: spawnAt, want: store.ErrInvalid},
 		"ok with a message":         {answer: store.SpawnAnswer{Code: "ok", Message: "m", Result: []byte(`{}`)}, at: spawnAt, want: store.ErrInvalid},
