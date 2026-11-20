@@ -89,10 +89,10 @@ type episode struct {
 // Observe reads one poll's state of project's boss, with project's c, at now,
 // and returns the alert due, if one is. The caller shows it and answers with
 // Shown before it observes project again. An alert left unanswered is
-// returned again at every poll below the limit while it is still due, and
-// never again past it. One that came due only through a ceiling's bound
-// comes back at its regular due time, not at every poll: a tried ceiling no
-// longer bounds (rule 6).
+// returned again at each poll once its regular due time has passed, but
+// never through a ceiling's bound it already used: a tried ceiling no
+// longer bounds (rule 6). Past the limit the only regular time is an
+// unshown alert's retry.
 //
 //   - An episode runs while Pending + Held > 0, and ends, forgotten, when
 //     nothing is pending. After 0 turns every alert off.
