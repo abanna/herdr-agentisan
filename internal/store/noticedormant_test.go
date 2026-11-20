@@ -48,15 +48,15 @@ var (
 	ledgerTableFiles = []string{ledgerFile, quotaFile, metaFile}
 )
 
-// ledgerUses parses every non-test Go file under root/dir. It returns, by
-// file relative to root, each use of a ledger name (an identifier spelled
-// so, a selector, a method, an interface's method or a dot-import's bare
-// name alike) and each string literal naming a ledger table, in any case, as
-// SQL reads it, once for each table it names, with that table's name. It
-// also returns each of those literals that contains
-// REPLACE, in any case and in any file, the ledger's own included, and how
-// many files it parsed.
-func ledgerUses(t *testing.T, root, dir string) (names, tables map[string][]string, replaces []string, files int) {
+// productionUses parses every non-test Go file under root/dir. It returns,
+// by file relative to root, each use of one of wantNames (an identifier
+// spelled so, a selector, a method, an interface's method or a dot-import's
+// bare name alike) and each string literal naming one of wantTables, in any
+// case, as SQL reads it, once for each table it names, with that table's
+// name. It also returns each of those literals that contains REPLACE, in any
+// case and in any file, and how many files it parsed. The ledger's dormancy
+// test and the retry keys' share it.
+func productionUses(t *testing.T, root, dir string, wantNames, wantTables []string) (names, tables map[string][]string, replaces []string, files int) {
 	t.Helper()
 	names, tables = map[string][]string{}, map[string][]string{}
 	fset := token.NewFileSet()
@@ -86,7 +86,7 @@ func ledgerUses(t *testing.T, root, dir string) (names, tables map[string][]stri
 		ast.Inspect(f, func(n ast.Node) bool {
 			switch n := n.(type) {
 			case *ast.Ident:
-				if slices.Contains(ledgerNames, n.Name) {
+				if slices.Contains(wantNames, n.Name) {
 					names[rel] = append(names[rel], fset.Position(n.Pos()).String()+" "+n.Name)
 				}
 			case *ast.BasicLit:
@@ -95,7 +95,7 @@ func ledgerUses(t *testing.T, root, dir string) (names, tables map[string][]stri
 				}
 				lit, pos := strings.ToLower(n.Value), fset.Position(n.Pos()).String()
 				named := false
-				for _, table := range ledgerTables {
+				for _, table := range wantTables {
 					if strings.Contains(lit, table) {
 						tables[rel] = append(tables[rel], pos+" "+table)
 						named = true
@@ -135,7 +135,7 @@ func TestLedgerHasNoProductionCaller(t *testing.T) {
 	var replaces []string
 	parsed := 0
 	for _, dir := range []string{"internal", "cmd"} {
-		n, tb, r, files := ledgerUses(t, root, dir)
+		n, tb, r, files := productionUses(t, root, dir, ledgerNames, ledgerTables)
 		maps.Copy(names, n)
 		maps.Copy(tables, tb)
 		replaces = append(replaces, r...)
@@ -199,7 +199,7 @@ func TestLedgerScanFindsAReplace(t *testing.T) {
 		")\n"
 	require.NoError(t, os.WriteFile(file, []byte(src), 0o600))
 
-	_, tables, replaces, files := ledgerUses(t, root, "internal")
+	_, tables, replaces, files := productionUses(t, root, "internal", ledgerNames, ledgerTables)
 	require.Equal(t, 1, files)
 	require.Len(t, tables["internal/fixture/fixture.go"], 5, "the scan finds each literal naming a ledger table")
 	assert.Equal(t, []string{file + ":4:10", file + ":5:10", file + ":6:10", file + ":7:10", file + ":8:10"}, replaces)
