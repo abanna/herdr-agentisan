@@ -473,6 +473,66 @@ func TestPostQueuedTakesAnEmptyProject(t *testing.T) {
 	assertState(t, s, store.MessageDelivered, m)
 }
 
+// TestPostQueuedPostsAtMostABatch: one call posts the oldest MaxQueuePost
+// rows, in seq order, a refused one among them counted in the batch, and
+// says More while a row remains; the next call posts that row and says no
+// more.
+func TestPostQueuedPostsAtMostABatch(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	const refused = 7
+	var sent []store.Message
+	for i := range store.MaxQueuePost + 1 {
+		if i == refused {
+			sent = append(sent, insertMessage(t, s, store.Message{To: boss, From: store.Address{Kind: store.KindPane, ID: strings.Repeat("p", 300)}, Body: "refused"}))
+			continue
+		}
+		sent = append(sent, send(t, s, boss, pane, fmt.Sprintf("m%03d", i)))
+	}
+	batch, last := sent[:store.MaxQueuePost], sent[store.MaxQueuePost]
+
+	got := postQueued(t, s)
+	assert.True(t, got.More, "a row remains past the batch")
+	require.Len(t, got.Posts, store.MaxQueuePost)
+	for i, p := range got.Posts {
+		if i == refused {
+			assert.Equal(t, batch[i].ID, p.Subject, "the undelivered post for the refused row")
+		} else {
+			assert.Equal(t, batch[i].ID, p.ID, "post %d is row %d's", i, i)
+		}
+		if i > 0 {
+			assert.Less(t, got.Posts[i-1].Seq, p.Seq)
+		}
+	}
+	assert.Equal(t, []string{batch[refused].ID}, ids(got.Failed))
+	assert.Len(t, got.Delivered, store.MaxQueuePost-1)
+	assertState(t, s, store.MessageQueued, last)
+
+	got = postQueued(t, s)
+	assert.False(t, got.More, "nothing remains")
+	require.Len(t, got.Posts, 1)
+	assert.Equal(t, last.ID, got.Posts[0].ID)
+	assertState(t, s, store.MessageDelivered, last)
+}
+
+// TestPostQueuedSaysMoreOnlyWhenRowsRemain: a queue of exactly MaxQueuePost
+// rows is posted whole by one call, which says no more; a call on an empty
+// queue says no more either.
+func TestPostQueuedSaysMoreOnlyWhenRowsRemain(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	for i := range store.MaxQueuePost {
+		send(t, s, boss, pane, fmt.Sprintf("m%03d", i))
+	}
+
+	got := postQueued(t, s)
+	assert.Len(t, got.Delivered, store.MaxQueuePost)
+	assert.False(t, got.More, "nothing remains after exactly a batch")
+	got = postQueued(t, s)
+	assert.Empty(t, got.Posts)
+	assert.False(t, got.More, "an empty queue has no more")
+}
+
 // TestPostQueuedLeavesDispatchingAlone: a message in flight is the
 // dispatcher's: it is neither posted nor moved.
 func TestPostQueuedLeavesDispatchingAlone(t *testing.T) {

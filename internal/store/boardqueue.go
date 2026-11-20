@@ -14,6 +14,13 @@ import (
 // partRoom is the room a part's "(part i of n) " prefix takes in a post.
 const partRoom = 32
 
+// MaxQueuePost is the most rows one PostQueued call posts. A call holds the
+// store's one connection for its whole transaction, and its caller gives it
+// 5 s: a batch of the largest rows, failure notices of two posts each, must
+// stay inside a second even under -race. A backlog drains a batch a call
+// (NERD-5533 1245ef8b, the boss's ruling on the cap's value).
+const MaxQueuePost = 100
+
 // noticesHeader is the first line of A44's notices to a boss. Their post
 // drops it when more follows it.
 const noticesHeader = "[agentisan] notices:"
@@ -23,14 +30,15 @@ type PostedQueue struct {
 	Posts     []BoardPost // every post it made, in seq order
 	Delivered []Message   // rows posted, as they now stand (state delivered)
 	Failed    []Message   // rows the board refused, as they now stand (state failed)
+	More      bool        // queued rows for to remained after its last row
 }
 
 const (
-	// selectBossQueue is a boss's queued messages, oldest first; one
-	// dispatching is the dispatcher's, never selected. messages_inbox
+	// selectBossQueue is a boss's oldest ?2 queued messages, oldest first;
+	// one dispatching is the dispatcher's, never selected. messages_inbox
 	// (migration 0002) serves it.
 	selectBossQueue = `SELECT ` + messageColumns + ` FROM messages
-WHERE recipient_kind = 'boss' AND recipient = ?1 AND state = 'queued' ORDER BY seq`
+WHERE recipient_kind = 'boss' AND recipient = ?1 AND state = 'queued' ORDER BY seq LIMIT ?2`
 	deliverQueued = `UPDATE messages SET state = 'delivered', updated_at = max(?2, created_at)
 WHERE id = ?1 AND state = 'queued' RETURNING ` + messageColumns
 	failQueued = `UPDATE messages SET state = 'failed', reason = ?2, updated_at = max(?3, created_at)
@@ -39,12 +47,12 @@ WHERE id = ?1 AND state = 'queued' RETURNING ` + messageColumns
 	refusedFormat = "[agentisan] message %s from %s could not be posted on the board (%s); it is kept, failed, in state.db"
 )
 
-// PostQueued posts every message queued for the boss `to` on project's
-// board, oldest first, instead of typing it (ADR-001 A74), in one
-// transaction. Each row posted is marked delivered in it; a body over
-// MaxBody is posted in parts, "(part i of n) " before each. A row the board
-// refuses is failed on its own, with an undelivered post from the daemon in
-// its place. A message dispatching is the dispatcher's and is left alone.
+// PostQueued posts the oldest MaxQueuePost messages queued for the boss `to`
+// on project's board, oldest first, instead of typing it (ADR-001 A74), in
+// one transaction, and says in More whether more remain for a later call.
+// Each row posted is marked delivered in it; a body over MaxBody is posted
+// in parts, "(part i of n) " before each. A row the board refuses is failed
+// on its own, with an undelivered post from the daemon in its place. A message dispatching is the dispatcher's and is left alone.
 // Any statement that fails rolls the whole call back (ErrStore), every row
 // still queued. Every waiter on BoardChanged is woken once the posts are
 // committed, and only when there are some.
@@ -79,7 +87,7 @@ func (s *Store) postQueued(ctx context.Context, to Address, project string, ns i
 		return PostedQueue{}, fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // a no-op once committed
-	rows, err := tx.QueryContext(ctx, selectBossQueue, to.ID)
+	rows, err := tx.QueryContext(ctx, selectBossQueue, to.ID, MaxQueuePost+1)
 	if err != nil {
 		return PostedQueue{}, fmt.Errorf("select: %w", err)
 	}
@@ -88,6 +96,9 @@ func (s *Store) postQueued(ctx context.Context, to Address, project string, ns i
 		return PostedQueue{}, err
 	}
 	var out PostedQueue
+	if len(queued) > MaxQueuePost {
+		queued, out.More = queued[:MaxQueuePost], true
+	}
 	for _, m := range queued {
 		if err := postRow(ctx, tx, m, project, ns, &out); err != nil {
 			return PostedQueue{}, err
