@@ -611,24 +611,36 @@ VALUES (?1, 'boss', 'ha-boss', '', 'pane', ?2, 'hello', ?3, ?3)`, id, strings.Re
 func TestPostedLogLineAndWarnReset(t *testing.T) {
 	t.Parallel()
 	r := newBoardRig(t, []settings.Team{haTabs}, boardOn("ha"), nil)
-	drop := daemon.FailBoardInserts(t, r.db, "")
+	drop := daemon.FailBoardInserts(t, r.db, "NEW.kind = 'undelivered'")
 	first := sent(t, r.st, haBoss, coder, "one")
+	second := sent(t, r.st, haBoss, coder, "two")
+	// The oversized sender makes the board refuse this row. The trigger
+	// rolls back the first pass when it tries to post the failure notice.
+	rawExec(t, r.db, "UPDATE messages SET sender = ? WHERE id = ?", strings.Repeat("w", 300), second.ID)
 	r.poll(haModel(bossPane("ha-boss", "claude")))
 	assert.Equal(t, 1, warnings(r.logs.String(), postFailedMsg))
 
 	drop()
 	r.p.Pass()
 	posts := r.posts(t, "ha")
-	require.Len(t, posts, 1)
+	require.Len(t, posts, 2)
 	lines := postedLines(t, r.logs)
 	require.Len(t, lines, 1)
 	assert.Equal(t, "ha-boss", lines[0]["recipient"])
 	assert.Equal(t, "ha", lines[0]["project"])
-	assert.Equal(t, []any{first.ID}, lines[0]["messages"])
-	assert.Equal(t, []any{float64(posts[0].Seq)}, lines[0]["posts"])
+	assert.Equal(t, []any{first.ID, second.ID}, lines[0]["messages"])
+	assert.Equal(t, []any{float64(posts[0].Seq), float64(posts[1].Seq)}, lines[0]["posts"])
+
+	events := map[string][]any{}
+	for _, e := range r.rec.Events() {
+		if e.Name == telemetry.EventMessageDelivered || e.Name == telemetry.EventMessageFailed {
+			events[e.Name] = append(events[e.Name], e.Attrs["agentisan.message.id"])
+		}
+	}
+	assert.Equal(t, map[string][]any{telemetry.EventMessageDelivered: {first.ID}, telemetry.EventMessageFailed: {second.ID}}, events)
 
 	daemon.FailBoardInserts(t, r.db, "")
-	sent(t, r.st, haBoss, coder, "two")
+	sent(t, r.st, haBoss, coder, "three")
 	r.p.Pass()
 	assert.Equal(t, 2, warnings(r.logs.String(), postFailedMsg), "the next failure warns again")
 }

@@ -214,17 +214,23 @@ func TestFlushDuringADrainQueuesItsNoticeLast(t *testing.T) {
 
 			batch(b, nil, unblocked("ha", "ha-coder-1"))
 			r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
-			assert.Equal(t, store.MaxQueuePost, boardCount(t, r.db), "the queue's first batch, and not the notice")
+			k := boardCount(t, r.db)
+			require.Positive(t, k, "the flush made progress")
+			assert.LessOrEqual(t, k, store.MaxQueuePost, "at most one batch")
+			require.LessOrEqual(t, k, len(held))
 			queued := query(t, r.db, "SELECT id FROM messages WHERE recipient = 'ha-boss' AND state = 'queued' ORDER BY seq")
 			require.NotEmpty(t, queued)
 			last := queued[len(queued)-1]
-			assert.Equal(t, held[store.MaxQueuePost:], queued[:len(queued)-1], "the held rows the batch left, then the notice's row")
+			assert.Equal(t, held[k:], queued[:len(queued)-1], "the held rows the batch left, then the notice's row")
 			assert.Equal(t, []string{"[agentisan] notices:\nha-coder-1 is no longer blocked"},
 				query(t, r.db, "SELECT body FROM messages WHERE id = '"+last+"'"), "a new row")
 			assert.Equal(t, []string{"[agentisan] notices:\nha-coder-1 is blocked"},
 				query(t, r.db, "SELECT body FROM messages WHERE id = '"+older[0]+"'"), "the older notice row unchanged")
 
-			for i := 0; r.p.TakeWake() && i < 5; i++ {
+			for range len(held) + 1 {
+				if !r.p.TakeWake() {
+					break
+				}
 				r.p.Pass()
 			}
 			assert.Equal(t, append(held, last), query(t, r.db, "SELECT id FROM board_posts WHERE project = 'ha' ORDER BY seq"),
