@@ -57,7 +57,9 @@ func bossProject(bosses map[string]string, boss string) (string, bool) {
 // instead of typing them (A74), in one transaction that marks each row
 // delivered, or failed where the board refuses it, and wakes the dispatcher
 // again while more remain, so a backlog drains in passes back to back. Like
-// claim, a stop does not cut it short, and it is bounded on its own. A post
+// claim, a stop does not cut it short, and it is bounded on its own: the
+// store stops at half that budget, commits the rows it has posted and says
+// more remain, so a pass that gets the connection always posts. A post
 // that fails leaves every row queued for the next pass, never typed, and is
 // warned of once while it lasts.
 func (d *dispatcher) post(ctx context.Context, to store.Address, project string) {

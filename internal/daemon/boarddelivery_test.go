@@ -108,6 +108,11 @@ func newBoardRig(t *testing.T, teams []settings.Team, cfgs notice.Configs, b *no
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = st.Close() })
 	logs := &lockedLog{}
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("the daemon's log:\n%s", logs.String())
+		}
+	})
 	events, rec := telemetrytest.NewEvents()
 	o := daemon.Options{Logger: zerolog.New(logs), Now: time.Now, Herdr: herdr.Client{SocketPath: th.path}, Team: &daemon.TeamOptions{Events: events}}
 	r := &boardRig{o: o, teams: teams, cfgs: cfgs, st: st, db: db, th: th, pr: pr, logs: logs, rec: rec}
@@ -625,11 +630,13 @@ func TestPostedLogLineAndWarnReset(t *testing.T) {
 }
 
 // TestBoardQueueDrainsInBackToBackPasses (1b's part of the PostQueued
-// cap, c9c5680f): a board-mode boss's backlog of 2×MaxQueuePost+1 rows is
-// posted MaxQueuePost rows a pass, and each pass that leaves rows queued
+// cap, c9c5680f, and a8611aa0): a board-mode boss's backlog of
+// 2×MaxQueuePost+1 rows is posted at most MaxQueuePost rows a pass, fewer
+// when a pass's budget runs short, and each pass that leaves rows queued
 // wakes the dispatcher again, so the next pass follows at once; the last
-// does not. Every row is posted once, in seq order, delivered, with one
-// .delivered event, and each pass's log line says whether more remain.
+// does not. Every pass posts at least one row. Every row is posted once, in
+// seq order, delivered, with one .delivered event, and each pass's log line
+// says whether more remain.
 func TestBoardQueueDrainsInBackToBackPasses(t *testing.T) {
 	t.Parallel()
 	r := newBoardRig(t, []settings.Team{haTabs}, boardOn("ha"), nil)
@@ -640,13 +647,15 @@ func TestBoardQueueDrainsInBackToBackPasses(t *testing.T) {
 	}
 	r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
 	r.p.TakeWake() // each poll leaves one
-	for i, want := range []struct {
-		posted int
-		more   bool
-	}{{store.MaxQueuePost, true}, {2 * store.MaxQueuePost, true}, {n, false}} {
+	posted, passes := 0, 0
+	for posted < n {
 		r.p.Pass()
-		assert.Equal(t, want.posted, boardCount(t, r.db), "posted after pass %d", i+1)
-		assert.Equal(t, want.more, r.p.TakeWake(), "woken after pass %d", i+1)
+		passes++
+		now := boardCount(t, r.db)
+		require.Greater(t, now, posted, "pass %d posts at least one row", passes)
+		require.LessOrEqual(t, now-posted, store.MaxQueuePost, "pass %d posts at most a batch", passes)
+		posted = now
+		assert.Equal(t, posted < n, r.p.TakeWake(), "woken after pass %d, %d of %d posted", passes, posted, n)
 	}
 	ids := query(t, r.db, "SELECT id FROM board_posts WHERE project = 'ha' ORDER BY seq")
 	require.Len(t, ids, n)
@@ -659,7 +668,48 @@ func TestBoardQueueDrainsInBackToBackPasses(t *testing.T) {
 	for _, l := range postedLines(t, r.logs) {
 		more = append(more, l["more"])
 	}
-	assert.Equal(t, []any{true, true, false}, more, "each pass's log line")
+	want := make([]any, passes)
+	for i := range want {
+		want[i] = i < passes-1
+	}
+	assert.Equal(t, want, more, "each pass's log line")
+	assert.Empty(t, r.pr.all(), "never typed")
+}
+
+// A batch whose rows together take longer than the post's budget still
+// drains, in order: every pass posts the rows that fit in half the budget,
+// and wakes the dispatcher while rows remain (NERD-5533 a8611aa0, A). Each
+// post is made to take 1.5 times its share of the budget, so the 100 rows
+// of a full batch take 7.5 s against settleTimeout's 5 s, as a slow host
+// or -race under load makes them; half the budget then fits 33 rows, and
+// the batch drains in 4 passes.
+func TestBoardQueueDrainsWhenABatchOutlastsItsBudget(t *testing.T) {
+	t.Parallel()
+	r := newBoardRig(t, []settings.Team{haTabs}, boardOn("ha"), nil)
+	ms := make([]store.Message, store.MaxQueuePost)
+	for i := range ms {
+		ms[i] = sent(t, r.st, haBoss, coder, fmt.Sprintf("m%d", i))
+	}
+	per := 3 * store.BusyTimeout / (2 * store.MaxQueuePost)
+	daemon.SlowBoardInserts(t, r.db, per)
+	fit := int(store.BusyTimeout / 2 / per) // rows a pass posts
+	passes := (len(ms) + fit - 1) / fit
+	r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
+	r.p.TakeWake() // each poll leaves one
+	posted := 0
+	for i := 1; i <= passes && posted < len(ms); i++ {
+		r.p.Pass()
+		now := boardCount(t, r.db)
+		require.Greater(t, now, posted, "pass %d posts at least one row", i)
+		posted = now
+		assert.Equal(t, posted < len(ms), r.p.TakeWake(), "woken after pass %d, %d of %d posted", i, posted, len(ms))
+	}
+	ids := query(t, r.db, "SELECT id FROM board_posts WHERE project = 'ha' ORDER BY seq")
+	require.Len(t, ids, len(ms), "posted after %d passes", passes)
+	for i, m := range ms {
+		assert.Equal(t, m.ID, ids[i], "post %d, in the messages' seq order", i)
+		assert.Equal(t, store.MessageDelivered, stateOf(t, r.st, m.ID).State, m.ID)
+	}
 	assert.Empty(t, r.pr.all(), "never typed")
 }
 

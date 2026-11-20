@@ -51,7 +51,10 @@ WHERE id = ?1 AND state = 'queued' RETURNING ` + messageColumns
 // PostQueued posts the oldest MaxQueuePost messages queued for the boss `to`
 // on project's board, oldest first, instead of typing it (ADR-001 A74), in
 // one transaction, and says in More whether more remain for a later call.
-// Each row posted is marked delivered in it; a body over MaxBody is posted
+// It stops early, committing what it has posted, once half its deadline
+// has passed, and says More; the first row always goes. The deadline bounds
+// only the wait for the store's connection: once the call holds it, no
+// statement or commit is cut. Each row posted is marked delivered in it; a body over MaxBody is posted
 // in parts, "(part i of n) " before each. A row the board refuses is failed
 // on its own, with an undelivered post from the daemon in its place. A message dispatching is the dispatcher's and is left alone.
 // Any statement that fails rolls the whole call back (ErrStore), every row
@@ -83,7 +86,16 @@ func (s *Store) PostQueued(ctx context.Context, to Address, project string, at t
 
 // postQueued is PostQueued's transaction.
 func (s *Store) postQueued(ctx context.Context, to Address, project string, ns int64) (PostedQueue, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	start := time.Now()
+	conn, err := s.db.Conn(ctx) // waits for the one connection within the budget
+	if err != nil {
+		return PostedQueue{}, fmt.Errorf("take the connection: %w", err)
+	}
+	defer conn.Close() //nolint:errcheck // returns the connection; the transaction is done by then
+	deadline, timed := ctx.Deadline()
+	stop := start.Add(deadline.Sub(start) / 2)
+	ctx = context.WithoutCancel(ctx) // no statement or commit is cut once the call holds the connection
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return PostedQueue{}, fmt.Errorf("begin: %w", err)
 	}
@@ -100,7 +112,11 @@ func (s *Store) postQueued(ctx context.Context, to Address, project string, ns i
 	if len(queued) > MaxQueuePost {
 		queued, out.More = queued[:MaxQueuePost], true
 	}
-	for _, m := range queued {
+	for i, m := range queued {
+		if i > 0 && timed && !time.Now().Before(stop) {
+			out.More = true // half the budget has gone: commit what is posted
+			break
+		}
 		if err := postRow(ctx, tx, m, project, ns, &out); err != nil {
 			return PostedQueue{}, err
 		}

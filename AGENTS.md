@@ -321,8 +321,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   the only write connection. `state.db` also holds messaging's inbox
   (`messages.go`, migration 0002, D8 and I3): a recipient's messages are
   claimed one at a time, oldest first; a board-mode boss's queue is
-  posted on its board instead, oldest first, at most 100 rows a call, each
-  row marked delivered in the same transaction, a body over 8 KiB in parts
+  posted on its board instead, oldest first, at most 100 rows a call, or
+  fewer when its budget runs short, each row marked delivered in the same transaction, a body over 8 KiB in parts
   and a row the board refuses failed on its own, with no notice to its
   sender (`boardqueue.go`, A74);
   the daemon's notices to a boss are

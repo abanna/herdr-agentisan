@@ -528,6 +528,58 @@ func TestPostQueuedSaysMoreOnlyWhenRowsRemain(t *testing.T) {
 	assert.False(t, got.More, "an empty queue has no more")
 }
 
+// pastDeadline is a context whose deadline has passed but which is never
+// done: a call given it is past half its budget from its start, and nothing
+// cuts its statements.
+type pastDeadline struct{ context.Context }
+
+func (pastDeadline) Deadline() (time.Time, bool) { return time.Now().Add(-time.Second), true }
+
+// TestPostQueuedStopsAtHalfItsBudget: once half its budget has gone, a
+// call posts no further row, commits the rows it posted and says More; the
+// first row always goes (NERD-5533 a8611aa0, A).
+func TestPostQueuedStopsAtHalfItsBudget(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	sent := []store.Message{send(t, s, boss, pane, "m0"), send(t, s, boss, pane, "m1"), send(t, s, boss, pane, "m2")}
+
+	got, err := s.PostQueued(pastDeadline{t.Context()}, boss, queueProject, postedAt)
+	require.NoError(t, err)
+	assert.True(t, got.More, "rows remain past the stop")
+	require.Len(t, got.Posts, 1)
+	assert.Equal(t, sent[0].ID, got.Posts[0].ID)
+	assert.Equal(t, ids(sent[:1]), ids(got.Delivered))
+	assert.Equal(t, 1, postCount(t, s))
+	assertState(t, s, store.MessageDelivered, sent[0])
+	assertState(t, s, store.MessageQueued, sent[1:]...)
+}
+
+// TestPostQueuedOutlivesItsDeadline: a deadline that ends mid-batch no
+// longer loses the batch. The call commits the oldest rows, those it
+// posted before half its budget went, says More and leaves the rest queued
+// (NERD-5533 a8611aa0, A).
+func TestPostQueuedOutlivesItsDeadline(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	sent := make([]store.Message, store.MaxQueuePost+1)
+	for i := range sent {
+		sent[i] = send(t, s, boss, pane, strings.Repeat(strconv.Itoa(i%10), store.MaxBody))
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+
+	got, err := s.PostQueued(ctx, boss, queueProject, postedAt)
+	require.NoError(t, err)
+	assert.True(t, got.More, "rows remain")
+	n := len(got.Delivered)
+	require.Positive(t, n, "the first row always goes")
+	assert.Equal(t, ids(sent[:n]), ids(got.Delivered), "the oldest rows, in order")
+	assert.Len(t, got.Posts, n, "a post a row")
+	assert.Equal(t, n, postCount(t, s), "the board holds what the call returned")
+	assertState(t, s, store.MessageDelivered, sent[:n]...)
+	assertState(t, s, store.MessageQueued, sent[n:]...)
+}
+
 // TestPostQueuedLeavesDispatchingAlone: a message in flight is the
 // dispatcher's: it is neither posted nor moved.
 func TestPostQueuedLeavesDispatchingAlone(t *testing.T) {
