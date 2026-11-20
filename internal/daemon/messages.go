@@ -264,7 +264,7 @@ func (d *dispatcher) pass(ctx context.Context) {
 			d.note(to, held, held, why)
 			continue
 		}
-		if !d.serve(ctx, to, target) {
+		if !d.serve(ctx, bosses, to, target) {
 			return
 		}
 	}
@@ -334,9 +334,14 @@ func (d *dispatcher) terminals(ctx context.Context) (map[string]string, error) {
 // a failure ends to's turn this pass, so neither a refused recipient nor a
 // stuck pane holds up the others. It reports false once the daemon is
 // stopping, which ends the pass; a stop is checked before each claim, never
-// inside one (claim).
-func (d *dispatcher) serve(ctx context.Context, to store.Address, target string) bool {
+// inside one (claim). So is a board-mode boss's delivery: once a poll has
+// turned it from typed, the message being typed finishes typed and the rest
+// wait for the next pass's board path (stillTyped, A74).
+func (d *dispatcher) serve(ctx context.Context, bosses map[string]string, to store.Address, target string) bool {
 	for ctx.Err() == nil {
+		if !d.stillTyped(bosses, to) {
+			return true
+		}
 		m, ok, err := d.claim(ctx, to)
 		if err != nil {
 			d.warnUnlessStopping(ctx, err, "messages: claim "+to.ID+"'s next message")

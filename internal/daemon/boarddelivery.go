@@ -41,6 +41,18 @@ func (d *dispatcher) untyped(ctx context.Context, bosses map[string]string, to s
 	return false
 }
 
+// stillTyped reports whether to's messages are still typed now. A boss of
+// one board-mode team is not once a poll has seen Claude on its pane since
+// the pass decided to type it: serve checks it before each claim, so a
+// switch mid-drain types nothing more into that Claude boss (#183's review).
+func (d *dispatcher) stillTyped(bosses map[string]string, to store.Address) bool {
+	if to.Kind != store.KindBoss {
+		return true
+	}
+	project, ok := bossProject(bosses, to.ID)
+	return !ok || d.in.delivery(project) == notice.DeliverTyped
+}
+
 // bossProject is the one configured project whose boss is named boss. It
 // reports false for none, and for two: a name two teams share stays typed
 // (A74).
