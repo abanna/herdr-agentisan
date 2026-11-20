@@ -338,7 +338,7 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   imports one `github_seen` holds, `PendingNotice` re-checks its digest.
   `noticequota.go` refuses an admission past one of eight quotas
   (B0a.3-limits, migration 0010, one-way, its identity totals kept by
-  triggers).
+  triggers). A daemon notice gets an `nt1` ID the store allocates (B0a.4).
   `noticemeta.go` reads pending notices' metadata and the quotas' exact
   counts, per source for the hour (B0a.3-queries), never a notice's text.
   No production caller, post, wake or `github_*` write;
