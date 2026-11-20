@@ -364,6 +364,7 @@ type BoardPending struct {
 	OldestHeld            time.Time // zero: none
 	OldestHeldCeiling     time.Time // the oldest held daemon row holding ceilingMark; zero: none
 	NewestCeiling         time.Time // the latest ceiling change pending: max(created_at) of the ceiling posts, max(updated_at) of the held daemon rows holding ceilingMark; zero: none
+	NewestCeilingPost     time.Time // max(created_at) of the ceiling posts alone, for rule 5 past a limit (user decision 2026-11-20); zero: none
 }
 
 // pendingPosts is the posts after the boss's mark on a project's board
@@ -417,6 +418,7 @@ func (s *Store) BoardPending(ctx context.Context, project, boss, ceilingMark str
 	}
 	p.Oldest, p.OldestCeiling, p.OldestHeld, p.OldestHeldCeiling = pendingTime(oldest), pendingTime(oldestCeiling), pendingTime(oldestHeld), pendingTime(oldestHeldCeiling)
 	p.NewestCeiling = pendingTime(newestCeiling)
+	p.NewestCeilingPost = p.NewestCeiling
 	if newest := pendingTime(newestHeldCeiling); newest.After(p.NewestCeiling) {
 		p.NewestCeiling = newest
 	}

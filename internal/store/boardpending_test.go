@@ -273,3 +273,26 @@ func TestBoardPendingHasNoProductionCaller(t *testing.T) {
 	delete(uses, own)
 	assert.Empty(t, uses, "BoardPending is dormant until PR 3b's poll calls it (A74)")
 }
+
+// TestBoardPendingNewestCeilingPostIsThePostsAlone (NERD-5533 053091ce, the
+// user's decision of 2026-11-20): NewestCeilingPost is the newest ceiling
+// post's creation, which a held notice, appended to or not, never moves:
+// past an alert limit, each new warning posted directly alerts once.
+func TestBoardPendingNewestCeilingPostIsThePostsAlone(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	at := func(n int) time.Time { return boardAt.Add(time.Duration(n) * time.Minute) }
+	_, _, err := s.Notify(t.Context(), boss, at(1), func(string) (string, bool) { return ceilingLine, true })
+	require.NoError(t, err)
+	assert.Zero(t, pending(t, s).NewestCeilingPost, "a held ceiling alone")
+	post(t, s, daemonPost("ha", "ctx_ceiling", "ha-boss is at 90% context", at(3)))
+	assert.Equal(t, at(3), pending(t, s).NewestCeilingPost, "the post")
+	_, appended, err := s.Notify(t.Context(), boss, at(5), func(queued string) (string, bool) {
+		return queued + "\n" + ceilingLine, queued != ""
+	})
+	require.NoError(t, err)
+	require.True(t, appended)
+	got := pending(t, s)
+	assert.Equal(t, at(5), got.NewestCeiling, "the held append")
+	assert.Equal(t, at(3), got.NewestCeilingPost, "still the post")
+}
