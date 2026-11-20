@@ -39,12 +39,12 @@ refusal exits 1:
 | `herdr_gone` | The daemon's herdr server is gone or was replaced. Nothing was queued: run the daemon-restart action, then send again |
 | `store_failed` | The daemon could not read or write `state.db`. Nothing was queued: send again, and tell the boss if it goes on |
 | `timeout` | The op ran past its 10 s budget while a call failed. Nothing was queued: send again |
-| `unknown_op` | The daemon is a build without `send`. Nothing was queued: run the daemon-restart action, or fall back to `herdr agent prompt`, which is not durable |
+| `unknown_op` | The daemon is a build without `send`. Nothing was queued: run the daemon-restart action, or fall back to `herdr agent prompt`, which is not durable. To a boss whose team is on the board (A74), don't fall back: wait for the daemon, since `herdr agent prompt` types into the input box the board keeps clear |
 | `unsupported_version` | The daemon is another build of the plugin. Nothing was queued: run the daemon-restart action, then send again |
 | `daemon_no_answer` | The daemon took the request and gave no answer: it was killed, or ran past the command's wait (A52). The message may be queued, and a queued message is delivered once the daemon runs again, so don't resend it with `herdr agent prompt`. If the daemon isn't running, run the daemon-restart action: a message still queued is delivered then, and one the daemon was typing when it stopped is failed at the next start, and its sender told |
 | `failed` | An answer no other code names, or one the command could not read. The message may be queued, as for `daemon_no_answer` |
 | `not_ready` | The daemon has just started; the command asks again for up to 10 s |
-| `daemon_unavailable` | No daemon answers under `--state-dir`, `HERDR_PLUGIN_STATE_DIR`, or else herdr's state directory for the plugin, from `XDG_STATE_HOME` or `HOME` (A51). Fall back to `herdr agent prompt`, which is not durable |
+| `daemon_unavailable` | No daemon answers under `--state-dir`, `HERDR_PLUGIN_STATE_DIR`, or else herdr's state directory for the plugin, from `XDG_STATE_HOME` or `HOME` (A51). Fall back to `herdr agent prompt`, which is not durable. To a boss whose team is on the board (A74), don't fall back: wait for the daemon, since `herdr agent prompt` types into the input box the board keeps clear |
 
 ## Who the sender is
 
@@ -103,6 +103,18 @@ too.
   takes it, so `report turn` reads its `item:` then (Codex 0.163.0). One
   that opens a resend notice's quoted body is not: the notice's own words
   come first on that line.
+
+**On the board (A74).** If your team's `notices.delivery` is `board` and
+you run Claude, nothing is typed into you: the daemon's notices and the
+messages sent to you are posts on your board. A worker's, a pane's or
+another boss's are on the `team` channel, kind `post`, the post's id the
+message's; a `returned` one has, as its subject, the worker it was for. The
+daemon's are on the `daemon` channel: `undelivered`, its subject the failed
+message's id, a body over 8 KiB in parts. Its notices are one `notices`
+post per delivery. `send` still answers `queued` with the message's id; the
+post follows in the next pass, within a few seconds; a backlog goes in
+batches of 100, in passes back to back. Run `herdr-agentisan
+board wait` in the background, and `board read` when it ends.
 
 ## A recipient that is working
 

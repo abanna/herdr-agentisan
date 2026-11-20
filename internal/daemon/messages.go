@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
 	"github.com/abanna/herdr-agentisan/internal/telemetry"
@@ -65,28 +66,72 @@ func refusal(err error) string {
 
 // inbox is what the team poll gives the dispatcher: the model its last poll
 // built, which every target is checked against, each configured team's
-// boss, and a wake.
+// boss, how each boss is delivered to (A74), and a wake.
 type inbox struct {
 	mu    sync.Mutex
 	model *team.Model
 	// bosses is each configured project's boss, by the agent name herdr
 	// knows it by.
 	bosses map[string]string
-	wake   chan struct{}
+	// cfgs are every team's notices settings, its delivery key among them,
+	// set once by newNotices.
+	cfgs notice.Configs
+	// tabs are the tabs teams' projects; the ◆ spaces are always typed.
+	tabs map[string]bool
+	// last is, by project, the agent last seen on its boss's pane: in
+	// memory only, so a restart starts with none (A74).
+	last map[string]string
+	wake chan struct{}
 }
 
-func newInbox() *inbox { return &inbox{wake: make(chan struct{}, 1)} }
+func newInbox() *inbox { return &inbox{wake: make(chan struct{}, 1), last: map[string]string{}} }
 
 // configure records each team's boss: <short>-boss for a tabs team, boss for
 // the ◆ spaces (UQ2).
 func (in *inbox) configure(c teamConfig) {
 	bosses := map[string]string{c.spaces.Project: team.SpacesBoss}
+	tabs := map[string]bool{}
 	for _, t := range c.tabs {
 		bosses[t.Project] = t.BossTab()
+		tabs[t.Project] = true
 	}
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	in.bosses = bosses
+	in.tabs = tabs
+}
+
+// setConfigs records every team's notices settings, read once at start.
+func (in *inbox) setConfigs(cfgs notice.Configs) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	in.cfgs = cfgs
+}
+
+// remember records, for each tabs team, the agent this poll's model m shows
+// on the pane in its boss place that bears its boss's name (A74). A nil
+// model, a failed agent.list, no named pane and an empty agent each change
+// nothing remembered.
+func (in *inbox) remember(m *team.Model) {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	for project := range in.tabs {
+		if a := notice.BossAgent(m, project, in.bosses[project]); a != "" {
+			in.last[project] = a
+		}
+	}
+}
+
+// delivery is how project's boss is delivered to now (A74): typed for the
+// ◆ spaces and any project that is not a tabs team, else by its key and the
+// agent last seen on its boss's pane.
+func (in *inbox) delivery(project string) notice.Delivery {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	if !in.tabs[project] {
+		return notice.DeliverTyped
+	}
+	return notice.DeliveryOf(in.cfgs.For(project).Board, in.last[project])
 }
 
 // polled replaces the model with a poll's, nil when the poll built none, and
@@ -175,8 +220,9 @@ func (d *dispatcher) run(ctx context.Context) {
 
 // pass returns every ended binding's queue to its boss, then serves each
 // recipient with a message queued, the one waiting longest first, whose
-// target the poll's model proves. With no model it does nothing: there are
-// no lists to check a target against.
+// target the poll's model proves, a board-mode boss's on its board (A74).
+// With no model it does nothing: there are no lists to check a target
+// against.
 func (d *dispatcher) pass(ctx context.Context) {
 	m, bosses := d.in.view()
 	if m == nil {
@@ -193,6 +239,9 @@ func (d *dispatcher) pass(ctx context.Context) {
 	for _, to := range queued {
 		if kept[to] {
 			continue // sent to a binding that ended; the sweep said why
+		}
+		if d.untyped(ctx, bosses, to) {
+			continue // posted or held for a board-mode boss (A74)
 		}
 		var (
 			target, held string
@@ -213,7 +262,7 @@ func (d *dispatcher) pass(ctx context.Context) {
 			d.note(to, held, held, why)
 			continue
 		}
-		if !d.serve(ctx, to, target) {
+		if !d.serve(ctx, bosses, to, target) {
 			return
 		}
 	}
@@ -283,9 +332,14 @@ func (d *dispatcher) terminals(ctx context.Context) (map[string]string, error) {
 // a failure ends to's turn this pass, so neither a refused recipient nor a
 // stuck pane holds up the others. It reports false once the daemon is
 // stopping, which ends the pass; a stop is checked before each claim, never
-// inside one (claim).
-func (d *dispatcher) serve(ctx context.Context, to store.Address, target string) bool {
+// inside one (claim). So is a board-mode boss's delivery: once a poll has
+// turned it from typed, the message being typed finishes typed and the rest
+// wait for the next pass's board path (stillTyped, A74).
+func (d *dispatcher) serve(ctx context.Context, bosses map[string]string, to store.Address, target string) bool {
 	for ctx.Err() == nil {
+		if !d.stillTyped(bosses, to) {
+			return true
+		}
 		m, ok, err := d.claim(ctx, to)
 		if err != nil {
 			d.warnUnlessStopping(ctx, err, "messages: claim "+to.ID+"'s next message")

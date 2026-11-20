@@ -6,11 +6,6 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"io/fs"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -936,77 +931,4 @@ func TestPostQueuedRefusesANonBoss(t *testing.T) {
 	}
 	assert.Zero(t, postCount(t, s), "nothing is posted")
 	assertState(t, s, store.MessageQueued, m)
-}
-
-// postQueuedFile is PostQueued's own file, relative to the module root.
-const postQueuedFile = "internal/store/boardqueue.go"
-
-// postQueuedFuncs is the name of every function and method postQueuedFile
-// declares: PostQueued and its helpers.
-func postQueuedFuncs(t *testing.T, root string) map[string]bool {
-	t.Helper()
-	f, err := parser.ParseFile(token.NewFileSet(), filepath.Join(root, postQueuedFile), nil, parser.SkipObjectResolution)
-	require.NoError(t, err)
-	names := map[string]bool{}
-	for _, d := range f.Decls {
-		if fn, ok := d.(*ast.FuncDecl); ok {
-			names[fn.Name.Name] = true
-		}
-	}
-	return names
-}
-
-// TestPostQueuedHasNoProductionCaller: PostQueued is dormant until PR 1b's
-// dispatcher calls it (NERD-5533, A74), which deletes this test. No non-test
-// file in internal/ or cmd/ but its own uses the name, a selector, a method
-// value or an interface's method alike; nor does any other non-test file of
-// internal/store use a function its file declares, postQueued or a helper,
-// which could post a queue without the name.
-func TestPostQueuedHasNoProductionCaller(t *testing.T) {
-	t.Parallel()
-	root := filepath.Join("..", "..")
-	funcs := postQueuedFuncs(t, root)
-	for _, name := range []string{"PostQueued", "postQueued", "postRow", "rowPosts", "postIDTaken", "splitBody", "refuseRow", "insertBoardPost"} {
-		assert.True(t, funcs[name], "%s declares %s", postQueuedFile, name)
-	}
-	storeDir := filepath.Join(root, "internal", "store")
-	uses := map[string][]string{}
-	parsed := 0
-	fset := token.NewFileSet()
-	for _, dir := range []string{"internal", "cmd"} {
-		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
-			switch {
-			case err != nil:
-				return err
-			case d.IsDir() && d.Name() == "testdata":
-				return filepath.SkipDir
-			case d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go"):
-				return nil
-			}
-			f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-			if err != nil {
-				return err
-			}
-			parsed++
-			rel, err := filepath.Rel(root, path)
-			if err != nil {
-				return err
-			}
-			// An unexported name is the store's own function only in the
-			// store's package; elsewhere it is another package's name.
-			inStore := filepath.Dir(path) == storeDir
-			ast.Inspect(f, func(n ast.Node) bool {
-				if id, ok := n.(*ast.Ident); ok && funcs[id.Name] && (id.IsExported() || inStore) {
-					uses[filepath.ToSlash(rel)] = append(uses[filepath.ToSlash(rel)], id.Name+" at "+fset.Position(id.Pos()).String())
-				}
-				return true
-			})
-			return nil
-		})
-		require.NoError(t, err)
-	}
-	assert.Greater(t, parsed, 100, "the scan reached the module's packages")
-	assert.NotEmpty(t, uses[postQueuedFile], "the scan finds PostQueued's functions in %s", postQueuedFile)
-	delete(uses, postQueuedFile)
-	assert.Empty(t, uses, "PostQueued and its helpers have no production caller until PR 1b")
 }
