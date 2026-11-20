@@ -14,9 +14,11 @@ package store
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"math"
 	"net/url"
@@ -76,6 +78,10 @@ type Store struct {
 	// quotas are the notice ledger's (noticequota.go); open sets the
 	// defaults.
 	quotas noticeQuotas
+	// noticeEntropy is the random part of each daemon notice's ID
+	// (noticeledger.go), crypto/rand's. It is a field, not a package
+	// variable, so tests in parallel each set their own.
+	noticeEntropy io.Reader
 }
 
 // Pragmas are the connection settings Open sets and verifies.
@@ -160,7 +166,7 @@ func open(ctx context.Context, path string, migrations fs.FS) (*Store, error) {
 	db.SetConnMaxLifetime(0)
 	db.SetConnMaxIdleTime(0)
 
-	s := &Store{db: db, closeWait: BusyTimeout, quotas: defaultNoticeQuotas}
+	s := &Store{db: db, closeWait: BusyTimeout, quotas: defaultNoticeQuotas, noticeEntropy: rand.Reader}
 	if err := s.init(ctx, path, set); err != nil {
 		_ = db.Close()
 		return nil, err

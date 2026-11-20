@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"io"
 	"io/fs"
 	"time"
 )
@@ -41,6 +42,14 @@ var NoticeQuotaQueries = map[string]string{
 	"Q4": selectBytesPerProject, "Q5": selectBytesInStore,
 	"Q6": selectProjectIdentities, "Q7": selectStoreIdentities, "Q8": selectAdmissionsInWindow,
 }
+
+// SetNoticeEntropy sets the reader s draws its daemon notices' IDs' random
+// bits from, before s is used.
+func SetNoticeEntropy(s *Store, r io.Reader) { s.noticeEntropy = r }
+
+// NoticeEncoding is e's nt1 layout, unchecked, for a test's hand-made rows
+// only: the vectors' bytes are the test's own literals.
+func NoticeEncoding(e NoticeEnvelope) []byte { return nt1Layout(e) }
 
 // NoticeBytes is the size the ledger stores for e: its canonical
 // encoding's length, which Q4 and Q5 sum.
