@@ -147,8 +147,7 @@ const (
 // workforceCode is the refusal code for a workforce op's error: a keyed
 // spawn's *workforce.RefusalError's own, computed once, else its sentinel's.
 func workforceCode(err error) string {
-	var refused *workforce.RefusalError
-	if errors.As(err, &refused) {
+	if refused, ok := errors.AsType[*workforce.RefusalError](err); ok {
 		return refused.Code
 	}
 	for _, c := range workforceCodes {

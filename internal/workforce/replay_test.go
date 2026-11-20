@@ -50,9 +50,6 @@ func done(a store.SpawnAnswer, links ...store.SpawnLink) store.SpawnRecord {
 	}
 }
 
-// briefs is n, as a replayed worker's briefs.
-func briefs(n int) *int { return &n }
-
 // TestReplayBuilder (B11): the replay builder, on records built by hand. An
 // ok replay is the stored result, spent, replayed and answered when first
 // answered, each worker as first answered but its status and briefs read
@@ -95,13 +92,13 @@ func TestReplayBuilder(t *testing.T) {
 			pane, status string
 			briefs       *int
 		}{
-			{"w9:p1", "active", briefs(2)},
-			{"w9:p2", "starting", briefs(0)},
-			{"", "retired", briefs(1)},
-			{"", "failed", briefs(0)},
-			{"", "lost", briefs(1)},
+			{"w9:p1", "active", new(2)},
+			{"w9:p2", "starting", new(0)},
+			{"", "retired", new(1)},
+			{"", "failed", new(0)},
+			{"", "lost", new(1)},
 			{"", "superseded", nil},
-			{"", "gone", briefs(0)},
+			{"", "gone", new(0)},
 		}
 		for i, n := range now {
 			want.Workers[i].PaneID, want.Workers[i].Status, want.Workers[i].Briefs = n.pane, n.status, n.briefs

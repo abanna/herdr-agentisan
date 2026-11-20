@@ -274,8 +274,7 @@ func (s *server) run(name string, o op, args json.RawMessage, peer Peer, extend 
 		s.log.Info().Err(err).Str("op", name).Msg("op refused")
 		// A keyed spawn's refusal was computed by the rule below already,
 		// and carries its key's state (A73).
-		var refused *workforce.RefusalError
-		if errors.As(err, &refused) {
+		if refused, ok := errors.AsType[*workforce.RefusalError](err); ok {
 			return response{Error: &errorBody{Code: refused.Code, Message: refused.Message, RetryKey: refused.RetryKey, KeyState: refused.KeyState}}
 		}
 		return refuse(refusalOf(ctx, name, budget, o.code, err))
