@@ -236,7 +236,10 @@ func TestAttentionBounds(t *testing.T) {
 				t.Parallel()
 				_, err := settings.Notices(writeNotices(t, toml))
 				require.ErrorIs(t, err, settings.ErrInvalid)
-				assert.Contains(t, err.Error(), key)
+				// The refused key itself, as "<key> (<layer>, <file>)": a
+				// mention in another key's refusal, such as max_every's
+				// "below notices.attention.every", does not count.
+				assert.Contains(t, err.Error(), key+" (")
 			})
 		}
 	}
