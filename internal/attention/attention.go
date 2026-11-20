@@ -39,9 +39,16 @@ type State struct {
 	// OldestHeldCeiling is the created_at of the oldest held daemon row
 	// holding a ceiling line, and NewestCeiling the latest ceiling change
 	// pending: the newest ceiling post's created_at, or the latest
-	// updated_at of a held daemon row holding a ceiling line.
+	// updated_at of a held daemon row holding a ceiling line. A held row
+	// posted to the board steps it back to the row's created_at; the episode
+	// keeps its own newest ceiling, which a post never lowers.
 	OldestHeldCeiling time.Time
 	NewestCeiling     time.Time
+	// NewestCeilingPost is the created_at of the newest ceiling post on the
+	// board: past a limit, a newer one than the last alert gives one alert
+	// (user decision 2026-11-20). A held row posted to the board keeps its
+	// created_at. Zero: none.
+	NewestCeilingPost time.Time
 	Status            team.Status // of the pane in the boss place bearing the boss's name
 	Agent             string      // "" when none shows
 	Place             bool        // this poll's model has a pane in the team's boss place
@@ -68,7 +75,7 @@ func NewTracker() *Tracker { return &Tracker{episodes: map[string]*episode{}} }
 type episode struct {
 	// start is the oldest post or held message pending when the episode
 	// opened, so a ceiling already pending then is not older than it,
-	// after a restart too; now when the state gives no time.
+	// after a restart too; now when that is earlier or there is none.
 	start time.Time
 	mark  int64 // BossMark at the last Observe
 	// count is the alerts shown since the episode opened or the boss last
@@ -79,11 +86,13 @@ type episode struct {
 	reacted   time.Time // the last reaction
 	retry     time.Time // when an alert not shown is tried again
 	// bound is when a ceiling newer than the last shown alert makes the
-	// next alert due at the latest, and tried the newest ceiling pending
-	// at the last try, which no longer bounds anything.
-	bound, tried time.Time
-	every        time.Duration // Every at the last try, for Shown
-	outstanding  bool          // an alert was tried and Shown has not answered it
+	// next alert due at the latest, and tried the newest ceiling at the
+	// last try, which no longer bounds anything. newest is the newest
+	// ceiling since the last reaction, or since none was pending: a post
+	// never lowers it.
+	bound, tried, newest time.Time
+	every                time.Duration // Every at the last try, for Shown
+	outstanding          bool          // an alert was tried and Shown has not answered it
 }
 
 // Observe reads one poll's state of project's boss, with project's c, at now,
@@ -103,10 +112,11 @@ type episode struct {
 //     MaxEvery). One not shown is tried again Every later.
 //   - A rise of BossMark is a reaction: the count goes to 0 and the next
 //     alert waits for the later of Every and the first alert's time.
-//   - A ceiling newer than the last shown alert is never held back
-//     (bound).
-//   - Alerts > 0 stops the episode after that many shown alerts, but for a
-//     ceiling newer than the last.
+//   - Below the limit, a ceiling newer than the last shown alert is never
+//     held back (bound).
+//   - Alerts > 0 stops the episode after that many shown alerts, but for
+//     the oldest pending ceiling or the newest ceiling post, when newer than
+//     the last shown alert: one more each.
 //   - With no boss place no alert is shown, and the episode is kept.
 func (t *Tracker) Observe(project string, c Config, s State, now time.Time) (Alert, bool) {
 	if c.After <= 0 || s.Pending+s.Held <= 0 {
@@ -118,12 +128,18 @@ func (t *Tracker) Observe(project string, c Config, s State, now time.Time) (Ale
 		e = &episode{start: earliest(earliest(s.Oldest, s.OldestHeld), now), mark: s.BossMark}
 		t.episodes[project] = e
 	}
-	if s.BossMark > e.mark {
+	reacted := s.BossMark > e.mark
+	if reacted {
 		e.count, e.reacted, e.retry = 0, now, time.Time{}
 	}
 	e.mark = s.BossMark
+	if reacted || s.NewestCeiling.IsZero() {
+		e.newest = s.NewestCeiling
+	} else {
+		e.newest = later(e.newest, s.NewestCeiling)
+	}
 	stopped := c.Alerts > 0 && e.count >= c.Alerts
-	e.keepBound(c, s)
+	e.keepBound(c)
 	if !s.Place {
 		return Alert{}, false
 	}
@@ -131,7 +147,7 @@ func (t *Tracker) Observe(project string, c Config, s State, now time.Time) (Ale
 	if due.IsZero() || now.Before(due) {
 		return Alert{}, false
 	}
-	e.tried, e.bound, e.every, e.outstanding = s.NewestCeiling, time.Time{}, c.Every, true
+	e.tried, e.bound, e.every, e.outstanding = e.newest, time.Time{}, c.Every, true
 	return e.alert(c, s, now), true
 }
 
@@ -152,30 +168,33 @@ func (t *Tracker) Shown(project string, shown bool, now time.Time) {
 	e.lastShown, e.retry = now, time.Time{}
 }
 
-// keepBound keeps the ceiling's bound: while the newest pending ceiling is
+// keepBound keeps the ceiling's bound: while the episode's newest ceiling is
 // newer than the last shown alert (before any, not older than the episode's
-// start) and newer than the ceiling pending at the last try, the next alert is due no
+// start) and newer than the one at the last try, the next alert is due no
 // later than it + CeilingAfter, and a later ceiling never moves that later.
 // A cap on alerts a ceiling repeats would go here.
-func (e *episode) keepBound(c Config, s State) {
-	newer := s.NewestCeiling.After(e.lastShown)
+func (e *episode) keepBound(c Config) {
+	newer := e.newest.After(e.lastShown)
 	if e.lastShown.IsZero() {
-		newer = !s.NewestCeiling.Before(e.start)
+		newer = !e.newest.Before(e.start)
 	}
-	if !newer || !s.NewestCeiling.After(e.tried) {
+	if !newer || !e.newest.After(e.tried) {
 		e.bound = time.Time{}
 		return
 	}
-	e.bound = earliest(e.bound, s.NewestCeiling.Add(c.CeilingAfter))
+	e.bound = earliest(e.bound, e.newest.Add(c.CeilingAfter))
 }
 
 // due is when the next alert is due, zero for none. Past the limit, only a
-// ceiling newer than the last shown alert gives one, at the ceiling's bound.
+// ceiling newer than the last shown alert gives one: the oldest pending
+// ceiling or the newest ceiling post. It comes at its bound, or at an unshown
+// alert's retry. Held ceilings still arm the bound past the limit, so a
+// ceiling posted while it is armed alerts at once.
 func (e *episode) due(c Config, s State, stopped bool) time.Time {
 	var at time.Time
 	switch {
 	case stopped:
-		if !ceilingOf(s).After(e.lastShown) {
+		if !ceilingOf(s).After(e.lastShown) && !s.NewestCeilingPost.After(e.lastShown) {
 			return time.Time{}
 		}
 		at = e.retry
@@ -205,8 +224,8 @@ func gap(c Config, k int) time.Duration {
 func first(c Config, s State) time.Time { return earliest(firstTimes(c, s)) }
 
 // firstTimes are the two times a first alert is due at the earlier of: the
-// oldest post or held message + After, or BusyGrace while the boss's agent
-// is working, and the oldest ceiling + CeilingAfter. Zero is none.
+// oldest post or held message + After, or BusyGrace, when longer, while the
+// boss's agent is working, and the oldest ceiling + CeilingAfter. Zero is none.
 func firstTimes(c Config, s State) (oldest, ceiling time.Time) {
 	if o := earliest(s.Oldest, s.OldestHeld); !o.IsZero() {
 		after := c.After
@@ -226,7 +245,7 @@ func ceilingOf(s State) time.Time { return earliest(s.OldestCeiling, s.OldestHel
 
 // alert is the alert e tries now: the ceiling's title when it is the first
 // alert since the episode opened or the boss reacted and the ceiling's time
-// is the earlier of the two, else the posts' title, else the held one's.
+// is at or before the other's, else the posts' title, else the held one's.
 func (e *episode) alert(c Config, s State, now time.Time) Alert {
 	a := Alert{Sound: c.Sound, N: e.count + 1, Of: c.Alerts}
 	a.Last = a.Of > 0 && a.N == a.Of

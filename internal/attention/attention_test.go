@@ -57,7 +57,7 @@ func ceilingPost(s attention.State, c time.Duration) attention.State {
 	if s.OldestCeiling.IsZero() {
 		s.OldestCeiling = at(c)
 	}
-	s.NewestCeiling = at(c)
+	s.NewestCeiling, s.NewestCeilingPost = at(c), at(c)
 	return s
 }
 
@@ -352,25 +352,69 @@ func TestNewCeilingPastTheLimitAlertsOnce(t *testing.T) {
 	assert.Equal(t, mins(10, 15), times(run(c, 60*m, m, appended, nil)), "a ceiling appended at 16 to a row from 0")
 }
 
-// TestLimitHoldsWhileAnOlderCeilingIsUnread pins rule 5 as the text writes
-// it, by intent (the boss's ruling on #182's review, 2026-11-20): past a
-// limit, the one more alert comes only when the oldest pending ceiling is
-// newer than the last alert shown (rule 5; 903c871a §6). So a ceiling posted
-// while an older one is still unread gives none. The newest ceiling cannot
-// decide: a held row's newest-ceiling time moves with every notice appended
-// to it, and the user's limit would stop holding for a held boss.
+// TestLimitHoldsWhileAnOlderCeilingIsUnread (rule 5): past a limit, a held
+// ceiling appended to a row older than the last alert gives none, since the
+// row's newest time moves with every notice appended. A ceiling posted
+// directly gives one (TestPostedWarningPastTheLimitAlertsOnce).
 func TestLimitHoldsWhileAnOlderCeilingIsUnread(t *testing.T) {
 	t.Parallel()
 	c := defaults()
 	c.Alerts = 1
 	twoCeilings := func(d time.Duration) attention.State {
-		s := ceilingPost(boss(), 0)
+		s := held(1, 0)
+		s.OldestHeldCeiling, s.NewestCeiling = at(0), at(0)
 		if d >= 10*m {
-			s = ceilingPost(s, 10*m)
+			s.NewestCeiling = at(10 * m)
 		}
 		return s
 	}
-	assert.Equal(t, mins(2), times(run(c, 60*m, m, twoCeilings, nil)), "ceilings posted at 0 and 10, the first unread")
+	assert.Equal(t, mins(2), times(run(c, 60*m, m, twoCeilings, nil)), "a held ceiling from 0, another appended at 10")
+}
+
+// TestPostedWarningPastTheLimitAlertsOnce (rule 5, the user's decision of
+// 2026-11-20): past a limit, each new ceiling posted directly gives one
+// alert of its own, even while an older one is unread.
+func TestPostedWarningPastTheLimitAlertsOnce(t *testing.T) {
+	t.Parallel()
+	c := defaults()
+	c.Alerts = 1
+	state := func(d time.Duration) attention.State {
+		s := posts(1, 0)
+		if d >= 20*m {
+			s = ceilingPost(s, 20*m)
+		}
+		if d >= 40*m {
+			s = ceilingPost(s, 40*m)
+		}
+		return s
+	}
+	got := run(c, 90*m, m, state, nil)
+	require.Equal(t, mins(10, 22, 42), times(got))
+	assert.Contains(t, got[2].a.Body, ". Alert 3, past the limit of 1. Open the board")
+}
+
+// TestHeldWarningPastTheLimitStaysQuiet (rule 5): past a limit, a held
+// ceiling with a notice appended every minute gives no alert; a ceiling
+// posted while its bound is armed alerts at once.
+func TestHeldWarningPastTheLimitStaysQuiet(t *testing.T) {
+	t.Parallel()
+	c := defaults()
+	c.Alerts = 1
+	appended := func(d time.Duration) attention.State {
+		s := unseen()
+		if d >= 16*m {
+			s.OldestHeldCeiling, s.NewestCeiling = at(0), at(d)
+		}
+		return s
+	}
+	assert.Equal(t, mins(10), times(run(c, 60*m, m, appended, nil)), "held")
+	posted := func(d time.Duration) attention.State {
+		if d < 30*m {
+			return appended(d)
+		}
+		return ceilingPost(appended(d), 30*m)
+	}
+	assert.Equal(t, mins(10, 30), times(run(c, 60*m, m, posted, nil)), "a ceiling posted at 30")
 }
 
 // TestUnshownDoesNotCount (rule 6): an alert not shown is tried again every
@@ -691,4 +735,309 @@ func TestLaterCeilingNeverDelaysTheBound(t *testing.T) {
 	}
 	got := run(defaults(), 50*m, m, state, nil)
 	assert.Equal(t, mins(10, 15, 25, 28, 48), times(got))
+}
+
+// unseen is a boss showing no agent with one message held since 0, as
+// before the daemon has seen its agent.
+func unseen() attention.State {
+	s := held(1, 0)
+	s.Agent = ""
+	return s
+}
+
+// TestCeilingAppendedAtEveryPollKeepsItsGaps (rule 6): a held ceiling row a
+// notice is appended to at every poll alerts at its bound, then at
+// reminders, never at every poll.
+func TestCeilingAppendedAtEveryPollKeepsItsGaps(t *testing.T) {
+	t.Parallel()
+	state := func(d time.Duration) attention.State {
+		s := unseen()
+		s.OldestHeldCeiling, s.NewestCeiling = at(0), at(d)
+		return s
+	}
+	got := run(defaults(), 12*m, m, state, nil)
+	assert.Equal(t, mins(2, 5, 8, 11), times(got))
+}
+
+// TestCeilingGoneBeforeItsBoundBoundsNothing (rule 2): a ceiling posted at
+// 26 and read at 27 brings no alert at 28; nor does a held one from 26
+// typed into the boss at 27, with no read.
+func TestCeilingGoneBeforeItsBoundBoundsNothing(t *testing.T) {
+	t.Parallel()
+	state := func(d time.Duration) attention.State {
+		switch {
+		case d < 26*m:
+			return posts(1, 0)
+		case d < 27*m:
+			return ceilingPost(posts(1, 0), 26*m)
+		}
+		s := posts(1, 27*m)
+		s.BossMark = 2
+		return s
+	}
+	got := run(defaults(), 40*m, m, state, nil)
+	assert.Equal(t, mins(10, 15, 25, 37), times(got), "read")
+
+	typed := func(d time.Duration) attention.State {
+		s := posts(1, 0)
+		if d >= 26*m && d < 27*m {
+			s.Held, s.OldestHeld, s.OldestHeldCeiling, s.NewestCeiling = 1, at(26*m), at(26*m), at(26*m)
+		}
+		return s
+	}
+	got = run(defaults(), 50*m, m, typed, nil)
+	assert.Equal(t, mins(10, 15, 25, 45), times(got), "typed in")
+}
+
+// TestNoBossPlaceHoldsTheFirstAlert (rule 7): with no boss place from 5 to
+// 20, the first alert waits for the place.
+func TestNoBossPlaceHoldsTheFirstAlert(t *testing.T) {
+	t.Parallel()
+	state := func(d time.Duration) attention.State {
+		s := posts(1, 0)
+		s.Place = d < 5*m || d >= 20*m
+		return s
+	}
+	got := run(defaults(), 26*m, m, state, nil)
+	assert.Equal(t, mins(20, 25), times(got))
+}
+
+// TestRestartAlertsAtOnceWhateverTheMark (rules 3 and 8): a new daemon's
+// first poll, at 30 with posts from 0, alerts at once; the boss's mark
+// then, 0 or not, is no reaction.
+func TestRestartAlertsAtOnceWhateverTheMark(t *testing.T) {
+	t.Parallel()
+	for _, mark := range []int64{0, 7} {
+		s := posts(2, 0)
+		s.BossMark = mark
+		tr := attention.NewTracker()
+		var got []time.Duration
+		for d := 30 * m; d <= 40*m; d += m {
+			if _, ok := tr.Observe("app", defaults(), s, at(d)); ok {
+				got = append(got, d)
+				tr.Shown("app", true, at(d))
+			}
+		}
+		assert.Equal(t, mins(30, 35), got, "mark %d", mark)
+	}
+}
+
+// TestHeldOlderThanThePostsSetsTheTime (rule 2): the oldest is the earlier
+// of the posts' and the held messages'.
+func TestHeldOlderThanThePostsSetsTheTime(t *testing.T) {
+	t.Parallel()
+	s := posts(1, 5*m)
+	s.Held, s.OldestHeld = 1, at(0)
+	got := run(defaults(), 12*m, m, steady(s), nil)
+	require.Equal(t, mins(10), times(got))
+	assert.Contains(t, got[0].a.Body, "oldest 10 min")
+}
+
+// TestHeldCeilingStartsTheEpisodeFirstSeenLate (Q4, f523b80b): a held
+// ceiling from 0:40, older than the post from 0:50, is the episode's start
+// though the episode is first seen at 1:00; the post is read at 1:30.
+func TestHeldCeilingStartsTheEpisodeFirstSeenLate(t *testing.T) {
+	t.Parallel()
+	tr := attention.NewTracker()
+	var got []time.Duration
+	for d := m; d <= 8*m; d += 10 * time.Second {
+		s := held(1, 40*time.Second)
+		s.OldestHeldCeiling, s.NewestCeiling = at(40*time.Second), at(40*time.Second)
+		if d >= 90*time.Second {
+			s.BossMark = 1
+		} else {
+			s.Pending, s.Oldest = 1, at(50*time.Second)
+		}
+		if _, ok := tr.Observe("app", defaults(), s, at(d)); ok {
+			got = append(got, d)
+			tr.Shown("app", true, at(d))
+		}
+	}
+	assert.Equal(t, []time.Duration{2*m + 40*time.Second, 7*m + 40*time.Second}, got)
+}
+
+// TestDrainedCeilingKeepsItsBound (#184's S1): a held row from 0 gets a
+// ceiling appended at 16 and is posted at 17 with its created_at, so the
+// state's NewestCeiling steps back to 0. The episode keeps the newest
+// ceiling since the last reaction, so the bound still alerts at 18; read
+// instead, the ceiling bounds nothing.
+func TestDrainedCeilingKeepsItsBound(t *testing.T) {
+	t.Parallel()
+	drain := func(d time.Duration) attention.State {
+		if d < 17*m {
+			s := unseen()
+			if d >= 16*m {
+				s.OldestHeldCeiling, s.NewestCeiling = at(0), at(16*m)
+			}
+			return s
+		}
+		s := posts(1, 0)
+		s.OldestCeiling, s.NewestCeiling = at(0), at(0)
+		return s
+	}
+	got := run(defaults(), 30*m, m, drain, nil)
+	assert.Equal(t, mins(10, 15, 18), times(got), "drained at 17")
+
+	read := func(d time.Duration) attention.State {
+		if d < 17*m {
+			return drain(d)
+		}
+		s := posts(1, 17*m)
+		s.BossMark = 3
+		return s
+	}
+	got = run(defaults(), 30*m, m, read, nil)
+	assert.Equal(t, mins(10, 15, 27), times(got), "read at 17")
+
+	mixed := func(d time.Duration) attention.State {
+		s := unseen()
+		s.OldestHeldCeiling, s.NewestCeiling = at(0), at(m)
+		if d >= 16*m && d < 17*m {
+			s = ceilingPost(s, 16*m)
+		}
+		if d >= 17*m {
+			s.BossMark = 1
+		}
+		return s
+	}
+	got = run(defaults(), 30*m, m, mixed, nil)
+	assert.NotContains(t, times(got), 18*m, "a newer posted ceiling read at 17 while the held one stays")
+}
+
+// TestPastTheLimitAnUnshownAlertIsRetried (rules 5 and 6): with Alerts 1,
+// the ceiling's extra alert not shown at 32 comes back at 37.
+func TestPastTheLimitAnUnshownAlertIsRetried(t *testing.T) {
+	t.Parallel()
+	c := defaults()
+	c.Alerts = 1
+	state := func(d time.Duration) attention.State {
+		if d < 30*m {
+			return posts(1, 0)
+		}
+		return ceilingPost(posts(1, 0), 30*m)
+	}
+	got := run(c, 90*m, m, state, func(d time.Duration) bool { return d != 32*m })
+	assert.Equal(t, mins(10, 32, 37), times(got))
+}
+
+// TestShorterBusyGraceNeverBringsItSooner (rule 2): BusyGrace counts only
+// when longer than After.
+func TestShorterBusyGraceNeverBringsItSooner(t *testing.T) {
+	t.Parallel()
+	c := defaults()
+	c.BusyGrace = 5 * m
+	s := posts(1, 0)
+	s.Status = team.StatusWorking
+	got := run(c, 12*m, m, steady(s), nil)
+	assert.Equal(t, mins(10), times(got))
+}
+
+// TestShownTwiceCountsOnce (rule 6): a second answer to one alert changes
+// nothing.
+func TestShownTwiceCountsOnce(t *testing.T) {
+	t.Parallel()
+	tr := attention.NewTracker()
+	_, ok := tr.Observe("app", defaults(), posts(1, 0), at(10*m))
+	require.True(t, ok)
+	tr.Shown("app", true, at(10*m))
+	tr.Shown("app", true, at(10*m))
+	_, ok = tr.Observe("app", defaults(), posts(1, 0), at(15*m))
+	assert.True(t, ok)
+}
+
+// TestCeilingTitleAndBody (Q2, f523b80b, and the body): a ceiling due at
+// the same time as the oldest takes the ceiling title; a held ceiling's
+// body keeps its held clause; minutes are cut, not rounded.
+func TestCeilingTitleAndBody(t *testing.T) {
+	t.Parallel()
+	tie := func(d time.Duration) attention.State {
+		if d < 8*m {
+			return posts(1, 0)
+		}
+		return ceilingPost(posts(1, 0), 8*m)
+	}
+	got := run(defaults(), 10*m, m, tie, nil)
+	require.NotEmpty(t, got)
+	assert.True(t, got[0].a.Ceiling, "a tie")
+
+	s := held(1, 0)
+	s.OldestHeldCeiling, s.NewestCeiling = at(0), at(0)
+	got = run(defaults(), 2*m, m, steady(s), nil)
+	require.Len(t, got, 1)
+	assert.Equal(t, "agentisan: a ceiling waits unread for ha-boss", got[0].a.Title)
+	assert.Contains(t, got[0].a.Body, "; 1 messages wait in its inbox. Alert 1.")
+
+	cut := func(d time.Duration) attention.State {
+		if d < 40*time.Second {
+			return posts(1, 0)
+		}
+		return ceilingPost(posts(1, 0), 40*time.Second)
+	}
+	got = run(defaults(), 3*m, 10*time.Second, cut, nil)
+	require.NotEmpty(t, got)
+	assert.Equal(t, 2*m+40*time.Second, got[0].at)
+	assert.Contains(t, got[0].a.Body, "oldest 2 min;")
+}
+
+// TestLimitAtTheAlertsInstantAndAtAReaction (rule 5): a held or posted
+// ceiling from the last shown alert's own instant is not newer than it; and
+// a reaction at the poll a held-back ceiling's bound falls due resets the
+// count first.
+func TestLimitAtTheAlertsInstantAndAtAReaction(t *testing.T) {
+	t.Parallel()
+	c := defaults()
+	c.Alerts = 1
+	heldFrom := func(d, row, appended time.Duration) attention.State {
+		s := posts(1, 0)
+		if d >= row+m {
+			s.Held, s.OldestHeld, s.OldestHeldCeiling, s.NewestCeiling = 1, at(row), at(row), at(row)
+		}
+		if d >= appended {
+			s.NewestCeiling = at(appended)
+		}
+		return s
+	}
+	instant := func(d time.Duration) attention.State { return heldFrom(d, 10*m, 12*m) }
+	assert.Equal(t, mins(10), times(run(c, 30*m, m, instant, nil)), "a row from 10, appended at 12")
+	posted := func(d time.Duration) attention.State {
+		s := posts(1, 0)
+		s.Held, s.OldestHeld = 1, at(0)
+		if d >= 11*m {
+			s = ceilingPost(s, 10*m)
+		}
+		if d >= 16*m {
+			s.OldestHeldCeiling, s.NewestCeiling = at(0), at(16*m)
+		}
+		return s
+	}
+	assert.Equal(t, mins(10), times(run(c, 30*m, m, posted, nil)), "a ceiling posted at 10, a held one appended at 16")
+
+	reaction := func(d time.Duration) attention.State {
+		s := heldFrom(d, 12*m, 20*m)
+		if d >= 22*m {
+			s.Pending, s.Oldest, s.BossMark = 0, time.Time{}, 1
+		}
+		return s
+	}
+	assert.Equal(t, mins(10, 14, 22), times(run(c, 30*m, m, reaction, nil)), "a row from 12, appended at 20, a read at 22")
+}
+
+// TestCeilingKeepsItsBoundThroughAPause (rule 7): paused from 26 to 40, the
+// ceiling from 27 alerts when the place is back; a later one in the same
+// pause never moves it.
+func TestCeilingKeepsItsBoundThroughAPause(t *testing.T) {
+	t.Parallel()
+	state := func(d time.Duration) attention.State {
+		s := posts(1, 0)
+		if d >= 27*m {
+			s = ceilingPost(s, 27*m)
+		}
+		if d >= 39*m {
+			s = ceilingPost(s, 39*m)
+		}
+		s.Place = d < 26*m || d >= 40*m
+		return s
+	}
+	got := run(defaults(), 50*m, m, state, nil)
+	assert.Equal(t, mins(10, 15, 25, 40), times(got))
 }
