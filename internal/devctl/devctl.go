@@ -6,12 +6,14 @@
 package devctl
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -28,12 +30,14 @@ func Root() *cobra.Command {
 		Use:   "devctl",
 		Short: "Development operations and helpers for this repository",
 		Long: "devctl holds the repository's own tooling: the gates that have no\n" +
-			"Go builtin (coverage floor, docs parity, large files).",
+			"Go builtin (coverage floor, docs parity, large files), and CI's test\n" +
+			"jobs' packages and coverage merge.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       fmt.Sprintf("%s (%s)", config.Version, config.Commit),
 	}
-	root.AddCommand(newParityCmd(), newCoverageCmd(), newLargeFilesCmd())
+	root.AddCommand(newParityCmd(), newCoverageCmd(), newLargeFilesCmd(),
+		newTestPackagesCmd(), newCoverageMergeCmd())
 	return root
 }
 
@@ -168,4 +172,87 @@ func newLargeFilesCmd() *cobra.Command {
 	}
 	c.Flags().Int64Var(&maxKB, "max-kb", DefaultMaxFileKB, "maximum size of a tracked file, in KB")
 	return c
+}
+
+func newTestPackagesCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "test-packages <shard>",
+		Short: "Print the packages one of CI's test jobs tests: " + strings.Join(Shards(), ", "),
+		// Every argument is a shard name, an option included, so every
+		// refusal prints FailedShardPath.
+		Args:               cobra.ArbitraryArgs,
+		DisableFlagParsing: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			pkgs, err := testPackages(cmd.Context(), args)
+			if err != nil {
+				if _, werr := fmt.Fprintln(cmd.OutOrStdout(), FailedShardPath); werr != nil {
+					return errors.Join(err, fmt.Errorf("write %s: %w", FailedShardPath, werr))
+				}
+				return err
+			}
+			if _, err := fmt.Fprintln(cmd.OutOrStdout(), strings.Join(pkgs, " ")); err != nil {
+				return fmt.Errorf("write packages: %w", err)
+			}
+			return nil
+		},
+	}
+}
+
+// goListBudget bounds test-packages' go list runs, so a hung one cannot hold a CI job.
+const goListBudget = 2 * time.Minute
+
+// testPackages is the one shard args names, read against this module.
+func testPackages(ctx context.Context, args []string) ([]string, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("want one test shard (%s), got %d arguments", strings.Join(Shards(), ", "), len(args))
+	}
+	root, err := repoRoot()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, goListBudget)
+	defer cancel()
+	module, all, err := ModulePackages(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	return ShardPackages(module, all, args[0])
+}
+
+func newCoverageMergeCmd() *cobra.Command {
+	var dir, out string
+	c := &cobra.Command{
+		Use:   "coverage-merge",
+		Short: "Merge every CI test job's coverage-<shard>.out into one profile for the floor",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			root, err := repoRoot()
+			if err != nil {
+				return err
+			}
+			inputs, err := ShardProfiles(underRoot(root, dir))
+			if err != nil {
+				return err
+			}
+			rep, err := MergeCoverageProfiles(underRoot(root, out), inputs)
+			if err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintln(cmd.OutOrStdout(), rep); err != nil {
+				return fmt.Errorf("write report: %w", err)
+			}
+			return nil
+		},
+	}
+	c.Flags().StringVar(&dir, "dir", ".", "directory holding each test job's coverage-<shard>.out")
+	c.Flags().StringVar(&out, "out", "coverage.out", "merged profile to write, for `devctl coverage`")
+	return c
+}
+
+// underRoot resolves a relative flag path against the repository root.
+func underRoot(root, path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(root, path)
 }

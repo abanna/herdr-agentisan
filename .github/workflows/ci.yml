@@ -29,8 +29,11 @@ jobs:
       - run: go tool golangci-lint fmt --diff ./...
       - run: go vet ./...
 
-  test:
-    name: test
+  # The unit suite runs as five jobs, each on a runner of its own (NERD-5676);
+  # `devctl test-packages` names each job's packages, so a new package needs
+  # no edit here. `test` merges their coverage profiles and enforces the floor.
+  test-dashboard:
+    name: test (dashboard)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -38,7 +41,97 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - run: go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage.out -covermode=atomic ./...
+      - run: go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage-dashboard.out -covermode=atomic $(go run ./cmd/devctl test-packages dashboard)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-dashboard
+          path: coverage-dashboard.out
+          if-no-files-found: error
+
+  test-store:
+    name: test (store)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage-store.out -covermode=atomic $(go run ./cmd/devctl test-packages store)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-store
+          path: coverage-store.out
+          if-no-files-found: error
+
+  test-daemon:
+    name: test (daemon)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage-daemon.out -covermode=atomic $(go run ./cmd/devctl test-packages daemon)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-daemon
+          path: coverage-daemon.out
+          if-no-files-found: error
+
+  test-workforce:
+    name: test (workforce)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage-workforce.out -covermode=atomic $(go run ./cmd/devctl test-packages workforce)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-workforce
+          path: coverage-workforce.out
+          if-no-files-found: error
+
+  test-rest:
+    name: test (rest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - run: go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage-rest.out -covermode=atomic $(go run ./cmd/devctl test-packages rest)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-rest
+          path: coverage-rest.out
+          if-no-files-found: error
+
+  test:
+    name: test
+    # Runs unless cancelled, so a failed test job fails this check, not skips it.
+    needs: [test-dashboard, test-store, test-daemon, test-workforce, test-rest]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: fail unless every test job passed
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
+        run: exit 1
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+      - run: go run ./cmd/devctl coverage-merge --out coverage.out
       - run: go run ./cmd/devctl coverage --profile coverage.out --min 75
 
   security:

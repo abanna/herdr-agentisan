@@ -29,7 +29,12 @@ everything.
 | Lint | `go tool golangci-lint run --allow-serial-runners ./...` |
 | Format check | `go tool golangci-lint fmt --diff ./...` |
 | Vet | `go vet ./...` |
-| Run tests with a coverage profile | `go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage.out -covermode=atomic ./...` |
+| Run the dashboard's tests with a coverage profile | `go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage-dashboard.out -covermode=atomic $(go run ./cmd/devctl test-packages dashboard)` |
+| Run the store's tests with a coverage profile | `go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage-store.out -covermode=atomic $(go run ./cmd/devctl test-packages store)` |
+| Run the daemon's tests with a coverage profile | `go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage-daemon.out -covermode=atomic $(go run ./cmd/devctl test-packages daemon)` |
+| Run the workforce's tests with a coverage profile | `go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage-workforce.out -covermode=atomic $(go run ./cmd/devctl test-packages workforce)` |
+| Run every other package's tests with a coverage profile | `go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage-rest.out -covermode=atomic $(go run ./cmd/devctl test-packages rest)` |
+| Merge the test jobs' coverage profiles | `go run ./cmd/devctl coverage-merge --out coverage.out` |
 | Enforce the coverage floor | `go run ./cmd/devctl coverage --profile coverage.out --min 75` |
 | Static security scan | `go tool gosec -quiet ./...` |
 | Secret scan (git history) | `go run github.com/zricethezav/gitleaks/v8@v8.30.1 git . --config .gitleaks.toml --no-banner --redact` |
@@ -423,7 +428,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   `testdata/` (`go test ./internal/dashboard/ -update`, then read every one).
 - `internal/devctl/` — the `devctl` cobra tree: the coverage floor, the
   docs-parity check and the large-file ceiling, none of which the Go toolchain
-  provides.
+  provides, and CI's five test jobs (NERD-5676): which packages each tests
+  (`test-packages`, `shards.go`: dashboard, store, daemon, workforce, then
+  every other package, so a new one needs no edit) and the merge of their
+  coverage profiles, one mode line for the floor (`coverage-merge`).
 - `internal/preflight/` — the D12 spawn precondition (ADR-001 I8, A10, A34):
   in a repo with a `go.mod`, `tdaddy` must run from the daemon's PATH and the
   Taskfile must have `tdaddy:index` and `tdaddy:impact`; each failure is a
