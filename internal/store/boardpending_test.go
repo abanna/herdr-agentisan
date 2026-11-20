@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"maps"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 
@@ -281,11 +282,21 @@ func TestBoardPendingHasNoProductionCaller(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, filepath.Join("..", "..", own), nil, parser.SkipObjectResolution)
 	require.NoError(t, err)
-	defined, selectors := false, []string{}
+	queries := []string{"pendingPosts", "pendingHeld"}
+	var method *ast.FuncDecl
+	selectors, declared := []string{}, map[*ast.Ident]bool{}
 	ast.Inspect(f, func(n ast.Node) bool {
 		switch n := n.(type) {
 		case *ast.FuncDecl:
-			defined = defined || (n.Recv != nil && n.Name.Name == "BoardPending")
+			if n.Recv != nil && n.Name.Name == "BoardPending" {
+				method = n
+			}
+		case *ast.ValueSpec:
+			for _, id := range n.Names {
+				if slices.Contains(queries, id.Name) {
+					declared[id] = true
+				}
+			}
 		case *ast.SelectorExpr:
 			if n.Sel.Name == "BoardPending" {
 				selectors = append(selectors, fset.Position(n.Sel.Pos()).String())
@@ -293,8 +304,22 @@ func TestBoardPendingHasNoProductionCaller(t *testing.T) {
 		}
 		return true
 	})
-	assert.True(t, defined, "the scan finds the method's definition in %s", own)
+	require.NotNil(t, method, "the scan finds the method's definition in %s", own)
 	assert.Empty(t, selectors, "BoardPending is dormant in its own file too: only its definition is exempt (ef44f246)")
+	// Its queries run only inside it: a use of either outside its body and
+	// their declarations is a caller under another name (71cf5dd9).
+	queryUses := []string{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		if id, ok := n.(*ast.Ident); ok && slices.Contains(queries, id.Name) && !declared[id] && (id.Pos() < method.Body.Pos() || id.Pos() > method.Body.End()) {
+			queryUses = append(queryUses, fset.Position(id.Pos()).String())
+		}
+		return true
+	})
+	assert.Len(t, declared, len(queries), "the scan finds both queries' declarations in %s", own)
+	assert.Empty(t, queryUses, "BoardPending's queries run only inside it (71cf5dd9)")
+	others, _, _, _ := productionUses(t, filepath.Join("..", ".."), "internal/store", queries, nil)
+	delete(others, own)
+	assert.Empty(t, others, "no other file of the store uses BoardPending's queries (71cf5dd9)")
 }
 
 // TestBoardPendingNewestCeilingPostIsThePostsAlone (NERD-5533 053091ce, the
