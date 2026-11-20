@@ -51,12 +51,16 @@ WHERE id = ?1 AND state = 'queued' RETURNING ` + messageColumns
 // PostQueued posts the oldest MaxQueuePost messages queued for the boss `to`
 // on project's board, oldest first, instead of typing it (ADR-001 A74), in
 // one transaction, and says in More whether more remain for a later call.
-// It stops early, committing what it has posted, once half its deadline
-// has passed, and says More; the first row always goes. The deadline bounds
-// only the wait for the store's connection: once the call holds it, no
-// statement or commit is cut. Each row posted is marked delivered in it; a body over MaxBody is posted
-// in parts, "(part i of n) " before each. A row the board refuses is failed
-// on its own, with an undelivered post from the daemon in its place. A message dispatching is the dispatcher's and is left alone.
+// It stops early, committing what it has posted, once half its deadline has
+// passed, and says More; with no deadline, the cap alone bounds it. The
+// deadline bounds only the wait for the store's connection; another
+// process's write lock is waited out for up to busy_timeout, and no
+// statement or commit is cut. Once the call holds the connection, the first
+// row always goes; a deadline already past on entry posts nothing (take the
+// connection). Each row posted is marked delivered in it; a body over
+// MaxBody is posted in parts, "(part i of n) " before each. A row the board
+// refuses is failed on its own, with an undelivered post from the daemon in
+// its place. A message dispatching is the dispatcher's and is left alone.
 // Any statement that fails rolls the whole call back (ErrStore), every row
 // still queued. Every waiter on BoardChanged is woken once the posts are
 // committed, and only when there are some.
@@ -94,13 +98,13 @@ func (s *Store) postQueued(ctx context.Context, to Address, project string, ns i
 	defer conn.Close() //nolint:errcheck // returns the connection; the transaction is done by then
 	deadline, timed := ctx.Deadline()
 	stop := start.Add(deadline.Sub(start) / 2)
-	ctx = context.WithoutCancel(ctx) // no statement or commit is cut once the call holds the connection
-	tx, err := conn.BeginTx(ctx, nil)
+	run := context.WithoutCancel(ctx) // no statement or commit is cut once the call holds the connection
+	tx, err := conn.BeginTx(run, nil)
 	if err != nil {
 		return PostedQueue{}, fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // a no-op once committed
-	rows, err := tx.QueryContext(ctx, selectBossQueue, to.ID, MaxQueuePost+1)
+	rows, err := tx.QueryContext(run, selectBossQueue, to.ID, MaxQueuePost+1)
 	if err != nil {
 		return PostedQueue{}, fmt.Errorf("select: %w", err)
 	}
@@ -117,7 +121,7 @@ func (s *Store) postQueued(ctx context.Context, to Address, project string, ns i
 			out.More = true // half the budget has gone: commit what is posted
 			break
 		}
-		if err := postRow(ctx, tx, m, project, ns, &out); err != nil {
+		if err := postRow(run, tx, m, project, ns, &out); err != nil {
 			return PostedQueue{}, err
 		}
 	}

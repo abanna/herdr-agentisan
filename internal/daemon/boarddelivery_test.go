@@ -681,8 +681,8 @@ func TestBoardQueueDrainsInBackToBackPasses(t *testing.T) {
 // and wakes the dispatcher while rows remain (NERD-5533 a8611aa0, A). Each
 // post is made to take 1.5 times its share of the budget, so the 100 rows
 // of a full batch take 7.5 s against settleTimeout's 5 s, as a slow host
-// or -race under load makes them; half the budget then fits 33 rows, and
-// the batch drains in 4 passes.
+// or -race under load makes them. Half the budget fits at most 33 of them,
+// fewer under load, so the test asks only that each pass posts.
 func TestBoardQueueDrainsWhenABatchOutlastsItsBudget(t *testing.T) {
 	t.Parallel()
 	r := newBoardRig(t, []settings.Team{haTabs}, boardOn("ha"), nil)
@@ -690,19 +690,17 @@ func TestBoardQueueDrainsWhenABatchOutlastsItsBudget(t *testing.T) {
 	for i := range ms {
 		ms[i] = sent(t, r.st, haBoss, coder, fmt.Sprintf("m%d", i))
 	}
-	per := 3 * store.BusyTimeout / (2 * store.MaxQueuePost)
-	daemon.SlowBoardInserts(t, r.db, per)
-	fit := int(store.BusyTimeout / 2 / per) // rows a pass posts
-	passes := (len(ms) + fit - 1) / fit
+	daemon.SlowBoardInserts(t, r.db, 3*store.BusyTimeout/(2*store.MaxQueuePost))
 	r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
 	r.p.TakeWake() // each poll leaves one
-	posted := 0
-	for i := 1; i <= passes && posted < len(ms); i++ {
+	posted, passes := 0, 0
+	for posted < len(ms) {
 		r.p.Pass()
+		passes++
 		now := boardCount(t, r.db)
-		require.Greater(t, now, posted, "pass %d posts at least one row", i)
+		require.Greater(t, now, posted, "pass %d posts at least one row", passes)
 		posted = now
-		assert.Equal(t, posted < len(ms), r.p.TakeWake(), "woken after pass %d, %d of %d posted", i, posted, len(ms))
+		assert.Equal(t, posted < len(ms), r.p.TakeWake(), "woken after pass %d, %d of %d posted", passes, posted, len(ms))
 	}
 	ids := query(t, r.db, "SELECT id FROM board_posts WHERE project = 'ha' ORDER BY seq")
 	require.Len(t, ids, len(ms), "posted after %d passes", passes)
