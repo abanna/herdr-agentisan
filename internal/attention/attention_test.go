@@ -859,8 +859,9 @@ func TestHeldCeilingStartsTheEpisodeFirstSeenLate(t *testing.T) {
 // TestDrainedCeilingKeepsItsBound (#184's S1): a held row from 0 gets a
 // ceiling appended at 16 and is posted at 17 with its created_at, so the
 // state's NewestCeiling steps back to 0. The episode keeps the newest
-// ceiling since the last reaction, so the bound still alerts at 18; read
-// instead, the ceiling bounds nothing.
+// ceiling since the last reaction, so the bound still alerts at 18, and
+// an alert there not shown is retried flat (rule 6); read instead, the
+// ceiling bounds nothing.
 func TestDrainedCeilingKeepsItsBound(t *testing.T) {
 	t.Parallel()
 	drain := func(d time.Duration) attention.State {
@@ -877,6 +878,8 @@ func TestDrainedCeilingKeepsItsBound(t *testing.T) {
 	}
 	got := run(defaults(), 30*m, m, drain, nil)
 	assert.Equal(t, mins(10, 15, 18), times(got), "drained at 17")
+	got = run(defaults(), 30*m, m, drain, func(d time.Duration) bool { return d != 18*m })
+	assert.Equal(t, mins(10, 15, 18, 23), times(got), "drained, the alert at 18 not shown: retried Every later")
 
 	read := func(d time.Duration) attention.State {
 		if d < 17*m {
