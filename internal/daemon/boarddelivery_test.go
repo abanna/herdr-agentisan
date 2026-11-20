@@ -1,6 +1,7 @@
 package daemon_test
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -555,6 +556,20 @@ func TestSpacesStayTyped(t *testing.T) {
 	assert.Zero(t, boardCount(t, paths(t, dir, th.fakeHerdr).DB))
 }
 
+// TestBoardPostIgnoresACancel: a post runs on its own budget, not on the
+// pass's context, as claim does (b92cbbbb): a stop that cancels the pass
+// does not keep a row from being posted (#183 pre-check 1c1ac52d, S1).
+func TestBoardPostIgnoresACancel(t *testing.T) {
+	t.Parallel()
+	r := newBoardRig(t, []settings.Team{haTabs}, boardOn("ha"), nil)
+	m := sent(t, r.st, haBoss, coder, "after the stop")
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	r.p.Post(ctx, haBoss, "ha")
+	assert.Equal(t, store.MessageDelivered, stateOf(t, r.st, m.ID).State)
+	assert.Equal(t, 1, boardCount(t, r.db))
+}
+
 // TestPostFailureTypesNothing is M4 and M-E: a post the board refuses
 // leaves the rows queued, never typed, and is warned of once; the next pass
 // after the board takes posts again posts them.
@@ -699,6 +714,9 @@ func TestBoardQueueDrainsWhenABatchOutlastsItsBudget(t *testing.T) {
 		passes++
 		now := boardCount(t, r.db)
 		require.Greater(t, now, posted, "pass %d posts at least one row", passes)
+		if passes == 1 {
+			require.Less(t, now, len(ms), "the first pass stops at half its budget, leaving rows queued")
+		}
 		posted = now
 		assert.Equal(t, posted < len(ms), r.p.TakeWake(), "woken after pass %d, %d of %d posted", passes, posted, len(ms))
 	}

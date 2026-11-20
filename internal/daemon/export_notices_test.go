@@ -77,6 +77,11 @@ func (p *Poller) Pass() {
 	p.d.pass(context.Background())
 }
 
+// Post posts to's queue on project's board as a pass does, on ctx.
+func (p *Poller) Post(ctx context.Context, to store.Address, project string) {
+	p.d.post(ctx, to, project)
+}
+
 // TakeWake empties the inbox's wake, as the dispatcher's loop takes it
 // before a pass, and reports whether it held one.
 func (p *Poller) TakeWake() bool {
