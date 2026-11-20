@@ -102,6 +102,9 @@ type fakePane struct {
 	kind                  string
 	fg                    bool
 	label                 string
+	// shell is the pid pane.process_info answers for the pane's shell; 0
+	// answers 100, every pane's shell unless a test tells them apart.
+	shell int
 }
 
 func newFake(t *testing.T) *fakeHerdr {
@@ -499,11 +502,12 @@ func (f *fakeHerdr) answer(r herdrtest.Request) herdrtest.Reply {
 		if pane == nil {
 			return errReply("pane_not_found")
 		}
-		fg := 100
+		shell := cmp.Or(pane.shell, 100)
+		fg := shell
 		if pane.fg {
 			fg = 200
 		}
-		return herdrtest.Reply{Result: map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": pane.id, "shell_pid": 100, "foreground_process_group_id": fg}}}
+		return herdrtest.Reply{Result: map[string]any{"type": "pane_process_info", "process_info": map[string]any{"pane_id": pane.id, "shell_pid": shell, "foreground_process_group_id": fg}}}
 	case "pane.wait_for_output":
 		id := str("pane_id")
 		f.waits[id]++
@@ -605,6 +609,8 @@ func newFixture(t *testing.T, config string) *fixture {
 		LookupEnv: func(string) (string, bool) { return "", false },
 		Idle:      &team.IdleClock{},
 		Preflight: func(context.Context, string) error { return nil },
+		// Every shell started at tick 1, as shellWorker's rows record it.
+		StartTime: func(int) (uint64, error) { return 1, nil },
 		ReadyPoll: time.Millisecond, BusyWindow: 2 * time.Second, HandoffPoll: time.Millisecond,
 	}
 	return f
