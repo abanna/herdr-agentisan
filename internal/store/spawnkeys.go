@@ -3,9 +3,11 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
@@ -14,8 +16,9 @@ import (
 // worker spawn's retry keys (ADR-001 D11 and its retry-key amendment, A73;
 // NERD-5254): spawn_requests records the request a key was first used for,
 // and spawn_request_workers the ids it planned and, once each is bound, the
-// generation it was bound at. Dormant: nothing in production reads or writes
-// them yet. Their migration is one-way, as every migration is.
+// generation it was bound at. Nothing in production reads or writes them
+// yet but the daemon's daily prune. Their migration is one-way, as every
+// migration is.
 
 // SpawnKeyRetention is how long a retry key is kept, from its first use.
 const SpawnKeyRetention = 14 * 24 * time.Hour
@@ -34,7 +37,7 @@ var (
 	// ErrSpawnKeyExists means a record already has the retry key.
 	ErrSpawnKeyExists = errors.New("a spawn record already has that retry key")
 	// ErrSpawnKeyChanged means a record is no longer as a write expects: it
-	// is done, or its planned id is already bound. Nothing returns it yet.
+	// is done, or its planned id is already bound.
 	ErrSpawnKeyChanged = errors.New("the spawn record changed since it was read")
 )
 
@@ -324,4 +327,207 @@ func (s *Store) DropSpawn(ctx context.Context, key string) (bool, error) {
 		return false, spawnFailed("drop a spawn record", err)
 	}
 	return n == 1, nil
+}
+
+// The bounds the schema holds an answer to: the result's JSON and the
+// refusal's message, in bytes, and the code's length.
+const (
+	maxSpawnAnswer  = 64 << 10
+	maxSpawnMessage = 16 << 10
+	maxSpawnCode    = 32
+)
+
+const (
+	// selectSpawnBind is a bind's view of key's record: its state, and
+	// whether id is planned under it and already bound. No row means no
+	// record.
+	selectSpawnBind = `SELECT r.state, l.logical_id IS NOT NULL, coalesce(l.bound_id IS NOT NULL, 0)
+FROM spawn_requests r LEFT JOIN spawn_request_workers l ON l.retry_key = r.retry_key AND l.logical_id = ?2
+WHERE r.retry_key = ?1`
+	// linkSpawned links key's planned id to the generation it was just
+	// bound at, once.
+	linkSpawned = `UPDATE spawn_request_workers SET bound_id = ?2, generation = ?3
+WHERE retry_key = ?1 AND logical_id = ?2 AND bound_id IS NULL`
+	// finishSpawn stores a running record's answer, once, finished no
+	// earlier than it began: a clock stepped back must not fail the CHECK
+	// and leave it running (P3).
+	finishSpawn = `UPDATE spawn_requests SET state = 'done', outcome = ?2, message = ?3, answer = ?4, finished_at = max(?5, created_at)
+WHERE retry_key = ?1 AND state = 'running'`
+	selectSpawnState = `SELECT state FROM spawn_requests WHERE retry_key = ?`
+	// pruneSpawnKeys deletes the records created before the cutoff, with
+	// their planned rows (ON DELETE CASCADE), but a running one with a bound
+	// row still starting at its linked generation: forgotten, its key would
+	// run afresh beside that worker.
+	pruneSpawnKeys = `DELETE FROM spawn_requests WHERE created_at < ?1
+AND NOT (state = 'running' AND EXISTS (SELECT 1 FROM spawn_request_workers l JOIN workers w ON w.logical_id = l.bound_id
+	WHERE l.retry_key = spawn_requests.retry_key AND w.generation = l.generation AND w.status = 'starting' AND w.retired_at IS NULL))`
+)
+
+// BindSpawned binds w as BindWorker does and links it to the id key's
+// request planned for it, as of at, in one transaction: a keyed row never
+// exists without its link, nor a link without its row. A key no record has
+// is ErrNoSpawnKey; a done record, or an id already bound under the key,
+// ErrSpawnKeyChanged; an id the key did not plan, ErrInvalid; a live id,
+// ErrWorkerLive. Any of them changes nothing.
+func (s *Store) BindSpawned(ctx context.Context, w Worker, key string, at time.Time) (int64, error) {
+	if err := checkRetryKey(key); err != nil {
+		return 0, err
+	}
+	ns, err := nanos(at)
+	if err != nil {
+		return 0, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, spawnFailed("bind a spawned worker", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op once committed
+	var (
+		state          string
+		planned, bound bool
+	)
+	err = tx.QueryRowContext(ctx, selectSpawnBind, key, w.LogicalID).Scan(&state, &planned, &bound)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, fmt.Errorf("%w: bind a spawned worker", ErrNoSpawnKey)
+	case err != nil:
+		return 0, spawnFailed("bind a spawned worker", err)
+	case state != "running":
+		return 0, fmt.Errorf("%w: bind a spawned worker: the request is answered", ErrSpawnKeyChanged)
+	case !planned:
+		return 0, fmt.Errorf("%w: bind a spawned worker: an id the request did not plan", ErrInvalid)
+	case bound:
+		return 0, fmt.Errorf("%w: bind a spawned worker: its id is bound under the key", ErrSpawnKeyChanged)
+	}
+	gen, err := bindTx(ctx, tx, w, ns)
+	if err != nil {
+		return 0, err
+	}
+	res, err := tx.ExecContext(ctx, linkSpawned, key, w.LogicalID, gen)
+	if err != nil {
+		return 0, spawnFailed("link a spawned worker", err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n != 1 {
+		return 0, fmt.Errorf("%w: link a spawned worker", ErrSpawnKeyChanged)
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, spawnFailed("bind a spawned worker", err)
+	}
+	return gen, nil
+}
+
+// FinishSpawn stores a's answer in key's running record, done as of at, or
+// as of when it began if at is earlier, once. a is Code "ok" with Result
+// the SpawnResult as JSON in UTF-8, or a refusal's Code, from 1 to 32 of
+// a-z and _,
+// and its Message, which is cut to 16 KiB at a rune boundary; anything else
+// is ErrInvalid, and a Result over 64 KiB ErrTooLarge. A record already
+// done is ErrSpawnKeyChanged, its first answer kept; a key no record has,
+// ErrNoSpawnKey.
+func (s *Store) FinishSpawn(ctx context.Context, key string, a SpawnAnswer, at time.Time) error {
+	if err := checkRetryKey(key); err != nil {
+		return err
+	}
+	message, answer, err := spawnAnswerArgs(a)
+	if err != nil {
+		return err
+	}
+	ns, err := nanos(at)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return spawnFailed("finish a spawn", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // a no-op once committed
+	res, err := tx.ExecContext(ctx, finishSpawn, key, a.Code, message, answer, ns)
+	if err != nil {
+		return spawnFailed("finish a spawn", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return spawnFailed("finish a spawn", err)
+	}
+	if n == 0 {
+		// The same transaction tells a record answered already from one
+		// that is gone, which a settle handles apart (S3).
+		var state string
+		err := tx.QueryRowContext(ctx, selectSpawnState, key).Scan(&state)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("%w: finish a spawn", ErrNoSpawnKey)
+		}
+		if err != nil {
+			return spawnFailed("finish a spawn", err)
+		}
+		return fmt.Errorf("%w: finish a spawn: the request is answered", ErrSpawnKeyChanged)
+	}
+	if err := tx.Commit(); err != nil {
+		return spawnFailed("finish a spawn", err)
+	}
+	return nil
+}
+
+// spawnAnswerArgs are finishSpawn's message and answer for a: NULL for
+// none, the result bound as text (the column is STRICT TEXT), and the
+// message cut to the schema's bound at a rune boundary.
+func spawnAnswerArgs(a SpawnAnswer) (message, answer any, err error) {
+	if a.Code == "" || len(a.Code) > maxSpawnCode || !snakeLetters(a.Code) {
+		return nil, nil, fmt.Errorf("%w: a spawn answer's code is 1 to %d of a-z and _", ErrInvalid, maxSpawnCode)
+	}
+	if a.Code != "ok" {
+		if a.Message == "" || a.Result != nil {
+			return nil, nil, fmt.Errorf("%w: a spawn refusal has a message and no result", ErrInvalid)
+		}
+		return cutAtRune(a.Message, maxSpawnMessage), nil, nil
+	}
+	if a.Message != "" || !utf8.Valid(a.Result) || !json.Valid(a.Result) {
+		return nil, nil, fmt.Errorf("%w: an ok spawn answer has a JSON result and no message", ErrInvalid)
+	}
+	if len(a.Result) > maxSpawnAnswer {
+		return nil, nil, fmt.Errorf("%w: a spawn answer over %d bytes", ErrTooLarge, maxSpawnAnswer)
+	}
+	return nil, string(a.Result), nil
+}
+
+// snakeLetters reports whether every byte of s is a-z or _.
+func snakeLetters(s string) bool {
+	for i := range len(s) {
+		if c := s[i]; c != '_' && (c < 'a' || c > 'z') {
+			return false
+		}
+	}
+	return true
+}
+
+// cutAtRune is s cut to at most n bytes, never inside a UTF-8 sequence.
+func cutAtRune(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	i := n
+	for i > n-utf8.UTFMax && i > 0 && !utf8.RuneStart(s[i]) {
+		i--
+	}
+	return s[:i]
+}
+
+// PruneSpawnKeys deletes the records created more than SpawnKeyRetention
+// before now, running or done, with their planned ids, but a running one
+// with a bound row still starting at its linked generation, and returns
+// how many it deleted. The workers rows stay.
+func (s *Store) PruneSpawnKeys(ctx context.Context, now time.Time) (int64, error) {
+	cutoff, err := nanos(now.Add(-SpawnKeyRetention))
+	if err != nil {
+		return 0, err
+	}
+	res, err := s.db.ExecContext(ctx, pruneSpawnKeys, cutoff)
+	if err != nil {
+		return 0, spawnFailed("prune spawn records", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, spawnFailed("prune spawn records", err)
+	}
+	return n, nil
 }
