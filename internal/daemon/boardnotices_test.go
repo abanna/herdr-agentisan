@@ -1,6 +1,7 @@
 package daemon_test
 
 import (
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -147,8 +148,8 @@ func TestHeldNoticesArePostedBeforeNewerOnes(t *testing.T) {
 
 // TestQueuePostFailureKeepsTheFlushBehindIt is M-C's failure branch: when
 // the boss's queue cannot be posted, the flush is not posted ahead of it;
-// it goes to the inbox behind the queue, and a later pass posts them all,
-// in order.
+// it is a new inbox row behind the held one, which is unchanged, and a
+// later pass posts the held row, then the flush, as two notices posts.
 func TestQueuePostFailureKeepsTheFlushBehindIt(t *testing.T) {
 	t.Parallel()
 	cfgs := boardOn("ha")
@@ -160,18 +161,77 @@ func TestQueuePostFailureKeepsTheFlushBehindIt(t *testing.T) {
 
 	r.poll(haModel(bossPane("ha-boss", "claude")))
 	assert.Zero(t, boardCount(t, r.db), "no post at all")
-	assert.Equal(t, []string{"[agentisan] notices:\nha-coder-1 is blocked\nha-coder-1 is no longer blocked"},
-		queuedNotices(t, r.db, "ha-boss"), "the flush is in the inbox, behind the queue")
+	assert.Equal(t, []string{"[agentisan] notices:\nha-coder-1 is blocked", "[agentisan] notices:\nha-coder-1 is no longer blocked"},
+		queuedNotices(t, r.db, "ha-boss"), "the flush is a new inbox row behind the held one, which is unchanged")
 	assert.Equal(t, 1, warnings(r.logs.String(), notPostedMsg))
 
 	drop()
 	r.p.Pass()
 	posts := r.posts(t, "ha")
-	require.Len(t, posts, 1)
-	assert.Equal(t, "notices", posts[0].Kind)
-	assert.Equal(t, "ha-coder-1 is blocked\nha-coder-1 is no longer blocked", posts[0].Body, "in order")
+	assert.Equal(t, []string{"notices", "notices"}, kinds(posts))
+	assert.Equal(t, []string{"ha-coder-1 is blocked", "ha-coder-1 is no longer blocked"}, postBodies(posts), "in order")
 	assert.Empty(t, queuedNotices(t, r.db, "ha-boss"))
 	assert.Empty(t, r.pr.all(), "nothing typed")
+}
+
+// TestFlushDuringADrainQueuesItsNoticeLast (PR 2's part of the PostQueued
+// cap, c9c5680f, with its erratum f59d7807): a flush for a board-mode boss
+// whose queue post leaves rows queued is not posted ahead of them. Its
+// notice is a new inbox row behind every held one, the older notice row
+// unchanged, and once the dispatcher has drained the queue the board holds
+// every held row in order, then the notice.
+//   - "text" is c9c5680f's set-up: MaxQueuePost+1 rows, the older notice
+//     row first. It shows only PR 2 as built red (the notice posted ahead
+//     of row 101): the flush's own queue post delivers the older notice
+//     row, so a Tail ignored still makes a new row.
+//   - "erratum": MaxQueuePost worker rows, the older notice row, then one
+//     more worker row. A Tail ignored is red too: A44's append puts the
+//     flush's lines into row 101, ahead of worker row 102.
+func TestFlushDuringADrainQueuesItsNoticeLast(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct{ before, after int }{
+		"text":    {0, store.MaxQueuePost},
+		"erratum": {store.MaxQueuePost, 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cfgs := boardOn("ha")
+			b := notice.NewBatcher(cfgs)
+			r := newBoardRig(t, []settings.Team{haTabs}, cfgs, b)
+			var held []string // every held row's id, in seq order
+			send := func(n int) {
+				for range n {
+					held = append(held, sent(t, r.st, haBoss, coder, fmt.Sprintf("m%d", len(held))).ID)
+				}
+			}
+			send(c.before)
+			batch(b, nil, blocked("ha", "ha-coder-1"))
+			r.p.EndPoll(haModel()) // no boss place: held, so the notice is an inbox row
+			older := query(t, r.db, "SELECT id FROM messages WHERE sender_kind = 'daemon'")
+			require.Len(t, older, 1, "the older notice row")
+			held = append(held, older[0])
+			send(c.after)
+
+			batch(b, nil, unblocked("ha", "ha-coder-1"))
+			r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
+			assert.Equal(t, store.MaxQueuePost, boardCount(t, r.db), "the queue's first batch, and not the notice")
+			queued := query(t, r.db, "SELECT id FROM messages WHERE recipient = 'ha-boss' AND state = 'queued' ORDER BY seq")
+			require.NotEmpty(t, queued)
+			last := queued[len(queued)-1]
+			assert.Equal(t, held[store.MaxQueuePost:], queued[:len(queued)-1], "the held rows the batch left, then the notice's row")
+			assert.Equal(t, []string{"[agentisan] notices:\nha-coder-1 is no longer blocked"},
+				query(t, r.db, "SELECT body FROM messages WHERE id = '"+last+"'"), "a new row")
+			assert.Equal(t, []string{"[agentisan] notices:\nha-coder-1 is blocked"},
+				query(t, r.db, "SELECT body FROM messages WHERE id = '"+older[0]+"'"), "the older notice row unchanged")
+
+			for i := 0; r.p.TakeWake() && i < 5; i++ {
+				r.p.Pass()
+			}
+			assert.Equal(t, append(held, last), query(t, r.db, "SELECT id FROM board_posts WHERE project = 'ha' ORDER BY seq"),
+				"every held row in order, then the notice")
+			assert.Empty(t, r.pr.all(), "nothing typed")
+		})
+	}
 }
 
 // TestBoardModeCodexBossIsTyped: on a team whose key is board, a boss

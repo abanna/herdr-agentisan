@@ -45,6 +45,18 @@ func TestAppendToAQueuedNotice(t *testing.T) {
 		"a header with no lines")
 }
 
+// TestAppendToATailMessageStartsANewOne (the PostQueued cap, c9c5680f): a
+// Tail message is never appended to a notice still queued, so the caller
+// queues it as a new row; with nothing queued it is the new body.
+func TestAppendToATailMessageStartsANewOne(t *testing.T) {
+	t.Parallel()
+	m := notice.Message{Project: "ha", Lines: []string{"c1 is blocked"}, Tail: true}
+	body, ok := m.AppendTo(appended(t, "", notice.Message{Lines: []string{"a"}}))
+	assert.False(t, ok, "never appended to a queued notice")
+	assert.Empty(t, body)
+	assert.Equal(t, "[agentisan] notices:\nc1 is blocked", appended(t, "", m), "with nothing queued, the new body")
+}
+
 // TestAppendToRefusesAnotherBody: a queued body AppendTo did not write is
 // not appended to, so the caller queues a new notice.
 func TestAppendToRefusesAnotherBody(t *testing.T) {

@@ -24,7 +24,10 @@ type Message struct {
 	Lines   []string
 	// Dropped counts the oldest notices cut to keep the body under MaxBody.
 	Dropped int
-	acks    []func()
+	// Tail queues this message as a new inbox row, never appended to one
+	// still queued.
+	Tail bool
+	acks []func()
 	// all is every notice of the flush, oldest first, the cut ones
 	// included, for the board (A74).
 	all []Notice

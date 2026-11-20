@@ -156,8 +156,12 @@ func (o Options) flushNotices(ctx context.Context, n *notices, in *inbox) {
 	n.batch.Add(o.Now(), n.github.take())
 	_, bosses := in.view()
 	for _, m := range n.batch.Flush(o.Now()) {
-		if o.postNotices(ctx, n, in, bosses, m) {
+		posted, tail := o.postNotices(ctx, n, in, bosses, m)
+		if posted {
 			continue
+		}
+		if tail {
+			m.Tail = true
 		}
 		if err := n.sink.Send(ctx, m); err != nil {
 			o.Logger.Warn().Err(err).Str("project", m.Project).Msg("notice not delivered")
@@ -213,29 +217,35 @@ func (s inboxSink) Send(ctx context.Context, m notice.Message) error {
 
 // postNotices posts m on its team's board when its boss is a board-mode
 // boss (A74): the boss's queue first, so a held notice or message is never
-// posted after a newer one, then m, one post per notice, every notice
-// acknowledged. It reports whether it did. A typed or held boss, a boss
-// name two teams share, a project with no boss, and a queue or a flush the
-// board refuses each leave m to the inbox, behind the queue, which a later
-// pass posts.
-func (o Options) postNotices(ctx context.Context, n *notices, in *inbox, bosses map[string]string, m notice.Message) bool {
+// posted after a newer one, then, when that call left nothing queued, m,
+// one post per notice, every notice acknowledged. It reports whether it
+// did, and whether m goes to the inbox as a tail: a board-mode boss whose
+// queue could not be emptied gets m as a new inbox row behind every held
+// one; the others' m (a typed or held boss, a boss name two teams share, a
+// project with no boss, a flush the board refuses) goes to the inbox by
+// A44's append.
+func (o Options) postNotices(ctx context.Context, n *notices, in *inbox, bosses map[string]string, m notice.Message) (posted, tail bool) {
 	boss, ok := bosses[m.Project]
 	if !ok {
-		return false
+		return false, false
 	}
 	if p, one := bossProject(bosses, boss); !one || p != m.Project || in.delivery(m.Project) != notice.DeliverBoard {
-		return false
+		return false, false
 	}
-	if _, err := o.postQueue(ctx, n.board.st, store.Address{Kind: store.KindBoss, ID: boss}, m.Project); err != nil {
+	out, err := o.postQueue(ctx, n.board.st, store.Address{Kind: store.KindBoss, ID: boss}, m.Project)
+	if err != nil {
 		o.Logger.Warn().Err(err).Str("project", m.Project).Msg("notice not posted; it goes to the inbox")
-		return false
+		return false, true
+	}
+	if out.More {
+		return false, true
 	}
 	if err := n.board.Send(ctx, boss, m); err != nil {
 		o.Logger.Warn().Err(err).Str("project", m.Project).Msg("notice not posted; it goes to the inbox")
-		return false
+		return false, false
 	}
 	m.SettleAll()
-	return true
+	return true, false
 }
 
 // boardSink posts a board-mode team's notices on its board (A74): one
