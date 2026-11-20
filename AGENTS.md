@@ -357,10 +357,12 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   which `BeginSpawn` writes, `SpawnRecord` reads with each planned id's row
   now and its briefs, and `DropSpawn` drops while nothing is bound;
   `BindSpawned` binds a worker and its link in one transaction, through
-  `BindWorker`'s own `bindTx`, `FinishSpawn` stores the answer once, and
-  `PruneSpawnKeys` is the daemon's daily prune of them. Dormant until
-  `worker spawn` takes a key: `TestSpawnKeysHaveNoProductionCaller` fails on
-  any use outside it but the daemon's prune line.
+  `BindWorker`'s own `checkWorker` and `bindTx`, with errors that repeat no
+  value of the worker, `FinishSpawn` stores the answer once, and
+  `PruneSpawnKeys` is the daemon's prune of them, at its start and daily.
+  Dormant until `worker spawn` takes a key:
+  `TestSpawnKeysHaveNoProductionCaller` fails on any use outside it but the
+  daemon's one prune line, in `Options.prune`.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real

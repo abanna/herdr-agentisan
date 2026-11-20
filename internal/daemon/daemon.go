@@ -47,8 +47,8 @@ const (
 	DefaultStopWait = 10 * time.Second
 	// PruneInterval is how often, by Options.Now, the daemon prunes finished
 	// handoffs and messages past retention (A1), the GitHub notices' rows
-	// past theirs (A45), and the board's posts past theirs (A60). It also
-	// prunes once when it starts.
+	// past theirs (A45), the board's posts past theirs (A60) and the spawn
+	// retry keys past theirs (A73). It also prunes once when it starts.
 	PruneInterval = 24 * time.Hour
 )
 
@@ -379,8 +379,9 @@ func (o Options) health(ctx context.Context, st *store.Store, base HealthInfo) f
 }
 
 // prune deletes the finished handoffs and messages past retention (A1), the
-// GitHub notices' rows past theirs (A45) and the spawn retry keys past
-// theirs (A73), and returns when the next prune is due. A failure is logged
+// GitHub notices' rows past theirs (A45), the board's posts past theirs
+// (A60) and the spawn retry keys past theirs (A73), and returns when the next
+// prune is due. A failure is logged
 // and retried at the next one.
 func (o Options) prune(ctx context.Context, st *store.Store) time.Time {
 	now := o.Now()

@@ -243,6 +243,9 @@ WHERE logical_id = ?1 AND state = 'pending'`
 // ErrWorkerLive means the id is bound, not retired and not lost, or is
 // another project's, and then nothing changes.
 func (s *Store) BindWorker(ctx context.Context, w Worker, at time.Time) (int64, error) {
+	if err := checkWorker(w); err != nil {
+		return 0, err
+	}
 	ns, err := nanos(at)
 	if err != nil {
 		return 0, err
@@ -262,15 +265,19 @@ func (s *Store) BindWorker(ctx context.Context, w Worker, at time.Time) (int64, 
 	return gen, nil
 }
 
-// bindTx is BindWorker's bind of w through tx, as of ns, which BindSpawned
-// shares, so the checks and the arguments around the SQL cannot drift
-// apart: the ids and the provider checked, the row upserted with its
-// routing, and the handoffs an earlier generation left pending failed. It
-// returns the row's generation.
+// checkWorker refuses a worker no bind can record, ErrInvalid: its ids and
+// its provider. BindWorker and BindSpawned check it first, before the time
+// and the connection.
+func checkWorker(w Worker) error {
+	return errors.Join(checkID(KindWorker, w.LogicalID), checkID(KindPane, w.PaneID), checkTerminal(w.TerminalID), checkProvider(w.Provider))
+}
+
+// bindTx is BindWorker's bind of w, which checkWorker passed, through tx,
+// as of ns, which BindSpawned shares, so the arguments around the SQL
+// cannot drift apart: the row upserted with its routing, and the handoffs
+// an earlier generation left pending failed. It returns the row's
+// generation.
 func bindTx(ctx context.Context, tx *sql.Tx, w Worker, ns int64) (int64, error) {
-	if err := errors.Join(checkID(KindWorker, w.LogicalID), checkID(KindPane, w.PaneID), checkTerminal(w.TerminalID), checkProvider(w.Provider)); err != nil {
-		return 0, err
-	}
 	routed, err := routingArgs(w.Routing)
 	if err != nil {
 		return 0, err

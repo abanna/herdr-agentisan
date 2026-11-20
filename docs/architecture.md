@@ -317,8 +317,8 @@ pins an id and its generation, so an answer can tell a worker retired since
 from one whose id was bound again; a column on `workers` could not, since a
 reused id rebinds its row.
 
-Nothing but the daemon's daily prune reads or writes them until a keyed
-`worker spawn` reaches them (A73: the socket refuses a key until part F).
+Nothing but the daemon's prune, at its start and daily, reads or writes
+them until a keyed `worker spawn` reaches them (A73: the socket refuses a key until part F).
 `BeginSpawn` writes a record and its planned ids
 in one transaction, and the insert itself refuses a known key
 (`ErrSpawnKeyExists`), never a read before it, so no replace can pass
@@ -326,14 +326,15 @@ unnoticed. `SpawnRecord` reads one with each planned id's `workers` row now,
 while still at its linked generation, and its briefs: the messages to it at
 that generation from a boss or a pane, in any state. `DropSpawn` deletes a
 running record none of whose ids is bound. `BindSpawned` binds a worker and
-links it to its planned id in one transaction, through the same `bindTx` as
-`BindWorker`, so the checks around the bind cannot drift apart.
+links it to its planned id in one transaction, through the same
+`checkWorker`, first, and `bindTx` as `BindWorker`, so the checks around the
+bind cannot drift apart; its errors repeat none of the worker's values.
 `FinishSpawn` stores the answer once, finished no earlier than the record
 began, and `PruneSpawnKeys` deletes records past 14 days but a running one
 whose bound row is still starting.
 `TestSpawnKeysHaveNoProductionCaller` fails on any use of their names in a
 non-test file of `internal/` or `cmd/` but `spawnkeys.go` and the daemon's
-prune line, on any string naming their tables outside it, and on any naming
+one prune line, in `Options.prune`, on any string naming their tables outside it, and on any naming
 one with REPLACE.
 
 The schema refuses on its own what a record must never hold, whoever writes
