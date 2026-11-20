@@ -53,6 +53,14 @@ func (m Message) AppendTo(queued string) (string, bool) {
 	return strings.Join(append([]string{inboxHeader(dropped)}, lines...), "\n"), true
 }
 
+// Kept is how many of m's lines, the newest, body holds: body is the one
+// AppendTo wrote for m, as the inbox committed it. AppendTo cuts from the
+// front and none of its lines holds a line break, so they are the last
+// min(len(m.Lines), the lines after the header) of m's (NERD-5533).
+func (m Message) Kept(body string) int {
+	return min(len(m.Lines), strings.Count(body, "\n"))
+}
+
 func inboxHeader(dropped int) string {
 	if dropped == 0 {
 		return "[agentisan] notices:"
