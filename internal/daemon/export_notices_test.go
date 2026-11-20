@@ -18,7 +18,17 @@ import (
 func InboxNotice(o Options, st *store.Store, bosses map[string]string, m notice.Message) error {
 	in := newInbox()
 	in.bosses = bosses
-	return inboxSink{st: st, in: in, log: o.Logger, events: o.Team.Events, now: o.Now}.Send(context.Background(), m)
+	_, err := inboxSink{st: st, in: in, log: o.Logger, events: o.Team.Events, now: o.Now}.Send(context.Background(), m)
+	return err
+}
+
+// FlushToInbox flushes b's waiting notices as the poll does, through its
+// inbox sink on st, with bosses, by project, as the poll gives them in
+// (A44), and settles what the sink kept.
+func FlushToInbox(o Options, st *store.Store, bosses map[string]string, b *notice.Batcher) {
+	in := newInbox()
+	in.bosses = bosses
+	o.flushNotices(context.Background(), &notices{batch: b, sink: inboxSink{st: st, in: in, log: o.Logger, events: o.Team.Events, now: o.Now}})
 }
 
 // EndPoll ends a poll as pollTeam does, with b's notices for s, and
@@ -104,7 +114,7 @@ type wakeSpy struct {
 	woken *[]bool
 }
 
-func (w wakeSpy) Send(ctx context.Context, m notice.Message) error {
+func (w wakeSpy) Send(ctx context.Context, m notice.Message) (int, error) {
 	*w.woken = append(*w.woken, len(w.in.wake) == 1)
 	return w.s.Send(ctx, m) //nolint:wrapcheck // a test's pass-through
 }

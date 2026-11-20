@@ -27,10 +27,11 @@ type Message struct {
 	// Tail queues this message as a new inbox row, never appended to one
 	// still queued.
 	Tail bool
+	// acks has one slot per batched notice, nil for a notice without an Ack.
+	// Cut notices form a prefix; the last len(Lines) slots align with Lines.
 	acks []func()
-	// all is every notice of the flush, oldest first, the cut ones
-	// included, for the board (A74).
-	all []Notice
+	// all keeps the board fields of every notice, including the cut prefix.
+	all []Entry
 }
 
 // Entry is one notice of a message as a board post carries it (A74).
@@ -44,13 +45,13 @@ type Entry struct {
 // size included. Each body is the notice's line as the inbox writes it, or
 // "(no text)" for an empty one.
 func (m Message) Entries() []Entry {
-	out := make([]Entry, 0, len(m.all))
-	for _, n := range m.all {
-		body := inboxLine(n.Text)
-		if body == "" {
-			body = "(no text)"
+	out := make([]Entry, len(m.all))
+	for i, e := range m.all {
+		e.Body = inboxLine(e.Body)
+		if e.Body == "" {
+			e.Body = "(no text)"
 		}
-		out = append(out, Entry{Kind: n.Kind, Subject: n.Subject, Worker: n.Worker, Body: body})
+		out[i] = e
 	}
 	return out
 }
@@ -58,11 +59,7 @@ func (m Message) Entries() []Entry {
 // SettleAll acknowledges every notice of m, the cut ones included. The
 // caller runs it, in place of Settle, once a sink has taken every entry.
 func (m Message) SettleAll() {
-	for _, n := range m.all {
-		if n.Ack != nil {
-			n.Ack()
-		}
-	}
+	settle(m.acks)
 }
 
 // Body is the message as one text: a line saying how many notices were cut,
@@ -75,11 +72,19 @@ func (m Message) Body() string {
 	return strings.Join(lines, "\n")
 }
 
-// Settle acknowledges every notice in m. The caller runs it once the sink
-// has accepted m.
-func (m Message) Settle() {
-	for _, ack := range m.acks {
-		ack()
+// Settle acknowledges the notices of m's last kept lines, the ones the
+// message the sink committed holds (Sink): the caller runs it once the sink
+// has accepted m. A line cut before the sink committed it is not settled.
+func (m Message) Settle(kept int) {
+	n := min(max(kept, 0), len(m.acks), len(m.Lines))
+	settle(m.acks[len(m.acks)-n:])
+}
+
+func settle(acks []func()) {
+	for _, ack := range acks {
+		if ack != nil {
+			ack()
+		}
 	}
 }
 
@@ -187,12 +192,13 @@ func message(project string, ns []Notice) Message {
 	for len(ns) > 1 && size(ns, dropped) > MaxBody {
 		ns, dropped = ns[1:], dropped+1
 	}
-	m := Message{Project: project, Dropped: dropped, all: all}
+	m := Message{Project: project, Dropped: dropped, all: make([]Entry, len(all)), acks: make([]func(), len(all))}
+	for i, n := range all {
+		m.all[i] = Entry{Kind: n.Kind, Subject: n.Subject, Worker: n.Worker, Body: n.Text}
+		m.acks[i] = n.Ack
+	}
 	for _, n := range ns {
 		m.Lines = append(m.Lines, n.Text)
-		if n.Ack != nil {
-			m.acks = append(m.acks, n.Ack)
-		}
 	}
 	return m
 }

@@ -74,7 +74,7 @@ func TestSettleAllAcksTheCutNotices(t *testing.T) {
 	t.Parallel()
 	kept := map[string]int{}
 	m := flushOne(t, longNotices(20, kept))
-	m.Settle()
+	m.Settle(len(m.Lines))
 	assert.Len(t, kept, len(m.Lines), "Settle: the kept notices")
 	assert.Less(t, len(kept), 20)
 
@@ -86,6 +86,34 @@ func TestSettleAllAcksTheCutNotices(t *testing.T) {
 	for subject, n := range all {
 		assert.Equal(t, 1, n, "%s acknowledged once", subject)
 	}
+}
+
+// A typed sink can acknowledge only the last kept inbox lines, even if it
+// reports more than the batcher retained. A45 can then retell a cut notice.
+func TestSettleNeverAcknowledgesTheBatchersCut(t *testing.T) {
+	t.Parallel()
+	acked := map[string]int{}
+	ns := longNotices(20, acked)
+	m := flushOne(t, ns)
+	require.Positive(t, m.Dropped)
+	for kept := 0; kept <= len(m.Lines)+1; kept++ {
+		clear(acked)
+		m.Settle(kept)
+		want := map[string]int{}
+		for _, n := range ns[len(ns)-min(kept, len(m.Lines)):] {
+			want[n.Subject] = 1
+		}
+		assert.Equal(t, want, acked, "sink kept %d lines", kept)
+	}
+}
+
+func TestUncutMessageHasOneAckSlotPerLine(t *testing.T) {
+	t.Parallel()
+	ns := longNotices(2, map[string]int{})
+	ns[0].Ack = nil
+	m := flushOne(t, ns)
+	require.Zero(t, m.Dropped)
+	assert.Equal(t, len(m.Lines), notice.AckSlots(m))
 }
 
 // TestEntryBodyIsOneCleanLine: an entry's body is its notice's line as the
