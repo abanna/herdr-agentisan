@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -39,9 +40,14 @@ func assertOpen(t *testing.T, ch <-chan struct{}, why string) {
 func TestPostAllPostsInOrder(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
-	got, err := s.PostAll(t.Context(), daemonPosts("first", "second", "third"))
+	ps := daemonPosts("first", "second", "third")
+	ps[0].ID = "01J00000000000000000000000"
+	want := slices.Clone(ps)
+	got, err := s.PostAll(t.Context(), ps)
 	require.NoError(t, err)
 	require.Len(t, got, 3)
+	assert.Equal(t, want, ps, "PostAll leaves the caller's posts untouched")
+	assert.NotEqual(t, want[0].ID, got[0].ID, "the store assigns the ID")
 	assert.Equal(t, []string{"first", "second", "third"}, bodies(got))
 	for i, p := range got {
 		assert.NotEmpty(t, p.ID, "post %d has an id", i)
@@ -52,6 +58,10 @@ func TestPostAllPostsInOrder(t *testing.T) {
 	read, err := s.ReadBoard(t.Context(), "ha", store.ReaderBoss, store.MaxBoardRead)
 	require.NoError(t, err)
 	assert.Equal(t, got, read.Posts, "the board holds them as returned")
+	for i, p := range got {
+		want[i].ID, want[i].Seq = p.ID, p.Seq
+	}
+	assert.Equal(t, want, read.Posts, "every caller-supplied field except ID and Seq is stored")
 }
 
 // TestPostAllIsAllOrNone: a post the store refuses rolls the whole flush
@@ -86,14 +96,20 @@ func TestPostAllChecksBeforeWriting(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
 	ps := daemonPosts("first", "second", "third")
-	ps[2].Subject = "w1\np2"
 	failBoardInserts(t, s, "NEW.body = 'first'")
 	changed := s.BoardChanged()
 
-	_, err := s.PostAll(t.Context(), ps)
-	require.ErrorIs(t, err, store.ErrInvalid)
-	assert.Zero(t, postCount(t, s), "nothing is posted")
-	assertOpen(t, changed, "a refused flush woke the board's waiters")
+	badSubject := ps[2]
+	badSubject.Subject = "w1\np2"
+	badTime := ps[2]
+	badTime.At = time.Date(2300, time.January, 1, 0, 0, 0, 0, time.UTC)
+	for _, invalid := range []store.BoardPost{badSubject, badTime} {
+		ps[2] = invalid
+		_, err := s.PostAll(t.Context(), ps)
+		require.ErrorIs(t, err, store.ErrInvalid)
+		assert.Zero(t, postCount(t, s), "nothing is posted")
+		assertOpen(t, changed, "a refused flush woke the board's waiters")
+	}
 }
 
 // TestPostAllWakesOnceAfterCommit: the waiters are woken once the flush is

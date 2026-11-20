@@ -35,7 +35,8 @@ func TestAppendToANewNotice(t *testing.T) {
 func TestAppendToAQueuedNotice(t *testing.T) {
 	t.Parallel()
 	first := appended(t, "", notice.Message{Lines: []string{"a"}})
-	second := appended(t, first, notice.Message{Lines: []string{"b", "c"}})
+	m := flushOne(t, []notice.Notice{note("ha", "p1", notice.Blocked, "b"), note("ha", "p2", notice.Blocked, "c")})
+	second := appended(t, first, m)
 	assert.Equal(t, "[agentisan] notices:\na\nb\nc", second)
 	third := appended(t, second, notice.Message{Lines: []string{"d"}, Dropped: 2})
 	assert.Equal(t, "[agentisan] notices (2 earlier dropped):\na\nb\nc\nd", third)

@@ -352,6 +352,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   lookup per post they return, which `board.read` does not serve; every
   post wakes each `board wait`. Tests open a fresh database in a temp
   dir; the store is never mocked.
+  The board batch (`PostAll`, `FitID`) and notice message operations
+  (`Entries`, `SettleAll`, `Tail`) are dormant until daemon wiring (A74),
+  guarded by `TestBoardNoticeBatchHasNoProductionCaller`.
   `boardnotice.go` also provides the pure version-1 GitHub capture-ID helper
   and its frozen envelope/receipt types (B0a.1), and `noticeledger.go` the
   dormant notice admission ledger (B0a.2, migration 0009, one-way):

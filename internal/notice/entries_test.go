@@ -79,8 +79,10 @@ func TestSettleAllAcksTheCutNotices(t *testing.T) {
 	assert.Less(t, len(kept), 20)
 
 	all := map[string]int{}
-	flushOne(t, longNotices(20, all)).SettleAll()
-	assert.Len(t, all, 20, "SettleAll: every notice")
+	ns := longNotices(20, all)
+	ns[1].Ack = nil
+	flushOne(t, ns).SettleAll()
+	assert.Len(t, all, 19, "SettleAll acknowledges every notice with a callback")
 	for subject, n := range all {
 		assert.Equal(t, 1, n, "%s acknowledged once", subject)
 	}
