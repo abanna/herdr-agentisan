@@ -27,8 +27,12 @@ const (
 	noticeImported = "imported"
 )
 
-// noticeFromGitHub is the one source admitted yet.
-const noticeFromGitHub = "github"
+// The ledger's sources: GitHub's, the one admitted yet, and the daemon's,
+// which the metadata counts (noticemeta.go) and B0a.4 admits.
+const (
+	noticeFromGitHub = "github"
+	noticeFromDaemon = "daemon"
+)
 
 // NoticeAdmission is what AdmitNotice did with a notice.
 type NoticeAdmission struct {

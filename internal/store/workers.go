@@ -313,10 +313,16 @@ var endsWorker = map[string]bool{StatusRetired: true, StatusFailed: true, Status
 // retirement time, NULL for starting and active, which never bring a lost row
 // back: only BindWorker does. A retirement leaves a row with a pending
 // handoff alone, as markWorkerLost does, so the handoff never outlives its
-// row (A33 part 2a).
+// row (A33 part 2a). ?5, when not NULL, is the terminal the row must still
+// bind: EndWorker's compare-and-set.
 const setWorkerStatus = `UPDATE workers SET status = ?3, retired_at = max(?4, created_at)
 WHERE logical_id = ?1 AND generation = ?2 AND retired_at IS NULL AND (?4 IS NOT NULL OR status <> 'lost')
-	AND (?4 IS NULL OR NOT EXISTS (SELECT 1 FROM handoffs AS h WHERE h.logical_id = ?1 AND h.state = 'pending'))`
+	AND (?4 IS NULL OR NOT EXISTS (SELECT 1 FROM handoffs AS h WHERE h.logical_id = ?1 AND h.state = 'pending'))
+	AND (?5 IS NULL OR terminal_id = ?5)`
+
+// rekeyedSince tells an ending EndWorker refused because the live row at the
+// generation binds another terminal now from one with no live row there.
+const rekeyedSince = `SELECT EXISTS (SELECT 1 FROM workers WHERE logical_id = ?1 AND generation = ?2 AND retired_at IS NULL AND terminal_id <> ?3)`
 
 // heldByHandoff tells a retirement setWorkerStatus refused for a pending
 // handoff from one with no live row at the generation.
@@ -333,6 +339,24 @@ func (s *Store) SetWorkerStatus(ctx context.Context, w Worker, status string, at
 	if status != StatusStarting && status != StatusActive && !endsWorker[status] {
 		return fmt.Errorf("%w: worker status %q", ErrInvalid, status)
 	}
+	return s.setWorkerStatus(ctx, w, status, at, nil)
+}
+
+// EndWorker ends w's row with status, retired, failed or gone, as
+// SetWorkerStatus does, but only while the row still binds w's terminal: a
+// compare-and-set on the row as it was read, as the team poll's writes are
+// (A35). A row the poll re-keyed since, after a herdr live handoff, is left
+// live (ErrWorkerChanged). ErrHandoffPending and ErrNoWorker are
+// SetWorkerStatus's.
+func (s *Store) EndWorker(ctx context.Context, w Worker, status string, at time.Time) error {
+	if !endsWorker[status] {
+		return fmt.Errorf("%w: %q ends no worker", ErrInvalid, status)
+	}
+	return s.setWorkerStatus(ctx, w, status, at, w.TerminalID)
+}
+
+// setWorkerStatus is SetWorkerStatus, and with a terminal, EndWorker.
+func (s *Store) setWorkerStatus(ctx context.Context, w Worker, status string, at time.Time, terminal any) error {
 	ns, err := nanos(at)
 	if err != nil {
 		return err
@@ -349,26 +373,43 @@ func (s *Store) SetWorkerStatus(ctx context.Context, w Worker, status string, at
 		return fmt.Errorf("%w: set worker %s %s: %w", ErrStore, w.LogicalID, status, err)
 	}
 	defer tx.Rollback() //nolint:errcheck // a no-op once committed
-	res, err := tx.ExecContext(ctx, setWorkerStatus, w.LogicalID, w.Generation, status, retired)
+	res, err := tx.ExecContext(ctx, setWorkerStatus, w.LogicalID, w.Generation, status, retired, terminal)
 	if err != nil {
 		return fmt.Errorf("%w: set worker %s %s: %w", ErrStore, w.LogicalID, status, err)
 	}
 	if n, err := res.RowsAffected(); err != nil || n == 0 {
-		var held bool
-		if retired != nil {
-			if err := tx.QueryRowContext(ctx, heldByHandoff, w.LogicalID, w.Generation).Scan(&held); err != nil {
-				return fmt.Errorf("%w: set worker %s %s: %w", ErrStore, w.LogicalID, status, err)
-			}
-		}
-		if held {
-			return fmt.Errorf("%w: %s stays live until its handoff completes or fails", ErrHandoffPending, w.LogicalID)
-		}
-		return fmt.Errorf("%w: %s is not a live worker at generation %d", ErrNoWorker, w.LogicalID, w.Generation)
+		return refusedStatus(ctx, tx, w, status, retired != nil, terminal)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("%w: set worker %s %s: %w", ErrStore, w.LogicalID, status, err)
 	}
 	return nil
+}
+
+// refusedStatus says, in setWorkerStatus's transaction tx, why its write
+// changed no row: an ending held by a pending handoff (ErrHandoffPending),
+// an ending EndWorker asked of a row that binds another terminal now
+// (ErrWorkerChanged), else no live row at w's generation (ErrNoWorker).
+func refusedStatus(ctx context.Context, tx *sql.Tx, w Worker, status string, ending bool, terminal any) error {
+	var held bool
+	if ending {
+		if err := tx.QueryRowContext(ctx, heldByHandoff, w.LogicalID, w.Generation).Scan(&held); err != nil {
+			return fmt.Errorf("%w: set worker %s %s: %w", ErrStore, w.LogicalID, status, err)
+		}
+	}
+	if held {
+		return fmt.Errorf("%w: %s stays live until its handoff completes or fails", ErrHandoffPending, w.LogicalID)
+	}
+	var rekeyed bool
+	if terminal != nil {
+		if err := tx.QueryRowContext(ctx, rekeyedSince, w.LogicalID, w.Generation, terminal).Scan(&rekeyed); err != nil {
+			return fmt.Errorf("%w: set worker %s %s: %w", ErrStore, w.LogicalID, status, err)
+		}
+	}
+	if rekeyed {
+		return fmt.Errorf("%w: %s binds another terminal than %s now", ErrWorkerChanged, w.LogicalID, w.TerminalID)
+	}
+	return fmt.Errorf("%w: %s is not a live worker at generation %d", ErrNoWorker, w.LogicalID, w.Generation)
 }
 
 // OtherProjectsIDs returns the logical id of every row of a project other
