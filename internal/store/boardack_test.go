@@ -24,8 +24,8 @@ import (
 // ackAt is when the tests' acknowledgements are made.
 var ackAt = boardAt.Add(time.Minute)
 
-// daemonPost is a notice on project's board.
-func daemonPost(project, body string) store.BoardPost {
+// turnEnded is a turn_ended notice on project's board.
+func turnEnded(project, body string) store.BoardPost {
 	return store.BoardPost{Project: project, Channel: store.ChannelDaemon, Author: store.Daemon, Kind: "turn_ended", Body: body, At: boardAt}
 }
 
@@ -137,8 +137,8 @@ func TestAckUptoBoundsByMarkLimitAndChannel(t *testing.T) {
 	s := open(t, dbPath(t))
 	var seqs []int64
 	for i, p := range []store.BoardPost{
-		daemonPost("ha", "1"), teamPost("ha", "ha-coder-1", "2"), daemonPost("ha", "3"),
-		teamPost("ha", "ha-coder-1", "4"), daemonPost("ha", "5"),
+		turnEnded("ha", "1"), teamPost("ha", "ha-coder-1", "2"), turnEnded("ha", "3"),
+		teamPost("ha", "ha-coder-1", "4"), turnEnded("ha", "5"),
 	} {
 		got := post(t, s, p)
 		require.Equal(t, strconv.Itoa(i+1), got.Body)
@@ -383,7 +383,7 @@ func TestAckChecksItsInput(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
 	ctx := t.Context()
-	p := post(t, s, daemonPost("ha", "one"))
+	p := post(t, s, turnEnded("ha", "one"))
 	for name, ack := range map[string]func() (store.AckResult, error){
 		"a channel x": func() (store.AckResult, error) { return s.AckUpto(ctx, "ha", boss.ID, p.Seq, "x", ackAt) },
 		"upto -1":     func() (store.AckResult, error) { return s.AckUpto(ctx, "ha", boss.ID, -1, "", ackAt) },
