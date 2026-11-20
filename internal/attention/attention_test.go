@@ -352,6 +352,27 @@ func TestNewCeilingPastTheLimitAlertsOnce(t *testing.T) {
 	assert.Equal(t, mins(10, 15), times(run(c, 60*m, m, appended, nil)), "a ceiling appended at 16 to a row from 0")
 }
 
+// TestLimitHoldsWhileAnOlderCeilingIsUnread pins rule 5 as the text writes
+// it, by intent (the boss's ruling on #182's review, 2026-11-20): past a
+// limit, the one more alert comes only when the oldest pending ceiling is
+// newer than the last alert shown (rule 5; 903c871a §6). So a ceiling posted
+// while an older one is still unread gives none. The newest ceiling cannot
+// decide: a held row's newest-ceiling time moves with every notice appended
+// to it, and the user's limit would stop holding for a held boss.
+func TestLimitHoldsWhileAnOlderCeilingIsUnread(t *testing.T) {
+	t.Parallel()
+	c := defaults()
+	c.Alerts = 1
+	twoCeilings := func(d time.Duration) attention.State {
+		s := ceilingPost(boss(), 0)
+		if d >= 10*m {
+			s = ceilingPost(s, 10*m)
+		}
+		return s
+	}
+	assert.Equal(t, mins(2), times(run(c, 60*m, m, twoCeilings, nil)), "ceilings posted at 0 and 10, the first unread")
+}
+
 // TestUnshownDoesNotCount (rule 6): an alert not shown is tried again every
 // later, flat, with its number; once tried, a ceiling's bound no longer
 // brings it, for that ceiling or an older one, a reaction included.
