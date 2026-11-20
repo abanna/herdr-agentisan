@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/notice"
@@ -79,7 +80,8 @@ func (p *Poller) Pass() {
 
 // Post posts to's queue on project's board as a pass does, on ctx.
 func (p *Poller) Post(ctx context.Context, to store.Address, project string) {
-	p.d.post(ctx, to, project)
+	out, err := p.d.postQueued(ctx, to, project)
+	p.d.posted(ctx, to, project, out, err)
 }
 
 // TakeWake empties the inbox's wake, as the dispatcher's loop takes it
@@ -91,6 +93,24 @@ func (p *Poller) TakeWake() bool {
 	default:
 		return false
 	}
+}
+
+// HoldRoute takes the inbox's route, the lock a board-mode boss's typed
+// claim and a poll's remember take, until release is called.
+func (p *Poller) HoldRoute() (release func()) {
+	p.in.route.Lock()
+	var once sync.Once
+	return func() { once.Do(p.in.route.Unlock) }
+}
+
+// RouteHeld reports whether someone holds the inbox's route now: it fails
+// to take it, else it takes it and gives it back at once.
+func (p *Poller) RouteHeld() bool {
+	if p.in.route.TryLock() {
+		p.in.route.Unlock()
+		return false
+	}
+	return true
 }
 
 // Delivery is how the inbox delivers to project's boss now (A74).
