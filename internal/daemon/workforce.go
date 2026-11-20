@@ -290,6 +290,7 @@ func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleCl
 		Idle:           idle,
 		Starts:         starts,
 		Now:            o.Now,
+		StartTime:      o.Hooks.StartTime,
 		Preflight:      o.Hooks.Preflight,
 		CodexHooks:     o.Team.CodexHooks,
 		CodexTurnHooks: o.Team.CodexTurnHooks,
