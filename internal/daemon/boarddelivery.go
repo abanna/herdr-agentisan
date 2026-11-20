@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/store"
@@ -20,17 +21,32 @@ const heldReason = "messages wait: the boss's agent has not been seen since the 
 // board-mode team (A74): posted on its board, or held while its agent is
 // unknown. It reports whether it did; a typed boss, a name no team or two
 // teams have, and every other recipient go on to targetOf.
+//
+// The delivery is read, and the queue posted, under in.route, the lock a
+// poll's remember takes, as claimTyped claims (NERD-5533 7c30e8aa, C2): a
+// pass that read board posts only while no poll has remembered another
+// agent since, so a boss that turned Codex is never posted to. route is
+// released before what the post logs, emits and wakes (posted), and before
+// a held queue's warning. A recipient that is not a board-key boss takes
+// no route: its delivery is typed.
 func (d *dispatcher) untyped(ctx context.Context, bosses map[string]string, to store.Address) bool {
-	if to.Kind != store.KindBoss {
+	project, board := d.boardBoss(bosses, to)
+	if !board {
 		return false
 	}
-	project, ok := bossProject(bosses, to.ID)
-	if !ok {
-		return false
+	var (
+		out store.PostedQueue
+		err error
+	)
+	d.in.route.Lock()
+	delivery := d.in.delivery(project)
+	if delivery == notice.DeliverBoard {
+		out, err = d.postQueued(ctx, to, project)
 	}
-	switch d.in.delivery(project) {
+	d.in.route.Unlock()
+	switch delivery {
 	case notice.DeliverBoard:
-		d.post(ctx, to, project)
+		d.posted(ctx, to, project, out, err)
 		return true
 	case notice.DeliverHeld:
 		d.note(to, "held", heldReason, nil)
@@ -94,20 +110,29 @@ func bossProject(bosses map[string]string, boss string) (string, bool) {
 	return found, n == 1
 }
 
-// post posts the oldest MaxQueuePost rows of to's queue on project's board
-// instead of typing them (A74), in one transaction that marks each row
-// delivered, or failed where the board refuses it, and wakes the dispatcher
-// again while more remain, so a backlog drains in passes back to back. Like
-// claim, a stop does not cut it short, and it is bounded on its own: the
-// store stops at half that budget, commits the rows it has posted and says
-// more remain, so a pass that gets the connection always posts. A post
-// that fails leaves every row queued for the next pass, never typed, and is
-// warned of once while it lasts.
-func (d *dispatcher) post(ctx context.Context, to store.Address, project string) {
-	ctx = context.WithoutCancel(ctx)
-	sctx, cancel := context.WithTimeout(ctx, settleTimeout)
+// postQueued posts the oldest MaxQueuePost rows of to's queue on project's
+// board instead of typing them (A74), in one transaction that marks each
+// row delivered, or failed where the board refuses it. Like claim, a stop
+// does not cut it short, and it is bounded on its own: the store stops at
+// half that budget, commits the rows it has posted and says more remain,
+// so a pass that gets the connection always posts. untyped runs it under
+// route.
+func (d *dispatcher) postQueued(ctx context.Context, to store.Address, project string) (store.PostedQueue, error) {
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), settleTimeout)
 	defer cancel()
 	out, err := d.st.PostQueued(sctx, to, project, d.now())
+	if err != nil {
+		return store.PostedQueue{}, fmt.Errorf("post the queue: %w", err)
+	}
+	return out, nil
+}
+
+// posted records how postQueued ended: it wakes the dispatcher again while
+// more remain, so a backlog drains in passes back to back, and logs and
+// emits each row posted. A post that failed leaves every row queued for
+// the next pass, never typed, and is warned of once while it lasts.
+func (d *dispatcher) posted(ctx context.Context, to store.Address, project string, out store.PostedQueue, err error) {
+	ctx = context.WithoutCancel(ctx)
 	if err != nil {
 		d.note(to, "board", "messages wait: posting them to the board failed", err)
 		return

@@ -527,11 +527,123 @@ func TestBossThatTurnsClaudeAfterTheClaimTypesOnlyWhatWasClaimed(t *testing.T) {
 	assert.Len(t, r.pr.all(), 1, "nothing more typed")
 }
 
+// TestBossThatTurnsCodexAtThePostIsNotPosted is the reverse switch (the
+// cold check of PR 2's design, NERD-5533 7c30e8aa, C2), on its probe's
+// schedule: a pass has read the delivery as board for a Claude boss and is
+// about to post when a poll remembers Codex and flushes a notice, which
+// goes into the inbox to be typed. The poll waits for the post: the pass
+// reads and posts under the lock remember takes, so only the row queued
+// before the switch is posted, and the notice is typed into the Codex boss,
+// never posted (A74: a Codex boss is never posted to).
+//
+// The post's clock read is paused inside that lock, so the test releases
+// it without waiting for the poll, which waits for it; without the lock the
+// poll ends first, and the stale pass posts the notice too.
+func TestBossThatTurnsCodexAtThePostIsNotPosted(t *testing.T) {
+	t.Parallel()
+	var pause atomic.Bool
+	atPost, resume := make(chan struct{}), make(chan struct{})
+	cfgs := boardOn("ha")
+	b := notice.NewBatcher(cfgs)
+	r := newBoardRig(t, []settings.Team{haTabs}, cfgs, b)
+	r.o.Now = func() time.Time {
+		if pause.Swap(false) {
+			close(atPost)
+			<-resume
+		}
+		return time.Now()
+	}
+	r.p = daemon.NewPoller(r.o, r.st, r.teams, cfgs, b, nil)
+	r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
+	row := sent(t, r.st, haBoss, coder, "worker row")
+	pause.Store(true) // the pass's first clock read is its post's
+	passed := make(chan struct{})
+	go func() {
+		defer close(passed)
+		r.p.Pass()
+	}()
+	select {
+	case <-atPost:
+	case <-time.After(ready):
+		close(resume)
+		t.Fatal("the pass never came to its post")
+	}
+	require.Zero(t, boardCount(t, r.db), "paused before the post")
+	b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Blocked, Text: "after the switch"}})
+	polled := make(chan struct{})
+	go func() {
+		defer close(polled)
+		r.p.EndPoll(haModel(bossPane("ha-boss", "codex")))
+	}()
+	select {
+	case <-polled: // no lock: the poll's flush queues the notice first
+	case <-time.After(100 * time.Millisecond): // the poll waits for the post
+	}
+	close(resume)
+	for _, c := range []chan struct{}{passed, polled} {
+		select {
+		case <-c:
+		case <-time.After(ready):
+			t.Fatal("the pass or the poll did not end")
+		}
+	}
+
+	var bodies []string
+	for _, p := range r.posts(t, "ha") {
+		bodies = append(bodies, p.Body)
+	}
+	assert.Equal(t, []string{"worker row"}, bodies, "only the row queued before the switch is posted")
+	assert.Equal(t, store.MessageDelivered, stateOf(t, r.st, row.ID).State)
+	r.p.Pass()
+	require.Len(t, r.pr.all(), 1, "the notice is typed into the Codex boss")
+	assert.Equal(t, "[agentisan] notices:\nafter the switch", r.pr.all()[0].Text)
+	assert.Len(t, r.posts(t, "ha"), 1, "nothing more posted")
+}
+
+// TestBoardModeDecisionsReadTheClockUnderRoute is C4 of the cold check
+// (NERD-5533 7c30e8aa): the schedules alone pass on code that reads the
+// clock outside the lock, so this pins it. A board-key boss's typed claim
+// and its board post each read the clock with route held: the delivery
+// they acted on cannot have turned since.
+func TestBoardModeDecisionsReadTheClockUnderRoute(t *testing.T) {
+	t.Parallel()
+	for name, agent := range map[string]string{"the typed claim": "codex", "the board post": "claude"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var (
+				pause atomic.Bool
+				held  atomic.Int32 // 0 not read, 1 held, 2 free
+				p     *daemon.Poller
+			)
+			cfgs := boardOn("ha")
+			r := newBoardRig(t, []settings.Team{haTabs}, cfgs, nil)
+			r.o.Now = func() time.Time {
+				if pause.Swap(false) {
+					if p.RouteHeld() {
+						held.Store(1)
+					} else {
+						held.Store(2)
+					}
+				}
+				return time.Now()
+			}
+			p = daemon.NewPoller(r.o, r.st, r.teams, cfgs, nil, nil)
+			p.EndPoll(haModel(bossPane("ha-boss", agent)))
+			sent(t, r.st, haBoss, coder, "done")
+			pause.Store(true) // the pass's first clock read is its claim's or its post's
+			p.Pass()
+			assert.Equal(t, int32(1), held.Load(), "the clock is read with route held")
+			assert.Equal(t, store.MessageDelivered, stateOf(t, r.st, query(t, r.db, "SELECT id FROM messages")[0]).State)
+		})
+	}
+}
+
 // TestTypedClaimsTakeNoRoute: only the boss of a tabs team whose key is
-// board takes the route lock to claim (claimTyped). With the key unset, and
-// for the ◆ spaces under the shared key board, a pass types its boss while
-// another holds route, so the typed path waits on nothing it did not wait
-// on before the lock (NERD-5533 cbf65a5e).
+// board takes the route lock, for its board decision (untyped) and its
+// claim (claimTyped). With the key unset, and for the ◆ spaces under the
+// shared key board, a pass types its boss while another holds route, so
+// the typed path waits on nothing it did not wait on before the lock
+// (NERD-5533 cbf65a5e, 7c30e8aa).
 func TestTypedClaimsTakeNoRoute(t *testing.T) {
 	t.Parallel()
 	spaces := settings.Team{Project: "spaces", Layout: settings.LayoutSpaces}
@@ -544,7 +656,9 @@ func TestTypedClaimsTakeNoRoute(t *testing.T) {
 	}{
 		"the key unset": {[]settings.Team{haTabs}, notice.Configs{}, haBoss, haModel(bossPane("ha-boss", "claude"))},
 		"the spaces, the shared key board": {
-			[]settings.Team{spaces}, notice.Configs{Default: notice.Config{Board: true}}, spacesBoss,
+			[]settings.Team{spaces},
+			notice.Configs{Default: notice.Config{Board: true}},
+			spacesBoss,
 			&team.Model{Projects: []team.Project{{Name: "spaces", Boss: []team.Worker{{ID: "wJ:p1", Pane: team.Pane{ID: "wJ:p1", TerminalID: "term_wJ:p1", Name: team.SpacesBoss, Agent: "claude"}}}}}},
 		},
 	} {
