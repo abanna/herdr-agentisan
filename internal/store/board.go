@@ -361,6 +361,10 @@ func (s *Store) PruneBoard(ctx context.Context, now time.Time) (int64, error) {
 }
 
 // BoardPending is what a board-mode boss has left waiting (ADR-001 A74).
+// NewestCeiling can fall when a held notice drains to the board: held, the
+// row is timed by its last append (updated_at); posted, by its creation (the
+// post takes the row's created_at). A caller that bounds an alert by it keeps
+// the newest it has seen (NERD-5533 bc2157dd).
 type BoardPending struct {
 	Pending               int       // posts after the boss's mark
 	Oldest, OldestCeiling time.Time // zero: none

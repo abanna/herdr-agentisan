@@ -1,6 +1,9 @@
 package store_test
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"maps"
 	"path/filepath"
 	"testing"
@@ -254,10 +257,12 @@ func TestBoardPendingIgnoresACeilingQuotedInAFailureNotice(t *testing.T) {
 	assert.Zero(t, got.NewestCeiling, "posted")
 }
 
-// TestBoardPendingHasNoProductionCaller (S3, NERD-5533 34ed8294):
-// BoardPending is dormant until PR 3b's poll calls it (A74), which deletes
-// this test. No non-test file in internal/ or cmd/ but board.go uses the
-// name, a selector, a method value or an interface's method alike.
+// TestBoardPendingHasNoProductionCaller (S3, NERD-5533 34ed8294 and
+// ef44f246): BoardPending is dormant until PR 3b's poll calls it (A74), which
+// deletes this test. No non-test file in internal/ or cmd/ but board.go uses
+// the name, a selector, a method value or an interface's method alike; and in
+// board.go, where the type is declared and used, only the method's
+// definition is exempt: a selector of it there is a caller too.
 func TestBoardPendingHasNoProductionCaller(t *testing.T) {
 	t.Parallel()
 	const own = "internal/store/board.go"
@@ -272,6 +277,24 @@ func TestBoardPendingHasNoProductionCaller(t *testing.T) {
 	assert.NotEmpty(t, uses[own], "the scan finds BoardPending in %s", own)
 	delete(uses, own)
 	assert.Empty(t, uses, "BoardPending is dormant until PR 3b's poll calls it (A74)")
+
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, filepath.Join("..", "..", own), nil, parser.SkipObjectResolution)
+	require.NoError(t, err)
+	defined, selectors := false, []string{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch n := n.(type) {
+		case *ast.FuncDecl:
+			defined = defined || (n.Recv != nil && n.Name.Name == "BoardPending")
+		case *ast.SelectorExpr:
+			if n.Sel.Name == "BoardPending" {
+				selectors = append(selectors, fset.Position(n.Sel.Pos()).String())
+			}
+		}
+		return true
+	})
+	assert.True(t, defined, "the scan finds the method's definition in %s", own)
+	assert.Empty(t, selectors, "BoardPending is dormant in its own file too: only its definition is exempt (ef44f246)")
 }
 
 // TestBoardPendingNewestCeilingPostIsThePostsAlone (NERD-5533 053091ce, the
