@@ -75,10 +75,11 @@ func (d *dispatcher) post(ctx context.Context, to store.Address, project string)
 // board (A74), in one transaction that marks each row delivered, or failed
 // where the board refuses it, with one .delivered or .failed event per row
 // and one log line, which says whether more remain. Like claim, a stop does
-// not cut it short, and it is bounded on its own. The dispatcher's pass and
-// a board-mode flush both post through it, so a row either posts is told
-// the same way; it touches no dispatcher state, since the flush runs on the
-// poll's goroutine.
+// not cut it short. Once it gets the connection the store posts at least
+// one queued row, stopping at half the budget to commit its progress.
+// The dispatcher's pass and a board-mode flush both post through it, so
+// either path reports each row the same way. It touches no dispatcher
+// state, since the flush runs on the poll's goroutine.
 func (o Options) postQueue(ctx context.Context, st *store.Store, to store.Address, project string) (store.PostedQueue, error) {
 	ctx = context.WithoutCancel(ctx)
 	sctx, cancel := context.WithTimeout(ctx, settleTimeout)
