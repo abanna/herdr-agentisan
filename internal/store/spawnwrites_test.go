@@ -477,6 +477,22 @@ func TestSpawnWritesRefuseWhatTheyCannotRecord(t *testing.T) {
 		require.ErrorIs(t, err, store.ErrInvalid, "an invalid provider, the context done")
 		require.NotErrorIs(t, err, store.ErrStore)
 	}
+	{ // the answer is checked before the connection: the schema's CHECKs,
+		// which refuse these too as ErrInvalid, are never reached
+		done, cancel := context.WithCancel(ctx)
+		cancel()
+		for name, a := range map[string]store.SpawnAnswer{
+			"no code":                   {Message: "m"},
+			"a code past 32 bytes":      {Code: strings.Repeat("a", 33), Message: "m"},
+			"a code in upper case":      {Code: "Spawn_failed", Message: "m"},
+			"a refusal with no message": {Code: "spawn_failed"},
+			"a result not JSON":         {Code: "ok", Result: []byte(`{`)},
+		} {
+			err := s.FinishSpawn(done, retryKey, a, spawnAt)
+			require.ErrorIs(t, err, store.ErrInvalid, "%s, the context done", name)
+			require.NotErrorIs(t, err, store.ErrStore, name)
+		}
+	}
 	for name, code := range map[string]string{
 		"a NUL": "spawn\x00failed", "invalid UTF-8": "spawn\xfffailed", "non-ASCII": "spawn_échec", "a dash": "spawn-failed",
 		"a space": "spawn failed", "a leading dash": "-spawn_failed", "a digit": "spawn_failed_2", "a line break": "spawn_failed\n",
