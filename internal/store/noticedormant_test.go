@@ -22,7 +22,7 @@ import (
 // its own.
 var ledgerNames = []string{
 	"AdmitNotice", "PendingNotice", "PendingNotices", "NoticeStats", "PruneNoticePayloads",
-	"NoticeAdmission", "ErrNoNotice",
+	"NoticeAdmission", "ErrNoNotice", "NoticeMeta",
 	"GitHubNoticeCaptureID", "NoticeEnvelope", "NoticeReceipt",
 	"ErrNoticeQuota", "ErrNoticePendingPerProject", "ErrNoticePendingInStore", "ErrNoticePendingPerPR",
 	"ErrNoticeBytesPerProject", "ErrNoticeBytesInStore", "ErrNoticeIdentitiesPerProject",
@@ -34,28 +34,29 @@ var ledgerNames = []string{
 var ledgerTables = []string{"notice_identities", "notice_payloads", "notice_counts", "notice_store_counts"}
 
 // The ledger's own files, relative to the module root: B0a.1's helper, the
-// ledger and its quotas may use its names, and only the ledger and its
-// quotas may name its tables.
+// ledger, its quotas and its metadata queries may use its names, and only
+// the ledger, its quotas and its metadata queries may name its tables.
 const (
 	ledgerHelper = "internal/store/boardnotice.go"
 	ledgerFile   = "internal/store/noticeledger.go"
 	quotaFile    = "internal/store/noticequota.go"
+	metaFile     = "internal/store/noticemeta.go"
 )
 
 var (
-	ledgerNameFiles  = []string{ledgerHelper, ledgerFile, quotaFile}
-	ledgerTableFiles = []string{ledgerFile, quotaFile}
+	ledgerNameFiles  = []string{ledgerHelper, ledgerFile, quotaFile, metaFile}
+	ledgerTableFiles = []string{ledgerFile, quotaFile, metaFile}
 )
 
-// ledgerUses parses every non-test Go file under root/dir. It returns, by
-// file relative to root, each use of a ledger name (an identifier spelled
-// so, a selector, a method, an interface's method or a dot-import's bare
-// name alike) and each string literal naming a ledger table, in any case, as
-// SQL reads it, once for each table it names, with that table's name. It
-// also returns each of those literals that contains
-// REPLACE, in any case and in any file, the ledger's own included, and how
-// many files it parsed.
-func ledgerUses(t *testing.T, root, dir string) (names, tables map[string][]string, replaces []string, files int) {
+// productionUses parses every non-test Go file under root/dir. It returns,
+// by file relative to root, each use of one of wantNames (an identifier
+// spelled so, a selector, a method, an interface's method or a dot-import's
+// bare name alike) and each string literal naming one of wantTables, in any
+// case, as SQL reads it, once for each table it names, with that table's
+// name. It also returns each of those literals that contains REPLACE, in any
+// case and in any file, and how many files it parsed. The ledger's dormancy
+// test and the retry keys' share it.
+func productionUses(t *testing.T, root, dir string, wantNames, wantTables []string) (names, tables map[string][]string, replaces []string, files int) {
 	t.Helper()
 	names, tables = map[string][]string{}, map[string][]string{}
 	fset := token.NewFileSet()
@@ -85,7 +86,7 @@ func ledgerUses(t *testing.T, root, dir string) (names, tables map[string][]stri
 		ast.Inspect(f, func(n ast.Node) bool {
 			switch n := n.(type) {
 			case *ast.Ident:
-				if slices.Contains(ledgerNames, n.Name) {
+				if slices.Contains(wantNames, n.Name) {
 					names[rel] = append(names[rel], fset.Position(n.Pos()).String()+" "+n.Name)
 				}
 			case *ast.BasicLit:
@@ -94,7 +95,7 @@ func ledgerUses(t *testing.T, root, dir string) (names, tables map[string][]stri
 				}
 				lit, pos := strings.ToLower(n.Value), fset.Position(n.Pos()).String()
 				named := false
-				for _, table := range ledgerTables {
+				for _, table := range wantTables {
 					if strings.Contains(lit, table) {
 						tables[rel] = append(tables[rel], pos+" "+table)
 						named = true
@@ -114,10 +115,11 @@ func ledgerUses(t *testing.T, root, dir string) (names, tables map[string][]stri
 
 // TestLedgerHasNoProductionCaller (D1): the ledger is dormant. No non-test
 // file in internal/ or cmd/ but the ledger's own (boardnotice.go,
-// noticeledger.go and noticequota.go) uses any of its names, its quotas'
-// errors included, and none but noticeledger.go and noticequota.go names
-// its tables in SQL, 0010's totals included, so nothing in production
-// admits, reads or builds a notice for it, or reaches its rows around it.
+// noticeledger.go, noticequota.go and noticemeta.go) uses any of its names,
+// its quotas' errors and its metadata's included, and none but
+// noticeledger.go, noticequota.go and noticemeta.go names its tables in SQL,
+// 0010's totals included, so nothing in production admits, reads or builds a
+// notice for it, or reaches its rows around it.
 //
 // No non-test Go string, the ledger's own included, names a ledger table
 // with REPLACE in it either: on a connection without recursive_triggers, a
@@ -133,7 +135,7 @@ func TestLedgerHasNoProductionCaller(t *testing.T) {
 	var replaces []string
 	parsed := 0
 	for _, dir := range []string{"internal", "cmd"} {
-		n, tb, r, files := ledgerUses(t, root, dir)
+		n, tb, r, files := productionUses(t, root, dir, ledgerNames, ledgerTables)
 		maps.Copy(names, n)
 		maps.Copy(tables, tb)
 		replaces = append(replaces, r...)
@@ -157,6 +159,13 @@ func TestLedgerHasNoProductionCaller(t *testing.T) {
 	}
 	for _, name := range []string{"ErrNoticeQuota", "ErrNoticeAdmissionRate", "notice_counts"} {
 		assert.True(t, inQuotas[name], "the scan finds %s in %s", name, quotaFile)
+	}
+	inMeta := map[string]bool{}
+	for _, use := range slices.Concat(names[metaFile], tables[metaFile]) {
+		inMeta[use[strings.LastIndexByte(use, ' ')+1:]] = true
+	}
+	for _, name := range []string{"PendingNotices", "NoticeStats", "NoticeMeta", "notice_payloads"} {
+		assert.True(t, inMeta[name], "the scan finds %s in %s", name, metaFile)
 	}
 
 	for _, file := range ledgerNameFiles {
@@ -190,7 +199,7 @@ func TestLedgerScanFindsAReplace(t *testing.T) {
 		")\n"
 	require.NoError(t, os.WriteFile(file, []byte(src), 0o600))
 
-	_, tables, replaces, files := ledgerUses(t, root, "internal")
+	_, tables, replaces, files := productionUses(t, root, "internal", ledgerNames, ledgerTables)
 	require.Equal(t, 1, files)
 	require.Len(t, tables["internal/fixture/fixture.go"], 5, "the scan finds each literal naming a ledger table")
 	assert.Equal(t, []string{file + ":4:10", file + ":5:10", file + ":6:10", file + ":7:10", file + ":8:10"}, replaces)

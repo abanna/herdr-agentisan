@@ -112,9 +112,9 @@ message's; a `returned` one has, as its subject, the worker it was for. The
 daemon's are on the `daemon` channel: `undelivered`, its subject the failed
 message's id, a body over 8 KiB in parts. Its notices are one post each,
 with the notice's kind. `send` still answers `queued` with the message's
-id; the post follows in the next pass, within a few seconds. Run
-`herdr-agentisan board wait` in the background, and `board read` when it
-ends.
+id; the post follows in the next pass, within a few seconds; a backlog goes
+in batches of 100, in passes back to back. Run `herdr-agentisan board wait`
+in the background, and `board read` when it ends.
 
 ## A recipient that is working
 

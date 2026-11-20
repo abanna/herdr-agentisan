@@ -82,6 +82,15 @@ func assertState(t *testing.T, s *store.Store, state string, ms ...store.Message
 	}
 }
 
+// ulidTime is the time an id made at at carries: a ULID's first ten
+// characters, its 48-bit millisecond time.
+func ulidTime(t *testing.T, at time.Time) string {
+	t.Helper()
+	id, err := store.NewULID(at, rand.Reader)
+	require.NoError(t, err)
+	return id[:10]
+}
+
 // TestPostQueuedSplitsAnOversizedFailureNotice (B1): a failure notice
 // carries the whole failed body, so it can pass 8 KiB. It is posted in
 // parts, each within MaxBody, the first under the notice's id, and the
@@ -113,6 +122,7 @@ func TestPostQueuedSplitsAnOversizedFailureNotice(t *testing.T) {
 	assert.Equal(t, nid, got.Posts[0].ID, "the first part keeps the notice's id")
 	assert.Len(t, got.Posts[1].ID, 26)
 	assert.NotEqual(t, nid, got.Posts[1].ID, "a later part has an id of its own")
+	assert.Equal(t, ulidTime(t, notice.CreatedAt), got.Posts[1].ID[:10], "a later part's id carries the notice's time")
 	assert.Equal(t, []string{nid}, ids(got.Delivered))
 	assert.Empty(t, got.Failed)
 	assertState(t, s, store.MessageDelivered, notice)
@@ -120,7 +130,8 @@ func TestPostQueuedSplitsAnOversizedFailureNotice(t *testing.T) {
 
 // TestPostQueuedSplitsOnARuneBoundary: a cut never falls inside a
 // character, so each part is UTF-8 that CheckBody takes, and the row is
-// delivered, not failed.
+// delivered, not failed. The cut moves back to the character's start, never
+// forward past MaxBody - 32.
 func TestPostQueuedSplitsOnARuneBoundary(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
@@ -136,8 +147,47 @@ func TestPostQueuedSplitsOnARuneBoundary(t *testing.T) {
 		joined += strings.TrimPrefix(p.Body, fmt.Sprintf("(part %d of 2) ", i+1))
 	}
 	assert.Equal(t, body, joined, "the parts join to the body")
+	assert.Len(t, strings.TrimPrefix(got.Posts[0].Body, "(part 1 of 2) "), store.MaxBody-32-3,
+		"the cut at MaxBody - 32 falls 3 bytes into an emoji and moves back to its start")
 	assert.Empty(t, got.Failed)
 	assertState(t, s, store.MessageDelivered, m)
+}
+
+// TestPostQueuedCutsPartsAtMaxBodyLessThePrefix: each part but the last
+// holds MaxBody - 32 bytes of the body, the 32 its "(part i of n) " prefix
+// may take, and the last part the rest.
+func TestPostQueuedCutsPartsAtMaxBodyLessThePrefix(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	insertMessage(t, s, store.Message{To: boss, From: store.Daemon, Body: strings.Repeat("c", 20000)})
+
+	got := postQueued(t, s)
+	var sizes []int
+	for i, p := range got.Posts {
+		chunk, ok := strings.CutPrefix(p.Body, fmt.Sprintf("(part %d of %d) ", i+1, len(got.Posts)))
+		assert.True(t, ok, "post %d begins with its prefix", i)
+		sizes = append(sizes, len(chunk))
+	}
+	room := store.MaxBody - 32
+	assert.Equal(t, []int{room, room, 20000 - 2*room}, sizes, "the bytes of the body each part holds")
+}
+
+// TestPostQueuedRefusesARowWholeForALaterPart: every part is checked before
+// any is inserted, so a row whose second part the board refuses (a NUL just
+// past the first part) leaves none of its parts on the board, only the
+// undelivered post in its place.
+func TestPostQueuedRefusesARowWholeForALaterPart(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	m := insertMessage(t, s, store.Message{To: boss, From: store.Daemon, Body: strings.Repeat("a", store.MaxBody-32) + "\x00" + strings.Repeat("b", 100)})
+
+	got := postQueued(t, s)
+	require.Len(t, got.Posts, 1)
+	assert.Equal(t, "undelivered", got.Posts[0].Kind)
+	assert.Equal(t, m.ID, got.Posts[0].Subject)
+	assert.Equal(t, 1, postCount(t, s), "no part of the row is on the board")
+	assert.Empty(t, got.Delivered)
+	assert.Equal(t, []string{m.ID}, ids(got.Failed))
 }
 
 // TestPostQueuedIsolatesARefusedRow (B1, minor 3): a row the board refuses
@@ -159,6 +209,7 @@ func TestPostQueuedIsolatesARefusedRow(t *testing.T) {
 	failed := message(t, s, b.ID)
 	assert.Equal(t, store.MessageFailed, failed.State)
 	assert.True(t, strings.HasPrefix(failed.Reason, "the board refused it"), "reason %q", failed.Reason)
+	assert.Equal(t, postedAt, failed.UpdatedAt, "B is failed at the call's time")
 	assert.Equal(t, []string{a.ID, c.ID}, ids(got.Delivered))
 	assert.Equal(t, []store.Message{failed}, got.Failed)
 
@@ -178,6 +229,7 @@ func TestPostQueuedIsolatesARefusedRow(t *testing.T) {
 	assert.Equal(t, queueProject, undelivered.Project)
 	assert.Len(t, undelivered.ID, 26)
 	assert.NotEqual(t, b.ID, undelivered.ID, "an id of its own")
+	assert.Equal(t, ulidTime(t, b.CreatedAt), undelivered.ID[:10], "its id carries B's time")
 	assert.True(t, strings.HasPrefix(undelivered.Body, fmt.Sprintf("[agentisan] message %s from \"", b.ID)), "body %q", undelivered.Body)
 	assert.Equal(t, fmt.Sprintf("[agentisan] message %s from %s could not be posted on the board (%s); it is kept, failed, in state.db",
 		b.ID, strconv.Quote(long.ID), failed.Reason), undelivered.Body)
@@ -203,7 +255,8 @@ func TestPostQueuedWakesForAnUndeliveredPostAlone(t *testing.T) {
 
 // TestUndeliveredPostSkipsTheCheck: the undelivered post is not checked, so
 // one whose body passes 8 KiB, quoting a 9,000-byte sender, is still
-// posted, and the call does not roll back on every pass.
+// posted, and the call does not roll back on every pass. The failed row's
+// reason, which quotes the sender too, is CleanReason's, cut to 512 bytes.
 func TestUndeliveredPostSkipsTheCheck(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
@@ -215,6 +268,9 @@ func TestUndeliveredPostSkipsTheCheck(t *testing.T) {
 	assert.Equal(t, "undelivered", got.Posts[0].Kind)
 	assert.Greater(t, len(got.Posts[0].Body), store.MaxBody, "the post is longer than checkPost takes")
 	assertState(t, s, store.MessageFailed, m)
+	reason := message(t, s, m.ID).Reason
+	assert.Len(t, reason, 512, "the reason is cut to 512 bytes")
+	assert.Equal(t, store.CleanReason(reason), reason, "the reason is CleanReason's")
 }
 
 // TestPostQueuedTakesAFreshIDWhenTheMessageIDIsTaken (minor 1): a post that
@@ -239,8 +295,9 @@ func TestPostQueuedTakesAFreshIDWhenTheMessageIDIsTaken(t *testing.T) {
 
 // TestPostQueuedMapsEveryRowKind: each row becomes the post its table row
 // says, the first rule that matches winning, so a daemon row with both
-// ReturnedFrom and NoticeOf is returned; every post is read back as made,
-// and every row is delivered.
+// ReturnedFrom and NoticeOf is returned, and a pane's or a boss's message is
+// a team post, as a worker's is; every post is read back as made, and every
+// row is delivered.
 func TestPostQueuedMapsEveryRowKind(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
@@ -262,6 +319,9 @@ func TestPostQueuedMapsEveryRowKind(t *testing.T) {
 		_, err := s.ReturnToBoss(t.Context(), id, "agentisan", boss, t1)
 		require.NoError(t, err)
 	}
+	otherBoss := store.Address{Kind: store.KindBoss, ID: "hb-boss"}
+	r7 := send(t, s, boss, pane, "a pane's post")
+	r8 := send(t, s, boss, otherBoss, "a boss's post")
 	var noticeIDs [2]string
 	require.NoError(t, store.DB(s).QueryRowContext(t.Context(),
 		"SELECT min(id) FILTER (WHERE notice_of = ?1), min(id) FILTER (WHERE notice_of = ?2) FROM messages",
@@ -280,6 +340,8 @@ func TestPostQueuedMapsEveryRowKind(t *testing.T) {
 		daemonPost(r4, "undelivered", failedToWorker.ID, r4.Body),
 		daemonPost(r5, "notices", "", "ha-coder-2 is blocked"),
 		daemonPost(r6, "returned", "ha-coder-3", r6.Body),
+		{ID: r7.ID, Project: queueProject, Channel: store.ChannelTeam, Author: pane, Kind: "post", Body: r7.Body, At: t1},
+		{ID: r8.ID, Project: queueProject, Channel: store.ChannelTeam, Author: otherBoss, Kind: "post", Body: r8.Body, At: t1},
 	}
 
 	got := postQueued(t, s)
@@ -297,12 +359,12 @@ func TestPostQueuedMapsEveryRowKind(t *testing.T) {
 	for i := range want {
 		assert.Equal(t, want[i], latest[len(latest)-1-i], "post %d reads back as made", i)
 	}
-	assert.Equal(t, []string{r1.ID, r2.ID, r3.ID, r4.ID, r5.ID, r6.ID}, ids(got.Delivered))
+	assert.Equal(t, []string{r1.ID, r2.ID, r3.ID, r4.ID, r5.ID, r6.ID, r7.ID, r8.ID}, ids(got.Delivered))
 	for _, m := range got.Delivered {
 		assert.Equal(t, store.MessageDelivered, m.State)
 		assert.Equal(t, postedAt, m.UpdatedAt)
 	}
-	assertState(t, s, store.MessageDelivered, r1, r2, r3, r4, r5, r6)
+	assertState(t, s, store.MessageDelivered, r1, r2, r3, r4, r5, r6, r7, r8)
 }
 
 // TestPostQueuedIsAllOrNone: a statement that fails rolls the whole call
@@ -325,6 +387,145 @@ func TestPostQueuedIsAllOrNone(t *testing.T) {
 		t.Fatal("a rolled-back call woke the board's waiters")
 	default:
 	}
+}
+
+// TestPostQueuedRollsBackARowItCannotMark: marking a row delivered or failed
+// must return the row; when a trigger leaves it as it was, the whole call
+// rolls back with ErrStore, the row still queued, no post left and no waiter
+// woken, so the next pass cannot post it twice.
+func TestPostQueuedRollsBackARowItCannotMark(t *testing.T) {
+	t.Parallel()
+	for state, from := range map[string]store.Address{
+		store.MessageDelivered: pane,
+		store.MessageFailed:    {Kind: store.KindPane, ID: strings.Repeat("p", 300)},
+	} {
+		t.Run(state, func(t *testing.T) {
+			t.Parallel()
+			s := open(t, dbPath(t))
+			m := insertMessage(t, s, store.Message{To: boss, From: from, Body: "unmarked"})
+			_, err := store.DB(s).ExecContext(t.Context(), "CREATE TEMP TRIGGER keep_queued BEFORE UPDATE ON messages WHEN NEW.state = '"+state+
+				"' BEGIN SELECT RAISE(IGNORE); END")
+			require.NoError(t, err)
+			changed := s.BoardChanged()
+
+			_, err = s.PostQueued(t.Context(), boss, queueProject, postedAt)
+			require.ErrorIs(t, err, store.ErrStore)
+			assertState(t, s, store.MessageQueued, m)
+			assert.Zero(t, postCount(t, s), "no post is left")
+			select {
+			case <-changed:
+				t.Fatal("a rolled-back call woke the board's waiters")
+			default:
+			}
+		})
+	}
+}
+
+// TestPostQueuedWithTheClockBehindTheRows: a call whose time is before the
+// rows' (the clock stepped back) still posts and fails them: each row's
+// updated_at is the later of the call's time and its created_at, never below
+// created_at, which the messages table refuses, pass after pass.
+func TestPostQueuedWithTheClockBehindTheRows(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	sent := send(t, s, boss, pane, "posted")
+	refused := insertMessage(t, s, store.Message{To: boss, From: store.Address{Kind: store.KindPane, ID: strings.Repeat("p", 300)}, Body: "refused"})
+
+	got, err := s.PostQueued(t.Context(), boss, queueProject, t1.Add(-time.Hour))
+	require.NoError(t, err)
+	assert.Equal(t, []string{sent.ID}, ids(got.Delivered))
+	assert.Equal(t, []string{refused.ID}, ids(got.Failed))
+	for _, m := range append(got.Delivered, got.Failed...) {
+		assert.Equal(t, t1, m.UpdatedAt, "message %q keeps updated_at at its created_at", m.Body)
+	}
+}
+
+// TestPostQueuedPostsInSendOrder: the queue is taken by seq, the order the
+// rows were sent in, not by their times: a row sent after the clock stepped
+// back is still posted after the one sent before it.
+func TestPostQueuedPostsInSendOrder(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	_, err := s.Send(t.Context(), boss, pane, "first", t1.Add(time.Hour))
+	require.NoError(t, err)
+	send(t, s, boss, pane, "second")
+
+	got := postQueued(t, s)
+	assert.Equal(t, []string{"first", "second"}, bodies(got.Posts))
+}
+
+// TestPostQueuedTakesAnEmptyProject: an empty project is allowed, as it is
+// for any post.
+func TestPostQueuedTakesAnEmptyProject(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	m := send(t, s, boss, pane, "one")
+
+	got, err := s.PostQueued(t.Context(), boss, "", postedAt)
+	require.NoError(t, err)
+	require.Len(t, got.Posts, 1)
+	assert.Empty(t, got.Posts[0].Project)
+	assertState(t, s, store.MessageDelivered, m)
+}
+
+// TestPostQueuedPostsAtMostABatch: one call posts the oldest MaxQueuePost
+// rows, in seq order, a refused one among them counted in the batch, and
+// says More while a row remains; the next call posts that row and says no
+// more.
+func TestPostQueuedPostsAtMostABatch(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	const refused = 7
+	var sent []store.Message
+	for i := range store.MaxQueuePost + 1 {
+		if i == refused {
+			sent = append(sent, insertMessage(t, s, store.Message{To: boss, From: store.Address{Kind: store.KindPane, ID: strings.Repeat("p", 300)}, Body: "refused"}))
+			continue
+		}
+		sent = append(sent, send(t, s, boss, pane, fmt.Sprintf("m%03d", i)))
+	}
+	batch, last := sent[:store.MaxQueuePost], sent[store.MaxQueuePost]
+
+	got := postQueued(t, s)
+	assert.True(t, got.More, "a row remains past the batch")
+	require.Len(t, got.Posts, store.MaxQueuePost)
+	for i, p := range got.Posts {
+		if i == refused {
+			assert.Equal(t, batch[i].ID, p.Subject, "the undelivered post for the refused row")
+		} else {
+			assert.Equal(t, batch[i].ID, p.ID, "post %d is row %d's", i, i)
+		}
+		if i > 0 {
+			assert.Less(t, got.Posts[i-1].Seq, p.Seq)
+		}
+	}
+	assert.Equal(t, []string{batch[refused].ID}, ids(got.Failed))
+	assert.Len(t, got.Delivered, store.MaxQueuePost-1)
+	assertState(t, s, store.MessageQueued, last)
+
+	got = postQueued(t, s)
+	assert.False(t, got.More, "nothing remains")
+	require.Len(t, got.Posts, 1)
+	assert.Equal(t, last.ID, got.Posts[0].ID)
+	assertState(t, s, store.MessageDelivered, last)
+}
+
+// TestPostQueuedSaysMoreOnlyWhenRowsRemain: a queue of exactly MaxQueuePost
+// rows is posted whole by one call, which says no more; a call on an empty
+// queue says no more either.
+func TestPostQueuedSaysMoreOnlyWhenRowsRemain(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	for i := range store.MaxQueuePost {
+		send(t, s, boss, pane, fmt.Sprintf("m%03d", i))
+	}
+
+	got := postQueued(t, s)
+	assert.Len(t, got.Delivered, store.MaxQueuePost)
+	assert.False(t, got.More, "nothing remains after exactly a batch")
+	got = postQueued(t, s)
+	assert.Empty(t, got.Posts)
+	assert.False(t, got.More, "an empty queue has no more")
 }
 
 // TestPostQueuedLeavesDispatchingAlone: a message in flight is the

@@ -632,3 +632,42 @@ func TestPostedLogLineAndWarnReset(t *testing.T) {
 	r.p.Pass()
 	assert.Equal(t, 2, warnings(r.logs.String(), postFailedMsg), "the next failure warns again")
 }
+
+// TestBoardQueueDrainsInBackToBackPasses (1b's part of the PostQueued
+// cap, c9c5680f): a board-mode boss's backlog of 2×MaxQueuePost+1 rows is
+// posted MaxQueuePost rows a pass, and each pass that leaves rows queued
+// wakes the dispatcher again, so the next pass follows at once; the last
+// does not. Every row is posted once, in seq order, delivered, with one
+// .delivered event, and each pass's log line says whether more remain.
+func TestBoardQueueDrainsInBackToBackPasses(t *testing.T) {
+	t.Parallel()
+	r := newBoardRig(t, []settings.Team{haTabs}, boardOn("ha"), nil)
+	n := 2*store.MaxQueuePost + 1
+	ms := make([]store.Message, n)
+	for i := range ms {
+		ms[i] = sent(t, r.st, haBoss, coder, fmt.Sprintf("m%d", i))
+	}
+	r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
+	r.p.TakeWake() // each poll leaves one
+	for i, want := range []struct {
+		posted int
+		more   bool
+	}{{store.MaxQueuePost, true}, {2 * store.MaxQueuePost, true}, {n, false}} {
+		r.p.Pass()
+		assert.Equal(t, want.posted, boardCount(t, r.db), "posted after pass %d", i+1)
+		assert.Equal(t, want.more, r.p.TakeWake(), "woken after pass %d", i+1)
+	}
+	ids := query(t, r.db, "SELECT id FROM board_posts WHERE project = 'ha' ORDER BY seq")
+	require.Len(t, ids, n)
+	for i, m := range ms {
+		assert.Equal(t, m.ID, ids[i], "post %d, in the messages' seq order", i)
+		assert.Equal(t, store.MessageDelivered, stateOf(t, r.st, m.ID).State, m.ID)
+		assert.Len(t, messageEvents(r.rec, telemetry.EventMessageDelivered, m.ID), 1, m.ID)
+	}
+	var more []any
+	for _, l := range postedLines(t, r.logs) {
+		more = append(more, l["more"])
+	}
+	assert.Equal(t, []any{true, true, false}, more, "each pass's log line")
+	assert.Empty(t, r.pr.all(), "never typed")
+}

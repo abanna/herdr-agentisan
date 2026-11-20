@@ -192,11 +192,12 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   It types each queued message into its recipient with `agent.prompt`, by
   the agent name the poll's last model shows where it belongs, or a pane
   sender's by the pane showing its terminal, posts a board-mode boss's
-  whole queue on its board instead, then its notices one post each, the
-  queue first, a flush in one transaction and the inbox when that fails,
-  and holds them, never typed, while that boss's agent has not been seen
-  since the start; the ◆ spaces stay typed (`boarddelivery.go`, A74),
-  returns an ended binding's
+  queue on its board instead, oldest first, 100 rows a call, passes back to
+  back while more remain, then its notices one post each once the queue is
+  empty, a flush in one transaction, and a new inbox row behind the queue
+  when the queue post fails or leaves rows, and holds them, never typed,
+  while that boss's agent has not been seen since the start; the ◆ spaces
+  stay typed (`boarddelivery.go`, A74), returns an ended binding's
   queue to its boss, and fails, never retrying, whatever a timeout or a
   crash may have typed (`messages.go`, A2, A30). The `send` op queues them
   (`docs/messaging.md`).
@@ -323,10 +324,11 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   embedded from `migrations/` and tracked by `user_version`. The daemon holds
   the only write connection. `state.db` also holds messaging's inbox
   (`messages.go`, migration 0002, D8 and I3): a recipient's messages are
-  claimed one at a time, oldest first; a board-mode boss's whole queue is
-  posted on its board instead, each row marked delivered in the same
-  transaction, a body over 8 KiB in parts and a row the board refuses
-  failed on its own, with no notice to its sender (`boardqueue.go`, A74);
+  claimed one at a time, oldest first; a board-mode boss's queue is
+  posted on its board instead, oldest first, at most 100 rows a call, each
+  row marked delivered in the same transaction, a body over 8 KiB in parts
+  and a row the board refuses failed on its own, with no notice to its
+  sender (`boardqueue.go`, A74);
   the daemon's notices to a boss are
   added to the one still queued (`notify.go`, A44); and a pending handoff
   (`handoffs.go`) holds a worker's inbox until it completes, which rebinds
@@ -353,11 +355,19 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   `noticequota.go` refuses an admission past one of eight quotas
   (B0a.3-limits, migration 0010, one-way, its identity totals kept by
   triggers).
+  `noticemeta.go` reads pending notices' metadata and the quotas' exact
+  counts, per source for the hour (B0a.3-queries), never a notice's text.
   No production caller, post, wake or `github_*` write;
   `noticedormant_test.go` fails on any use in a non-test file of
-  `internal/` or `cmd/` but those three, and on SQL naming its tables in one
-  but `noticeledger.go` and `noticequota.go`; it also fails on any non-test
-  Go string naming a ledger table with REPLACE in it.
+  `internal/` or `cmd/` but those four, and on SQL naming its tables in one
+  but `noticeledger.go`, `noticequota.go` and `noticemeta.go`; it also
+  fails on any non-test Go string naming a ledger table with REPLACE in it.
+  `spawnkeys.go` is worker spawn's retry keys (A73, NERD-5254):
+  migration 0011 (one-way) adds `spawn_requests` and `spawn_request_workers`,
+  which `BeginSpawn` writes, `SpawnRecord` reads with each planned id's row
+  now and its briefs, and `DropSpawn` drops while nothing is bound; dormant
+  until `worker spawn` takes a key, and `TestSpawnKeysHaveNoProductionCaller`
+  fails on any use outside it.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real

@@ -54,25 +54,32 @@ func bossProject(bosses map[string]string, boss string) (string, bool) {
 	return found, n == 1
 }
 
-// post posts to's whole queue on project's board instead of typing it
-// (A74), through postQueue. A post that fails leaves every row queued for
-// the next pass, never typed, and is warned of once while it lasts.
+// post posts the oldest MaxQueuePost rows of to's queue on project's board
+// instead of typing them (A74), through postQueue, and wakes the dispatcher
+// again while more remain, so a backlog drains in passes back to back. A
+// post that fails leaves every row queued for the next pass, never typed,
+// and is warned of once while it lasts.
 func (d *dispatcher) post(ctx context.Context, to store.Address, project string) {
-	if _, err := d.o.postQueue(ctx, d.st, to, project); err != nil {
+	out, err := d.o.postQueue(ctx, d.st, to, project)
+	if err != nil {
 		d.note(to, "board", "messages wait: posting them to the board failed", err)
 		return
 	}
 	delete(d.warned, to)
+	if out.More {
+		d.in.Wake()
+	}
 }
 
-// postQueue posts to's whole queue on project's board (A74), in one
-// transaction that marks each row delivered, or failed where the board
-// refuses it, with one .delivered or .failed event per row and one log
-// line. Like claim, a stop does not cut it short, and it is bounded on its
-// own. The dispatcher's pass and a board-mode flush both post through it,
-// so a row either posts is told the same way; it touches no dispatcher
-// state, since the flush runs on the poll's goroutine.
-func (o Options) postQueue(ctx context.Context, st *store.Store, to store.Address, project string) (store.PostedQueue, error) { //nolint:unparam // the signature NERD-5533 PR 2 specifies (A74), kept as the boss approved; no caller reads the posts yet
+// postQueue posts the oldest MaxQueuePost rows of to's queue on project's
+// board (A74), in one transaction that marks each row delivered, or failed
+// where the board refuses it, with one .delivered or .failed event per row
+// and one log line, which says whether more remain. Like claim, a stop does
+// not cut it short, and it is bounded on its own. The dispatcher's pass and
+// a board-mode flush both post through it, so a row either posts is told
+// the same way; it touches no dispatcher state, since the flush runs on the
+// poll's goroutine.
+func (o Options) postQueue(ctx context.Context, st *store.Store, to store.Address, project string) (store.PostedQueue, error) {
 	ctx = context.WithoutCancel(ctx)
 	sctx, cancel := context.WithTimeout(ctx, settleTimeout)
 	defer cancel()
@@ -97,6 +104,6 @@ func (o Options) postQueue(ctx context.Context, st *store.Store, to store.Addres
 		seqs = append(seqs, p.Seq)
 	}
 	o.Logger.Info().Str("recipient", to.ID).Str("project", project).Strs("messages", ids).Ints64("posts", seqs).
-		Msg("messages: posted to the board")
+		Bool("more", out.More).Msg("messages: posted to the board")
 	return out, nil
 }
