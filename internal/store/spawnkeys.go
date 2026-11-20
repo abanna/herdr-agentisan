@@ -20,7 +20,11 @@ import (
 // yet but the daemon's daily prune. Their migration is one-way, as every
 // migration is.
 
-// SpawnKeyRetention is how long a retry key is kept, from its first use.
+// SpawnKeyRetention is how long a retry key is kept, from its first use: no
+// longer than MessageRetention, so a record goes no later than its briefs as
+// a rule. A running record whose bound worker is still starting is kept past
+// it, and then a brief to another of its workers, finished and past
+// MessageRetention, can be pruned first: its brief count shrinks.
 const SpawnKeyRetention = 14 * 24 * time.Hour
 
 // The bounds the schema holds a request to.
@@ -368,10 +372,15 @@ AND NOT (state = 'running' AND EXISTS (SELECT 1 FROM spawn_request_workers l JOI
 // exists without its link, nor a link without its row. A key no record has
 // is ErrNoSpawnKey; a done record, or an id already bound under the key,
 // ErrSpawnKeyChanged; an id the key did not plan, ErrInvalid; a live id,
-// ErrWorkerLive. Any of them changes nothing.
+// ErrWorkerLive. Any of them changes nothing, and no error repeats w's
+// values. The store checks only that the key planned w's id: the caller
+// builds w from the request it compared (C-write).
 func (s *Store) BindSpawned(ctx context.Context, w Worker, key string, at time.Time) (int64, error) {
 	if err := checkRetryKey(key); err != nil {
 		return 0, err
+	}
+	if err := checkWorker(w); err != nil {
+		return 0, &keyedError{op: "bind a spawned worker", err: err}
 	}
 	ns, err := nanos(at)
 	if err != nil {
@@ -401,13 +410,17 @@ func (s *Store) BindSpawned(ctx context.Context, w Worker, key string, at time.T
 	}
 	gen, err := bindTx(ctx, tx, w, ns)
 	if err != nil {
-		return 0, err
+		return 0, &keyedError{op: "bind a spawned worker", err: err}
 	}
 	res, err := tx.ExecContext(ctx, linkSpawned, key, w.LogicalID, gen)
 	if err != nil {
 		return 0, spawnFailed("link a spawned worker", err)
 	}
-	if n, err := res.RowsAffected(); err != nil || n != 1 {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, spawnFailed("link a spawned worker", err)
+	}
+	if n != 1 {
 		return 0, fmt.Errorf("%w: link a spawned worker", ErrSpawnKeyChanged)
 	}
 	if err := tx.Commit(); err != nil {
@@ -442,6 +455,12 @@ func (s *Store) FinishSpawn(ctx context.Context, key string, a SpawnAnswer, at t
 	}
 	defer tx.Rollback() //nolint:errcheck // a no-op once committed
 	res, err := tx.ExecContext(ctx, finishSpawn, key, a.Code, message, answer, ns)
+	var e *sqlite.Error
+	if errors.As(err, &e) && e.Code() == sqlite3.SQLITE_CONSTRAINT_CHECK {
+		// The arguments are checked above, so only the answer's json_valid
+		// can refuse here: JSON nested past what SQLite reads.
+		return fmt.Errorf("%w: an ok spawn answer has a JSON result the store reads", ErrInvalid)
+	}
 	if err != nil {
 		return spawnFailed("finish a spawn", err)
 	}
@@ -481,11 +500,11 @@ func spawnAnswerArgs(a SpawnAnswer) (message, answer any, err error) {
 		}
 		return cutAtRune(a.Message, maxSpawnMessage), nil, nil
 	}
-	if a.Message != "" || !utf8.Valid(a.Result) || !json.Valid(a.Result) {
-		return nil, nil, fmt.Errorf("%w: an ok spawn answer has a JSON result and no message", ErrInvalid)
-	}
 	if len(a.Result) > maxSpawnAnswer {
 		return nil, nil, fmt.Errorf("%w: a spawn answer over %d bytes", ErrTooLarge, maxSpawnAnswer)
+	}
+	if a.Message != "" || !utf8.Valid(a.Result) || !json.Valid(a.Result) {
+		return nil, nil, fmt.Errorf("%w: an ok spawn answer has a JSON result and no message", ErrInvalid)
 	}
 	return nil, string(a.Result), nil
 }
@@ -500,17 +519,42 @@ func snakeLetters(s string) bool {
 	return true
 }
 
-// cutAtRune is s cut to at most n bytes, never inside a UTF-8 sequence.
+// cutAtRune is s cut to at most n bytes at a boundary of its decoded runes,
+// never inside a UTF-8 sequence: a byte that is not UTF-8 is a rune of its
+// own.
 func cutAtRune(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	i := n
-	for i > n-utf8.UTFMax && i > 0 && !utf8.RuneStart(s[i]) {
-		i--
+	i := 0
+	for {
+		_, w := utf8.DecodeRuneInString(s[i:])
+		if i+w > n {
+			return s[:i]
+		}
+		i += w
 	}
-	return s[:i]
 }
+
+// keyedError is a keyed write's error as BindSpawned returns it: its text
+// names the first store sentinel err holds and the operation, never the
+// request's values, since no error carries the request's text (revision 5
+// section 11, the ledger's rule). errors.Is and errors.As still reach err.
+type keyedError struct {
+	op  string
+	err error
+}
+
+func (e *keyedError) Error() string {
+	for _, s := range []error{ErrWorkerLive, ErrInvalid, ErrStore} {
+		if errors.Is(e.err, s) {
+			return s.Error() + ": " + e.op
+		}
+	}
+	return e.op + " failed"
+}
+
+func (e *keyedError) Unwrap() error { return e.err }
 
 // PruneSpawnKeys deletes the records created more than SpawnKeyRetention
 // before now, running or done, with their planned ids, but a running one

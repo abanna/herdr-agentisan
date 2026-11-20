@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"context"
 	"strings"
 	"sync"
 	"testing"
@@ -55,7 +56,8 @@ func TestBindSpawnedIsOneTransaction(t *testing.T) {
 		gen   int64
 		// row is the workers row's status and generation after the bind,
 		// or "" when id must have none.
-		row string
+		row   string
+		check func(t *testing.T, s *store.Store)
 	}{
 		"an unknown key": {key: other, id: "ha-coder-1", want: store.ErrNoSpawnKey},
 		"a done key": {setup: func(t *testing.T, s *store.Store) {
@@ -73,7 +75,16 @@ func TestBindSpawnedIsOneTransaction(t *testing.T) {
 			w.Generation = gen
 			require.NoError(t, s.SetWorkerStatus(t.Context(), w, store.StatusRetired, spawnAt))
 		}, key: retryKey, id: "ha-coder-1", want: store.ErrSpawnKeyChanged, row: store.StatusRetired},
+		"an id bound under the key, still starting": {setup: func(t *testing.T, s *store.Store) {
+			_, err := s.BindSpawned(t.Context(), fullWorker("ha-coder-1"), retryKey, spawnAt)
+			require.NoError(t, err)
+		}, key: retryKey, id: "ha-coder-1", want: store.ErrSpawnKeyChanged, row: store.StatusStarting},
 		"a running key": {key: retryKey, id: "ha-coder-1", row: store.StatusStarting},
+		"an id another running key plans too": {setup: func(t *testing.T, s *store.Store) {
+			begin(t, s, other, spawnAt, "ha-coder-1")
+		}, key: retryKey, id: "ha-coder-1", row: store.StatusStarting, check: func(t *testing.T, s *store.Store) {
+			assert.Equal(t, store.SpawnLink{LogicalID: "ha-coder-1"}, linkOf(t, s, other, "ha-coder-1"), "the other key's link stays empty")
+		}},
 		"a retired id under a new key": {setup: func(t *testing.T, s *store.Store) {
 			gen, err := s.BindWorker(t.Context(), fullWorker("ha-coder-1"), spawnAt)
 			require.NoError(t, err)
@@ -89,11 +100,13 @@ func TestBindSpawnedIsOneTransaction(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(t, s)
 			}
-			before, _ := s.SpawnRecord(t.Context(), retryKey)
+			before, err := s.SpawnRecord(t.Context(), retryKey)
+			require.NoError(t, err)
 			gen, err := s.BindSpawned(t.Context(), fullWorker(tc.id), tc.key, spawnAt.Add(time.Minute))
 			if tc.want != nil {
 				require.ErrorIs(t, err, tc.want)
-				after, _ := s.SpawnRecord(t.Context(), retryKey)
+				after, err := s.SpawnRecord(t.Context(), retryKey)
+				require.NoError(t, err)
 				assert.Equal(t, before, after, "the record and its links are unchanged")
 				if tc.row == "" {
 					noRow(t, s, tc.id)
@@ -113,45 +126,60 @@ func TestBindSpawnedIsOneTransaction(t *testing.T) {
 			assert.Equal(t, tc.gen, row.Generation)
 			assert.Equal(t, store.SpawnLink{LogicalID: tc.id, Bound: true, Generation: tc.gen, Row: &row}, linkOf(t, s, retryKey, tc.id))
 			assert.Equal(t, store.SpawnLink{LogicalID: "ha-coder-2"}, linkOf(t, s, retryKey, "ha-coder-2"), "the other planned id is not bound")
+			if tc.check != nil {
+				tc.check(t, s)
+			}
 		})
 	}
 }
 
 // TestBindSpawnedRollsBackAFailedLink (B2): the link step itself fails
-// after the upsert ran, by a trigger, and nothing of the bind is kept: a
-// fresh id has no row, and an id retired at generation 0 is still retired
-// there, with its link unbound.
+// after the upsert ran, by a trigger, with an error (ErrStore) or changing
+// no row (ErrSpawnKeyChanged), and nothing of the bind is kept: a fresh id
+// has no row, and an id retired at generation 0 is still retired there,
+// with its link unbound.
 func TestBindSpawnedRollsBackAFailedLink(t *testing.T) {
 	t.Parallel()
+	// The link fails with an error, or changes no row without one.
+	links := map[string]struct {
+		raise string
+		want  error
+	}{"an error": {"RAISE(ABORT, 'injected')", store.ErrStore}, "no row changed": {"RAISE(IGNORE)", store.ErrSpawnKeyChanged}}
 	for name, retired := range map[string]bool{"a fresh id": false, "an id retired at generation 0": true} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			s := open(t, dbPath(t))
-			ctx := t.Context()
-			w := fullWorker("ha-coder-1")
-			if retired {
-				_, err := s.BindWorker(ctx, w, spawnAt)
-				require.NoError(t, err)
-				require.NoError(t, s.SetWorkerStatus(ctx, w, store.StatusRetired, spawnAt))
-			}
-			begin(t, s, retryKey, spawnAt, "ha-coder-1")
-			_, err := store.DB(s).ExecContext(ctx, "CREATE TRIGGER fail_link BEFORE UPDATE ON spawn_request_workers BEGIN SELECT RAISE(ABORT, 'injected'); END")
-			require.NoError(t, err)
-
-			_, err = s.BindSpawned(ctx, w, retryKey, spawnAt.Add(time.Minute))
-			require.ErrorIs(t, err, store.ErrStore)
-			assert.Contains(t, err.Error(), "injected")
-			assert.Equal(t, store.SpawnLink{LogicalID: "ha-coder-1"}, linkOf(t, s, retryKey, "ha-coder-1"), "the link is unbound")
-			if !retired {
-				noRow(t, s, "ha-coder-1")
-				return
-			}
-			row, err := s.WorkerRow(ctx, "ha-coder-1")
-			require.NoError(t, err)
-			assert.Equal(t, store.StatusRetired, row.Status)
-			assert.Zero(t, row.Generation, "still at generation 0")
-		})
+		for how, link := range links {
+			t.Run(name+", "+how, func(t *testing.T) {
+				t.Parallel()
+				failedLink(t, retired, link.raise, link.want)
+			})
+		}
 	}
+}
+
+func failedLink(t *testing.T, retired bool, raise string, want error) {
+	t.Helper()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	w := fullWorker("ha-coder-1")
+	if retired {
+		_, err := s.BindWorker(ctx, w, spawnAt)
+		require.NoError(t, err)
+		require.NoError(t, s.SetWorkerStatus(ctx, w, store.StatusRetired, spawnAt))
+	}
+	begin(t, s, retryKey, spawnAt, "ha-coder-1")
+	_, err := store.DB(s).ExecContext(ctx, "CREATE TRIGGER fail_link BEFORE UPDATE ON spawn_request_workers BEGIN SELECT "+raise+"; END")
+	require.NoError(t, err)
+
+	_, err = s.BindSpawned(ctx, w, retryKey, spawnAt.Add(time.Minute))
+	require.ErrorIs(t, err, want)
+	assert.Equal(t, store.SpawnLink{LogicalID: "ha-coder-1"}, linkOf(t, s, retryKey, "ha-coder-1"), "the link is unbound")
+	if !retired {
+		noRow(t, s, "ha-coder-1")
+		return
+	}
+	row, err := s.WorkerRow(ctx, "ha-coder-1")
+	require.NoError(t, err)
+	assert.Equal(t, store.StatusRetired, row.Status)
+	assert.Zero(t, row.Generation, "still at generation 0")
 }
 
 // TestFinishSpawnWritesOnce (B4): FinishSpawn turns a running record done
@@ -231,10 +259,10 @@ func TestFinishSpawnWritesOnce(t *testing.T) {
 	}
 }
 
-// TestSpawnAnswerBounds (B5): a result over 64 KiB is ErrTooLarge and
-// leaves the record running; one of exactly 64 KiB is stored. A message
-// over 16 KiB is stored cut to 16 KiB at a rune boundary, one of exactly
-// 16 KiB whole.
+// TestSpawnAnswerBounds (B5): a result over 64 KiB is ErrTooLarge, JSON or
+// not, and leaves the record running; one of exactly 64 KiB is stored. A
+// message over 16 KiB is stored cut to 16 KiB at a decoded rune boundary,
+// one of exactly 16 KiB whole.
 func TestSpawnAnswerBounds(t *testing.T) {
 	t.Parallel()
 	result := func(n int) []byte { return []byte(`"` + strings.Repeat("a", n-2) + `"`) }
@@ -263,6 +291,13 @@ func TestSpawnAnswerBounds(t *testing.T) {
 			answer: store.SpawnAnswer{Code: "spawn_failed", Message: "\ufeffa\x00b\xffc\r\nd\re é\xe2\x82"},
 			stored: "\ufeffa\x00b\xffc\r\nd\re é\xe2\x82",
 		},
+		// A byte not UTF-8 is one rune wide, so the cut keeps the 🙂 before
+		// the two stray bytes whole and one of them.
+		"a rune before bytes not UTF-8 across 16 KiB": {
+			answer: store.SpawnAnswer{Code: "spawn_failed", Message: strings.Repeat("m", 16<<10-5) + "🙂\x80\x80"},
+			stored: strings.Repeat("m", 16<<10-5) + "🙂\x80",
+		},
+		"a result over 64 KiB, not JSON": {answer: store.SpawnAnswer{Code: "ok", Result: []byte(strings.Repeat("{", 64<<10+1))}, want: store.ErrTooLarge},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -292,8 +327,9 @@ func TestSpawnAnswerBounds(t *testing.T) {
 // retention's cutoff, running or done, with its planned rows, and keeps
 // one created at the cutoff. The workers rows stay. A running record with a
 // bound row still starting at its linked generation is kept, and pruned
-// once that row is active; a starting row of a later generation keeps
-// nothing.
+// once that row is active, whichever of its planned ids it is; a starting
+// row of a later generation keeps nothing. A prune with nothing to delete
+// is no error.
 func TestPruneSpawnKeys(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
@@ -306,6 +342,7 @@ func TestPruneSpawnKeys(t *testing.T) {
 	begin(t, s, key("c"), cutoff.Add(-time.Hour), "ha-coder-3", "ha-coder-4") // done, past, one bound
 	begin(t, s, key("d"), cutoff.Add(-time.Hour), "ha-coder-5")               // running, past, its row starting
 	begin(t, s, key("e"), cutoff.Add(-time.Hour), "ha-coder-6")               // running, past, rebound since
+	begin(t, s, key("f"), cutoff.Add(-time.Hour), "ha-coder-7", "ha-coder-8") // running, past, only its second row starting
 	_, err := s.BindSpawned(ctx, fullWorker("ha-coder-3"), key("c"), cutoff)
 	require.NoError(t, err)
 	require.NoError(t, s.FinishSpawn(ctx, key("c"), store.SpawnAnswer{Code: "spawn_failed", Message: "m"}, cutoff))
@@ -318,11 +355,14 @@ func TestPruneSpawnKeys(t *testing.T) {
 	require.NoError(t, s.SetWorkerStatus(ctx, e, store.StatusRetired, cutoff))
 	_, err = s.BindWorker(ctx, fullWorker("ha-coder-6"), cutoff)
 	require.NoError(t, err)
+	f := fullWorker("ha-coder-8")
+	f.Generation, err = s.BindSpawned(ctx, f, key("f"), cutoff)
+	require.NoError(t, err)
 
 	n, err := s.PruneSpawnKeys(ctx, now)
 	require.NoError(t, err)
 	assert.EqualValues(t, 3, n, "a, c and e")
-	for c, kept := range map[string]bool{"a": false, "b": true, "c": false, "d": true, "e": false} {
+	for c, kept := range map[string]bool{"a": false, "b": true, "c": false, "d": true, "e": false, "f": true} {
 		_, err := s.SpawnRecord(ctx, key(c))
 		if kept {
 			assert.NoError(t, err, c)
@@ -330,7 +370,8 @@ func TestPruneSpawnKeys(t *testing.T) {
 			assert.ErrorIs(t, err, store.ErrNoSpawnKey, c)
 		}
 	}
-	assert.Equal(t, [2]int{2, 2}, spawnRows(t, s), "the pruned records' planned rows went with them")
+	assert.Equal(t, [2]int{3, 4}, spawnRows(t, s), "the pruned records' planned rows went with them")
+	assert.False(t, linkOf(t, s, key("f"), "ha-coder-7").Bound, "f's first row, never bound, kept")
 	for _, id := range []string{"ha-coder-3", "ha-coder-5", "ha-coder-6"} {
 		_, err := s.WorkerRow(ctx, id)
 		assert.NoError(t, err, "%s's workers row stays", id)
@@ -344,15 +385,52 @@ func TestPruneSpawnKeys(t *testing.T) {
 	require.ErrorIs(t, err, store.ErrNoSpawnKey)
 	_, err = s.SpawnRecord(ctx, key("b"))
 	require.NoError(t, err)
+
+	require.NoError(t, s.SetWorkerStatus(ctx, f, store.StatusActive, now))
+	n, err = s.PruneSpawnKeys(ctx, now)
+	require.NoError(t, err)
+	assert.EqualValues(t, 1, n, "f, once its second row is active")
+	n, err = s.PruneSpawnKeys(ctx, now)
+	require.NoError(t, err, "a prune with nothing to delete")
+	assert.Zero(t, n)
 }
 
-// TestSpawnKeyRetentionKeepsNoRecordPastItsBriefs (PR A's N4): a retry key
-// is kept 14 days from its first use, no longer than the finished messages
-// its briefs count, so a record goes no later than its briefs.
-func TestSpawnKeyRetentionKeepsNoRecordPastItsBriefs(t *testing.T) {
+// TestSpawnKeyRetentionIsNoLongerThanMessages (PR A's N4): a retry key is
+// kept 14 days from its first use, no longer than the finished messages its
+// briefs count. A record kept past it for a starting worker can outlive a
+// brief (SpawnKeyRetention's comment).
+func TestSpawnKeyRetentionIsNoLongerThanMessages(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, 14*24*time.Hour, store.SpawnKeyRetention)
 	assert.LessOrEqual(t, store.SpawnKeyRetention, store.MessageRetention)
+}
+
+// TestKeyedBindErrorsCarryNoRequestValue (revision 5 section 11: no error
+// carries the request's text): a keyed bind's error names its sentinel and
+// the operation, never the worker's project, group or ids, and errors.Is
+// still finds its cause.
+func TestKeyedBindErrorsCarryNoRequestValue(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	w := fullWorker("ha-coder-1")
+	w.Project, w.Group, w.PaneID = "marker-project", "marker-group", "w14:marker-pane"
+	require.NoError(t, s.BeginSpawn(ctx, spawnKey(func(k *store.SpawnKey) { k.Count, k.Project, k.Group = 1, w.Project, w.Group }), []string{w.LogicalID}, spawnAt))
+	_, err := s.BindWorker(ctx, w, spawnAt)
+	require.NoError(t, err)
+	_, err = s.BindSpawned(ctx, w, retryKey, spawnAt)
+	require.ErrorIs(t, err, store.ErrWorkerLive, "a live id")
+	assert.NotContains(t, err.Error(), "marker")
+	assert.NotContains(t, err.Error(), w.LogicalID)
+
+	bad := w
+	bad.Provider, bad.TerminalID = "marker-provider", "marker\x00terminal"
+	_, err = s.BindSpawned(ctx, bad, retryKey, spawnAt)
+	require.ErrorIs(t, err, store.ErrInvalid, "an invalid worker")
+	assert.NotContains(t, err.Error(), "marker")
+	_, err = s.BindWorker(ctx, bad, spawnAt)
+	require.ErrorIs(t, err, store.ErrInvalid)
+	assert.Contains(t, err.Error(), "marker", "the keyless bind's diagnostics stay as they were")
 }
 
 // TestSpawnWritesRefuseWhatTheyCannotRecord: BindSpawned and FinishSpawn
@@ -390,6 +468,15 @@ func TestSpawnWritesRefuseWhatTheyCannotRecord(t *testing.T) {
 		_, err := s.BindSpawned(ctx, w, retryKey, spawnAt)
 		require.ErrorIs(t, err, store.ErrInvalid, name)
 	}
+	{ // the worker is checked before the connection, as BindWorker's is
+		done, cancel := context.WithCancel(ctx)
+		cancel()
+		w := fullWorker("ha-coder-1")
+		w.Provider = "gemini"
+		_, err := s.BindSpawned(done, w, retryKey, spawnAt)
+		require.ErrorIs(t, err, store.ErrInvalid, "an invalid provider, the context done")
+		require.NotErrorIs(t, err, store.ErrStore)
+	}
 	for name, code := range map[string]string{
 		"a NUL": "spawn\x00failed", "invalid UTF-8": "spawn\xfffailed", "non-ASCII": "spawn_échec", "a dash": "spawn-failed",
 		"a space": "spawn failed", "a leading dash": "-spawn_failed", "a digit": "spawn_failed_2", "a line break": "spawn_failed\n",
@@ -402,7 +489,7 @@ func TestSpawnWritesRefuseWhatTheyCannotRecord(t *testing.T) {
 		require.ErrorIs(t, s.FinishSpawn(ctx, retryKey, store.SpawnAnswer{Code: "ok", Result: []byte(result)}, spawnAt), store.ErrInvalid, "a result with %s", name)
 	}
 	deep := []byte(strings.Repeat("[", 2000) + strings.Repeat("]", 2000))
-	require.Error(t, s.FinishSpawn(ctx, retryKey, store.SpawnAnswer{Code: "ok", Result: deep}, spawnAt), "a result nested past what SQLite's json_valid reads")
+	require.ErrorIs(t, s.FinishSpawn(ctx, retryKey, store.SpawnAnswer{Code: "ok", Result: deep}, spawnAt), store.ErrInvalid, "a result nested past what SQLite's json_valid reads")
 	far := time.Date(3000, 1, 1, 0, 0, 0, 0, time.UTC)
 	_, err := s.BindSpawned(ctx, fullWorker("ha-coder-1"), retryKey, far)
 	require.ErrorIs(t, err, store.ErrInvalid, "a bind time")
@@ -425,7 +512,8 @@ func TestSpawnWritesRefuseWhatTheyCannotRecord(t *testing.T) {
 
 // TestSpawnWritesRaceOnce: two binds of one planned id at once bind it
 // once, and two finishes of one record at once store one answer; the other
-// of each is ErrSpawnKeyChanged.
+// of each is ErrSpawnKeyChanged. Two prunes at once both succeed and delete
+// an old record once.
 func TestSpawnWritesRaceOnce(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
@@ -444,6 +532,7 @@ func TestSpawnWritesRaceOnce(t *testing.T) {
 		won := -1
 		for i, err := range errs {
 			if err == nil {
+				require.Equal(t, -1, won, "only one of them wrote")
 				won = i
 				continue
 			}
@@ -469,10 +558,11 @@ func TestSpawnWritesRaceOnce(t *testing.T) {
 	old := strings.Repeat("0", 32)
 	begin(t, s, old, spawnAt.Add(-15*24*time.Hour), "ha-coder-2")
 	pruned := make([]int64, 2)
-	race(func(i int) error {
+	errs := race(func(i int) error {
 		var err error
 		pruned[i], err = s.PruneSpawnKeys(ctx, spawnAt)
 		return err
 	})
-	assert.EqualValues(t, 1, pruned[0]+pruned[1], "two prunes at once delete the old record once")
+	assert.Equal(t, []error{nil, nil}, errs, "both prunes succeed")
+	assert.ElementsMatch(t, []int64{0, 1}, pruned, "two prunes at once delete the old record once")
 }
