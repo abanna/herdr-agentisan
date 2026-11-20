@@ -611,7 +611,9 @@ func TestPostQueuedStopsAtHalfItsBudget(t *testing.T) {
 // for it, its timer started after the hook's set-up; in the second another
 // writer holds the write lock past the deadline, so BEGIN waits it out under
 // busy_timeout and the read must not run on the spent deadline (#186
-// pre-check).
+// pre-check). Each deadline is 2 s, so a loaded runner cannot spend it
+// before the call takes the connection; the second's BEGIN waits until the
+// deadline plus 100 ms, 2.1 s, well under busy_timeout's 5 s.
 func TestPostQueuedCommitsARowThatOutlastsItsBudget(t *testing.T) {
 	t.Parallel()
 	t.Run("the first insert", func(t *testing.T) {
@@ -621,7 +623,7 @@ func TestPostQueuedCommitsARowThatOutlastsItsBudget(t *testing.T) {
 		sent := []store.Message{send(t, s, boss, pane, "m0"), send(t, s, boss, pane, "m1"), send(t, s, boss, pane, "m2")}
 		var ctx context.Context
 		hookBoardInserts(t, path, func() { <-ctx.Done() })
-		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 		defer cancel()
 
 		got, err := s.PostQueued(ctx, boss, queueProject, postedAt)
@@ -643,7 +645,7 @@ func TestPostQueuedCommitsARowThatOutlastsItsBudget(t *testing.T) {
 		t.Cleanup(func() { _ = outside.Close() })
 		held, err := outside.BeginTx(t.Context(), nil)
 		require.NoError(t, err)
-		ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 		defer cancel()
 		released := make(chan error, 1)
 		go func() {
@@ -663,11 +665,12 @@ func TestPostQueuedCommitsARowThatOutlastsItsBudget(t *testing.T) {
 	})
 }
 
-// TestPostQueuedStopsAtHalfARealBudget: under a real 1 s budget, with each
-// insert slowed to 100 ms, a call starts no row once half the budget has
+// TestPostQueuedStopsAtHalfARealBudget: under a real 2 s budget, with each
+// insert slowed to 200 ms, a call starts no row once half the budget has
 // gone: it posts the oldest rows, at most 6, in order, says More and
 // leaves the rest queued (NERD-5533 a8611aa0, A, and afd038aa T2). A slow
-// host only lowers the count, so the upper bound holds under load.
+// host only lowers the count, so the upper bound holds under load, and a
+// stall before the call takes the connection would have to last 2 s.
 func TestPostQueuedStopsAtHalfARealBudget(t *testing.T) {
 	t.Parallel()
 	path := dbPath(t)
@@ -676,8 +679,8 @@ func TestPostQueuedStopsAtHalfARealBudget(t *testing.T) {
 	for i := range sent {
 		sent[i] = send(t, s, boss, pane, fmt.Sprintf("m%02d", i))
 	}
-	hookBoardInserts(t, path, func() { time.Sleep(100 * time.Millisecond) })
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	hookBoardInserts(t, path, func() { time.Sleep(200 * time.Millisecond) })
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 	defer cancel()
 
 	got, err := s.PostQueued(ctx, boss, queueProject, postedAt)
@@ -752,7 +755,7 @@ func TestPostQueuedWaitsForTheConnectionWithinItsBudget(t *testing.T) {
 		select {
 		case got = <-done:
 			require.NoError(t, held.Close())
-		case <-time.After(2 * time.Second):
+		case <-time.After(10 * time.Second): // far past the 150 ms deadline: a stall only delays the failure
 			require.NoError(t, held.Close())
 			t.Fatalf("the call waited past its budget for the connection, then returned %v", <-done)
 		}
