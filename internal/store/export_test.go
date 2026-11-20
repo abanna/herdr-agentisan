@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"io"
 	"io/fs"
+	"sync/atomic"
 	"time"
 )
 
@@ -70,4 +71,25 @@ func (r Row) InUTC() Row {
 		r.Routing = &rt
 	}
 	return r
+}
+
+// CountBoardSignals installs a forwarding wake on this test's private store
+// before its first writer starts. A second signal still counts when the
+// first already closed the wait channel.
+func CountBoardSignals(s *Store) func() int64 {
+	rec := &countingBoardWake{next: s.wake}
+	s.wake = rec
+	return rec.calls.Load
+}
+
+type countingBoardWake struct {
+	next  boardNotifier
+	calls atomic.Int64
+}
+
+func (w *countingBoardWake) changed() <-chan struct{} { return w.next.changed() }
+
+func (w *countingBoardWake) signal() {
+	w.calls.Add(1)
+	w.next.signal()
 }

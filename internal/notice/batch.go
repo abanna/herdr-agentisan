@@ -24,7 +24,45 @@ type Message struct {
 	Lines   []string
 	// Dropped counts the oldest notices cut to keep the body under MaxBody.
 	Dropped int
-	acks    []func()
+	// Tail queues this message as a new inbox row, never appended to one
+	// still queued.
+	Tail bool
+	acks []func()
+	// all is every notice of the flush, oldest first, the cut ones
+	// included, for the board (A74).
+	all []Notice
+}
+
+// Entry is one notice of a message as a board post carries it (A74).
+type Entry struct {
+	Kind            Kind
+	Subject, Worker string
+	Body            string
+}
+
+// Entries is every notice of m, oldest first, the ones its lines cut for
+// size included. Each body is the notice's line as the inbox writes it, or
+// "(no text)" for an empty one.
+func (m Message) Entries() []Entry {
+	out := make([]Entry, 0, len(m.all))
+	for _, n := range m.all {
+		body := inboxLine(n.Text)
+		if body == "" {
+			body = "(no text)"
+		}
+		out = append(out, Entry{Kind: n.Kind, Subject: n.Subject, Worker: n.Worker, Body: body})
+	}
+	return out
+}
+
+// SettleAll acknowledges every notice of m, the cut ones included. The
+// caller runs it, in place of Settle, once a sink has taken every entry.
+func (m Message) SettleAll() {
+	for _, n := range m.all {
+		if n.Ack != nil {
+			n.Ack()
+		}
+	}
 }
 
 // Body is the message as one text: a line saying how many notices were cut,
@@ -131,8 +169,10 @@ func (b *Batcher) Flush(now time.Time) []Message {
 	return out
 }
 
-// message is ns as one message, the oldest cut until its body fits MaxBody.
+// message is ns as one message, the oldest cut until its body fits MaxBody;
+// it keeps every notice of ns for Entries and SettleAll.
 func message(project string, ns []Notice) Message {
+	all := ns
 	size := func(ns []Notice, dropped int) int {
 		n := 0
 		if dropped > 0 {
@@ -147,7 +187,7 @@ func message(project string, ns []Notice) Message {
 	for len(ns) > 1 && size(ns, dropped) > MaxBody {
 		ns, dropped = ns[1:], dropped+1
 	}
-	m := Message{Project: project, Dropped: dropped}
+	m := Message{Project: project, Dropped: dropped, all: all}
 	for _, n := range ns {
 		m.Lines = append(m.Lines, n.Text)
 		if n.Ack != nil {
