@@ -1,5 +1,8 @@
 name: CI
 
+# THROWAWAY (NERD-5676, gates/covdata): can Go's own binary coverage data
+# and `go tool covdata textfmt` replace devctl coverage-merge? Never merged.
+
 on:
   push:
     branches: [main, 'gates/**']
@@ -16,40 +19,29 @@ env:
   GO_VERSION: "1.26.11"
 
 jobs:
-  lint:
-    name: lint
+  shard:
+    name: covdata (${{ matrix.shard }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [dashboard, store, daemon, workforce, rest]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - run: go tool golangci-lint run --allow-serial-runners ./...
-      - run: go tool golangci-lint fmt --diff ./...
-      - run: go vet ./...
-
-  # The unit suite runs as five jobs, each on a runner of its own (NERD-5676);
-  # `devctl test-packages` names each job's packages, so a new package needs
-  # no edit here. `test` merges their coverage profiles and enforces the floor.
-  test-dashboard:
-    name: test (dashboard)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - run: go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage-dashboard.out -covermode=atomic $(go run ./cmd/devctl test-packages dashboard)
+      - run: mkdir -p covdata && go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... $(go run ./cmd/devctl test-packages ${{ matrix.shard }}) -args -test.gocoverdir=$PWD/covdata
+      - run: ls covdata | sed -E 's/\.[0-9a-f]{32}.*//' | sort | uniq -c; du -sh covdata
       - uses: actions/upload-artifact@v7
         with:
-          name: coverage-dashboard
-          path: coverage-dashboard.out
+          name: covdata-${{ matrix.shard }}
+          path: covdata/
           if-no-files-found: error
 
-  test-store:
-    name: test (store)
+  single-text:
+    name: single (today's text profile)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -57,15 +49,15 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - run: go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage-store.out -covermode=atomic $(go run ./cmd/devctl test-packages store)
+      - run: go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage.out -covermode=atomic ./...
       - uses: actions/upload-artifact@v7
         with:
-          name: coverage-store
-          path: coverage-store.out
+          name: single-text
+          path: coverage.out
           if-no-files-found: error
 
-  test-daemon:
-    name: test (daemon)
+  single-covdata:
+    name: single (binary covdata)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -73,55 +65,20 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - run: go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage-daemon.out -covermode=atomic $(go run ./cmd/devctl test-packages daemon)
+      - run: mkdir -p covdata && go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ./... -args -test.gocoverdir=$PWD/covdata
+      - run: go tool covdata textfmt -i=covdata -o single-covdata.out
       - uses: actions/upload-artifact@v7
         with:
-          name: coverage-daemon
-          path: coverage-daemon.out
+          name: single-covdata
+          path: single-covdata.out
           if-no-files-found: error
 
-  test-workforce:
-    name: test (workforce)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - run: go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage-workforce.out -covermode=atomic $(go run ./cmd/devctl test-packages workforce)
-      - uses: actions/upload-artifact@v7
-        with:
-          name: coverage-workforce
-          path: coverage-workforce.out
-          if-no-files-found: error
-
-  test-rest:
-    name: test (rest)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - run: go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage-rest.out -covermode=atomic $(go run ./cmd/devctl test-packages rest)
-      - uses: actions/upload-artifact@v7
-        with:
-          name: coverage-rest
-          path: coverage-rest.out
-          if-no-files-found: error
-
-  test:
-    name: test
-    # Runs unless cancelled, so a failed test job fails this check, not skips it.
-    needs: [test-dashboard, test-store, test-daemon, test-workforce, test-rest]
+  compare:
+    name: compare
+    needs: [shard, single-text, single-covdata]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
-      - name: fail unless every test job passed
-        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}
-        run: exit 1
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
@@ -129,83 +86,50 @@ jobs:
           cache: true
       - uses: actions/download-artifact@v8
         with:
-          pattern: coverage-*
-          merge-multiple: true
-      - run: go run ./cmd/devctl coverage-merge --out coverage.out
+          pattern: covdata-*
+          path: shards
+      - uses: actions/download-artifact@v8
+        with:
+          name: single-text
+          path: single-text
+      - uses: actions/download-artifact@v8
+        with:
+          name: single-covdata
+          path: single-covdata
+      - run: ls -R shards | head -40
+      - run: go tool covdata textfmt -i=$(ls -d shards/covdata-* | paste -sd, -) -o coverage.out
       - run: go run ./cmd/devctl coverage --profile coverage.out --min 75
-
-  security:
-    name: security
-    runs-on: ubuntu-latest
-    steps:
-      # gitleaks git mode walks commit history; a shallow clone would hide it.
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - run: go tool gosec -quiet ./...
-      - run: go run github.com/zricethezav/gitleaks/v8@v8.30.1 git . --config .gitleaks.toml --no-banner --redact
-      - run: go tool govulncheck ./...
-
-  docs:
-    name: docs
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - run: go run ./cmd/devctl docs-parity
-      - run: go run ./cmd/devctl large-files
-
-  tidy:
-    name: tidy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - run: go mod tidy
-      - run: git diff --exit-code go.mod go.sum
-
-  hooks:
-    name: hooks
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - uses: astral-sh/setup-uv@v7
-      # The local hooks invoke task targets so Taskfile stays the single
-      # source of gate truth; that makes `task` a dependency of this job.
-      - uses: arduino/setup-task@v3
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - run: uvx pre-commit run --all-files
-        # gitleaks-staged reads the git index, which is empty in CI: it would
-        # report Passed having scanned nothing. The security job scans full
-        # history instead. Skipping by id keeps the hook useful locally, and
-        # setting it in env rather than inline keeps the `run:` line identical
-        # to the one AGENTS.md and the Taskfile document.
-        env:
-          SKIP: gitleaks-staged
-
-  modernize:
-    name: modernize
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
-        with:
-          go-version: ${{ env.GO_VERSION }}
-          cache: true
-      - run: go tool modernize ./...
+      - run: go run ./cmd/devctl coverage --profile single-text/coverage.out --min 75
+      - run: go run ./cmd/devctl coverage --profile single-covdata/single-covdata.out --min 75
+      - run: go tool covdata percent -i=$(ls -d shards/covdata-* | paste -sd, -) | tail -40
+      - name: compare the statement sets
+        run: |
+          python3 - coverage.out single-text/coverage.out single-covdata/single-covdata.out <<'EOF'
+          import sys
+          def load(p):
+              blocks, modes = {}, set()
+              for line in open(p):
+                  line = line.rstrip("\n")
+                  if line.startswith("mode:"):
+                      modes.add(line); continue
+                  if not line:
+                      continue
+                  pos, n, c = line.rsplit(" ", 2)
+                  key = (pos, int(n))
+                  blocks[key] = blocks.get(key, 0) + int(c)
+              return blocks, modes
+          names = ["shards via covdata textfmt", "single text profile (today)", "single via covdata textfmt"]
+          sets = []
+          for name, p in zip(names, sys.argv[1:]):
+              b, m = load(p)
+              stm = sum(n for (_, n) in b)
+              cov = sum(n for (k, n) in b if b[(k, n)] > 0)
+              pkgs = {k.rsplit("/", 1)[0] for (k, _) in b}
+              print(f"{name}: modes {sorted(m)}, {len(b)} distinct blocks, {stm} statements, {cov} covered, {100*cov/stm:.2f}%, {len(pkgs)} directories")
+              sets.append(b)
+          for i, j in [(0, 1), (0, 2), (1, 2)]:
+              a, b = set(sets[i]), set(sets[j])
+              print(f"{names[i]} vs {names[j]}: only first {len(a-b)}, only second {len(b-a)}")
+              for k in sorted(a - b)[:5]: print("   only first:", k)
+              for k in sorted(b - a)[:5]: print("   only second:", k)
+          EOF
