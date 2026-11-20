@@ -159,7 +159,7 @@ func TestOpenMigratesAndIsIdempotent(t *testing.T) {
 
 	s, err := store.Open(t.Context(), path)
 	require.NoError(t, err)
-	assert.Equal(t, 11, store.SchemaVersion(), "0001, 0002, messaging's inbox, 0003, the workers' identity, 0004, the GitHub notices' state, 0005, the workers' routing, 0006, the GitHub notices' seed per kind, 0007, the board, 0008, the workers' provider, 0009, the notice ledger, 0010, the notice ledger's totals, 0011, worker spawn's retry keys, and 0011, the board's acknowledgements")
+	assert.Equal(t, 12, store.SchemaVersion(), "0001, 0002, messaging's inbox, 0003, the workers' identity, 0004, the GitHub notices' state, 0005, the workers' routing, 0006, the GitHub notices' seed per kind, 0007, the board, 0008, the workers' provider, 0009, the notice ledger, 0010, the notice ledger's totals, 0011, worker spawn's retry keys, and 0012, the board's acknowledgements")
 	assert.Equal(t, store.SchemaVersion(), s.UserVersion())
 	assert.Equal(t, []string{"table:board_acks", "table:board_held_acks", "table:board_marks", "table:board_posts", "table:focus", "table:github_open", "table:github_seeded", "table:github_seeded_kinds", "table:github_seen", "table:handoffs", "table:messages", "table:notice_counts", "table:notice_identities", "table:notice_payloads", "table:notice_store_counts", "table:spawn_request_workers", "table:spawn_requests", "table:workers", "trigger:focus_cap", "trigger:notice_counts_delete", "trigger:notice_counts_insert", "trigger:notice_counts_move"}, objects(t, store.DB(s)))
 	at := time.Date(2026, 10, 9, 12, 0, 0, 123456789, time.UTC)

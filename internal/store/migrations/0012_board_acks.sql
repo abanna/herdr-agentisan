@@ -1,4 +1,4 @@
--- 0011: the user's acknowledgements of board posts (ADR-001 A74, NERD-5533).
+-- 0012: the user's acknowledgements of board posts (ADR-001 A74, NERD-5533).
 -- One row per post the user acknowledged in the dashboard's board panel. It
 -- is a record, not a mark: it moves neither reader's mark (board_marks). A
 -- post's acknowledgement goes with it when the board's prune deletes it.

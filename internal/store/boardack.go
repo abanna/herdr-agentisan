@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// The user's acknowledgements (ADR-001 A74, migration 0011), made in the
+// The user's acknowledgements (ADR-001 A74, migration 0012), made in the
 // dashboard's board panel alone: of posts, a record per post that moves
 // neither reader's mark and goes with its post at the prune, and of the
 // messages waiting in a boss's inbox, one record per project and boss that a
