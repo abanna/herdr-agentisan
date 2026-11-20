@@ -645,9 +645,11 @@ VALUES (?, 'worker', ?, 'agentisan', ?, ?, 'ha-sender', ?, 'a brief', ?, 1, 1)`,
 
 // TestSpawnKeysHaveNoProductionCaller (A9): the retry keys are dormant but
 // for what part B wires, each name in the one file it may use it in: the
-// daemon's prune line. No other non-test file in internal/ or cmd/ but
-// spawnkeys.go uses their names or names their tables, and no Go string
-// names a table of theirs with REPLACE.
+// daemon's prune line and its codes for the store's two record errors, and
+// the replay builder's types, a builder nothing calls until worker spawn
+// takes a key. No other non-test file in internal/ or cmd/ but spawnkeys.go
+// uses their names or names their tables, and no Go string names a table of
+// theirs with REPLACE.
 func TestSpawnKeysHaveNoProductionCaller(t *testing.T) {
 	t.Parallel()
 	const own = "internal/store/spawnkeys.go"
@@ -657,7 +659,9 @@ func TestSpawnKeysHaveNoProductionCaller(t *testing.T) {
 		"ErrNoSpawnKey", "ErrSpawnKeyExists", "ErrSpawnKeyChanged",
 	}
 	wired := map[string][]string{
-		"internal/daemon/daemon.go": {"PruneSpawnKeys"},
+		"internal/daemon/daemon.go":    {"PruneSpawnKeys"},
+		"internal/daemon/workforce.go": {"ErrSpawnKeyChanged", "ErrSpawnKeyExists"},
+		"internal/workforce/replay.go": {"SpawnLink", "SpawnRecord"},
 	}
 	names, tables := map[string][]string{}, map[string][]string{}
 	var replaces []string
@@ -688,6 +692,15 @@ func TestSpawnKeysHaveNoProductionCaller(t *testing.T) {
 	assert.Empty(t, names, "the retry keys are dormant until worker spawn takes a key (NERD-5254)")
 	assert.Empty(t, tables, "only spawnkeys.go names their tables in SQL")
 	assert.Empty(t, replaces, "no Go string names a retry key table with REPLACE in it")
+
+	builder := map[string][]string{}
+	for _, dir := range []string{"internal", "cmd"} {
+		n, _, _, _ := productionUses(t, filepath.Join("..", ".."), dir, []string{"Replay"}, nil)
+		maps.Copy(builder, n)
+	}
+	require.NotEmpty(t, builder["internal/workforce/replay.go"], "the scan finds the builder")
+	delete(builder, "internal/workforce/replay.go")
+	assert.Empty(t, builder, "nothing calls the replay builder until worker spawn takes a key")
 }
 
 // TestDropSpawnOnlyWhenNothingBound (A10): DropSpawn deletes a running

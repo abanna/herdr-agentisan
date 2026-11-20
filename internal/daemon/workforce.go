@@ -119,6 +119,14 @@ var workforceCodes = []struct {
 	{workforce.ErrInvalidID, "invalid_id"},
 	{workforce.ErrPreflight, "preflight_failed"},
 	{workforce.ErrSpawnFailed, "spawn_failed"},
+	// A73's retry keys: a store's changed record, which only a race the
+	// keys in flight exclude reaches, is answered unsettled, so a retry with
+	// the same key replays or settles it; a hand-edited store's known key is
+	// a store failure, never failed.
+	{workforce.ErrRetryKeyReused, "retry_key_mismatch"},
+	{workforce.ErrSpawnUnsettled, codeSpawnUnsettled},
+	{store.ErrSpawnKeyChanged, codeSpawnUnsettled},
+	{store.ErrSpawnKeyExists, codeStoreFailed},
 	{workforce.ErrUnknownRecipient, "unknown_recipient"},
 	{workforce.ErrUnknownSender, "unknown_sender"},
 	{store.ErrTooLarge, "too_large"},
@@ -128,11 +136,21 @@ var workforceCodes = []struct {
 	{store.ErrStore, codeStoreFailed},
 }
 
-// codeStoreFailed answers an op whose state.db call failed.
-const codeStoreFailed = "store_failed"
+const (
+	// codeStoreFailed answers an op whose state.db call failed.
+	codeStoreFailed = "store_failed"
+	// codeSpawnUnsettled answers a keyed spawn whose request is not
+	// settled; it is never stored (A73).
+	codeSpawnUnsettled = "spawn_unsettled"
+)
 
-// workforceCode is the refusal code for a workforce op's error.
+// workforceCode is the refusal code for a workforce op's error: a keyed
+// spawn's *workforce.RefusalError's own, computed once, else its sentinel's.
 func workforceCode(err error) string {
+	var refused *workforce.RefusalError
+	if errors.As(err, &refused) {
+		return refused.Code
+	}
 	for _, c := range workforceCodes {
 		if errors.Is(err, c.err) {
 			return c.code
@@ -299,6 +317,9 @@ func (o Options) newWorkforce(st *store.Store, ident Identity, idle *team.IdleCl
 		Routed:         o.routed,
 		Jev:            jev.Asker{Keys: &jev.Keys{}},
 		HandoffSteps:   o.handoffStep,
+		Refusal: func(ctx context.Context, err error) (string, string) {
+			return refusalOf(ctx, OpWorkerSpawn, SpawnBudget, workforceCode, err)
+		},
 	}
 }
 

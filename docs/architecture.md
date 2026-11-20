@@ -276,9 +276,10 @@ links it to its planned id in one transaction, through the same `bindTx` as
 began, and `PruneSpawnKeys` deletes records past 14 days but a running one
 whose bound row is still starting.
 `TestSpawnKeysHaveNoProductionCaller` fails on any use of their names in a
-non-test file of `internal/` or `cmd/` but `spawnkeys.go` and the daemon's
-prune line, on any string naming their tables outside it, and on any naming
-one with REPLACE.
+non-test file of `internal/` or `cmd/` but `spawnkeys.go` and the three files
+part B wires (the prune line, the daemon's codes and the replay builder's
+types), on any string naming their tables outside it, and on any naming one
+with REPLACE.
 
 The schema refuses on its own what a record must never hold, whoever writes
 it: a key, effort, digest or outcome off its grammar, each compared by its

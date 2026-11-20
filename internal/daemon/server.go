@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
 // The socket protocol (D6): one JSON request per connection,
@@ -115,6 +117,10 @@ type request struct {
 type errorBody struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+	// RetryKey and KeyState are a keyed spawn's key and its state, set only
+	// from a *workforce.RefusalError (A73): no other refusal carries them.
+	RetryKey string `json:"retry_key,omitempty"`
+	KeyState string `json:"key_state,omitempty"`
 }
 
 type response struct {
@@ -266,14 +272,13 @@ func (s *server) run(name string, o op, args json.RawMessage, peer Peer, extend 
 	res, err := o.run(ctx, args)
 	if err != nil {
 		s.log.Info().Err(err).Str("op", name).Msg("op refused")
-		code := o.code(err)
-		// An op whose own budget ended while a call failed is a timeout, the
-		// error saying what it waited on; a code that says more than that a
-		// call failed, such as handoff_timeout or herdr_gone, stands.
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) && callFailed[code] {
-			return refuse(codeTimeout, fmt.Sprintf("%s ran past its %s budget: %v", name, budget, err))
+		// A keyed spawn's refusal was computed by the rule below already,
+		// and carries its key's state (A73).
+		var refused *workforce.RefusalError
+		if errors.As(err, &refused) {
+			return response{Error: &errorBody{Code: refused.Code, Message: refused.Message, RetryKey: refused.RetryKey, KeyState: refused.KeyState}}
 		}
-		return refuse(code, err.Error())
+		return refuse(refusalOf(ctx, name, budget, o.code, err))
 	}
 	data, err := json.Marshal(res)
 	if err != nil {
@@ -281,6 +286,20 @@ func (s *server) run(name string, o op, args json.RawMessage, peer Peer, extend 
 	}
 	s.log.Info().Str("op", name).Msg("op done")
 	return response{OK: true, Data: data}
+}
+
+// refusalOf is the code and message an op named name, of budget, answers
+// err with on ctx, its code from code: an op whose own budget ended while a
+// call failed is a timeout, the error saying what it waited on; a code that
+// says more than that a call failed, such as handoff_timeout or herdr_gone,
+// stands. server.run applies it, and a keyed spawn computes its refusal
+// with it once, to store (A73).
+func refusalOf(ctx context.Context, name string, budget time.Duration, code func(error) string, err error) (string, string) {
+	c := code(err)
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) && callFailed[c] {
+		return codeTimeout, fmt.Sprintf("%s ran past its %s budget: %v", name, budget, err)
+	}
+	return c, err.Error()
 }
 
 // callFailed are the codes that say only that a call failed.
