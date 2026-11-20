@@ -380,12 +380,14 @@ WHERE project = ?1 AND seq > (SELECT coalesce(max(seq), 0) FROM board_marks WHER
 // pendingHeld is the messages queued for a boss (?1) in its inbox, with its
 // held ceilings, ?2 being the ceiling mark: a daemon notice holding the
 // mark, the oldest timed by its creation, at or before its ceiling line,
-// the newest change by its last update, which an appended line moves. It
+// the newest change by its last update, which an appended line moves. A
+// notice of a failed delivery (notice_of) or a returned row (returned_from)
+// is none, whatever it quotes: posted, rowPosts gives it no notices kind. It
 // runs on messages_inbox. PR 3c adds its acknowledgement filter to this
 // WHERE, and the ceilings are then read over the same rows.
 const pendingHeld = `SELECT count(*), min(created_at),
-  min(CASE WHEN sender_kind = 'daemon' AND instr(body, ?2) > 0 THEN created_at END),
-  max(CASE WHEN sender_kind = 'daemon' AND instr(body, ?2) > 0 THEN updated_at END)
+  min(CASE WHEN sender_kind = 'daemon' AND notice_of = '' AND returned_from = '' AND instr(body, ?2) > 0 THEN created_at END),
+  max(CASE WHEN sender_kind = 'daemon' AND notice_of = '' AND returned_from = '' AND instr(body, ?2) > 0 THEN updated_at END)
 FROM messages
 WHERE recipient_kind = 'boss' AND recipient = ?1 AND state = 'queued'`
 

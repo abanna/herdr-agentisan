@@ -260,6 +260,7 @@ func TestCrossingAlert(t *testing.T) {
 // no soft or hard line.
 func TestCeilingMarkIsInEveryCeilingLineOnly(t *testing.T) {
 	t.Parallel()
+	assert.Equal(t, "% context (ceiling: ", notice.CeilingMark, "the mark is ctxText's from its percent sign: another daemon notice quoting a bare (ceiling: is none")
 	boss := team.Worker{ID: "w1:p0", Pane: team.Pane{ID: "w1:p0", Name: "ha-boss", Agent: "claude"}}
 	for _, who := range []struct {
 		name string

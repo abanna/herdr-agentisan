@@ -1,6 +1,8 @@
 package store_test
 
 import (
+	"maps"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -206,4 +208,65 @@ func TestBoardPendingNewestCeilingIsTheLaterRead(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, appended)
 	assert.Equal(t, at(5), pending(t, s).NewestCeiling, "the held notice's append, newer than the post")
+}
+
+// TestBoardPendingIgnoresACeilingQuotedInAFailureNotice (S2, NERD-5533
+// 34ed8294): a notice of a failed delivery quotes the message whole, and a
+// row returned from an ended binding is the sender's own; either can hold a
+// ceiling line and is no ceiling, held or posted. The held read takes only
+// the daemon's own notices, as the posts read takes only the notices kind,
+// which rowPosts gives no such row.
+func TestBoardPendingIgnoresACeilingQuotedInAFailureNotice(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	seedWorker(t, s, "ha-coder-1", "w14:p2", 1)
+	seedWorker(t, s, "ha-coder-2", "w14:p3", 1)
+	failed := func(from store.Address, at time.Time) {
+		t.Helper()
+		_, err := s.Send(ctx, worker("ha-coder-1"), from, ceilingLine+"\nhand off now", at)
+		require.NoError(t, err)
+		m, ok, err := s.Claim(ctx, worker("ha-coder-1"), at)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.NoError(t, s.Fail(ctx, m.ID, "prompt timed out", at))
+	}
+	failed(boss, t1)                                  // its notice is the boss's
+	failed(worker("ha-coder-2"), t1.Add(time.Minute)) // ha-coder-2's, then returned to the boss
+	retire(t, s, "ha-coder-2")
+	returned, err := s.ReturnToBoss(ctx, "ha-coder-2", "agentisan", boss, t1.Add(2*time.Minute))
+	require.NoError(t, err)
+	require.Len(t, returned, 1)
+	got := pending(t, s)
+	assert.Equal(t, 2, got.Held)
+	assert.Zero(t, got.OldestHeldCeiling, "held")
+	assert.Zero(t, got.NewestCeiling, "held")
+	posted, err := s.PostQueued(ctx, boss, "ha", t1.Add(3*time.Minute))
+	require.NoError(t, err)
+	require.Len(t, posted.Delivered, 2)
+	got = pending(t, s)
+	assert.Equal(t, 2, got.Pending)
+	assert.Zero(t, got.Held)
+	assert.Zero(t, got.OldestCeiling, "posted")
+	assert.Zero(t, got.NewestCeiling, "posted")
+}
+
+// TestBoardPendingHasNoProductionCaller (S3, NERD-5533 34ed8294):
+// BoardPending is dormant until PR 3b's poll calls it (A74), which deletes
+// this test. No non-test file in internal/ or cmd/ but board.go uses the
+// name, a selector, a method value or an interface's method alike.
+func TestBoardPendingHasNoProductionCaller(t *testing.T) {
+	t.Parallel()
+	const own = "internal/store/board.go"
+	uses := map[string][]string{}
+	parsed := 0
+	for _, dir := range []string{"internal", "cmd"} {
+		names, _, _, files := productionUses(t, filepath.Join("..", ".."), dir, []string{"BoardPending"}, nil)
+		maps.Copy(uses, names)
+		parsed += files
+	}
+	assert.Greater(t, parsed, 100, "the scan reached the module's packages")
+	assert.NotEmpty(t, uses[own], "the scan finds BoardPending in %s", own)
+	delete(uses, own)
+	assert.Empty(t, uses, "BoardPending is dormant until PR 3b's poll calls it (A74)")
 }
