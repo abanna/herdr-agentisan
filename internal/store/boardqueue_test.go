@@ -3,6 +3,8 @@ package store_test
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -11,12 +13,15 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"modernc.org/sqlite"
 
 	"github.com/abanna/herdr-agentisan/internal/store"
 )
@@ -531,6 +536,268 @@ func TestPostQueuedSaysMoreOnlyWhenRowsRemain(t *testing.T) {
 	got = postQueued(t, s)
 	assert.Empty(t, got.Posts)
 	assert.False(t, got.More, "an empty queue has no more")
+}
+
+// boardHookFunc is the SQL function hookBoardInserts' trigger calls: it
+// runs the callback registered under its argument, a token unique to the
+// test. The driver gives a function only to the connections it opens
+// afterwards, so it is registered before any test opens a state.db.
+const boardHookFunc = "test_board_hook"
+
+var boardHooks sync.Map // a test's token → func()
+
+func init() {
+	sqlite.MustRegisterScalarFunction(boardHookFunc, 1, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		if h, ok := boardHooks.Load(args[0]); ok {
+			h.(func())()
+		}
+		return nil, nil
+	})
+}
+
+// hookBoardInserts runs h before each post inserted into the state.db at
+// path, inside the inserting call's transaction, until the test ends. Its
+// trigger is not TEMP: it is made on a connection of its own, as the
+// daemon tests' FailBoardInserts makes its own.
+func hookBoardInserts(t *testing.T, path string, h func()) {
+	t.Helper()
+	token := t.Name()
+	boardHooks.Store(token, h)
+	db, err := sql.Open("sqlite", path+"?_pragma=busy_timeout(10000)")
+	require.NoError(t, err)
+	_, err = db.ExecContext(t.Context(), "CREATE TRIGGER test_board_hook BEFORE INSERT ON board_posts"+
+		" BEGIN SELECT "+boardHookFunc+"('"+token+"'); END")
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = db.ExecContext(context.Background(), "DROP TRIGGER IF EXISTS test_board_hook")
+		_ = db.Close()
+		boardHooks.Delete(token)
+	})
+}
+
+// pastDeadline is a context whose deadline has passed but which is never
+// done: a call given it is past half its budget from its start, and nothing
+// cuts its statements.
+type pastDeadline struct{ context.Context }
+
+func (pastDeadline) Deadline() (time.Time, bool) { return time.Now().Add(-time.Second), true }
+
+// TestPostQueuedStopsAtHalfItsBudget: once half its budget has gone, a call
+// posts no further row, commits the rows it posted and says More, the row
+// it stopped before being the last; the first row always goes (NERD-5533
+// a8611aa0, A, and afd038aa T3). A context past its deadline but never
+// done pins the stop and the first row, not the fraction.
+func TestPostQueuedStopsAtHalfItsBudget(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	sent := []store.Message{send(t, s, boss, pane, "m0"), send(t, s, boss, pane, "m1")}
+
+	got, err := s.PostQueued(pastDeadline{t.Context()}, boss, queueProject, postedAt)
+	require.NoError(t, err)
+	assert.True(t, got.More, "a row remains past the stop")
+	require.Len(t, got.Posts, 1)
+	assert.Equal(t, sent[0].ID, got.Posts[0].ID)
+	assert.Equal(t, ids(sent[:1]), ids(got.Delivered))
+	assert.Equal(t, 1, postCount(t, s))
+	assertState(t, s, store.MessageDelivered, sent[0])
+	assertState(t, s, store.MessageQueued, sent[1])
+}
+
+// TestPostQueuedCommitsARowThatOutlastsItsBudget: a row whose insert lasts
+// past the call's deadline is still posted and committed, since no
+// statement or commit is cut once the call holds the connection; the call
+// then stops and says More (NERD-5533 a8611aa0, A, and afd038aa T1). In the
+// first case the deadline passes inside the first insert, the hook waiting
+// for it, its timer started after the hook's set-up; in the second another
+// writer holds the write lock past the deadline, so BEGIN waits it out under
+// busy_timeout and the read must not run on the spent deadline (#186
+// pre-check). Each deadline is 2 s, so a loaded runner cannot spend it
+// before the call takes the connection; the second's BEGIN waits until the
+// deadline plus 100 ms, 2.1 s, well under busy_timeout's 5 s.
+func TestPostQueuedCommitsARowThatOutlastsItsBudget(t *testing.T) {
+	t.Parallel()
+	t.Run("the first insert", func(t *testing.T) {
+		t.Parallel()
+		path := dbPath(t)
+		s := open(t, path)
+		sent := []store.Message{send(t, s, boss, pane, "m0"), send(t, s, boss, pane, "m1"), send(t, s, boss, pane, "m2")}
+		var ctx context.Context
+		hookBoardInserts(t, path, func() { <-ctx.Done() })
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		defer cancel()
+
+		got, err := s.PostQueued(ctx, boss, queueProject, postedAt)
+		require.NoError(t, err)
+		assert.True(t, got.More, "rows remain")
+		require.Len(t, got.Posts, 1)
+		assert.Equal(t, sent[0].ID, got.Posts[0].ID)
+		assert.Equal(t, 1, postCount(t, s))
+		assertState(t, s, store.MessageDelivered, sent[0])
+		assertState(t, s, store.MessageQueued, sent[1:]...)
+	})
+	t.Run("another writer's lock", func(t *testing.T) {
+		t.Parallel()
+		path := dbPath(t)
+		s := open(t, path)
+		sent := []store.Message{send(t, s, boss, pane, "m0"), send(t, s, boss, pane, "m1")}
+		outside, err := sql.Open("sqlite", path+"?_txlock=immediate")
+		require.NoError(t, err)
+		t.Cleanup(func() { _ = outside.Close() })
+		held, err := outside.BeginTx(t.Context(), nil)
+		require.NoError(t, err)
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		defer cancel()
+		released := make(chan error, 1)
+		go func() {
+			<-ctx.Done()
+			time.Sleep(100 * time.Millisecond)
+			released <- held.Rollback()
+		}()
+
+		got, err := s.PostQueued(ctx, boss, queueProject, postedAt)
+		require.NoError(t, <-released)
+		require.NoError(t, err)
+		assert.True(t, got.More, "a row remains")
+		require.Len(t, got.Posts, 1)
+		assert.Equal(t, sent[0].ID, got.Posts[0].ID)
+		assertState(t, s, store.MessageDelivered, sent[0])
+		assertState(t, s, store.MessageQueued, sent[1])
+	})
+}
+
+// TestPostQueuedStopsAtHalfARealBudget: under a real 2 s budget, with each
+// insert slowed to 200 ms, a call starts no row once half the budget has
+// gone: it posts the oldest rows, at most 6, in order, says More and
+// leaves the rest queued (NERD-5533 a8611aa0, A, and afd038aa T2). A slow
+// host only lowers the count, so the upper bound holds under load, and a
+// stall before the call takes the connection would have to last 2 s.
+func TestPostQueuedStopsAtHalfARealBudget(t *testing.T) {
+	t.Parallel()
+	path := dbPath(t)
+	s := open(t, path)
+	sent := make([]store.Message, 20)
+	for i := range sent {
+		sent[i] = send(t, s, boss, pane, fmt.Sprintf("m%02d", i))
+	}
+	hookBoardInserts(t, path, func() { time.Sleep(200 * time.Millisecond) })
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+
+	got, err := s.PostQueued(ctx, boss, queueProject, postedAt)
+	require.NoError(t, err)
+	assert.True(t, got.More, "rows remain")
+	n := len(got.Posts)
+	require.GreaterOrEqual(t, n, 1, "the first row always goes")
+	require.LessOrEqual(t, n, 6, "rows started within half the budget")
+	assert.Equal(t, ids(sent[:n]), ids(got.Delivered), "the oldest rows, in order")
+	assertPostsInOrder(t, sent, got.Posts)
+	assertState(t, s, store.MessageQueued, sent[n:]...)
+}
+
+// assertPostsInOrder checks that each returned post is the row sent in its
+// place, with seqs rising.
+func assertPostsInOrder(t *testing.T, sent []store.Message, posts []store.BoardPost) {
+	t.Helper()
+	for i, p := range posts {
+		assert.Equal(t, sent[i].ID, p.ID, "post %d is row %d's", i, i)
+		if i > 0 {
+			assert.Less(t, posts[i-1].Seq, p.Seq, "post %d's seq", i)
+		}
+	}
+}
+
+// TestPostQueuedStopsAtExactlyHalfItsBudget: in virtual time, each insert
+// taking 100 ms under a 1 s budget, a call posts exactly the five rows that
+// start before half its budget, the oldest, in order; a quarter would post
+// three, the whole budget ten (#186 pre-check).
+func TestPostQueuedStopsAtExactlyHalfItsBudget(t *testing.T) {
+	t.Parallel()
+	path := dbPath(t)
+	s := open(t, path)
+	sent := make([]store.Message, 10)
+	for i := range sent {
+		sent[i] = send(t, s, boss, pane, fmt.Sprintf("m%d", i))
+	}
+	hookBoardInserts(t, path, func() { time.Sleep(100 * time.Millisecond) })
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+		defer cancel()
+		got, err := s.PostQueued(ctx, boss, queueProject, postedAt)
+		require.NoError(t, err)
+		assert.True(t, got.More, "rows remain")
+		require.Len(t, got.Posts, 5)
+		assertPostsInOrder(t, sent, got.Posts)
+	})
+	assertState(t, s, store.MessageQueued, sent[5:]...)
+}
+
+// TestPostQueuedWaitsForTheConnectionWithinItsBudget: while another holds the
+// store's one connection, a call waits for it within its budget only, then
+// fails with nothing posted; and the time it waited counts against half its
+// budget (NERD-5533 a8611aa0, A, and #186's pre-check).
+func TestPostQueuedWaitsForTheConnectionWithinItsBudget(t *testing.T) {
+	t.Parallel()
+	t.Run("past the deadline", func(t *testing.T) {
+		t.Parallel()
+		s := open(t, dbPath(t))
+		m := send(t, s, boss, pane, "waiting")
+		changed := s.BoardChanged()
+		held, err := store.DB(s).Conn(t.Context())
+		require.NoError(t, err)
+		ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
+		defer cancel()
+		done := make(chan error, 1)
+		go func() {
+			_, err := s.PostQueued(ctx, boss, queueProject, postedAt)
+			done <- err
+		}()
+		var got error
+		select {
+		case got = <-done:
+			require.NoError(t, held.Close())
+		case <-time.After(10 * time.Second): // far past the 150 ms deadline: a stall only delays the failure
+			require.NoError(t, held.Close())
+			t.Fatalf("the call waited past its budget for the connection, then returned %v", <-done)
+		}
+		assert.ErrorIs(t, got, store.ErrStore)
+		assert.ErrorIs(t, got, context.DeadlineExceeded)
+		assert.Zero(t, postCount(t, s))
+		assertState(t, s, store.MessageQueued, m)
+		select {
+		case <-changed:
+			t.Error("a wake with nothing posted")
+		default:
+		}
+	})
+	t.Run("the wait counts against half", func(t *testing.T) {
+		t.Parallel()
+		s := open(t, dbPath(t))
+		for i := range 10 {
+			send(t, s, boss, pane, fmt.Sprintf("m%d", i))
+		}
+		synctest.Test(t, func(t *testing.T) {
+			held, err := store.DB(s).Conn(t.Context())
+			require.NoError(t, err)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			type result struct {
+				out store.PostedQueue
+				err error
+			}
+			done := make(chan result, 1)
+			go func() {
+				out, err := s.PostQueued(ctx, boss, queueProject, postedAt)
+				done <- result{out, err}
+			}()
+			synctest.Wait()
+			time.Sleep(750 * time.Millisecond)
+			require.NoError(t, held.Close())
+			got := <-done
+			require.NoError(t, got.err)
+			assert.True(t, got.out.More, "rows remain")
+			assert.Len(t, got.out.Posts, 1, "the connection taken at 750 ms of 1 s, past half: the first row only")
+		})
+	})
 }
 
 // TestPostQueuedLeavesDispatchingAlone: a message in flight is the
