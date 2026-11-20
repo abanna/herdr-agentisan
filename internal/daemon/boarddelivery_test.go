@@ -320,6 +320,46 @@ func TestBossAgentSwitchMovesItsDelivery(t *testing.T) {
 	assert.Equal(t, []typed{{Target: "ha-boss", Pane: "w14:p1", Text: "[msg " + second.ID + " from ha-coder-1] two"}}, r.pr.all(), "typed while it runs Codex")
 }
 
+// TestBossThatTurnsClaudeMidDrainGetsTheRestPosted (#183's hosted P2): a
+// board team's Codex boss has three messages queued, so a pass types them.
+// While the first is being typed, a poll sees Claude on the boss's pane. The
+// first finishes typed; the two still queued are never typed into the
+// Claude boss, and the next pass posts them, in order, each once.
+func TestBossThatTurnsClaudeMidDrainGetsTheRestPosted(t *testing.T) {
+	t.Parallel()
+	r := newBoardRig(t, []settings.Team{haTabs}, boardOn("ha"), nil)
+	a, b, c := sent(t, r.st, haBoss, coder, "a"), sent(t, r.st, haBoss, coder, "b"), sent(t, r.st, haBoss, coder, "c")
+	r.p.EndPoll(haModel(bossPane("ha-boss", "codex")))
+	release := r.pr.hold(t, "ha-boss")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.p.Pass()
+	}()
+	assert.Equal(t, "[msg "+a.ID+" from ha-coder-1] a", r.pr.next(t).Text, "the drain types the oldest first")
+	r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
+	release()
+	select {
+	case <-done:
+	case <-time.After(ready):
+		t.Fatal("the pass did not end")
+	}
+
+	assert.Equal(t, []typed{{Target: "ha-boss", Pane: "w14:p1", Text: "[msg " + a.ID + " from ha-coder-1] a"}}, r.pr.all(),
+		"only the message already being typed is typed")
+	assert.Equal(t, store.MessageDelivered, stateOf(t, r.st, a.ID).State)
+	for _, m := range []store.Message{b, c} {
+		assert.Equal(t, store.MessageQueued, stateOf(t, r.st, m.ID).State, "left queued for the board")
+	}
+	r.p.Pass()
+	var ids []string
+	for _, p := range r.posts(t, "ha") {
+		ids = append(ids, p.ID)
+	}
+	assert.Equal(t, []string{b.ID, c.ID}, ids, "the rest posted, in order, each once")
+	assert.Len(t, r.pr.all(), 1, "nothing more typed")
+}
+
 // TestBossNotSeenSinceStartIsHeld: until a poll sees the boss's agent
 // since the daemon started, its queue is held, neither typed nor posted, and
 // warned of once; once Claude is seen, it is posted. A restart starts from
@@ -578,8 +618,10 @@ func TestPostFailureTypesNothing(t *testing.T) {
 	r := newBoardRig(t, []settings.Team{haTabs}, boardOn("ha"), nil)
 	drop := daemon.FailBoardInserts(t, r.db, "")
 	m := sent(t, r.st, haBoss, coder, "done")
-	r.poll(haModel(bossPane("ha-boss", "claude")))
+	r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
+	r.p.TakeWake() // the poll's own
 	r.p.Pass()
+	assert.False(t, r.p.TakeWake(), "a failed post wakes no pass: the next one follows the next poll or send")
 	assert.Equal(t, store.MessageQueued, stateOf(t, r.st, m.ID).State)
 	assert.Empty(t, r.pr.all(), "never typed")
 	assert.Empty(t, r.posts(t, "ha"))
