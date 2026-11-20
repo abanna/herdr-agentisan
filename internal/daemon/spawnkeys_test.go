@@ -66,7 +66,8 @@ func TestEveryWorkforceCodeFitsASpawnRecord(t *testing.T) {
 // TestSpawnRefusalIsTheServersRule (B9): refusalOf is the rule server.run
 // applies: an op whose own budget ended while a call failed answers
 // timeout, with the server's own message, and any other code stands with
-// the error's message. server.run answers a *workforce.RefusalError's code and
+// the error's message; the daemon's workforce applies it to a keyed spawn
+// as worker.spawn. server.run answers a *workforce.RefusalError's code and
 // message as they are, past its budget too, since the rule already ran.
 func TestSpawnRefusalIsTheServersRule(t *testing.T) {
 	t.Parallel()
@@ -93,6 +94,16 @@ func TestSpawnRefusalIsTheServersRule(t *testing.T) {
 		assert.Equal(t, tc.want, code, name)
 		assert.Equal(t, tc.msg, msg, name)
 	}
+
+	// The daemon's workforce computes a keyed spawn's refusal by the same
+	// rule, as worker.spawn of its own budget, with the workforce's codes.
+	svc := daemon.WorkforceOf(daemon.Options{Team: &daemon.TeamOptions{}}, daemon.Identity{})
+	require.NotNil(t, svc.Refusal)
+	code, msg := svc.Refusal(expired, cause)
+	assert.Equal(t, "timeout", code)
+	assert.Equal(t, "worker.spawn ran past its 1m40s budget: list panes: context deadline exceeded", msg)
+	code, msg = svc.Refusal(expired, fmt.Errorf("%w: coder: 3 of 3", workforce.ErrSlotCap))
+	assert.Equal(t, [2]string{"slot_cap", "slot cap reached: coder: 3 of 3"}, [2]string{code, msg})
 
 	sock := filepath.Join(shortDir(t), "d.sock")
 	budget := 200 * time.Millisecond
