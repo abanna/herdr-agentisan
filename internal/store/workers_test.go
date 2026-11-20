@@ -655,6 +655,17 @@ func TestWorkerWritesRefuseWhatTheyCannotRecord(t *testing.T) {
 	}
 	_, err := s.BindWorker(ctx, w, time.Date(3000, 1, 1, 0, 0, 0, 0, time.UTC))
 	require.ErrorIs(t, err, store.ErrInvalid)
+	// The worker is checked first, as main does, before the time and the
+	// connection: an invalid worker with its context done is ErrInvalid, and
+	// with a bad time too its error names the id.
+	done, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err = s.BindWorker(done, store.Worker{LogicalID: "x-qa-1", Provider: "gemini", PaneID: "w1:p1", TerminalID: "term_1"}, t0)
+	require.ErrorIs(t, err, store.ErrInvalid, "an invalid provider, the context done")
+	require.NotErrorIs(t, err, store.ErrStore)
+	_, err = s.BindWorker(ctx, store.Worker{Provider: "claude", PaneID: "w1:p1", TerminalID: "term_1"}, time.Date(3000, 1, 1, 0, 0, 0, 0, time.UTC))
+	require.ErrorIs(t, err, store.ErrInvalid)
+	assert.Contains(t, err.Error(), "worker id", "no id and a bad time")
 	require.ErrorIs(t, s.SetWorkerStatus(ctx, w, "paused", t0), store.ErrInvalid)
 	require.ErrorIs(t, s.SetWorkerStatus(ctx, w, store.StatusActive, time.Time{}), store.ErrInvalid)
 	require.ErrorIs(t, s.SetWorkerStatus(ctx, w, store.StatusActive, t0), store.ErrNoWorker)
