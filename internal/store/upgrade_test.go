@@ -40,7 +40,7 @@ func TestUpgradeFromTheFirstSchema(t *testing.T) {
 
 	s := open(t, path)
 	assert.Equal(t, store.SchemaVersion(), s.UserVersion())
-	assert.Equal(t, 10, s.UserVersion())
+	assert.Equal(t, 12, s.UserVersion())
 	row, err := s.WorkerRow(t.Context(), "w")
 	require.NoError(t, err)
 	assert.Nil(t, row.Routing, "a worker bound before 0005 was not launched by routing")
@@ -137,7 +137,7 @@ INSERT INTO github_seen VALUES ('agentisan', 'nerds-run/agentisan-skills', 1006,
 }
 
 // TestUpgradeFrom8 (A10) is the live state.db's path into 0009 and 0010: a
-// database at schema 8 with rows in every table migrates to 10 with every
+// database at schema 8 with rows in every table migrates to 12 with every
 // row and every object it had unchanged, and an empty ledger, which then
 // imports what github_seen already held and admits the rest.
 func TestUpgradeFrom8(t *testing.T) {
@@ -173,14 +173,14 @@ func TestUpgradeFrom8(t *testing.T) {
 		require.NotEmpty(t, rows, "%s has a row before the upgrade", table)
 	}
 	schema := func(db *sql.DB) [][]any {
-		return queryRows(t, db, "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name NOT IN ('notice_identities', 'notice_payloads', 'notice_counts', 'notice_store_counts') ORDER BY type, name")
+		return queryRows(t, db, "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name NOT IN ('notice_identities', 'notice_payloads', 'notice_counts', 'notice_store_counts', 'board_acks', 'board_held_acks', 'spawn_requests', 'spawn_request_workers') ORDER BY type, name")
 	}
 	objectsBefore := schema(store.DB(v8))
 	require.NoError(t, v8.Close())
 
 	s := open(t, path)
-	assert.Equal(t, 10, s.UserVersion())
-	assert.Equal(t, before, otherTables(t, store.DB(s)), "every row of schema 8 survives as it was")
+	assert.Equal(t, 12, s.UserVersion())
+	assert.Equal(t, before, withoutSpawnKeys(t, withoutBoardAcks(t, otherTables(t, store.DB(s)))), "every row of schema 8 survives as it was")
 	assert.Equal(t, objectsBefore, schema(store.DB(s)), "every object of schema 8 is as it was")
 	assert.Equal(t, [2]int{0, 0}, ledgerRows(t, s), "the ledger starts empty")
 	var check string
@@ -199,7 +199,7 @@ func TestUpgradeFrom8(t *testing.T) {
 }
 
 // TestUpgradeFrom7 is the live state.db's own path: it is at schema 7, so
-// one Open applies 0008, 0009 and 0010. An event github_seen held at 7 is
+// one Open applies 0008, 0009, 0010, 0011 and 0012. An event github_seen held at 7 is
 // then imported, never told again, and an unseen one admits as pending.
 func TestUpgradeFrom7(t *testing.T) {
 	t.Parallel()
@@ -223,7 +223,7 @@ func TestUpgradeFrom7(t *testing.T) {
 	require.NoError(t, v7.Close())
 
 	s := open(t, path)
-	assert.Equal(t, 10, s.UserVersion(), "one Open applies 0008, 0009 and 0010")
+	assert.Equal(t, 12, s.UserVersion(), "one Open applies 0008, 0009, 0010, 0011 and 0012")
 	told := admissible(t)
 	assert.Equal(t, store.NoticeAdmission{CaptureID: told.CaptureID, State: "imported", Imported: true}, admit(t, s, told))
 	fresh := admissible(t, func(e *store.NoticeEnvelope) { e.Receipt.PR = 51 })
@@ -236,7 +236,7 @@ func TestUpgradeFrom7(t *testing.T) {
 
 // TestUpgradeFrom9 (K3) is the path into 0010: a database at schema 9 whose
 // ledger holds GitHub rows in each state, the pending one with its payload,
-// and a daemon row in the empty project, migrates to 10 with its totals
+// and a daemon row in the empty project, migrates to 12 with its totals
 // backfilled from those rows and every row and object of 9 unchanged. The
 // rows are raw SQL, not AdmitNotice, so the test holds once the quotas make
 // AdmitNotice read the totals, which do not exist at 9.
@@ -286,7 +286,7 @@ func TestUpgradeFrom9(t *testing.T) {
 	// triggers, which are on notice_identities.
 	schema := func(db *sql.DB) [][]any {
 		return queryRows(t, db, `SELECT type, name, tbl_name, sql FROM sqlite_schema
-WHERE tbl_name NOT IN ('notice_counts', 'notice_store_counts')
+WHERE tbl_name NOT IN ('notice_counts', 'notice_store_counts', 'board_acks', 'board_held_acks', 'spawn_requests', 'spawn_request_workers')
 AND name NOT IN ('notice_counts_insert', 'notice_counts_delete', 'notice_counts_move') ORDER BY type, name`)
 	}
 	ledgerBefore, othersBefore, objectsBefore := ledger(db9), otherTables(t, db9), schema(db9)
@@ -296,13 +296,13 @@ AND name NOT IN ('notice_counts_insert', 'notice_counts_delete', 'notice_counts_
 
 	s := open(t, path)
 	db := store.DB(s)
-	assert.Equal(t, 10, s.UserVersion())
+	assert.Equal(t, 12, s.UserVersion())
 	assertNoticeTotals(t, db)
 	projects, total := noticeTotals(t, db)
 	assert.Equal(t, map[string]int64{"": 1, "ha": 4}, projects, "every state counts")
 	assert.Equal(t, int64(5), total)
 	assert.Equal(t, ledgerBefore, ledger(db), "every ledger row of schema 9 survives as it was")
-	assert.Equal(t, othersBefore, otherTables(t, db), "every other row of schema 9 survives as it was")
+	assert.Equal(t, othersBefore, withoutSpawnKeys(t, withoutBoardAcks(t, otherTables(t, db))), "every other row of schema 9 survives as it was")
 	assert.Equal(t, objectsBefore, schema(db), "every object of schema 9 is as it was")
 	var check string
 	require.NoError(t, db.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&check))
@@ -314,4 +314,213 @@ AND name NOT IN ('notice_counts_insert', 'notice_counts_delete', 'notice_counts_
 	assert.Equal(t, map[string]int64{"": 1, "ha": 5}, projects, "the next admission moves its project's total by one")
 	assert.Equal(t, int64(6), total, "and the store's")
 	assertNoticeTotals(t, db)
+}
+
+// withoutBoardAcks is tables, every table's rows by name, less the two the
+// acknowledgements' migration adds, which it asserts are there and empty: an
+// upgrade from before that migration starts them empty.
+func withoutBoardAcks(t *testing.T, tables map[string][][]any) map[string][][]any {
+	t.Helper()
+	for _, name := range []string{"board_acks", "board_held_acks"} {
+		rows, ok := tables[name]
+		assert.True(t, ok, "the upgrade made %s", name)
+		assert.Empty(t, rows, "%s starts empty", name)
+		delete(tables, name)
+	}
+	return tables
+}
+
+// The acknowledgements' objects as their migration writes them, copied here,
+// so a slip in the migration fails the test: once it has run on the live
+// database, it cannot be taken back.
+const (
+	ackTableSQL = `CREATE TABLE board_acks (
+    seq      INTEGER PRIMARY KEY REFERENCES board_posts (seq) ON DELETE CASCADE,
+    project  TEXT    NOT NULL,
+    acked_at INTEGER NOT NULL
+) STRICT`
+	ackIndexSQL     = `CREATE INDEX board_acks_by_project ON board_acks (project, acked_at)`
+	heldAckTableSQL = `CREATE TABLE board_held_acks (
+    project     TEXT    NOT NULL,
+    boss        TEXT    NOT NULL CHECK (boss <> ''),
+    through_seq INTEGER NOT NULL CHECK (through_seq >= 0),
+    through_at  INTEGER NOT NULL CHECK (through_at >= 0),
+    acked_at    INTEGER NOT NULL,
+    PRIMARY KEY (project, boss)
+) STRICT`
+)
+
+// TestUpgradeToTheAcks (A1, A74) is the path into the acknowledgements'
+// migration (0012): a database at schema 11 with rows in every table, the
+// notice ledger's and its totals and the retry keys' included, migrates to
+// 12 with every row and every object of 11 unchanged, and its two tables
+// empty. The live
+// state.db takes it at the switch-over, so it only adds.
+func TestUpgradeToTheAcks(t *testing.T) {
+	t.Parallel()
+	eleven := fstest.MapFS{}
+	for _, name := range []string{
+		"0001_init.sql", "0002_messages.sql", "0003_worker_identity.sql", "0004_github_notices.sql",
+		"0005_worker_routing.sql", "0006_github_seeded_kinds.sql", "0007_board.sql", "0008_worker_provider.sql",
+		"0009_notice_ledger.sql", "0010_notice_counts.sql", "0011_spawn_retry_keys.sql",
+	} {
+		raw, err := os.ReadFile(filepath.Join("migrations", name)) // #nosec G304 -- this package's own migrations
+		require.NoError(t, err)
+		eleven[name] = &fstest.MapFile{Data: raw}
+	}
+	path := dbPath(t)
+	v11, err := store.OpenWith(t.Context(), path, eleven)
+	require.NoError(t, err)
+	require.Equal(t, 11, v11.UserVersion())
+	ctx := t.Context()
+	db11 := store.DB(v11)
+	require.NoError(t, v11.RecordFocus(ctx, "w14:p2", t1))
+	seedWorker(t, v11, "w", "w14:p2", 1)
+	_, err = db11.ExecContext(ctx, "INSERT INTO handoffs (logical_id, old_pane, new_pane, state, created_at, updated_at) VALUES ('w', 'w14:p1', 'w14:p2', 'acknowledged', 1, 2)")
+	require.NoError(t, err)
+	send(t, v11, worker("w"), boss, "before 0012")
+	post(t, v11, teamPost("ha", "w", "before 0012"))
+	_, err = v11.MarkSeen(ctx, "ha", store.ReaderUser, 1)
+	require.NoError(t, err)
+	require.NoError(t, v11.UpdateGitHub(ctx, store.GitHubUpdate{
+		Project: "ha", Repo: ledgerRepo, Collected: true, SeedKinds: []string{"review"}, Open: []int{50},
+		Seen: []store.GitHubEvent{{PR: 50, Kind: "ci_failed", Key: headOID}},
+	}, ledgerSeen))
+	require.NoError(t, insertRow(t, db11, insertIdentity, identityColumns, map[string]any{
+		"capture_id": "gh1:pending", "project": "ha", "source": "github", "kind": "ci_failed",
+		"repo": ledgerRepo, "pr": 71, "receipt_key": headOID, "state": "pending", "admitted_at": 1, "attempts": 0,
+	}))
+	require.NoError(t, insertRow(t, db11, insertIdentity, identityColumns, daemonIdentity))
+	require.NoError(t, insertRow(t, db11, insertPayload, payloadColumns, map[string]any{
+		"capture_id": "gh1:pending", "version": 1, "receipt_version": 1, "subject": ledgerRepo + "#71", "worker": "ha-coder-1",
+		"observed_at": 1, "text": "#71 CI failed", "bytes": 13, "digest": strings.Repeat("0123456789abcdef", 4),
+	}))
+	require.NoError(t, v11.BeginSpawn(ctx, spawnKey(func(k *store.SpawnKey) { k.Count = 1 }), []string{"ha-coder-1"}, spawnAt))
+	ledger := func(db *sql.DB) [][][]any {
+		return [][][]any{
+			queryRows(t, db, "SELECT * FROM notice_identities ORDER BY rowid"),
+			tableRows(t, db, "notice_payloads"),
+			queryRows(t, db, "SELECT * FROM notice_counts ORDER BY rowid"),
+			queryRows(t, db, "SELECT * FROM notice_store_counts ORDER BY rowid"),
+		}
+	}
+	schema := func(db *sql.DB) [][]any {
+		return queryRows(t, db, "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name NOT IN ('board_acks', 'board_held_acks') ORDER BY type, name")
+	}
+	ledgerBefore, othersBefore, objectsBefore := ledger(db11), otherTables(t, db11), schema(db11)
+	for table, rows := range othersBefore {
+		require.NotEmpty(t, rows, "%s has a row before the upgrade", table)
+	}
+	for i, rows := range ledgerBefore {
+		require.NotEmpty(t, rows, "ledger table %d has a row before the upgrade", i)
+	}
+	require.NoError(t, v11.Close())
+
+	s := open(t, path)
+	db := store.DB(s)
+	assert.Equal(t, 12, s.UserVersion())
+	assert.Equal(t, ledgerBefore, ledger(db), "every ledger row of schema 11 survives as it was, its totals included")
+	assert.Equal(t, othersBefore, withoutBoardAcks(t, otherTables(t, db)), "every other row of schema 11, the retry keys' included, survives as it was")
+	assert.Equal(t, objectsBefore, schema(db), "every object of schema 11 is as it was")
+	assert.Equal(t, [][]any{
+		{"index", "board_acks_by_project", "board_acks", ackIndexSQL},
+		{"index", "sqlite_autoindex_board_held_acks_1", "board_held_acks", nil},
+		{"table", "board_acks", "board_acks", ackTableSQL},
+		{"table", "board_held_acks", "board_held_acks", heldAckTableSQL},
+	}, queryRows(t, db, "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name IN ('board_acks', 'board_held_acks') ORDER BY type, name"), "0012 adds its two tables and their indexes, nothing else")
+	var check string
+	require.NoError(t, db.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&check))
+	assert.Equal(t, "ok", check)
+	assert.Empty(t, queryRows(t, db, "PRAGMA foreign_key_check"))
+}
+
+// withoutSpawnKeys is tables, every table's rows by name, less the two the
+// retry keys' migration adds, which it asserts are there and empty: an
+// upgrade from before that migration starts them empty.
+func withoutSpawnKeys(t *testing.T, tables map[string][][]any) map[string][][]any {
+	t.Helper()
+	for _, name := range []string{"spawn_requests", "spawn_request_workers"} {
+		rows, ok := tables[name]
+		assert.True(t, ok, "the upgrade made %s", name)
+		assert.Empty(t, rows, "%s starts empty", name)
+		delete(tables, name)
+	}
+	return tables
+}
+
+// TestUpgradeFrom10 (A1) is the path into the retry keys' migration (0011,
+// NERD-5254): a database at schema 10 with rows in every table, the notice
+// ledger's and its totals included, migrates to 12 (0011, then the
+// acknowledgements' 0012) with every row and every object of 10 unchanged,
+// and the four new tables empty. The ledger's rows are raw SQL, as
+// TestUpgradeFrom9's are.
+func TestUpgradeFrom10(t *testing.T) {
+	t.Parallel()
+	ten := fstest.MapFS{}
+	for _, name := range []string{
+		"0001_init.sql", "0002_messages.sql", "0003_worker_identity.sql", "0004_github_notices.sql",
+		"0005_worker_routing.sql", "0006_github_seeded_kinds.sql", "0007_board.sql", "0008_worker_provider.sql",
+		"0009_notice_ledger.sql", "0010_notice_counts.sql",
+	} {
+		raw, err := os.ReadFile(filepath.Join("migrations", name)) // #nosec G304 -- this package's own migrations
+		require.NoError(t, err)
+		ten[name] = &fstest.MapFile{Data: raw}
+	}
+	path := dbPath(t)
+	v10, err := store.OpenWith(t.Context(), path, ten)
+	require.NoError(t, err)
+	require.Equal(t, 10, v10.UserVersion())
+	ctx := t.Context()
+	db10 := store.DB(v10)
+	require.NoError(t, v10.RecordFocus(ctx, "w14:p2", t1))
+	seedWorker(t, v10, "w", "w14:p2", 1)
+	_, err = db10.ExecContext(ctx, "INSERT INTO handoffs (logical_id, old_pane, new_pane, state, created_at, updated_at) VALUES ('w', 'w14:p1', 'w14:p2', 'acknowledged', 1, 2)")
+	require.NoError(t, err)
+	send(t, v10, worker("w"), boss, "before 0011")
+	post(t, v10, teamPost("ha", "w", "before 0011"))
+	_, err = v10.MarkSeen(ctx, "ha", store.ReaderUser, 1)
+	require.NoError(t, err)
+	require.NoError(t, v10.UpdateGitHub(ctx, store.GitHubUpdate{
+		Project: "ha", Repo: ledgerRepo, Collected: true, SeedKinds: []string{"review"}, Open: []int{50},
+		Seen: []store.GitHubEvent{{PR: 50, Kind: "ci_failed", Key: headOID}},
+	}, ledgerSeen))
+	require.NoError(t, insertRow(t, db10, insertIdentity, identityColumns, map[string]any{
+		"capture_id": "gh1:pending", "project": "ha", "source": "github", "kind": "ci_failed",
+		"repo": ledgerRepo, "pr": 71, "receipt_key": headOID, "state": "pending", "admitted_at": 1, "attempts": 0,
+	}))
+	require.NoError(t, insertRow(t, db10, insertIdentity, identityColumns, daemonIdentity))
+	require.NoError(t, insertRow(t, db10, insertPayload, payloadColumns, map[string]any{
+		"capture_id": "gh1:pending", "version": 1, "receipt_version": 1, "subject": ledgerRepo + "#71", "worker": "ha-coder-1",
+		"observed_at": 1, "text": "#71 CI failed", "bytes": 13, "digest": strings.Repeat("0123456789abcdef", 4),
+	}))
+	ledger := func(db *sql.DB) [][][]any {
+		return [][][]any{
+			queryRows(t, db, "SELECT * FROM notice_identities ORDER BY rowid"),
+			tableRows(t, db, "notice_payloads"),
+			queryRows(t, db, "SELECT * FROM notice_counts ORDER BY rowid"),
+			queryRows(t, db, "SELECT * FROM notice_store_counts ORDER BY rowid"),
+		}
+	}
+	schema := func(db *sql.DB) [][]any {
+		return queryRows(t, db, "SELECT type, name, tbl_name, sql FROM sqlite_schema WHERE tbl_name NOT IN ('spawn_requests', 'spawn_request_workers', 'board_acks', 'board_held_acks') ORDER BY type, name")
+	}
+	ledgerBefore, othersBefore, objectsBefore := ledger(db10), otherTables(t, db10), schema(db10)
+	for table, rows := range othersBefore {
+		require.NotEmpty(t, rows, "%s has a row before the upgrade", table)
+	}
+	for i, rows := range ledgerBefore {
+		require.NotEmpty(t, rows, "ledger table %d has a row before the upgrade", i)
+	}
+	require.NoError(t, v10.Close())
+
+	s := open(t, path)
+	db := store.DB(s)
+	assert.Equal(t, 12, s.UserVersion())
+	assert.Equal(t, ledgerBefore, ledger(db), "every ledger row of schema 10 survives as it was, its totals included")
+	assert.Equal(t, othersBefore, withoutBoardAcks(t, withoutSpawnKeys(t, otherTables(t, db))), "every other row of schema 10 survives as it was")
+	assert.Equal(t, objectsBefore, schema(db), "every object of schema 10 is as it was")
+	var check string
+	require.NoError(t, db.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&check))
+	assert.Equal(t, "ok", check)
+	assert.Empty(t, queryRows(t, db, "PRAGMA foreign_key_check"))
 }

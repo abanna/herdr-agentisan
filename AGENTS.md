@@ -318,7 +318,12 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   embedded from `migrations/` and tracked by `user_version`. The daemon holds
   the only write connection. `state.db` also holds messaging's inbox
   (`messages.go`, migration 0002, D8 and I3): a recipient's messages are
-  claimed one at a time, oldest first; the daemon's notices to a boss are
+  claimed one at a time, oldest first; a board-mode boss's queue is
+  posted on its board instead, oldest first, at most 100 rows a call, each
+  row marked delivered in the same transaction, a body over 8 KiB in parts
+  and a row the board refuses failed on its own, with no notice to its
+  sender (`boardqueue.go`, A74);
+  the daemon's notices to a boss are
   added to the one still queued (`notify.go`, A44); and a pending handoff
   (`handoffs.go`) holds a worker's inbox until it completes, which rebinds
   the worker in the same transaction, onto the terminal the ack proved, or
@@ -332,8 +337,14 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   seen-set, open PRs and seed marks, a kind's own included (`github.go`,
   migrations 0004 and 0006, A45), make each event told once across
   restarts. Each team's board (`board.go`, migration 0007, A60) holds its
-  posts and two read marks, the boss's and the user's; every post wakes
-  each `board wait`. Tests open a fresh database in a temp
+  posts and two read marks, the boss's and the user's; the user's
+  acknowledgements of posts, a record per post that moves no mark and goes
+  with its post at the prune, and of the messages waiting in a boss's
+  inbox, one record per project and boss that a later one replaces
+  (`boardack.go`, migration 0012, A74), dormant until PR 3c: nothing writes
+  either table, and `ReadBoard` and `LatestPosts` read one primary-key
+  lookup per post they return, which `board.read` does not serve; every
+  post wakes each `board wait`. Tests open a fresh database in a temp
   dir; the store is never mocked.
   `boardnotice.go` also provides the pure version-1 GitHub capture-ID helper
   and its frozen envelope/receipt types (B0a.1), and `noticeledger.go` the
@@ -342,12 +353,20 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   imports one `github_seen` holds, `PendingNotice` re-checks its digest.
   `noticequota.go` refuses an admission past one of eight quotas
   (B0a.3-limits, migration 0010, one-way, its identity totals kept by
-  triggers).
+  triggers). A daemon notice gets an `nt1` ID the store allocates (B0a.4).
+  `noticemeta.go` reads pending notices' metadata and the quotas' exact
+  counts, per source for the hour (B0a.3-queries), never a notice's text.
   No production caller, post, wake or `github_*` write;
   `noticedormant_test.go` fails on any use in a non-test file of
-  `internal/` or `cmd/` but those three, and on SQL naming its tables in one
-  but `noticeledger.go` and `noticequota.go`; it also fails on any non-test
-  Go string naming a ledger table with REPLACE in it.
+  `internal/` or `cmd/` but those four, and on SQL naming its tables in one
+  but `noticeledger.go`, `noticequota.go` and `noticemeta.go`; it also
+  fails on any non-test Go string naming a ledger table with REPLACE in it.
+  `spawnkeys.go` is worker spawn's retry keys (A73, NERD-5254):
+  migration 0011 (one-way) adds `spawn_requests` and `spawn_request_workers`,
+  which `BeginSpawn` writes, `SpawnRecord` reads with each planned id's row
+  now and its briefs, and `DropSpawn` drops while nothing is bound; dormant
+  until `worker spawn` takes a key, and `TestSpawnKeysHaveNoProductionCaller`
+  fails on any use outside it.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real

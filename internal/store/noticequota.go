@@ -18,9 +18,10 @@ import (
 //
 // A pending admission faces Q1 to Q8, an import (a notice github_seen
 // already holds) Q6 to Q8 only, and a duplicate or an invalid envelope
-// none: AdmitNotice returns both before the quotas run. A count quota
-// refuses when count >= limit, a byte quota when the pending bytes plus
-// this notice's would pass its limit.
+// none: AdmitNotice returns both before the quotas run. A daemon notice
+// (B0a.4) is pending and has no pull request, so it faces every quota but
+// Q3. A count quota refuses when count >= limit, a byte quota when the
+// pending bytes plus this notice's would pass its limit.
 type noticeQuotas struct {
 	PendingPerProject, PendingInStore, PendingPerPR int64
 	BytesPerProject, BytesInStore                   int64
@@ -80,6 +81,12 @@ const (
 	selectProjectIdentities  = `SELECT (SELECT identities FROM notice_counts WHERE project = ?1), EXISTS (SELECT 1 FROM notice_identities WHERE project = ?1)`
 	selectStoreIdentities    = `SELECT identities FROM notice_store_counts WHERE id = 1`
 	selectAdmissionsInWindow = `SELECT count(*) FROM (SELECT 1 FROM notice_identities WHERE project = ?1 AND state IN ('pending', 'imported', 'posted', 'dropped') AND admitted_at >= ?2 LIMIT ?3)`
+	// selectSourceAdmissionsInWindow is Q8 per source: a project's admissions
+	// of one source, in every state, at or after ?2. B0a.4-hour points Q8 at
+	// it and pins it to notice_identities_by_state.
+	selectSourceAdmissionsInWindow = `SELECT count(*) FROM (SELECT 1 FROM notice_identities
+  WHERE project = ?1 AND source = ?4 AND state IN ('pending', 'imported', 'posted', 'dropped')
+    AND admitted_at >= ?2 LIMIT ?3)`
 )
 
 // checkingQuotas is what a failed quota query was doing.
@@ -107,12 +114,13 @@ func readQuota(ctx context.Context, tx *sql.Tx, query string, args ...any) (int6
 	return n, nil
 }
 
-// checkNoticeQuotas checks a notice of project, on r's pull request,
-// whose canonical encoding is bytes long, admitted at ns, against q, on
-// the admission's transaction tx, and returns the first quota it would
-// pass, Q1 to Q8 in order. A pending notice faces all eight, an import Q6
-// to Q8. Writes are serialized on the store's one connection, so nothing
-// overtakes a count between it and the insert after it.
+// checkNoticeQuotas checks a notice of project, on r's pull request if r
+// is not nil (a daemon notice has none), whose canonical encoding is bytes
+// long, admitted at ns, against q, on the admission's transaction tx, and
+// returns the first quota it would pass, Q1 to Q8 in order. A pending
+// notice faces all eight, an import Q6 to Q8. Writes are serialized on the
+// store's one connection, so nothing overtakes a count between it and the
+// insert after it.
 func checkNoticeQuotas(ctx context.Context, tx *sql.Tx, q noticeQuotas, project string, r *NoticeReceipt, bytes int64, pending bool, ns int64) error {
 	if pending {
 		if err := checkPendingQuotas(ctx, tx, q, project, r, bytes); err != nil {
@@ -153,7 +161,8 @@ func checkNoticeQuotas(ctx context.Context, tx *sql.Tx, q noticeQuotas, project 
 }
 
 // checkPendingQuotas checks Q1 to Q5, the quotas only a pending notice
-// faces. A byte quota compares the pending sum with its limit less this
+// faces, Q3 only for a notice with a receipt r: it counts r's pull
+// request's. A byte quota compares the pending sum with its limit less this
 // notice's bytes, which a canonical encoding's length keeps small, so a sum
 // a hand edit has made as large as int64 holds refuses instead of wrapping
 // past it and admitting.
@@ -171,11 +180,13 @@ func checkPendingQuotas(ctx context.Context, tx *sql.Tx, q noticeQuotas, project
 	if n >= q.PendingInStore {
 		return quotaRefused(ErrNoticePendingInStore, q.PendingInStore)
 	}
-	if n, err = readQuota(ctx, tx, selectPendingPerPR, project, r.Repo, r.PR, q.PendingPerPR); err != nil {
-		return err
-	}
-	if n >= q.PendingPerPR {
-		return quotaRefused(ErrNoticePendingPerPR, q.PendingPerPR)
+	if r != nil {
+		if n, err = readQuota(ctx, tx, selectPendingPerPR, project, r.Repo, r.PR, q.PendingPerPR); err != nil {
+			return err
+		}
+		if n >= q.PendingPerPR {
+			return quotaRefused(ErrNoticePendingPerPR, q.PendingPerPR)
+		}
 	}
 	if n, err = readQuota(ctx, tx, selectBytesPerProject, project, q.PendingPerProject); err != nil {
 		return err

@@ -125,16 +125,18 @@ production calls `store.AdmitNotice` or `store.PendingNotice`, neither posts
 to the board nor wakes `board wait`, and neither writes a `github_*` table;
 `TestLedgerHasNoProductionCaller` fails on any use of the ledger's names, or
 B0a.1's, in a non-test file of `internal/` or `cmd/` but `noticeledger.go`,
-`noticequota.go` and `boardnotice.go`, and on any string naming a ledger
-table, in any case, in one but `noticeledger.go` and `noticequota.go`. It also
+`noticequota.go`, `noticemeta.go` and `boardnotice.go`, and on any string
+naming a ledger table, in any case, in one but `noticeledger.go`,
+`noticequota.go` and `noticemeta.go`. It also
 fails on any non-test Go string that names a ledger table and contains
 REPLACE. The migration is one-way: an older build
 refuses the database (`ErrSchemaTooNew`), so no build holding it is installed
 before the board's activation, and the first install is the activation build.
 
-`AdmitNotice` takes only a GitHub envelope, with a project, whose CaptureID is
-the one `GitHubNoticeCaptureID` derives; anything else is ErrInvalid. In one
-transaction it then dedupes, by capture ID and by receipt (project, repo, PR,
+A GitHub envelope must have a project and the CaptureID
+`GitHubNoticeCaptureID` derives; a daemon envelope is described under B0a.4
+below; a team post is refused. In one transaction `AdmitNotice` then dedupes
+a GitHub notice, by capture ID and by receipt (project, repo, PR,
 kind, key), which the schema also holds `UNIQUE`: the capture ID covers the
 time observed and the text, so the same event seen after a restart is caught
 by its receipt, and the first capture wins, its payload never rewritten. An
@@ -163,8 +165,8 @@ when each is written (deviation (g), decided by the user).
 The schema already holds every source (`github`, `daemon`, `team`), every
 state (`pending`, `imported`, `posted`, `dropped`) and the settle columns, so
 other sources' allocated IDs and the payload prune (B0a.4) need no migration.
-That holds for the GitHub and daemon sources: a `team` post's author has no
-column yet. The quotas (B0a.3-limits) need one, 0010, for their running
+A team post is never a notice: it goes to the board by `Post`, which records
+its author. The quotas (B0a.3-limits) need one, 0010, for their running
 totals.
 The board's writes (B0b onward) and its activation remain, each after human
 merge and separate authorization.
@@ -204,8 +206,8 @@ COMMIT;
 0010 is one-way, so the install rule stands: no build holding it is installed
 before the board's activation. It is dormant: only 0010's triggers write the
 totals, and `TestLedgerHasNoProductionCaller` fails on any non-test Go string
-naming them outside `noticeledger.go` and `noticequota.go`. The connection
-setting is the one live change.
+naming them outside `noticeledger.go`, `noticequota.go` and `noticemeta.go`.
+The connection setting is the one live change.
 
 ## The notice quotas (B0a.3-limits)
 
@@ -219,7 +221,8 @@ in the store. Q8 counts a project's admissions, in every state: 600 an hour.
 A pending notice faces all eight, an import (an event `github_seen` already
 holds) Q6 to Q8, and a duplicate or an invalid envelope none, since
 `AdmitNotice` returns both before the quotas run. So a duplicate stays a
-duplicate however full the ledger is.
+duplicate however full the ledger is. A daemon notice (B0a.4) faces every
+quota but Q3, which counts a pull request's pending notices: it has none.
 
 Each refusal is its quota's own error, which wraps `ErrNoticeQuota`. It names
 only the quota and its limit, never the notice, and writes nothing: the
@@ -239,6 +242,99 @@ neither reads 0. The recount above repairs a missing total.
 
 It is dormant: `TestLedgerHasNoProductionCaller` covers `noticequota.go`, its
 names and its SQL.
+
+`noticemeta.go` reads the ledger without changing it (B0a.3-queries).
+`PendingNotices` lists a project's pending notices, oldest first, at most 200,
+with their metadata, never their text or receipt key; a pending notice with no
+payload is `ErrStore`. `NoticeStats` returns the exact counts the quotas
+compare, for a project and for the store, from the quotas' own queries without
+their caps. It counts the project's hour per source, GitHub and daemon, as Q8
+does from B0a.4-hour on; before it, Q8 counts the two together. Both only
+read, and are dormant.
+
+## Allocated notice IDs, the prune and the daemon's memory (B0a.4)
+
+B0a.4 brings the daemon's notices into the ledger. So far it gives them IDs
+the store allocates; the prune and the daemon's memory of what it told
+follow in their own changes. It is dormant, as the rest of the ledger is,
+and needs no migration: 0009 already holds the `daemon` source.
+
+A daemon notice's ID is `nt1:<ULID>:<digest>`, 95 bytes. The ULID is 26
+characters of Crockford's base32 in capitals, made as the inbox's are: the
+admission's millisecond, then 80 random bits, so its first character is 0
+to 7. The digest is 64 lowercase hex characters, the SHA-256 of the
+notice's `nt1` encoding, and is also the payload's `digest`. The encoding is
+two unsigned 64-bit big-endian words, the version and the observed
+instant's nanoseconds as their two's-complement bits, then the project,
+source, kind, subject, worker and text, each an unsigned 32-bit big-endian
+byte length and its UTF-8 bytes: at most 9,070 bytes. It is frozen: once a
+daemon notice is admitted, a changed encoding would fail its pending row.
+Four vectors pin it (`TestDaemonNoticeVectors`): V1 a turn's end; V2 a
+start observed before 1970, with no project, subject or worker and a text
+of two lines; V3 a ceiling observed at the last nanosecond the store holds,
+with a text of 8,192 bytes; and V4 a text with more bytes than characters.
+
+A daemon notice is checked as a post before anything is drawn: version 1,
+no CaptureID and no receipt; a kind of 1 to 64 bytes, a line, and none of
+GitHub's; a project, subject and worker each empty or a line of at most 256
+bytes; a text `Send` would queue (1 to 8,192 bytes of UTF-8 with no NUL;
+line breaks are allowed); an observed time the store can hold; and an
+admission time the store can hold, not before 1970, since a ULID holds
+milliseconds since then. The project may be empty (`""`), the ◆ spaces'
+project while it has no name. Anything else is ErrInvalid, carrying none of
+it.
+
+There is no dedupe by ID or content: two equal daemon notices are two
+identities. What keeps a daemon notice from being told twice after a
+restart is the daemon's memory of what it recorded, written in the
+transaction that records it (B0a.4's memory, still to come), never the ID.
+An ID drawn twice, the same content in the same millisecond with the same
+80 random bits, fails the primary key: ErrStore, never a duplicate, and
+nothing is written. A daemon notice is recorded pending, with its payload,
+past every quota but Q3.
+
+`PendingNotice` rebuilds a daemon notice from its rows and their stored
+source, recomputes its encoding, and checks the ID's grammar, the ID's
+digest, the stored digest and the size. That is exactly as strong as a
+GitHub notice's check: a rewritten payload must change the identity's
+primary key too, which the payload references. Like that check it is not
+keyed, and the ULID is outside the digest, which is harmless, since it
+carries no content. It returns the envelope as it was admitted, with no
+CaptureID and no receipt.
+
+A team post is never a notice: `AdmitNotice` refuses the `team` source, and
+`PendingNotice` refuses a team row however well its columns agree. `send`
+to a boss will post to the board directly (B2).
+
+## worker spawn's retry keys (NERD-5254)
+
+The retry keys' migration adds the store a retried `worker spawn` will answer
+from (ADR-001 A73). `spawn_requests` holds one record per retry key: the
+request it was first used for, as asked, `running` until its answer is stored,
+then `done` with it. `spawn_request_workers` holds the ids that request
+planned, in order, each with the generation it was bound at once bound. A link
+pins an id and its generation, so an answer can tell a worker retired since
+from one whose id was bound again; a column on `workers` could not, since a
+reused id rebinds its row.
+
+They are dormant until a keyed `worker spawn` reaches them (A73: the socket
+refuses a key until part F). `BeginSpawn` writes a record and its planned ids
+in one transaction, and the insert itself refuses a known key
+(`ErrSpawnKeyExists`), never a read before it, so no replace can pass
+unnoticed. `SpawnRecord` reads one with each planned id's `workers` row now,
+while still at its linked generation, and its briefs: the messages to it at
+that generation from a boss or a pane, in any state. `DropSpawn` deletes a
+running record none of whose ids is bound.
+`TestSpawnKeysHaveNoProductionCaller` fails on any use of their names in a
+non-test file of `internal/` or `cmd/` but `spawnkeys.go`, on any string
+naming their tables outside it, and on any naming one with REPLACE.
+
+The schema refuses on its own what a record must never hold, whoever writes
+it: a key, effort, digest or outcome off its grammar, each compared by its
+byte length too, since SQL's `length()` and `GLOB` stop at a NUL; a count
+outside 1 to 64; a done record without its time or its answer; an answer
+that is not JSON. The migration is one-way and runs at `Open`: an older build
+then refuses the database (`ErrSchemaTooNew`).
 
 ## Deliberate limits
 
