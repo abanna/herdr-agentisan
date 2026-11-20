@@ -56,6 +56,9 @@ type BoardPost struct {
 	Worker  string
 	Body    string
 	At      time.Time
+	// Acked is whether the user acknowledged it (A74): a record of its own,
+	// in board_acks, which reads give it and Post never sets.
+	Acked bool
 }
 
 // BoardRead is one reader's read of a project's board.
@@ -191,9 +194,11 @@ func checkLimit(limit int) error {
 
 // The posts' reads, each with every column scanPosts reads, in its order.
 const (
-	selectUnread = `SELECT seq, id, project, channel, author_kind, author, kind, subject, worker, body, created_at
+	selectUnread = `SELECT seq, id, project, channel, author_kind, author, kind, subject, worker, body, created_at,
+	EXISTS (SELECT 1 FROM board_acks a WHERE a.seq = board_posts.seq)
 FROM board_posts WHERE project = ? AND seq > ? ORDER BY seq LIMIT ?`
-	selectLatest = `SELECT seq, id, project, channel, author_kind, author, kind, subject, worker, body, created_at
+	selectLatest = `SELECT seq, id, project, channel, author_kind, author, kind, subject, worker, body, created_at,
+	EXISTS (SELECT 1 FROM board_acks a WHERE a.seq = board_posts.seq)
 FROM board_posts WHERE project = ? ORDER BY seq DESC LIMIT ?`
 )
 
@@ -203,7 +208,7 @@ func scanPosts(rows *sql.Rows) ([]BoardPost, error) {
 	for rows.Next() {
 		var p BoardPost
 		var ns int64
-		if err := rows.Scan(&p.Seq, &p.ID, &p.Project, &p.Channel, &p.Author.Kind, &p.Author.ID, &p.Kind, &p.Subject, &p.Worker, &p.Body, &ns); err != nil {
+		if err := rows.Scan(&p.Seq, &p.ID, &p.Project, &p.Channel, &p.Author.Kind, &p.Author.ID, &p.Kind, &p.Subject, &p.Worker, &p.Body, &ns, &p.Acked); err != nil {
 			return nil, fmt.Errorf("%w: read a post: %w", ErrStore, err)
 		}
 		p.At = time.Unix(0, ns).UTC()

@@ -53,11 +53,15 @@ func bossProject(bosses map[string]string, boss string) (string, bool) {
 	return found, n == 1
 }
 
-// post posts to's whole queue on project's board instead of typing it
-// (A74), in one transaction that marks each row delivered, or failed where
-// the board refuses it. Like claim, a stop does not cut it short, and it is
-// bounded on its own. A post that fails leaves every row queued for the
-// next pass, never typed, and is warned of once while it lasts.
+// post posts the oldest MaxQueuePost rows of to's queue on project's board
+// instead of typing them (A74), in one transaction that marks each row
+// delivered, or failed where the board refuses it, and wakes the dispatcher
+// again while more remain, so a backlog drains in passes back to back. Like
+// claim, a stop does not cut it short, and it is bounded on its own: the
+// store stops at half that budget, commits the rows it has posted and says
+// more remain, so a pass that gets the connection always posts. A post
+// that fails leaves every row queued for the next pass, never typed, and is
+// warned of once while it lasts.
 func (d *dispatcher) post(ctx context.Context, to store.Address, project string) {
 	ctx = context.WithoutCancel(ctx)
 	sctx, cancel := context.WithTimeout(ctx, settleTimeout)
@@ -68,6 +72,9 @@ func (d *dispatcher) post(ctx context.Context, to store.Address, project string)
 		return
 	}
 	delete(d.warned, to)
+	if out.More {
+		d.in.Wake()
+	}
 	if len(out.Posts) == 0 {
 		return
 	}
@@ -85,5 +92,5 @@ func (d *dispatcher) post(ctx context.Context, to store.Address, project string)
 		seqs = append(seqs, p.Seq)
 	}
 	d.log.Info().Str("recipient", to.ID).Str("project", project).Strs("messages", ids).Ints64("posts", seqs).
-		Msg("messages: posted to the board")
+		Bool("more", out.More).Msg("messages: posted to the board")
 }

@@ -14,6 +14,14 @@ import (
 // partRoom is the room a part's "(part i of n) " prefix takes in a post.
 const partRoom = 32
 
+// MaxQueuePost is the most rows one PostQueued call posts. A call holds the
+// store's one connection for its whole transaction, and its caller gives it
+// 5 s. Measured under -race, a batch of 8 KiB rows took 0.85 s, and a batch
+// of 8,800-byte failure notices, two posts each, 1.03 s: about a second. A
+// backlog drains a batch a call (NERD-5533 1245ef8b, the boss's ruling on
+// the cap's value).
+const MaxQueuePost = 100
+
 // noticesHeader is the first line of A44's notices to a boss. Their post
 // drops it when more follows it.
 const noticesHeader = "[agentisan] notices:"
@@ -23,14 +31,15 @@ type PostedQueue struct {
 	Posts     []BoardPost // every post it made, in seq order
 	Delivered []Message   // rows posted, as they now stand (state delivered)
 	Failed    []Message   // rows the board refused, as they now stand (state failed)
+	More      bool        // queued rows for to remained after its last row
 }
 
 const (
-	// selectBossQueue is a boss's queued messages, oldest first; one
-	// dispatching is the dispatcher's, never selected. messages_inbox
+	// selectBossQueue is a boss's oldest ?2 queued messages, oldest first;
+	// one dispatching is the dispatcher's, never selected. messages_inbox
 	// (migration 0002) serves it.
 	selectBossQueue = `SELECT ` + messageColumns + ` FROM messages
-WHERE recipient_kind = 'boss' AND recipient = ?1 AND state = 'queued' ORDER BY seq`
+WHERE recipient_kind = 'boss' AND recipient = ?1 AND state = 'queued' ORDER BY seq LIMIT ?2`
 	deliverQueued = `UPDATE messages SET state = 'delivered', updated_at = max(?2, created_at)
 WHERE id = ?1 AND state = 'queued' RETURNING ` + messageColumns
 	failQueued = `UPDATE messages SET state = 'failed', reason = ?2, updated_at = max(?3, created_at)
@@ -39,9 +48,16 @@ WHERE id = ?1 AND state = 'queued' RETURNING ` + messageColumns
 	refusedFormat = "[agentisan] message %s from %s could not be posted on the board (%s); it is kept, failed, in state.db"
 )
 
-// PostQueued posts every message queued for the boss `to` on project's
-// board, oldest first, instead of typing it (ADR-001 A74), in one
-// transaction. Each row posted is marked delivered in it; a body over
+// PostQueued posts the oldest MaxQueuePost messages queued for the boss `to`
+// on project's board, oldest first, instead of typing it (ADR-001 A74), in
+// one transaction, and says in More whether more remain for a later call.
+// It stops early, committing what it has posted, once half its deadline has
+// passed, and says More; with no deadline, the cap alone bounds it. The
+// deadline bounds only the wait for the store's connection; another
+// process's write lock is waited out for up to busy_timeout, and no
+// statement or commit is cut. Once the call holds the connection, the first
+// row always goes; a deadline already past on entry posts nothing (take the
+// connection). Each row posted is marked delivered in it; a body over
 // MaxBody is posted in parts, "(part i of n) " before each. A row the board
 // refuses is failed on its own, with an undelivered post from the daemon in
 // its place. A message dispatching is the dispatcher's and is left alone.
@@ -74,12 +90,21 @@ func (s *Store) PostQueued(ctx context.Context, to Address, project string, at t
 
 // postQueued is PostQueued's transaction.
 func (s *Store) postQueued(ctx context.Context, to Address, project string, ns int64) (PostedQueue, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	start := time.Now()
+	conn, err := s.db.Conn(ctx) // waits for the one connection within the budget
+	if err != nil {
+		return PostedQueue{}, fmt.Errorf("take the connection: %w", err)
+	}
+	defer conn.Close() //nolint:errcheck // returns the connection; the transaction is done by then
+	deadline, timed := ctx.Deadline()
+	stop := start.Add(deadline.Sub(start) / 2)
+	run := context.WithoutCancel(ctx) // no statement or commit is cut once the call holds the connection
+	tx, err := conn.BeginTx(run, nil)
 	if err != nil {
 		return PostedQueue{}, fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // a no-op once committed
-	rows, err := tx.QueryContext(ctx, selectBossQueue, to.ID)
+	rows, err := tx.QueryContext(run, selectBossQueue, to.ID, MaxQueuePost+1)
 	if err != nil {
 		return PostedQueue{}, fmt.Errorf("select: %w", err)
 	}
@@ -88,8 +113,15 @@ func (s *Store) postQueued(ctx context.Context, to Address, project string, ns i
 		return PostedQueue{}, err
 	}
 	var out PostedQueue
-	for _, m := range queued {
-		if err := postRow(ctx, tx, m, project, ns, &out); err != nil {
+	if len(queued) > MaxQueuePost {
+		queued, out.More = queued[:MaxQueuePost], true
+	}
+	for i, m := range queued {
+		if i > 0 && timed && !time.Now().Before(stop) {
+			out.More = true // half the budget has gone: commit what is posted
+			break
+		}
+		if err := postRow(run, tx, m, project, ns, &out); err != nil {
 			return PostedQueue{}, err
 		}
 	}
