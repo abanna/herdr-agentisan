@@ -2,6 +2,8 @@ name: CI
 
 # THROWAWAY (NERD-5676, gates/covdata): can Go's own binary coverage data
 # and `go tool covdata textfmt` replace devctl coverage-merge? Never merged.
+# All three runs skip the two tests that check this repo's ci.yml against
+# AGENTS.md, which this throwaway ci.yml cannot match.
 
 on:
   push:
@@ -32,7 +34,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - run: mkdir -p covdata && go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... $(go run ./cmd/devctl test-packages ${{ matrix.shard }}) -args -test.gocoverdir=$PWD/covdata
+      - run: mkdir -p covdata && go test -race -timeout 5m -skip '^(TestParityHoldsInThisRepo|TestDocsParityCommandPasses)$' -cover -covermode=atomic -coverpkg=./internal/... $(go run ./cmd/devctl test-packages ${{ matrix.shard }}) -args -test.gocoverdir=$PWD/covdata
       - run: ls covdata | sed -E 's/\.[0-9a-f]{32}.*//' | sort | uniq -c; du -sh covdata
       - uses: actions/upload-artifact@v7
         with:
@@ -49,7 +51,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - run: go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage.out -covermode=atomic ./...
+      - run: go test -race -timeout 5m -skip '^(TestParityHoldsInThisRepo|TestDocsParityCommandPasses)$' -coverpkg=./internal/... -coverprofile=coverage.out -covermode=atomic ./...
       - uses: actions/upload-artifact@v7
         with:
           name: single-text
@@ -65,7 +67,7 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - run: mkdir -p covdata && go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ./... -args -test.gocoverdir=$PWD/covdata
+      - run: mkdir -p covdata && go test -race -timeout 5m -skip '^(TestParityHoldsInThisRepo|TestDocsParityCommandPasses)$' -cover -covermode=atomic -coverpkg=./internal/... ./... -args -test.gocoverdir=$PWD/covdata
       - run: go tool covdata textfmt -i=covdata -o single-covdata.out
       - uses: actions/upload-artifact@v7
         with:
