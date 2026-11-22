@@ -106,8 +106,8 @@ func TestStageColourWhenCut(t *testing.T) {
 }
 
 // TestDataAge: once the snapshot drawn is more than 15 whole seconds older
-// than the clock, the footer says "data Ns old", in seconds, as v12 does
-// (ADR-001 A38). It comes after a search query and before everything else,
+// than the clock, the footer reports its age, switching to the stage-age
+// format at one minute (ADR-001 A75). It comes after a search query and before everything else,
 // so a long error cannot push it off the line.
 func TestDataAge(t *testing.T) {
 	t.Parallel()
@@ -132,7 +132,8 @@ func TestDataAge(t *testing.T) {
 		"15 s old is not yet stale":     {frame: dashboard.Frame{Snapshot: aged(15 * time.Second), Now: at}, want: " " + hints},
 		"15.9 s counts as 15":           {frame: dashboard.Frame{Snapshot: aged(15*time.Second + 900*time.Millisecond), Now: at}, want: " " + hints},
 		"16 s old":                      {frame: dashboard.Frame{Snapshot: aged(16 * time.Second), Now: at}, want: " data 16s old · " + hints},
-		"an hour old is still seconds":  {frame: dashboard.Frame{Snapshot: aged(time.Hour), Now: at}, want: " data 3600s old · " + hints},
+		"an hour old":                   {frame: dashboard.Frame{Snapshot: aged(time.Hour), Now: at}, want: " data 1h00m old · " + hints},
+		"a long outage":                 {frame: dashboard.Frame{Snapshot: aged(3748877 * time.Second), Now: at}, want: " data 43d09h old · " + hints},
 		"a snapshot from the future":    {frame: dashboard.Frame{Snapshot: aged(-time.Hour), Now: at}, want: " " + hints},
 		"no snapshot":                   {frame: dashboard.Frame{Now: at}, want: " " + bare},
 		"no team here":                  {frame: dashboard.Frame{Now: at, NoTeam: dashboard.ErrNotATeamsWorkspace}, want: " " + bare},
@@ -168,7 +169,7 @@ func TestDataAge(t *testing.T) {
 		// Filter keeps the snapshot's time, so the age stays right.
 		f := dashboard.Frame{Snapshot: dashboard.Filter(fixture(t, "full"), "pee"), Now: at.Add(time.Minute), Search: true, Query: "pee"}
 		ls := lines(dashboard.Render(f, 120, 40, plain))
-		assert.Contains(t, ls[len(ls)-1], " · data 60s old · ")
+		assert.Contains(t, ls[len(ls)-1], " · data 1m old · ")
 	})
 }
 

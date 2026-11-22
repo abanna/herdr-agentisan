@@ -17,7 +17,7 @@ var ErrBtop = errors.New("btop failed")
 // full-screen btop and the 92% prefix+m popup in herdr's own config.
 const btopSize = "92%"
 
-// BtopOpener opens btop for the reader. A click on [ btop ] calls it.
+// BtopOpener opens btop for the reader. Pressing m or clicking [ btop ] calls it.
 type BtopOpener interface {
 	OpenBtop(ctx context.Context) error
 }

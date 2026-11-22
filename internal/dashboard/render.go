@@ -1058,17 +1058,15 @@ func searchHints(act bool) string {
 // viewHints are the keys that work in a group's view, as hints names them.
 func viewHints(btop, act bool) string {
 	if btop {
-		return keyHints(act, "b board", "esc back", "ctrl-b m btop", "? help", "q quit")
+		return keyHints(act, "b board", "esc back", "m btop", "? help", "q quit")
 	}
 	return keyHints(act, "b board", "esc back", "? help", "q quit")
 }
 
-// hints are the keys that work, as the footer names them. ctrl-b m is
-// herdr's own popup key for btop in this setup, named only where herdr is
-// reachable.
+// hints are the overview's footer keys, with btop when herdr is reachable.
 func hints(btop, act bool) string {
 	if btop {
-		return keyHints(act, "b board", "ctrl-b m btop", "? help", "q quit")
+		return keyHints(act, "b board", "m btop", "? help", "q quit")
 	}
 	return keyHints(act, "b board", "? help", "q quit")
 }
@@ -1094,8 +1092,8 @@ func onAgent(f Frame, view bool) bool {
 const staleAfter = 15
 
 // dataAge is "data 42s old" when the frame draws a snapshot more than
-// staleAfter whole seconds older than its clock, as v12 counts it
-// (ADR-001 A38), so a frozen view never passes for a live one. It is false
+// staleAfter whole seconds older than its clock. At a minute it switches
+// to the same units as the stage ages. It is false
 // with no snapshot, with one whose time is after the clock or is the zero
 // time, which reports no time at all, and while the snapshot is fresh.
 func dataAge(f Frame) (string, bool) {
@@ -1106,7 +1104,10 @@ func dataAge(f Frame) (string, bool) {
 	if secs <= staleAfter {
 		return "", false
 	}
-	return "data " + strconv.FormatInt(secs, 10) + "s old", true
+	if secs < 60 {
+		return "data " + strconv.FormatInt(secs, 10) + "s old", true
+	}
+	return "data " + Elapsed(&f.Snapshot.At, f.Now) + " old", true
 }
 
 // footerParts are the footer's parts, first to last: the search query, the
@@ -1146,20 +1147,22 @@ func footerParts(f Frame, view bool) []seg {
 }
 
 // helpRows are the help overlay's keys and what they do: only keys that
-// work, and the btop button only where it is drawn.
+// work, and the btop shortcut only when the opener is available.
 func helpRows(btop bool) [][2]string {
 	rows := [][2]string{
-		{"↑ ↓", "move through the agents"},
-		{keyEnter, "jump; on board, expand post"},
-		{"click", "jump; a title opens its group"},
+		{"↑ ↓ / wheel", "move or scroll expanded post"},
+		{"pgup/pgdown", "page through expanded post"},
+		{"home/end", "start/end of expanded post"},
+		{keyEnter, "jump; expand/collapse post"},
+		{"click", "jump to agent or open group"},
 		{"1-9", "open that group's view"},
-		{"esc ←", "back from a group's view"},
-		{"/", "search name, group, item, stage"},
+		{"esc / ←", "back; esc closes post/help"},
+		{"/", "search name/group/item/stage"},
 		{"b", "open or close the board"},
-		{"t / d", "board: team / daemon filter"},
+		{"t / d", "board team / daemon filter"},
 	}
 	if btop {
-		rows = append(rows, [2]string{btopButton, "btop in a herdr popup"})
+		rows = append(rows, [2]string{"m / click", "btop in a herdr popup"})
 	}
 	return append(rows, [2]string{"?", "close this help"}, [2]string{"q", "quit"})
 }
@@ -1187,7 +1190,7 @@ var helpLegend = [][]glyph{
 // overlayHelp draws the help box centred over the groups: the keys, then
 // what each glyph means.
 func overlayHelp(canvas []line, l layout, btop bool) {
-	const keyCells = 10
+	const keyCells = 12
 	const legendCells = 11
 	keys := helpRows(btop)
 	rows := make([]line, 0, len(keys)+len(helpLegend))
