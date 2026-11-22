@@ -132,7 +132,8 @@ VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`
 //     not the ID. An ID drawn twice is ErrStore, and nothing is written.
 //   - It is recorded pending, with its payload, unless it would exceed a
 //     quota: it faces what a pending GitHub notice faces but Q3, since it
-//     has no pull request, and a refusal writes nothing.
+//     has no pull request, and a refusal writes nothing. A ctx_ceiling
+//     also passes Q8: it counts toward the hour, but Q8 never refuses it.
 //
 // It writes no table but the ledger's and wakes no reader.
 func (s *Store) AdmitNotice(ctx context.Context, e NoticeEnvelope, at time.Time) (NoticeAdmission, error) {

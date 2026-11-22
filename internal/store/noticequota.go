@@ -68,11 +68,14 @@ var (
 
 // The quotas' queries, run on the admission's transaction. Each walk stops
 // at its LIMIT, a bound parameter, so each check reads at most its cap's
-// rows, however large the ledger grows, except Q8, which reads at most the
-// project's hour of both sources, about 1,200 rows, and names its index
-// (INDEXED BY notice_identities_by_state) so that no index without the
-// project can take it over. Q4 and Q5 walk at most Q1's and
-// Q2's caps: their LIMIT cuts rows only when Q1 or Q2 refuses anyway.
+// rows, however large the ledger grows, except Q8, which reads the
+// project's admissions of the last hour, of both sources, and names its
+// index (INDEXED BY notice_identities_by_state) so that no index without
+// the project can take it over. That is no fixed bound: Q8 caps the hour at
+// 600 of each source but ctx_ceiling, which no hourly quota caps; only the
+// other quotas bound the ceilings (pending, bytes, every state). Q4 and Q5
+// walk at most Q1's and Q2's caps: their LIMIT cuts rows only when Q1 or Q2
+// refuses anyway.
 // Q6 and Q7 read 0010's totals, one row each.
 const (
 	selectPendingPerProject = `SELECT count(*) FROM (SELECT 1 FROM notice_identities WHERE project = ?1 AND state = 'pending' LIMIT ?2)`

@@ -224,7 +224,9 @@ A pending notice faces all eight, an import (an event `github_seen` already
 holds) Q6 to Q8, and a duplicate or an invalid envelope none, since
 `AdmitNotice` returns both before the quotas run. So a duplicate stays a
 duplicate however full the ledger is. A daemon notice (B0a.4) faces every
-quota but Q3, which counts a pull request's pending notices: it has none.
+quota but Q3, which counts a pull request's pending notices: it has none. A
+daemon `ctx_ceiling` also passes Q8: it counts toward the hour, but Q8 never
+refuses it.
 
 Each refusal is its quota's own error, which wraps `ErrNoticeQuota`. It names
 only the quota and its limit, never the notice, and writes nothing: the
@@ -234,12 +236,15 @@ several are full is not part of the contract.
 The checks run in the admission's transaction, after the dedupe and the
 `github_seen` lookup, on the store's one connection, so no admission overtakes
 another between a count and its insert. Each reads at most its cap's rows,
-however large the ledger grows, except Q8, which reads at most the project's
-hour of both sources, about 1,200 rows, and names its index (`INDEXED BY
+however large the ledger grows, except Q8, which reads the project's
+admissions of the last hour, of both sources, and names its index (`INDEXED BY
 notice_identities_by_state`) so that no index without the project can take it
-over. Q8's window is one hour, bounded below only:
-an admission exactly an hour old is out, and one stamped after the admission
-being checked counts.
+over. That is no fixed bound: Q8 caps a project's hour at 600 GitHub notices
+and 600 daemon notices other than `ctx_ceiling`, but no hourly quota caps the
+ceilings: only the other quotas bound them, by pending count (Q1, Q2), bytes
+(Q4, Q5) and count in every state (Q6, Q7). Q8's window is one hour, bounded
+below only: an admission exactly an hour old is out, and one stamped after the
+admission being checked counts.
 
 Q6 and Q7 read the totals of the section above. A missing store total, or a
 missing total of a project that has identities, is `ErrStore`; a project with
