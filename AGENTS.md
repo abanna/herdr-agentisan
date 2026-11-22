@@ -160,7 +160,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   focus history, un-zoom the pane left, then focus the target), `snapshot`
   and the workforce ops (A23, `workforce.go`), each with a budget of its
   own, which their client gives every ask, a not_ready one asked again for
-  10 s (A52). Every poll it also reconciles `state.db`'s `workers` rows with
+  10 s (A52), and each refusal's code by one rule (`refusalOf`), which a
+  keyed spawn's `*workforce.RefusalError` has applied already, and whose
+  retry key and key state the error body carries (A73).
+  Every poll it also reconciles `state.db`'s `workers` rows with
   herdr's panes (`bind.go`, A35), rebuilds the team model, pushes `$team`
   and every agent pane's ctx display (`team.go`, A28) and caches every team's
   snapshot, each row with the model its agent reports, while the report is
@@ -264,6 +267,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   `send`'s sender and for `handoff ready` and `handoff ack` with no target;
   under Codex, only from the pane's own Codex, else no pane and no
   `HERDR_AGENTISAN_WORKER` (`FindCaller`, `caller_unverified`, A64).
+  A keyed spawn's refusal is a `RefusalError` with its key's state, and
+  `Replay` builds a retry key's stored answer from its record, each worker
+  read now (`replay.go`, A73); nothing calls it until `worker spawn` takes a
+  key.
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
   D9, D12) behind `config resolve`: layered precedence with provenance, secret
@@ -356,6 +363,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   boss has left unread and waiting, excluding acknowledgements, and reports
   the latest acknowledgement for the alert (A74). Tests open a fresh
   database in a temp dir. The store is never mocked.
+  The board batch (`PostAll`, `FitID`) and notice message operations
+  (`Entries`, `SettleAll`, `Tail`) are dormant until daemon wiring (A74),
+  guarded by `TestBoardNoticeBatchHasNoProductionCaller`.
   `boardnotice.go` also provides the pure version-1 GitHub capture-ID helper
   and its frozen envelope/receipt types (B0a.1), and `noticeledger.go` the
   dormant notice admission ledger (B0a.2, migration 0009, one-way):
@@ -381,7 +391,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   `PruneSpawnKeys` is the daemon's prune of them, at its start and daily.
   Dormant until `worker spawn` takes a key:
   `TestSpawnKeysHaveNoProductionCaller` fails on any use outside it but the
-  daemon's one prune line, in `Options.prune`.
+  daemon's one prune line, in `Options.prune`, the daemon's codes and the
+  replay builder's types.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real

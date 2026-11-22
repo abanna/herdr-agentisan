@@ -5,6 +5,7 @@
 
 ╭─ CODERS · 9 ✔1 ◐4 ●2 ⚠1 ⟳1 ────────────────────╮
 │ write the code                                 │
+│   Worker     Status   Model Ctx                │
 │ ◐ pee01      working  opus  ▓▓░░░  38%         │
 │ ◐ pee02      working  opus  ▓▓░░░  30%         │
 │ ● pee03      idle     opus  ▓░░░░  22%         │
@@ -16,15 +17,14 @@
 │ ◐ pee09      working  opus  ▓▓▓░░  69%         │
 ╰────────────────────────────────────────────────╯
 ╭─ PRECHECK · 2 ◐1 ●1 ───────────────────────────╮
+│   Worker     Status   Model Ctx                │
 │ ◐ precheck   working  son   ▓▓░░░  37%         │
 │ ● precheck2  idle     son   ▓░░░░  10%         │
 ╰────────────────────────────────────────────────╯
 ╭─ QA · 1 ✔1 ────────────────────────────────────╮
+│   Worker     Status   Model Ctx                │
 │ ✔ qa         done     son   ▓░░░░  12%         │
 ╰────────────────────────────────────────────────╯
 ╭─ CODEX · 1 ◐1 ─────────────────────────────────╮
 │ Codex review triage                            │
-│ ◐ codex      working  cdx5  ▓▓░░░  41%         │
-╰────────────────────────────────────────────────╯
-╭─ RESEARCH · 1 ●1 ──────────────────────────────╮
- enter jump · ↑↓ move · b board · ctrl-b m bt… ↓2
+ enter jump · ↑↓ move · b board · m btop · ? … ↓3

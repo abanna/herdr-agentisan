@@ -45,6 +45,9 @@ const (
 	bossStageCap = 32
 )
 
+// The smallest heading fits a glyph gutter, Worker, and Ctx.
+const headingMinWidth = 2 + len("Worker") + colGap + ctxCells
+
 // Header geometry.
 const (
 	// boxedHeight is the shortest terminal whose header is a box with a
@@ -218,11 +221,12 @@ func downsample(s string, p colorprofile.Profile) string {
 type rowKind int
 
 const (
-	rowTop    rowKind = iota // a box's top border, with the group's title
-	rowDesc                  // the group's description
-	rowAgent                 // one agent
-	rowEmpty                 // "no agents"
-	rowBottom                // a box's bottom border
+	rowTop     rowKind = iota // a box's top border, with the group's title
+	rowDesc                   // the group's description
+	rowHeading                // the group's column labels
+	rowAgent                  // one agent
+	rowEmpty                  // "no agents"
+	rowBottom                 // a box's bottom border
 )
 
 // row is one line of the stacked groups.
@@ -308,7 +312,10 @@ func plan(f Frame, w, h int) layout {
 		l.offset = l.view.offset
 		return l
 	}
-	l.cols = planColumns(l.groups, f.Now, rowWidth(w))
+	inner := rowWidth(w)
+	l.cols = planColumns(l.groups, f.Now, inner)
+	// Four rows fit a group title, description, heading, and agent.
+	headings := l.avail >= 4 && inner >= headingMinWidth
 	selRow, groupTop, groupBottom := -1, 0, 0
 	for g, grp := range l.groups {
 		top := len(l.rows)
@@ -318,6 +325,8 @@ func plan(f Frame, w, h int) layout {
 		}
 		if len(grp.Agents) == 0 {
 			l.rows = append(l.rows, row{kind: rowEmpty, group: g})
+		} else if headings {
+			l.rows = append(l.rows, row{kind: rowHeading, group: g})
 		}
 		for a := range grp.Agents {
 			if l.selOK && l.sel == (Selection{Group: g, Agent: a}) {
@@ -793,6 +802,8 @@ func (l layout) drawRow(r row, th Thresholds) line {
 		return line{{"╰" + strings.Repeat("─", max(0, l.w-2)) + "╯", border}}
 	case rowDesc:
 		return boxed(line{{clean(g.Description), dimStyle}}, inner, border)
+	case rowHeading:
+		return boxed(l.cols.heading(inner), inner, border)
 	case rowEmpty:
 		return boxed(line{{noAgents, dimStyle}}, inner, border)
 	default:
@@ -878,10 +889,52 @@ func planColumns(groups []snapshot.Group, now time.Time, inner int) columns {
 	if over := c.need() - inner; over > 0 {
 		c.name = max(1, c.name-over)
 	}
+	if inner >= headingMinWidth {
+		// Reserve space for Worker only from spare cells. Keep all
+		// columns that fitted with names at their natural width.
+		const workerCells = len("Worker") - 1 // one cell of the gap
+		c.name += min(max(0, workerCells-c.name), max(0, inner-c.need()))
+	}
 	if c.width[colStage] > 0 {
 		c.width[colStage] = stageMin + max(0, inner-c.need())
 	}
 	return c
+}
+
+// heading starts each label at its column's text. Worker, Status and Model
+// may use one cell of their following gap to fit, without widening the
+// columns or changing which ones drop. Age aligns to the right like the values.
+func (c columns) heading(inner int) line {
+	fields := [...]struct {
+		title, short string
+		width, extra int
+	}{
+		{"Worker", "ID", c.name, 1},
+		{"Status", "State", c.width[colState], 1},
+		{"Model", "AI", c.width[colModel], 1},
+		{"Ctx", "", ctxCells, 0},
+		{"Item", "ID", c.width[colItem], 0},
+		{"Stage", "", c.width[colStage], 0},
+	}
+	var out line
+	x := 2 // leave the row's status glyph and its space empty
+	for _, f := range fields {
+		if f.width == 0 {
+			continue
+		}
+		room := min(f.width+f.extra, inner-x)
+		title := f.title
+		if len(title) > room && f.short != "" {
+			title = f.short
+		}
+		out = append(out.pad(x), seg{ansi.Truncate(title, room, ""), boldStyle})
+		x += f.width + colGap
+	}
+	if age := c.width[colTime]; age > 0 {
+		const title = "Age"
+		out = append(out.pad(x+age-len(title)), seg{title, boldStyle})
+	}
+	return out
 }
 
 // row is one agent's line: "◐ pee04  working  opus  ▓▓▓░░  61%  NERD-5255
@@ -1058,17 +1111,15 @@ func searchHints(act bool) string {
 // viewHints are the keys that work in a group's view, as hints names them.
 func viewHints(btop, act bool) string {
 	if btop {
-		return keyHints(act, "b board", "esc back", "ctrl-b m btop", "? help", "q quit")
+		return keyHints(act, "b board", "esc back", "m btop", "? help", "q quit")
 	}
 	return keyHints(act, "b board", "esc back", "? help", "q quit")
 }
 
-// hints are the keys that work, as the footer names them. ctrl-b m is
-// herdr's own popup key for btop in this setup, named only where herdr is
-// reachable.
+// hints are the overview's footer keys, with btop when herdr is reachable.
 func hints(btop, act bool) string {
 	if btop {
-		return keyHints(act, "b board", "ctrl-b m btop", "? help", "q quit")
+		return keyHints(act, "b board", "m btop", "? help", "q quit")
 	}
 	return keyHints(act, "b board", "? help", "q quit")
 }
@@ -1094,8 +1145,8 @@ func onAgent(f Frame, view bool) bool {
 const staleAfter = 15
 
 // dataAge is "data 42s old" when the frame draws a snapshot more than
-// staleAfter whole seconds older than its clock, as v12 counts it
-// (ADR-001 A38), so a frozen view never passes for a live one. It is false
+// staleAfter whole seconds older than its clock. At a minute it switches
+// to the same units as the stage ages. It is false
 // with no snapshot, with one whose time is after the clock or is the zero
 // time, which reports no time at all, and while the snapshot is fresh.
 func dataAge(f Frame) (string, bool) {
@@ -1106,7 +1157,10 @@ func dataAge(f Frame) (string, bool) {
 	if secs <= staleAfter {
 		return "", false
 	}
-	return "data " + strconv.FormatInt(secs, 10) + "s old", true
+	if secs < 60 {
+		return "data " + strconv.FormatInt(secs, 10) + "s old", true
+	}
+	return "data " + Elapsed(&f.Snapshot.At, f.Now) + " old", true
 }
 
 // footerParts are the footer's parts, first to last: the search query, the
@@ -1146,20 +1200,22 @@ func footerParts(f Frame, view bool) []seg {
 }
 
 // helpRows are the help overlay's keys and what they do: only keys that
-// work, and the btop button only where it is drawn.
+// work, and the btop shortcut only when the opener is available.
 func helpRows(btop bool) [][2]string {
 	rows := [][2]string{
-		{"↑ ↓", "move through the agents"},
-		{keyEnter, "jump; on board, expand post"},
-		{"click", "jump; a title opens its group"},
+		{"↑ ↓ / wheel", "move or scroll expanded post"},
+		{"pgup/pgdown", "page through expanded post"},
+		{"home/end", "start/end of expanded post"},
+		{keyEnter, "jump; expand/collapse post"},
+		{"click", "jump to agent or open group"},
 		{"1-9", "open that group's view"},
-		{"esc ←", "back from a group's view"},
-		{"/", "search name, group, item, stage"},
+		{"esc / ←", "back; esc closes post/help"},
+		{"/", "search name/group/item/stage"},
 		{"b", "open or close the board"},
-		{"t / d", "board: team / daemon filter"},
+		{"t / d", "board team / daemon filter"},
 	}
 	if btop {
-		rows = append(rows, [2]string{btopButton, "btop in a herdr popup"})
+		rows = append(rows, [2]string{"m / click", "btop in a herdr popup"})
 	}
 	return append(rows, [2]string{"?", "close this help"}, [2]string{"q", "quit"})
 }
@@ -1187,7 +1243,7 @@ var helpLegend = [][]glyph{
 // overlayHelp draws the help box centred over the groups: the keys, then
 // what each glyph means.
 func overlayHelp(canvas []line, l layout, btop bool) {
-	const keyCells = 10
+	const keyCells = 12
 	const legendCells = 11
 	keys := helpRows(btop)
 	rows := make([]line, 0, len(keys)+len(helpLegend))

@@ -370,3 +370,23 @@ func (s GitHubSource) Take() []notice.Notice { return s.g.n.github.take() }
 // BetweenReads runs f, from now on, in each collection between its read of
 // what is held and its read of state.db, where an acknowledgement may land.
 func (s GitHubSource) BetweenReads(f func()) { s.g.betweenReads = f }
+
+// RefusalOf is the code and message an op named name, of budget, answers
+// err with on ctx, its code from code: the server's rule (A73).
+var RefusalOf = refusalOf
+
+// WorkforceCodeRow is one row of the workforce ops' codes: a sentinel and
+// the code it answers.
+type WorkforceCodeRow struct {
+	Err  error
+	Code string
+}
+
+// WorkforceCodeRows is every row of the workforce ops' codes, in order.
+func WorkforceCodeRows() []WorkforceCodeRow {
+	rows := make([]WorkforceCodeRow, 0, len(workforceCodes))
+	for _, c := range workforceCodes {
+		rows = append(rows, WorkforceCodeRow{Err: c.err, Code: c.code})
+	}
+	return rows
+}
