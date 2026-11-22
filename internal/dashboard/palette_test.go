@@ -115,6 +115,15 @@ func TestSelectionUsesCoolBarInColour(t *testing.T) {
 	check(board, "extra body", "earlier topic")
 }
 
+func TestRenderWideFrameAllocations(t *testing.T) {
+	frame := dashboard.Frame{Snapshot: fixture(t, "full"), Now: at}
+	const width, height = 8192, 16
+	allocations := testing.AllocsPerRun(3, func() {
+		dashboard.Render(frame, width, height, fullColour)
+	})
+	require.Less(t, allocations, float64(2600), "fitting lines should reach the writer without allocating copies of their segments")
+}
+
 func paletteHex(role int) string {
 	r, g, b, _ := dashboard.PaletteForTest()[role].RGBA()
 	return fmt.Sprintf("#%02x%02x%02x", r>>8, g>>8, b>>8)

@@ -201,7 +201,10 @@ func Render(f Frame, w, h int, opts Options) string {
 		}
 		// The last word on width: at a few columns a box's corners alone
 		// are wider than the terminal, and nothing may spill past it.
-		b.WriteString(ln.cut(0, w).trimRight().render())
+		if ln.width() > w {
+			ln = ln.cut(0, w)
+		}
+		b.WriteString(ln.trimRight().render())
 	}
 	return downsample(b.String(), opts.Profile)
 }
