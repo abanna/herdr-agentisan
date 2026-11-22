@@ -295,3 +295,22 @@ func TestReopenedOldestCeilingKeepsItsFirstAlertTime(t *testing.T) {
 	require.True(t, ok)
 	assert.True(t, a.Ceiling)
 }
+
+func TestRestartedEpisodeKeepsTheOldestCeilingDeadline(t *testing.T) {
+	t.Parallel()
+	cfg := defaults()
+	tr := attention.NewTracker()
+	first := ceilingPost(boss(), 0)
+	_, ok := tr.Observe("app", cfg, first, at(0))
+	require.False(t, ok, "the first ceiling is due at 2")
+
+	tr = attention.NewTracker()
+	_, ok = tr.Observe("app", cfg, ceilingPost(first, m), at(m))
+	require.False(t, ok, "a restart with a new ceiling does not alert before 2")
+
+	// The second ceiling is acknowledged. The first is still pending
+	// and reaches its original deadline in this poll.
+	alert, ok := tr.Observe("app", cfg, acked(first, 2*m), at(2*m))
+	require.True(t, ok, "the first ceiling is due even during the quiet interval")
+	assert.True(t, alert.Ceiling)
+}

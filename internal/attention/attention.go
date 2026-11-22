@@ -139,6 +139,10 @@ func (t *Tracker) Observe(project string, c Config, s State, now time.Time) (Ale
 		if e.openedAck.After(now) {
 			e.openedAck = now
 		}
+		if oldest := ceilingOf(s); !oldest.IsZero() {
+			// Preserve the first ceiling's deadline if a reaction follows.
+			e.bound = oldest.Add(c.CeilingAfter)
+		}
 		t.episodes[project] = e
 	}
 	read, acked := s.BossMark > e.mark, s.LastAck.After(e.ack)
