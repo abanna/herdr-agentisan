@@ -1249,7 +1249,7 @@ func TestSnapshotOpBeforeAnyPollSelectsNothing(t *testing.T) {
 	serving(t, teamOpts(t, dir, th, configDir(t, everyTeamConfig)), th.fakeHerdr)
 	polled(t, th.srv, 1)
 	sock := socketPath(t, dir, th.path)
-	for _, sel := range []daemon.Selector{{}, {Project: "alpha"}, {Project: "gamma"}, {WorkspaceID: "wN"}, {WorkspaceID: "w99"}} {
+	for _, sel := range []daemon.Selector{{}, {Project: "alpha"}, {Project: "gamma"}, {WorkspaceID: liveWorkspace}, {WorkspaceID: "w99"}} {
 		_, err := daemon.SnapshotOf(t.Context(), sock, sel)
 		require.ErrorIs(t, err, daemon.ErrNotReady, "%+v", sel)
 		assert.NotErrorIs(t, err, daemon.ErrNoTeam)

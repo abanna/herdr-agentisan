@@ -599,6 +599,8 @@ func TestDispatcherHoldsAnUnprovenTarget(t *testing.T) {
 	tests := map[string]struct {
 		to    store.Address
 		setup func(t *testing.T, th *teamHerdr, dir string)
+		// config, when set, replaces workforceConfig.
+		config func(t *testing.T) string
 	}{
 		"no agent list, to a worker": {to: coder, setup: func(_ *testing.T, th *teamHerdr, _ string) {
 			th.mu.Lock()
@@ -626,9 +628,11 @@ func TestDispatcherHoldsAnUnprovenTarget(t *testing.T) {
 		"the boss's name outside its boss place": {to: haBoss, setup: func(_ *testing.T, th *teamHerdr, _ string) {
 			th.setAgents(named("w14:p2", "ha-boss"))
 		}},
+		// wJ:p1 is in the live team's boss tab, which liveTOML configures
+		// beside ha.
 		"the boss's name in another team's boss place": {to: haBoss, setup: func(_ *testing.T, th *teamHerdr, _ string) {
 			th.setAgents(named("wJ:p1", "ha-boss"), named("w14:p2", "ha-coder-1"))
-		}},
+		}, config: func(t *testing.T) string { return haNotices(t, liveTOML+quietNotices) }},
 		"a boss no team has": {to: store.Address{Kind: store.KindBoss, ID: "zz-boss"}, setup: func(_ *testing.T, th *teamHerdr, _ string) {
 			th.setAgents(named("w14:p1", "ha-boss"), named("w14:p2", "ha-coder-1"), named("w2:p1", "zz-boss"))
 		}},
@@ -640,7 +644,11 @@ func TestDispatcherHoldsAnUnprovenTarget(t *testing.T) {
 			st := stateStore(t, dir, th)
 			tc.setup(t, th, dir)
 			m := sent(t, st, tc.to, aPane, "wait")
-			serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
+			config := workforceConfig
+			if tc.config != nil {
+				config = tc.config
+			}
+			serving(t, teamOpts(t, dir, th, config(t)), th.fakeHerdr)
 
 			polled(t, th.srv, 3)
 			assert.Empty(t, p.all(), "nothing typed")
