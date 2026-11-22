@@ -797,9 +797,23 @@ it is. Either is no member of the team: `team status` does not list it as the
 boss's (ADR-001 A19's addendum).
 See [`docs/config/herdr-keys.example.toml`](docs/config/herdr-keys.example.toml).
 
+The wheel navigates like the up and down arrows. In the dashboard, press
+`m` or click `[ btop ]` to open btop. To open it from any herdr pane, add
+this binding to herdr's config:
+
+```toml
+[[keys.command]]
+key = "prefix+m"
+type = "popup"
+command = "btop"
+width = "92%"
+height = "92%"
+description = "Open btop"
+```
+
 `herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json`
 draws a snapshot file instead, outside herdr too. A fixture's time is fixed,
-so its footer always reads `data Ns old`. Preview the board, then press `b`:
+so its footer shows its age (for example, `data 43d09h old`). Preview the board, then press `b`:
 
 ```bash
 herdr-agentisan dashboard --fixture docs/dashboard/sample-snapshot.json --board-fixture docs/dashboard/sample-board.json
@@ -814,9 +828,9 @@ new daemon and dashboard together.
 
 The dashboard keeps v12's cues (ADR-001 A38). A stage that says READY is
 bold green, RED or blocked bold red, and waiting or queued yellow, matched
-by whole word in any case. The footer says `data Ns old` once the snapshot
-drawn is more than 15 s old, so a stalled daemon never passes for a live
-one. A plain shell is drawn as `▸ shell`. An [old stage](#an-old-stage-ages)
+by whole word in any case. Once the drawn snapshot is more than 15 whole
+seconds old, the footer shows its age in seconds below a minute and in the
+stage-age format from a minute onward (ADR-001 A75). A plain shell is drawn as `▸ shell`. An [old stage](#an-old-stage-ages)
 takes none of those colours: it is dim, faint and italic, and its time
 column says how long ago it was reported ("3h05m ago"), so it reads as old
 on a terminal that draws neither.
