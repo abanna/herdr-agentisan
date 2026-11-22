@@ -113,6 +113,22 @@ func (p *Poller) RouteHeld() bool {
 	return true
 }
 
+// SetProbe makes f the inbox's probe: called just before remember takes
+// route ("remember") and at each delivery read ("delivery"). nil removes it.
+func (p *Poller) SetProbe(f func(at string)) {
+	p.in.probe = f
+}
+
+// MuHeld reports whether someone holds the inbox's mu now, as RouteHeld
+// does for route.
+func (p *Poller) MuHeld() bool {
+	if p.in.mu.TryLock() {
+		p.in.mu.Unlock()
+		return false
+	}
+	return true
+}
+
 // Delivery is how the inbox delivers to project's boss now (A74).
 func (p *Poller) Delivery(project string) notice.Delivery {
 	return p.in.delivery(project)

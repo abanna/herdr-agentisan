@@ -23,12 +23,13 @@ const heldReason = "messages wait: the boss's agent has not been seen since the 
 // teams have, and every other recipient go on to targetOf.
 //
 // The delivery is read, and the queue posted, under in.route, the lock a
-// poll's remember takes, as claimTyped claims (NERD-5533 7c30e8aa, C2): a
-// pass that read board posts only while no poll has remembered another
-// agent since, so a boss that turned Codex is never posted to. route is
-// released before what the post logs, emits and wakes (posted), and before
-// a held queue's warning. A recipient that is not a board-key boss takes
-// no route: its delivery is typed.
+// poll's remember takes, as claimTyped claims (NERD-5533 7c30e8aa, C2):
+// while another agent stays remembered, the dispatcher starts no board
+// post for that boss, and a post started before the change has committed,
+// or failed and left its rows queued, before it. route is released before
+// what the post logs, emits and wakes (posted), and before a held queue's
+// warning. A recipient that is not a board-key boss takes no route: its
+// delivery is typed.
 func (d *dispatcher) untyped(ctx context.Context, bosses map[string]string, to store.Address) bool {
 	project, board := d.boardBoss(bosses, to)
 	if !board {
@@ -63,13 +64,15 @@ func (d *dispatcher) untyped(ctx context.Context, bosses map[string]string, to s
 // pre-check, NERD-5533 cbf65a5e).
 //
 // For the boss of one tabs team whose key is board, the delivery is read
-// and the row claimed under in.route, the lock remember takes, so a poll's
-// switch falls wholly before the claim, and nothing is claimed, or wholly
-// after it, and the row is already dispatching, which A44 never appends to:
-// a notice the poll flushes after it remembers Claude is never typed. route
-// is released before the prompt. Lock order: route, then in.mu, then the
-// store; route is taken nowhere else but remember, and neither holds
-// another lock when it takes it.
+// and the row claimed under in.route, the lock remember takes, so a change
+// of the remembered agent falls wholly before the claim, and nothing is
+// claimed, or wholly after it, with the row already dispatching, which A44
+// does not append to while it is. The prompt runs after route is
+// released: the claimed body is the one typed, and a refusal that requeues
+// it (A30) makes it a queued row again, which a later notice may join.
+// Lock order: route, then in.mu, then the store; route is taken only here,
+// in untyped and in remember, none of which holds another lock when it
+// takes it.
 //
 // Every other recipient, and every boss with the key unset, is claimed as
 // on the typed path alone, with no route taken.
@@ -113,10 +116,13 @@ func bossProject(bosses map[string]string, boss string) (string, bool) {
 // postQueued posts the oldest MaxQueuePost rows of to's queue on project's
 // board instead of typing them (A74), in one transaction that marks each
 // row delivered, or failed where the board refuses it. Like claim, a stop
-// does not cut it short, and it is bounded on its own: the store stops at
-// half that budget, commits the rows it has posted and says more remain,
-// so a pass that gets the connection always posts. untyped runs it under
-// route.
+// does not cut it short. The cap bounds the count, not the time: the store
+// starts no new row past half its budget, measured from before it takes
+// the connection, commits the rows it has posted and says more remain, so
+// a pass that gets the connection always posts; but a statement once
+// started, and the commit, run to their end. untyped runs it under route,
+// so a poll can wait behind one post as long as it takes, which delays
+// that poll's remember, its flush and its model hand-off (polled).
 func (d *dispatcher) postQueued(ctx context.Context, to store.Address, project string) (store.PostedQueue, error) {
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), settleTimeout)
 	defer cancel()

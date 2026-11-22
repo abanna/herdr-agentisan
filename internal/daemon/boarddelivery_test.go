@@ -391,8 +391,9 @@ func noticeRig(t *testing.T, o func(*daemon.Options)) (*boardRig, *notice.Batche
 // a row of its own and is posted, never typed.
 //
 // The claim's clock read is paused inside that lock, so the test releases
-// it without waiting for the poll, which waits for it; without the lock the
-// poll ends first, and the row the pass claims holds the notice.
+// it once the poll has come to remember (the probe), without waiting for
+// the poll, which waits for it. The lock's placement is pinned
+// deterministically by TestBoardModeCriticalSectionsHoldRoute.
 func TestBossThatTurnsClaudeAtTheClaimGetsNoLaterNotice(t *testing.T) {
 	t.Parallel()
 	var pause atomic.Bool
@@ -420,14 +421,22 @@ func TestBossThatTurnsClaudeAtTheClaimGetsNoLaterNotice(t *testing.T) {
 	}
 	require.Equal(t, store.MessageQueued, stateOf(t, r.st, row.ID).State, "paused before the claim")
 	b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Gone, Text: "after the switch"}})
+	atRemember := make(chan struct{})
+	r.p.SetProbe(func(at string) {
+		if at == "remember" {
+			close(atRemember)
+		}
+	})
 	polled := make(chan struct{})
 	go func() {
 		defer close(polled)
 		r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
 	}()
 	select {
-	case <-polled: // no lock: the poll's flush appends to the row first
-	case <-time.After(100 * time.Millisecond): // the poll waits for the claim
+	case <-atRemember: // the poll is at remember's route, which the pass holds
+	case <-time.After(ready):
+		close(resume)
+		t.Fatal("the poll never came to remember")
 	}
 	close(resume)
 	for _, c := range []chan struct{}{passed, polled} {
@@ -537,8 +546,9 @@ func TestBossThatTurnsClaudeAfterTheClaimTypesOnlyWhatWasClaimed(t *testing.T) {
 // never posted (A74: a Codex boss is never posted to).
 //
 // The post's clock read is paused inside that lock, so the test releases
-// it without waiting for the poll, which waits for it; without the lock the
-// poll ends first, and the stale pass posts the notice too.
+// it once the poll has come to remember (the probe), without waiting for
+// the poll, which waits for it. The lock's placement is pinned
+// deterministically by TestBoardModeCriticalSectionsHoldRoute.
 func TestBossThatTurnsCodexAtThePostIsNotPosted(t *testing.T) {
 	t.Parallel()
 	var pause atomic.Bool
@@ -570,14 +580,22 @@ func TestBossThatTurnsCodexAtThePostIsNotPosted(t *testing.T) {
 	}
 	require.Zero(t, boardCount(t, r.db), "paused before the post")
 	b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Blocked, Text: "after the switch"}})
+	atRemember := make(chan struct{})
+	r.p.SetProbe(func(at string) {
+		if at == "remember" {
+			close(atRemember)
+		}
+	})
 	polled := make(chan struct{})
 	go func() {
 		defer close(polled)
 		r.p.EndPoll(haModel(bossPane("ha-boss", "codex")))
 	}()
 	select {
-	case <-polled: // no lock: the poll's flush queues the notice first
-	case <-time.After(100 * time.Millisecond): // the poll waits for the post
+	case <-atRemember: // the poll is at remember's route, which the pass holds
+	case <-time.After(ready):
+		close(resume)
+		t.Fatal("the poll never came to remember")
 	}
 	close(resume)
 	for _, c := range []chan struct{}{passed, polled} {
@@ -679,6 +697,7 @@ func TestTypedClaimsTakeNoRoute(t *testing.T) {
 			case <-done:
 			case <-time.After(ready):
 				release()
+				<-done
 				t.Fatal("the typed pass waited on route")
 			}
 			assert.Equal(t, []string{"[msg " + m.ID + " from ha-coder-1] done"}, func() []string {

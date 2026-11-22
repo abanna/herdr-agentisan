@@ -68,11 +68,18 @@ func refusal(err error) string {
 // built, which every target is checked against, each configured team's
 // boss, how each boss is delivered to (A74), and a wake.
 type inbox struct {
-	// route orders a poll's remember with a typed pass's claim for the
-	// boss of a board-mode team (claimTyped): it is taken before mu, and
-	// by those two alone.
+	// route orders a poll's remember with the dispatcher's decisions for
+	// the boss of a board-mode team: its typed claim (claimTyped) and its
+	// board post (untyped), each with the delivery read it acts on. It is
+	// taken before mu, at those three sites alone. Under it the board post
+	// may close the store's board-reader channel, which wakes `board wait`;
+	// the dispatcher's own backlog wake (posted) runs after it is released.
 	route sync.Mutex
 	mu    sync.Mutex
+	// probe, nil outside tests, is called just before remember takes route
+	// ("remember") and at each delivery read ("delivery"): the tests check
+	// what is held at those points (export_notices_test.go's SetProbe).
+	probe func(at string)
 	model *team.Model
 	// bosses is each configured project's boss, by the agent name herdr
 	// knows it by.
@@ -115,10 +122,13 @@ func (in *inbox) setConfigs(cfgs notice.Configs) {
 // remember records, for each tabs team, the agent this poll's model m shows
 // on the pane in its boss place that bears its boss's name (A74). A nil
 // model, a failed agent.list, no named pane and an empty agent each change
-// nothing remembered. It takes route first, so a typed pass that is
-// claiming for a board-mode boss finishes its claim before the memory
-// turns (claimTyped).
+// nothing remembered. It takes route first, so a pass deciding for a
+// board-mode boss finishes its claim or its post before the remembered
+// agent changes (claimTyped, untyped).
 func (in *inbox) remember(m *team.Model) {
+	if in.probe != nil {
+		in.probe("remember")
+	}
 	in.route.Lock()
 	defer in.route.Unlock()
 	in.mu.Lock()
@@ -134,6 +144,9 @@ func (in *inbox) remember(m *team.Model) {
 // ◆ spaces and any project that is not a tabs team, else by its key and the
 // agent last seen on its boss's pane.
 func (in *inbox) delivery(project string) notice.Delivery {
+	if in.probe != nil {
+		in.probe("delivery")
+	}
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if !in.tabs[project] {
@@ -143,7 +156,7 @@ func (in *inbox) delivery(project string) notice.Delivery {
 }
 
 // boardKey reports whether project is a tabs team whose key is board
-// (A74): only its boss's claims take route.
+// (A74): only its boss's claims and posts take route.
 func (in *inbox) boardKey(project string) bool {
 	in.mu.Lock()
 	defer in.mu.Unlock()
