@@ -11,14 +11,14 @@ import (
 // dashboard's board panel alone: of posts, a record per post that moves
 // neither reader's mark and goes with its post at the prune, and of the
 // messages waiting in a boss's inbox, one record per project and boss that a
-// later one replaces. They are dormant: nothing in production calls them
-// before the board's PR 3c.
+// later one replaces. The queue writers read the held cutoffs. Production
+// callers begin writing acknowledgements with the board's PR 3c.
 
 // AckResult is what an acknowledgement wrote.
 type AckResult struct {
 	Acked       int       // posts newly acknowledged
 	HeldThrough int64     // AckUpto only: the newest seq queued for boss, 0 with none
-	HeldAt      time.Time // AckUpto only: the latest updated_at queued for boss, zero with none
+	HeldAt      time.Time // AckUpto only: the cutoff for held messages, zero for a cutoff at the Unix epoch
 }
 
 // ackPosts acknowledges, at ?2, the posts on ?1's board the boss has not
@@ -35,16 +35,13 @@ const (
 	ackOnePost  = ackPosts + `seq = ?3`
 	ackUptoPost = ackPosts + `seq <= ?3 AND (?4 = '' OR channel = ?4)`
 	// ackHeld records, for project ?1 and boss ?2 at ?3, every message then
-	// queued for the boss: the newest seq and the latest updated_at among
-	// them, 0 and 0 with none. A message queued later, a notice added to a
-	// waiting one and a message returned to the boss each have a newer seq
-	// or updated_at, so each counts again. It replaces the last record rather
-	// than keep the larger values: each covers everything queued at its
-	// moment, and a clock stepped back must not hide a later append behind an
-	// earlier record. The SELECT keeps its WHERE: SQLite's parser needs one
-	// before ON CONFLICT in an INSERT ... SELECT.
+	// queued for the boss: the newest seq (0 with none) and the later of
+	// the acknowledgement's time and the latest queued update. Taking the
+	// latest update covers rows stamped ahead of the acknowledgement's
+	// clock. Each acknowledgement replaces the preceding record. The
+	// SELECT keeps its WHERE for SQLite's INSERT ... SELECT parser.
 	ackHeld = `INSERT INTO board_held_acks (project, boss, through_seq, through_at, acked_at)
-SELECT ?1, ?2, coalesce(max(seq), 0), coalesce(max(updated_at), 0), ?3 FROM messages
+SELECT ?1, ?2, coalesce(max(seq), 0), max(?3, coalesce(max(updated_at), 0)), ?3 FROM messages
 WHERE recipient_kind = 'boss' AND recipient = ?2 AND state = 'queued'
 ON CONFLICT (project, boss) DO UPDATE SET through_seq = excluded.through_seq,
 	through_at = excluded.through_at, acked_at = excluded.acked_at

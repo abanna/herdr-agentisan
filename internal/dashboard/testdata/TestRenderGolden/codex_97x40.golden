@@ -5,6 +5,7 @@
 
 ╭─ CODER · 4 ◐3 ●1 ─────────────────────────────────────────────────────────────────────────────╮
 │ write the code                                                                                │
+│   Worker          Status   Model   Ctx         Item         Stage                         Age │
 │ ◐ ha-coder-1      working  opus    ▓▓▓░░  57%  NERD-5504    review loop cycle 1           14m │
 │ ◐ ha-coder-2      working  sol6.1  ▓▓░░░  33%  NERD-5289    go-review Job 1                5m │
 │ ● ha-coder-3      idle     sol6    ▓░░░░  12%  PR#118       BOSS: PR #118 open            39m │
@@ -12,29 +13,28 @@
 ╰───────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ QA · 2 ◐2 ───────────────────────────────────────────────────────────────────────────────────╮
 │ verify each handoff                                                                           │
+│   Worker          Status   Model   Ctx         Item         Stage                         Age │
 │ ◐ ha-qa-1         working  son     ▓▓░░░  41%  PR#118       merge check                    9m │
 │ ◐ ha-qa-2         working  gpt5.5  ▓░░░░  22%  PR#121       QA PASS                        1m │
 ╰───────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ REVIEW · 2 ◐1 ●1 ────────────────────────────────────────────────────────────────────────────╮
+│   Worker          Status   Model   Ctx         Item         Stage                         Age │
 │ ◐ ha-review-1     working  sol6.1  ▓░░░░  18%  PR#120       reading the diff               3m │
 │ ● ha-review-2     idle     sol5.6  ░░░░░   9%               BOSS: no findings             24m │
 ╰───────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ LIBRARIAN · 2 ◐1 ●1 ─────────────────────────────────────────────────────────────────────────╮
+│   Worker          Status   Model   Ctx         Item         Stage                         Age │
 │ ◐ ha-librarian-1  working  hai     ▓░░░░  15%  NERD-5501    filing sub-issues              2m │
 │ ● ha-librarian-2  idle     luna6   ░░░░░   7%               archived g001                 49m │
 ╰───────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ DEBUGGER · 2 ◐1 ●1 ──────────────────────────────────────────────────────────────────────────╮
+│   Worker          Status   Model   Ctx         Item         Stage                         Age │
 │ ● ha-debugger-1   idle     fab     ░░░░░   4%                                                 │
 │ ◐ ha-debugger-2   working  astra6  ▓░░░░  26%  NERD-5340    reading the trail             10m │
 ╰───────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ RESEARCH · 1 ◐1 ─────────────────────────────────────────────────────────────────────────────╮
+│   Worker          Status   Model   Ctx         Item         Stage                         Age │
 │ ◐ ha-research-1   working  cdx5.5  ▓▓░░░  48%  codex 0.163  hook review strings           18m │
 ╰───────────────────────────────────────────────────────────────────────────────────────────────╯
-
-
-
-
-
-
 
  enter jump · ↑↓ move · b board · m btop · ? help · q quit

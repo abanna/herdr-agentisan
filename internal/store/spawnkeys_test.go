@@ -90,7 +90,7 @@ func TestSpawnKeyMigrationUpgradesThePreviousStore(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, len(previous), old.UserVersion())
 	seedWorker(t, old, "ha-coder-3", "w14:p3", 1)
-	send(t, old, worker("ha-coder-3"), boss, "your task")
+	sendBefore12(t, old, "ha-coder-3", "your task")
 	workers, messages := tableRows(t, store.DB(old), "workers"), tableRows(t, store.DB(old), "messages")
 	require.NoError(t, old.Close())
 
