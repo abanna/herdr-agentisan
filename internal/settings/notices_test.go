@@ -13,8 +13,9 @@ import (
 )
 
 // defaultNotices is every team's notices with nothing set: told everything,
-// one message every 30 s at most, a repeat dropped for 5 min (A44).
-var defaultNotices = settings.NoticeConfig{Gap: 30 * time.Second, Repeat: 5 * time.Minute}
+// one message every 30 s at most, a repeat dropped for 5 min (A44), typed
+// (A74).
+var defaultNotices = settings.NoticeConfig{Gap: 30 * time.Second, Repeat: 5 * time.Minute, Delivery: settings.DeliveryTyped}
 
 // TestNoticesForTheDaemon: the daemon reads every project's notices once,
 // from the shared file alone. They merge as the profile does, so a shared
@@ -37,18 +38,18 @@ func TestNoticesForTheDaemon(t *testing.T) {
 		"shared, then the project's own": {
 			file: "[notices]\nskip = [\"turn_ended\"]\ngap = 60\n[projects.app]\nrepo = \"/x\"\nshort = \"a\"\n[projects.web]\nrepo = \"/y\"\nshort = \"w\"\n[projects.web.notices]\nskip = []\nrepeat = 0\n",
 			want: settings.NoticeSettings{
-				Default: settings.NoticeConfig{Skip: []string{"turn_ended"}, Gap: time.Minute, Repeat: 5 * time.Minute},
+				Default: settings.NoticeConfig{Skip: []string{"turn_ended"}, Gap: time.Minute, Repeat: 5 * time.Minute, Delivery: settings.DeliveryTyped},
 				Projects: map[string]settings.NoticeConfig{
-					"app": {Skip: []string{"turn_ended"}, Gap: time.Minute, Repeat: 5 * time.Minute},
-					"web": {Skip: []string{}, Gap: time.Minute},
+					"app": {Skip: []string{"turn_ended"}, Gap: time.Minute, Repeat: 5 * time.Minute, Delivery: settings.DeliveryTyped},
+					"web": {Skip: []string{}, Gap: time.Minute, Delivery: settings.DeliveryTyped},
 				},
 			},
 		},
 		"every kind, and the bounds": {
 			file: "[projects.app]\nrepo = \"/x\"\nshort = \"a\"\n[projects.app.notices]\nskip = [\"turn_ended\", \"blocked\", \"unknown\", \"gone\", \"started\", \"ctx_soft\", \"ctx_hard\", \"merged\", \"ci_failed\", \"ci_passed\", \"dirty\", \"approved\"]\ngap = 3600\nrepeat = 86400\n[projects.web]\nrepo = \"/y\"\nshort = \"w\"\nnotices = { gap = 0, repeat = 0 }\n",
 			want: settings.NoticeSettings{Default: defaultNotices, Projects: map[string]settings.NoticeConfig{
-				"app": {Skip: []string{"turn_ended", "blocked", "unknown", "gone", "started", "ctx_soft", "ctx_hard", "merged", "ci_failed", "ci_passed", "dirty", "approved"}, Gap: time.Hour, Repeat: 24 * time.Hour},
-				"web": {},
+				"app": {Skip: []string{"turn_ended", "blocked", "unknown", "gone", "started", "ctx_soft", "ctx_hard", "merged", "ci_failed", "ci_passed", "dirty", "approved"}, Gap: time.Hour, Repeat: 24 * time.Hour, Delivery: settings.DeliveryTyped},
+				"web": {Delivery: settings.DeliveryTyped},
 			}},
 		},
 		"an unknown kind":     {file: "[notices]\nskip = [\"ctx\"]\n", wantErr: settings.ErrInvalid},
@@ -119,5 +120,64 @@ func TestNoticesResolveWithProvenance(t *testing.T) {
 	writeFile(t, repo, settings.RepoFileName, "schema_version = 1\n[notices]\ngap = 3600\n", repo)
 	_, err = settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
 	require.ErrorIs(t, err, settings.ErrUnknownKey, "a repo file cannot set notices: the daemon reads no repo file")
+	assert.Contains(t, err.Error(), "notices")
+}
+
+// TestNoticesDeliveryDefaultsToTyped: with no notices.delivery anywhere,
+// every team is typed, as before the board (A74).
+func TestNoticesDeliveryDefaultsToTyped(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte("schema_version = 1\n[notices]\ngap = 10\n[projects.app]\nrepo = \"/x\"\nshort = \"a\"\n"), 0o600))
+	got, err := settings.Notices(dir)
+	require.NoError(t, err)
+	assert.Equal(t, settings.DeliveryTyped, got.Default.Delivery, "the default")
+	assert.Equal(t, settings.DeliveryTyped, got.Projects["app"].Delivery, "a project that sets none")
+}
+
+// TestNoticesDeliveryPerProject: a project's own [projects.<p>.notices]
+// sets its delivery over the shared table's, and every other team keeps
+// the shared value (A74).
+func TestNoticesDeliveryPerProject(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte("schema_version = 1\n[notices]\ndelivery = \"typed\"\n[projects.app]\nrepo = \"/x\"\nshort = \"a\"\n[projects.app.notices]\ndelivery = \"board\"\n[projects.web]\nrepo = \"/y\"\nshort = \"w\"\n"), 0o600))
+	got, err := settings.Notices(dir)
+	require.NoError(t, err)
+	assert.Equal(t, settings.DeliveryBoard, got.Projects["app"].Delivery, "the project's own table")
+	assert.Equal(t, settings.DeliveryTyped, got.Projects["web"].Delivery, "a project with no table of its own")
+	assert.Equal(t, settings.DeliveryTyped, got.Default.Delivery, "the default")
+}
+
+// TestNoticesDeliveryRefusesOtherValues: notices.delivery is typed or
+// board, exactly; anything else is refused, naming the key. Each value is
+// as the TOML file spells it.
+func TestNoticesDeliveryRefusesOtherValues(t *testing.T) {
+	t.Parallel()
+	for name, v := range map[string]string{
+		"Board": `"Board"`, "empty": `""`, "post": `"post"`, "a space": `" typed"`, "a newline": `"board\n"`,
+		"option-like": `"--board"`, "full-width": `"\uff42\uff4f\uff41\uff52\uff44"`, "a number": `1`, "a list": `["board"]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte("schema_version = 1\n[projects.app]\nrepo = \"/x\"\nshort = \"a\"\n[projects.app.notices]\ndelivery = "+v+"\n"), 0o600))
+			_, err := settings.Notices(dir)
+			require.ErrorIs(t, err, settings.ErrInvalid)
+			assert.Contains(t, err.Error(), "notices.delivery")
+		})
+	}
+}
+
+// TestRepoFileCannotSetNoticesDelivery: a repo file is committed, and the
+// daemon reads none, so notices.delivery in one is refused as an unknown
+// key (A46), like every notices key.
+func TestRepoFileCannotSetNoticesDelivery(t *testing.T) {
+	t.Parallel()
+	repo, dir := newRepo(t), t.TempDir()
+	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n", repo)
+	writeFile(t, repo, settings.RepoFileName, "schema_version = 1\n[notices]\ndelivery = \"board\"\n", repo)
+	_, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
+	require.ErrorIs(t, err, settings.ErrUnknownKey)
 	assert.Contains(t, err.Error(), "notices")
 }
