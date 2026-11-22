@@ -74,6 +74,20 @@ var (
 	ErrSpawnFailed = errors.New("spawn failed")
 	// ErrPreflight means the repo fails a spawn precondition (D12, A34).
 	ErrPreflight = errors.New("the spawn preflight failed")
+	// ErrRetryKeyReused means a spent retry key came with another request
+	// than the one it was first used for (A73).
+	ErrRetryKeyReused = errors.New("the retry key was first used for another request")
+	// ErrSpawnUnsettled means a keyed spawn's request is not settled: an
+	// attempt of it is still running, or one was interrupted with a worker
+	// still starting (A73). Re-run it with the same key.
+	ErrSpawnUnsettled = errors.New("the spawn request is not settled")
+	// ErrReplayed is a replayed refusal's cause: a stored answer, whose own
+	// cause is gone, so only its code says what it was (A73).
+	ErrReplayed = errors.New("a stored answer, replayed")
+	// ErrStoredAnswerUnreadable means a done record's stored result does
+	// not decode, which only a hand-edited or damaged store holds: a store
+	// failure, never failed, and the key stays as it is (A73).
+	ErrStoredAnswerUnreadable = errors.New("the retry key's stored answer does not decode")
 )
 
 // Defaults for the waits; Service fields of the same name override them.
@@ -147,6 +161,10 @@ type Service struct {
 	// Dashboard is the plugin pane team up opens as a team's dashboard; zero
 	// opens none (A18, A23).
 	Dashboard DashboardPane
+	// Refusal is the daemon's rule for the code and message a keyed spawn
+	// answers err with on ctx, computed once and stored as it is (A73). A
+	// keyed spawn on a service with none is refused.
+	Refusal func(ctx context.Context, err error) (code, message string)
 	// ReadyPoll, BusyWindow and HandoffPoll override the defaults above.
 	ReadyPoll, BusyWindow, HandoffPoll time.Duration
 

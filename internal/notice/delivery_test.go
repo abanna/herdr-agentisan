@@ -35,6 +35,8 @@ func TestDeliveryRemembersTheBossAgent(t *testing.T) {
 		typed = notice.DeliverTyped
 		held  = notice.DeliverHeld
 	)
+	twoNamed := bossModel("ha-boss", "codex")
+	twoNamed.Projects[0].Boss = append(twoNamed.Projects[0].Boss, team.Worker{Pane: team.Pane{ID: "w14:p3", Name: "ha-boss", Agent: "claude"}})
 	rows := []struct {
 		name  string
 		model *team.Model
@@ -45,6 +47,8 @@ func TestDeliveryRemembersTheBossAgent(t *testing.T) {
 	}{
 		{"the named pane shows claude", bossModel("ha-boss", "claude"), "claude", [3]notice.Delivery{board, board, board}},
 		{"the named pane shows another agent", bossModel("ha-boss", "codex"), "codex", [3]notice.Delivery{typed, typed, typed}},
+		{"two named panes show codex then claude", twoNamed, "codex", [3]notice.Delivery{typed, typed, typed}},
+		{"the named pane shows claude-x", bossModel("ha-boss", "claude-x"), "claude-x", [3]notice.Delivery{typed, typed, typed}},
 		{"the named pane shows no agent", bossModel("ha-boss", ""), "", [3]notice.Delivery{held, board, typed}},
 		{"no pane bears the name", bossModel("", "claude"), "", [3]notice.Delivery{held, board, typed}},
 		{"no model", nil, "", [3]notice.Delivery{held, board, typed}},

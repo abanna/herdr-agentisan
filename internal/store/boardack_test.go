@@ -155,16 +155,23 @@ func TestAckUptoBoundsByMarkLimitAndChannel(t *testing.T) {
 }
 
 // TestAckUptoReturnsTheNewestHeldMessage (A74, the cold check's M1):
-// AckUpto reports the newest seq queued for the boss and the latest
-// updated_at among those rows. A notice appended to a waiting one keeps its
-// seq, so only HeldAt shows it; so does a worker's message returned to the
-// boss, which is older still. A message delivered, or queued for another
-// boss or for a pane of the same name, is not held for this one.
+// AckUpto reports the newest seq queued for the boss and takes the later
+// of its clock and the newest update among those rows. An append keeps
+// the notice's seq and a return keeps the message's seq, so HeldAt shows
+// both changes. A delivered message or one for another recipient does not
+// contribute to the cutoff.
 func TestAckUptoReturnsTheNewestHeldMessage(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
 	ctx := t.Context()
-	assert.Equal(t, store.AckResult{}, ackUpto(t, s, "ha", 0, ""), "with nothing queued, 0 and the zero time")
+	early := t1.Add(-time.Hour)
+	ackBeforeMessages := func() store.AckResult {
+		t.Helper()
+		r, err := s.AckUpto(ctx, "ha", boss.ID, 0, "", early)
+		require.NoError(t, err)
+		return r
+	}
+	assert.Equal(t, store.AckResult{HeldAt: early}, ackBeforeMessages(), "with nothing queued, the acknowledgement's own time")
 
 	seedWorker(t, s, "w", "w14:p2", 1)
 	forW := send(t, s, worker("w"), boss, "for w, older than the rest")
@@ -190,7 +197,7 @@ func TestAckUptoReturnsTheNewestHeldMessage(t *testing.T) {
 	_, err = s.Send(ctx, store.Address{Kind: store.KindPane, ID: boss.ID}, pane, "a pane named as the boss", t1.Add(5*time.Minute))
 	require.NoError(t, err)
 
-	first := ackUpto(t, s, "ha", 0, "")
+	first := ackBeforeMessages()
 	assert.Equal(t, messageSeq(t, s, notice.ID), first.HeldThrough, "the notice, the newest still queued for ha-boss")
 	assert.Equal(t, t1.Add(time.Minute), first.HeldAt)
 	assert.Equal(t, time.UTC, first.HeldAt.Location())
@@ -199,7 +206,7 @@ func TestAckUptoReturnsTheNewestHeldMessage(t *testing.T) {
 	_, appended, err = s.Notify(ctx, boss, t1.Add(6*time.Minute), appendTo)
 	require.NoError(t, err)
 	require.True(t, appended, "Notify appends to the acknowledged notice")
-	second := ackUpto(t, s, "ha", 0, "")
+	second := ackBeforeMessages()
 	assert.Equal(t, first.HeldThrough, second.HeldThrough, "the appended notice keeps its seq")
 	assert.Equal(t, t1.Add(6*time.Minute), second.HeldAt, "HeldAt moves when Notify appends")
 
@@ -208,7 +215,7 @@ func TestAckUptoReturnsTheNewestHeldMessage(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, returned, 1)
 	require.Equal(t, forW.ID, returned[0].ID)
-	third := ackUpto(t, s, "ha", 0, "")
+	third := ackBeforeMessages()
 	assert.Equal(t, first.HeldThrough, third.HeldThrough, "a returned message keeps its older seq")
 	assert.Equal(t, t1.Add(7*time.Minute), third.HeldAt, "HeldAt moves when a message is returned to the boss")
 }
@@ -232,7 +239,7 @@ func TestHeldAckIsSaved(t *testing.T) {
 	require.Equal(t, seq, ackUpto(t, s, "ha", 0, "").HeldThrough)
 	require.NoError(t, s.Close())
 
-	assert.Equal(t, [][]any{{"ha", boss.ID, seq, t1.UnixNano(), ackAt.UnixNano()}}, heldAcks(t, open(t, path)), "one record, after a restart")
+	assert.Equal(t, [][]any{{"ha", boss.ID, seq, ackAt.UnixNano(), ackAt.UnixNano()}}, heldAcks(t, open(t, path)), "one record through the later of the acknowledgement and the row")
 }
 
 // TestHeldAckIsPerProjectAndBoss (A74): a held acknowledgement is one record
@@ -254,9 +261,9 @@ func TestHeldAckIsPerProjectAndBoss(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, [][]any{
-		{"ha", boss.ID, messageSeq(t, s, newer.ID), t1.Add(time.Minute).UnixNano(), ackAt.Add(time.Minute).UnixNano()},
-		{"ha", "ha-boss2", int64(0), int64(0), ackAt.UnixNano()},
-		{"other", boss.ID, messageSeq(t, s, first.ID), t1.UnixNano(), ackAt.UnixNano()},
+		{"ha", boss.ID, messageSeq(t, s, newer.ID), ackAt.Add(time.Minute).UnixNano(), ackAt.Add(time.Minute).UnixNano()},
+		{"ha", "ha-boss2", int64(0), ackAt.UnixNano(), ackAt.UnixNano()},
+		{"other", boss.ID, messageSeq(t, s, first.ID), ackAt.UnixNano(), ackAt.UnixNano()},
 	}, heldAcks(t, s))
 
 	// Both messages delivered, a later acknowledgement records an empty queue:
@@ -266,8 +273,8 @@ func TestHeldAckIsPerProjectAndBoss(t *testing.T) {
 	}
 	r, err := s.AckUpto(ctx, "ha", boss.ID, 0, "", ackAt.Add(2*time.Minute))
 	require.NoError(t, err)
-	assert.Equal(t, store.AckResult{}, r)
-	assert.Equal(t, []any{"ha", boss.ID, int64(0), int64(0), ackAt.Add(2 * time.Minute).UnixNano()}, heldAcks(t, s)[0], "the record says nothing is queued")
+	assert.Equal(t, store.AckResult{HeldAt: ackAt.Add(2 * time.Minute)}, r)
+	assert.Equal(t, []any{"ha", boss.ID, int64(0), ackAt.Add(2 * time.Minute).UnixNano(), ackAt.Add(2 * time.Minute).UnixNano()}, heldAcks(t, s)[0], "the queue is empty at the acknowledgement's time")
 }
 
 // TestAcksAtOnceWriteEachPostOnce (A74): acknowledgements made at once, by
@@ -503,21 +510,21 @@ BEGIN SELECT RAISE(ABORT, 'injected'); END`)
 	assert.Equal(t, 1, ackUpto(t, s, "ha", p.Seq, "").Acked, "without the failure, the post is acknowledged")
 }
 
-// TestAcksHaveNoProductionCaller: the acknowledgements are dormant until the
-// board's PR 3c. No non-test file in internal/ or cmd/ but boardack.go uses
-// AckPost, AckUpto or AckResult, or the statements and helper behind them;
-// none but boardack.go names board_held_acks in a string; and none but
-// boardack.go and board.go names board_acks, board.go only to read it, for
-// ReadBoard and LatestPosts. A write split across joined strings is past
-// what a scan of single strings can see.
+// TestAcksHaveNoProductionCaller pins the dormant acknowledgement writes.
+// Production code outside boardack.go never uses AckPost, AckUpto,
+// AckResult or their write helpers. board.go reads board_acks when listing
+// posts and messages.go reads board_held_acks when stamping queue writes.
+// The scan reads individual literals. It permits exactly the three stamp
+// fragments in messages.go, including when SQL is assembled from literals.
 func TestAcksHaveNoProductionCaller(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join("..", "..")
-	const ackFile, boardFile = "internal/store/boardack.go", "internal/store/board.go"
+	const ackFile, boardFile, messagesFile = "internal/store/boardack.go", "internal/store/board.go", "internal/store/messages.go"
 	names := []string{"AckPost", "AckUpto", "AckResult", "ackPosts", "ackOnePost", "ackUptoPost", "ackHeld", "ackRows"}
 	write := regexp.MustCompile(`\b(insert|update|delete|replace)\b`)
 	uses := map[string][]string{}
 	found := map[string]bool{}
+	var stampReads []string
 	parsed := 0
 	for _, dir := range []string{"internal", "cmd"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
@@ -552,11 +559,13 @@ func TestAcksHaveNoProductionCaller(t *testing.T) {
 					lit := strings.ToLower(n.Value)
 					for table, allowed := range map[string][]string{
 						"board_acks":      {ackFile, boardFile},
-						"board_held_acks": {ackFile},
+						"board_held_acks": {ackFile, messagesFile},
 					} {
 						switch {
 						case !strings.Contains(lit, table):
-						case rel == boardFile && write.MatchString(lit):
+						case rel == messagesFile && table == "board_held_acks":
+							stampReads = append(stampReads, lit)
+						case (rel == boardFile || rel == messagesFile) && write.MatchString(lit):
 							uses[rel] = append(uses[rel], fset.Position(n.Pos()).String()+" a write to "+table)
 						case slices.Contains(allowed, rel):
 							found[table+" in "+rel] = true
@@ -577,5 +586,10 @@ func TestAcksHaveNoProductionCaller(t *testing.T) {
 	for _, name := range append(names, "board_acks in "+ackFile, "board_acks in "+boardFile, "board_held_acks in "+ackFile) {
 		assert.True(t, found[name], "the scan finds %s", name)
 	}
+	assert.ElementsMatch(t, []string{
+		"` from board_held_acks as h where h.boss = ?3) end`",
+		"` from board_held_acks as h where h.boss = messages.recipient) end`",
+		"` from board_held_acks as h where h.boss = ?2)`",
+	}, stampReads, "messages.go names the held table only in the three stamp reads")
 	assert.Empty(t, uses, "the acknowledgements are dormant until PR 3c")
 }
