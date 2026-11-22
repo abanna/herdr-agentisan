@@ -309,11 +309,8 @@ id> handoff <step>`.
 
 ### `agentisan.board.posted`
 
-One flush of a board-mode team's notices posted on its board (ADR-001
-A74): one post per notice, in one transaction. It is one event per board
-flush; a notice a board flush posts gives no `agentisan.message.*` event.
-The body reads `<posts> posts on <project>'s board`, and never carries a
-post's body.
+The event counts a board flush's committed posts (ADR-001 A74).
+The body is `<posts> posts on <project>'s board` and carries no post text.
 
 | Attribute | Type | Value |
 | --- | --- | --- |

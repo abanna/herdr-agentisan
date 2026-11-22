@@ -117,55 +117,44 @@ func TestBoardFlushWaitsForItsBossClaim(t *testing.T) {
 
 func TestBoardFallbackSettlesOnlyCommittedEntries(t *testing.T) {
 	t.Parallel()
-	for _, tail := range []bool{false, true} {
-		name := "direct insert refused"
-		if tail {
-			name = "queue post refused"
-		}
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			cfg := boardOn("app")
-			b := notice.NewBatcher(cfg)
-			r := newBoardRig(t, []settings.Team{{Project: "app", Short: "ha", Layout: settings.LayoutTabs}}, cfg, b)
-			model := haModel(bossPane("ha-boss", "claude"))
-			model.Projects[0].Name = "app"
-			now := time.Now()
-			r.o.Now = func() time.Time { return now }
-			r.o.Team.ConfigDir = t.TempDir()
-			r.p = daemon.NewPoller(r.o, r.st, r.teams, cfg, b, nil)
-			src := daemon.NewGitHubSource(r.o, r.st)
-			require.Empty(t, collectCI(t, src, snapshot.CIPending))
-			ci := collectCI(t, src, snapshot.CIFailure)
-			require.Len(t, ci, 1)
-			counts := map[string]int{}
-			fill := fillTo("app", len(ci[0].Text), notice.MaxBody-1, counts)
-			ns := slices.Concat(ci, fill)
-			require.Equal(t, notice.MaxBody-1, joined(ns))
-			if tail {
-				sent(t, r.st, haBoss, coder, "older")
-			}
-			drop := daemon.FailBoardInserts(t, r.db, "")
-			b.Add(now, ns)
-			r.p.EndPoll(model)
-			require.Equal(t, []string{"[agentisan] notices (1 earlier dropped):\n" + strings.Join(texts(fill), "\n")}, queuedNotices(t, r.db, "ha-boss"))
-			assert.Empty(t, seenOnDisk(t, r.st))
-			settledOnce(t, counts, fill, "only retained entries")
-			drop()
-			r.p.Pass()
-			now = now.Add(notice.DefaultGap + daemon.GitHubInterval)
-			again := collectCI(t, src, snapshot.CIFailure)
-			require.Len(t, again, 1, "the same running collector retells the cut line")
-			calls, ack := 0, again[0].Ack
-			again[0].Ack = func() { calls++; ack() }
-			b.Add(now, again)
-			r.p.EndPoll(model)
-			posts := r.posts(t, "app")
-			require.NotEmpty(t, posts)
-			assert.Equal(t, ci[0].Text, posts[len(posts)-1].Body)
-			assert.Equal(t, 1, calls)
-			assert.Equal(t, map[store.GitHubEvent]bool{ciFailed: true}, seenOnDisk(t, r.st))
-		})
-	}
+	cfg := boardOn("app")
+	b := notice.NewBatcher(cfg)
+	r := newBoardRig(t, []settings.Team{{Project: "app", Short: "ha", Layout: settings.LayoutTabs}}, cfg, b)
+	model := haModel(bossPane("ha-boss", "claude"))
+	model.Projects[0].Name = "app"
+	now := time.Now()
+	r.o.Now = func() time.Time { return now }
+	r.o.Team.ConfigDir = t.TempDir()
+	r.p = daemon.NewPoller(r.o, r.st, r.teams, cfg, b, nil)
+	src := daemon.NewGitHubSource(r.o, r.st)
+	require.Empty(t, collectCI(t, src, snapshot.CIPending))
+	ci := collectCI(t, src, snapshot.CIFailure)
+	require.Len(t, ci, 1)
+	counts := map[string]int{}
+	fill := fillTo("app", len(ci[0].Text), notice.MaxBody-1, counts)
+	ns := slices.Concat(ci, fill)
+	require.Equal(t, notice.MaxBody-1, joined(ns))
+	sent(t, r.st, haBoss, coder, "older")
+	drop := daemon.FailBoardInserts(t, r.db, "")
+	b.Add(now, ns)
+	r.p.EndPoll(model)
+	require.Equal(t, []string{"[agentisan] notices (1 earlier dropped):\n" + strings.Join(texts(fill), "\n")}, queuedNotices(t, r.db, "ha-boss"))
+	assert.Empty(t, seenOnDisk(t, r.st))
+	settledOnce(t, counts, fill, "only retained entries")
+	drop()
+	r.p.Pass()
+	now = now.Add(notice.DefaultGap + daemon.GitHubInterval)
+	again := collectCI(t, src, snapshot.CIFailure)
+	require.Len(t, again, 1, "the same running collector retells the cut line")
+	calls, ack := 0, again[0].Ack
+	again[0].Ack = func() { calls++; ack() }
+	b.Add(now, again)
+	r.p.EndPoll(model)
+	posts := r.posts(t, "app")
+	require.NotEmpty(t, posts)
+	assert.Equal(t, ci[0].Text, posts[len(posts)-1].Body)
+	assert.Equal(t, 1, calls)
+	assert.Equal(t, map[store.GitHubEvent]bool{ciFailed: true}, seenOnDisk(t, r.st))
 }
 
 // Inspect the real publication and release, on the dispatcher's goroutine.
@@ -190,62 +179,12 @@ func TestBoardClaimMarkFollowsItsDurableRow(t *testing.T) {
 	assert.Equal(t, []string{store.MessageDispatching, store.MessageDelivered}, states)
 }
 
-// Resume the previously selected typed path after a poll has completed
-// the switch. Its queue may now contain the fallback or the unposted suffix.
-func TestBoardSwitchSkipsUnclaimedRows(t *testing.T) {
-	t.Parallel()
-	for _, partial := range []bool{false, true} {
-		name := "direct insert refused"
-		if partial {
-			name = "queue partially posted"
-		}
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			cfg := boardOn("ha")
-			b := notice.NewBatcher(cfg)
-			r := newBoardRig(t, []settings.Team{haTabs}, cfg, b)
-			r.p.EndPoll(haModel(bossPane("ha-boss", "codex")))
-			var ids []string
-			count := 1
-			if partial {
-				count = store.MaxQueuePost + 1
-			}
-			for range count {
-				ids = append(ids, sent(t, r.st, haBoss, coder, "older").ID)
-			}
-			resume := r.p.TypedTurn(haBoss)
-			require.NotNil(t, resume, "the old pass selected the typed target")
-			if !partial {
-				daemon.FailBoardInserts(t, r.db, "NEW.kind = 'blocked'")
-			}
-			n := blocked("ha", "one")
-			batch(b, nil, n)
-			r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
-			prefix := boardCount(t, r.db)
-			require.Positive(t, prefix)
-			require.LessOrEqual(t, prefix, store.MaxQueuePost)
-			tails := query(t, r.db, "SELECT id FROM messages WHERE state = 'queued' ORDER BY seq")
-			require.Len(t, tails, len(ids)-prefix+1)
-			ids = append(ids, tails[len(tails)-1])
-			resume()
-			assert.Empty(t, r.pr.all(), "the old pass cannot type any newly eligible row")
-			for range len(tails) {
-				if !r.p.TakeWake() {
-					break
-				}
-				r.p.Pass()
-			}
-			assert.Equal(t, ids, query(t, r.db, "SELECT id FROM board_posts ORDER BY seq"))
-			assert.Equal(t, []string{n.Text}, query(t, r.db, "SELECT body FROM board_posts ORDER BY seq DESC LIMIT 1"))
-		})
-	}
-}
-
 func TestBoardRefusalAtBothSinksSettlesNothing(t *testing.T) {
 	t.Parallel()
 	cfg := boardOn("ha")
 	b := notice.NewBatcher(cfg)
 	r := newBoardRig(t, []settings.Team{haTabs}, cfg, b)
+	sent(t, r.st, haBoss, coder, "older")
 	daemon.FailBoardInserts(t, r.db, "")
 	rawExec(t, r.db, "CREATE TRIGGER refuse_notice BEFORE INSERT ON messages BEGIN SELECT RAISE(ABORT, 'inbox refused'); END")
 	acks := map[string]int{}

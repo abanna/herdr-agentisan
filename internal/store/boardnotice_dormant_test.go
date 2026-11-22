@@ -15,7 +15,7 @@ import (
 func TestBoardNoticeDeliveryCallers(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join("..", "..")
-	names := []string{"Claim", "claim", "claimTyped", "PostAll", "postAll", "FitID", "Entries", "SettleAll", "Tail"}
+	names := []string{"Claim", "claim", "claimTyped", "PostAll", "postAll", "FitID", "Entries", "SettleEntries", "Tail"}
 	got := map[string][]string{}
 	for _, dir := range []string{"cmd", "internal"} {
 		uses, _, _, _ := productionUses(t, root, dir, names, nil)
@@ -29,10 +29,10 @@ func TestBoardNoticeDeliveryCallers(t *testing.T) {
 	assert.Equal(t, map[string][]string{
 		"internal/daemon/messages.go":      {"Claim", "claim", "claimTyped"},
 		"internal/daemon/boarddelivery.go": {"claim", "claim", "claimTyped"},
-		"internal/daemon/notices.go":       {"Entries", "FitID", "FitID", "PostAll", "SettleAll", "Tail"},
+		"internal/daemon/notices.go":       {"Entries", "FitID", "FitID", "PostAll", "SettleEntries", "Tail"},
 		"internal/store/messages.go":       {"Claim"},
 		"internal/store/board.go":          {"FitID", "PostAll", "postAll", "postAll"},
-		"internal/notice/batch.go":         {"Entries", "SettleAll", "Tail"},
+		"internal/notice/batch.go":         {"Entries", "SettleEntries", "Tail"},
 		"internal/notice/inbox.go":         {"Tail"},
 	}, got)
 }

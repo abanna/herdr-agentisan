@@ -74,9 +74,7 @@ func (d *dispatcher) untyped(ctx context.Context, bosses map[string]string, to s
 // does not append to while it is. The prompt runs after route is
 // released: the claimed body is the one typed, and a refusal that requeues
 // it (A30) makes it a queued row again, which a later notice may join.
-// Lock order: route, then in.mu, then the store; route is taken only here,
-// in untyped and in remember, none of which holds another lock when it
-// takes it.
+// Lock order is route, then in.mu, then the store.
 //
 // Every other recipient, and every boss with the key unset, is claimed as
 // on the typed path alone, with no route taken.

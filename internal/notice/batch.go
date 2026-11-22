@@ -42,12 +42,11 @@ type Entry struct {
 }
 
 // Entries is every notice of m, oldest first, the ones its lines cut for
-// size included. Each body is the notice's line as the inbox writes it, or
-// "(no text)" for an empty one.
+// size included. Each body is clean text, or "(no text)" for an empty one.
 func (m Message) Entries() []Entry {
 	out := make([]Entry, len(m.all))
 	for i, e := range m.all {
-		e.Body = inboxLine(e.Body)
+		e.Body = cleanLine(e.Body)
 		if e.Body == "" {
 			e.Body = "(no text)"
 		}
@@ -56,10 +55,10 @@ func (m Message) Entries() []Entry {
 	return out
 }
 
-// SettleAll acknowledges every notice of m, the cut ones included. The
-// caller runs it, in place of Settle, once a sink has taken every entry.
-func (m Message) SettleAll() {
-	settle(m.acks)
+// SettleEntries acknowledges the oldest n entries, including entries cut
+// from the inbox body. The board calls it once for its committed prefix.
+func (m Message) SettleEntries(n int) {
+	settle(m.acks[:n])
 }
 
 // Body is the message as one text: a line saying how many notices were cut,
@@ -117,7 +116,7 @@ func NewBatcher(configs Configs) *Batcher {
 
 // Add queues ns for their bosses, as of now. A notice of a kind its team
 // skips, one about a muted worker, or a repeat inside its team's window, is
-// dropped and acknowledged here; a line longer than MaxLine is cut. Whose pane a notice is about
+// dropped and acknowledged here. Whose pane a notice is about
 // never matters here: a source decides that (the poll's leaves the boss's
 // own panes out; a context source may tell the boss about its own).
 func (b *Batcher) Add(now time.Time, ns []Notice) {
@@ -129,7 +128,6 @@ func (b *Batcher) Add(now time.Time, ns []Notice) {
 			}
 			continue
 		}
-		n.Text = cut(strings.ToValidUTF8(n.Text, "\uFFFD"), MaxLine)
 		b.pending[n.Project] = append(b.pending[n.Project], n)
 	}
 }
@@ -174,31 +172,24 @@ func (b *Batcher) Flush(now time.Time) []Message {
 	return out
 }
 
-// message is ns as one message, the oldest cut until its body fits MaxBody;
-// it keeps every notice of ns for Entries and SettleAll.
+// message keeps every entry for the board and cuts the inbox lines for A44.
 func message(project string, ns []Notice) Message {
-	all := ns
-	size := func(ns []Notice, dropped int) int {
-		n := 0
-		if dropped > 0 {
-			n = len(droppedLine(dropped)) + 1
-		}
-		for _, x := range ns {
-			n += len(x.Text) + 1
-		}
-		return n - 1
-	}
-	dropped := 0
-	for len(ns) > 1 && size(ns, dropped) > MaxBody {
-		ns, dropped = ns[1:], dropped+1
-	}
-	m := Message{Project: project, Dropped: dropped, all: make([]Entry, len(all)), acks: make([]func(), len(all))}
-	for i, n := range all {
+	m := Message{Project: project, all: make([]Entry, len(ns)), acks: make([]func(), len(ns)), Lines: make([]string, len(ns))}
+	size := -1
+	for i, n := range ns {
 		m.all[i] = Entry{Kind: n.Kind, Subject: n.Subject, Worker: n.Worker, Body: n.Text}
 		m.acks[i] = n.Ack
+		m.Lines[i] = cut(strings.ToValidUTF8(n.Text, "\uFFFD"), MaxLine)
+		size += len(m.Lines[i]) + 1
 	}
-	for _, n := range ns {
-		m.Lines = append(m.Lines, n.Text)
+	for len(m.Lines) > 1 && size > MaxBody {
+		size -= len(m.Lines[0]) + 1
+		if m.Dropped > 0 {
+			size -= len(droppedLine(m.Dropped)) + 1
+		}
+		m.Dropped++
+		size += len(droppedLine(m.Dropped)) + 1
+		m.Lines = m.Lines[1:]
 	}
 	return m
 }

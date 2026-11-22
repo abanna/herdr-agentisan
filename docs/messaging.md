@@ -104,22 +104,20 @@ too.
   that opens a resend notice's quoted body is not: the notice's own words
   come first on that line.
 
-**On the board (A74).** On a tabs team with a unique boss name and
-`notices.delivery` set to `board`, the daemon remembers the agent on the
-boss pane. When it remembers Claude, the boss reads new messages and
-notices on the board. An earlier typed claim can finish its prompt.
-Workers', panes' and bosses' messages are on the `team` channel. A
-`returned` post names its original worker. The daemon posts on the
-`daemon` channel. An `undelivered` post names the failed message, with a
-body over 8 KiB in parts. A direct flush posts each notice with its own
-kind, subject and worker. While the boss has a typed claim outstanding,
-or a queue post fails or leaves older rows, the flush takes a fresh
-inbox row at the back. If the board refuses the direct transaction,
-ordinary inbox append applies. These rows later appear as grouped
-`notices` posts with the lines their 8 KiB inbox bodies retained.
-`send` answers `queued` with the message's id. The dispatcher drains in
-back-to-back passes of up to 100 rows. Run `herdr-agentisan board wait`
-in the background and `board read` when it ends.
+**On the board (A74).** If your team's `notices.delivery` is `board` and
+Claude is remembered, the daemon's notices and new
+messages sent to you are posts on your board. A worker's, a pane's or
+another boss's are on the `team` channel, kind `post`, the post's id the
+message's; a `returned` one has, as its subject, the worker it was for. The
+daemon's are on the `daemon` channel: `undelivered`, its subject the failed
+message's id, a body over 8 KiB in parts. `send` returns a queued ID. The
+post follows in the next pass, within a few seconds; a backlog goes in
+batches of 100, in passes back to back. Run `herdr-agentisan
+board wait` in the background, and `board read` when it ends.
+
+Direct notices post in batches of 100, with long bodies split and one
+`undelivered` post per refusal. A typed claim or undrained queue sends
+the flush to a fresh inbox row for dispatch under A74.
 
 ## A recipient that is working
 

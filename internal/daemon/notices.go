@@ -153,8 +153,8 @@ func (o Options) flushNotices(ctx context.Context, n *notices, in *inbox) {
 	n.batch.Add(o.Now(), n.github.take())
 	_, bosses := in.view()
 	for _, m := range n.batch.Flush(o.Now()) {
-		posted, tail := n.board.postNotices(ctx, in, bosses, m)
-		if posted {
+		handled, tail := n.board.postNotices(ctx, in, bosses, m)
+		if handled {
 			continue
 		}
 		m.Tail = tail
@@ -213,46 +213,48 @@ func (s inboxSink) Send(ctx context.Context, m notice.Message) (int, error) {
 	return m.Kept(queued.Body), nil
 }
 
-// postNotices returns posted after a direct commit. It requests a fresh
-// inbox tail when an earlier claim is outstanding or a queue post fails
-// or leaves more rows. All other inbox deliveries use A44's append.
-func (s boardWriter) postNotices(ctx context.Context, in *inbox, bosses map[string]string, m notice.Message) (posted, tail bool) {
+// postNotices handles a board decision and its writes in one route hold.
+func (s boardWriter) postNotices(ctx context.Context, in *inbox, bosses map[string]string, m notice.Message) (handled, tail bool) {
 	boss, ok := bosses[m.Project]
-	if !ok || in.delivery(m.Project) != notice.DeliverBoard {
+	if !ok || !in.boardKey(m.Project) {
 		return false, false
 	}
 	if _, one := bossProject(bosses, boss); !one {
 		return false, false
 	}
-	to := store.Address{Kind: store.KindBoss, ID: boss}
-	// This poll owns remember through flush. Once it remembers board no
-	// later typed claim can start. A claim published by the earlier route
-	// must finish before the poll can drain younger rows past it.
-	if held := in.typedBoss.Load(); held != nil && *held == to {
-		return false, true
-	}
-	out, err := s.postQueued(ctx, to, m.Project)
-	if err != nil {
-		s.log.Warn().Err(err).Str("project", m.Project).Msg("notice not posted; it goes to the inbox")
-		return false, true
-	}
-	s.reportQueue(ctx, to, m.Project, out)
-	if out.More {
-		return false, true
-	}
-	if err := s.postBatch(ctx, boss, m); err != nil {
-		s.log.Warn().Err(err).Str("project", m.Project).Msg("notice not posted; it goes to the inbox")
+	in.route.Lock()
+	if in.delivery(m.Project) != notice.DeliverBoard {
+		in.route.Unlock()
 		return false, false
 	}
-	m.SettleAll()
+	to := store.Address{Kind: store.KindBoss, ID: boss}
+	if held := in.typedBoss.Load(); held != nil && *held == to {
+		in.route.Unlock()
+		return false, true
+	}
+	queue, err := s.postQueued(ctx, to, m.Project)
+	if err != nil {
+		in.route.Unlock()
+		s.log.Warn().Err(err).Str("project", m.Project).Msg("notice not posted; it goes to the inbox")
+		return false, true
+	}
+	var out store.PostedNotices
+	var bodies []string
+	committed := 0
+	if !queue.More {
+		out, bodies, committed, err = s.postBatch(ctx, m)
+	}
+	in.route.Unlock()
+	s.reportQueue(ctx, to, m.Project, queue)
+	if queue.More {
+		return false, true
+	}
+	s.reportNotices(ctx, boss, m.Project, out, bodies, committed, err)
+	m.SettleEntries(committed)
 	return true, false
 }
 
-// postBatch posts m's notices for boss, each with its kind, subject and worker;
-// a subject or worker the board would refuse is posted empty. A flush the
-// board refuses posts none of them, and is logged without posts and
-// returned.
-func (s boardWriter) postBatch(ctx context.Context, boss string, m notice.Message) error {
+func (s boardWriter) postBatch(ctx context.Context, m notice.Message) (store.PostedNotices, []string, int, error) {
 	entries := m.Entries()
 	at := s.now()
 	ps := make([]store.BoardPost, 0, len(entries))
@@ -264,19 +266,37 @@ func (s boardWriter) postBatch(ctx context.Context, boss string, m notice.Messag
 		})
 		bodies = append(bodies, e.Body)
 	}
-	ev := s.log.Info().Str("project", m.Project).Strs("notices", bodies).Str("boss", boss).Str("delivery", "board")
-	posted, err := s.st.PostAll(ctx, ps)
-	if err != nil {
-		ev.Msg(noticeMsg)
-		return fmt.Errorf("post the notices for %s: %w", boss, err)
+	var out store.PostedNotices
+	committed := 0
+	for chunk := range slices.Chunk(ps, store.MaxQueuePost) {
+		batch, err := s.st.PostAll(ctx, chunk)
+		if err != nil {
+			return out, bodies, committed, fmt.Errorf("post notice batch: %w", err)
+		}
+		out.Posts = append(out.Posts, batch.Posts...)
+		out.Refused += batch.Refused
+		committed += len(chunk)
 	}
-	seqs := make([]int64, 0, len(posted))
-	for _, p := range posted {
+	return out, bodies, committed, nil
+}
+
+func (s boardWriter) reportNotices(ctx context.Context, boss, project string, out store.PostedNotices, bodies []string, committed int, err error) {
+	ev := s.log.Info().Str("project", project).Strs("notices", bodies).Str("boss", boss).Str("delivery", "board")
+	if out.Refused > 0 {
+		ev.Int("refused", out.Refused)
+	}
+	if err != nil {
+		dropped := len(bodies) - committed
+		ev.Int("dropped", dropped)
+		s.log.Warn().Err(err).Str("project", project).Int("dropped", dropped).Msg("notice not delivered")
+	}
+	seqs := make([]int64, 0, len(out.Posts))
+	for _, p := range out.Posts {
 		seqs = append(seqs, p.Seq)
 	}
-	ev.Ints64("posts", seqs).Msg(noticeMsg)
 	if len(seqs) > 0 {
-		s.events.BoardPosted(ctx, telemetry.BoardPost{Project: m.Project, Channel: store.ChannelDaemon, Posts: len(seqs), FirstSeq: seqs[0], LastSeq: seqs[len(seqs)-1]})
+		ev.Ints64("posts", seqs)
+		s.events.BoardPosted(ctx, telemetry.BoardPost{Project: project, Channel: store.ChannelDaemon, Posts: len(seqs), FirstSeq: seqs[0], LastSeq: seqs[len(seqs)-1]})
 	}
-	return nil
+	ev.Msg(noticeMsg)
 }
