@@ -202,6 +202,45 @@ func TestAcknowledgedCeilingCanAlertAgainInsideTheQuietInterval(t *testing.T) {
 	}
 }
 
+func TestDrainedCeilingCountsAgainDuringTheAckQuietInterval(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name     string
+		ordinary attention.State
+		every    time.Duration
+		alerts   []time.Duration
+	}{
+		{"partial acknowledgement", posts(1, 0), 5 * m, mins(10, 15)},
+		{"full acknowledgement", boss(), 5 * m, mins(10, 13)},
+		{"partial acknowledgement with hourly reminders", posts(1, 0), time.Hour, mins(10, 15)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := defaults()
+			cfg.Every = c.every
+			cfg.MaxEvery = max(cfg.MaxEvery, c.every)
+			state := func(d time.Duration) attention.State {
+				switch {
+				case d < 12*m:
+					s := c.ordinary
+					s.Held, s.OldestHeld = 1, at(0)
+					if d >= 11*m {
+						s.OldestHeldCeiling, s.NewestCeiling = at(0), at(11*m)
+					}
+					return s
+				case d < 13*m:
+					return acked(c.ordinary, 12*m)
+				default:
+					// A drain posts the ceiling at the held row's creation time.
+					return acked(ceilingPost(c.ordinary, 0), 12*m)
+				}
+			}
+			assert.Equal(t, c.alerts, times(run(cfg, 17*m, m, state, nil)))
+		})
+	}
+}
+
 // TestEarlierAckIsNoReaction (A74): a LastAck earlier than the last one
 // seen, a clock stepped back or the held record replaced at an earlier
 // time, is no reaction: only a newer acknowledgement resets the count.
@@ -270,10 +309,13 @@ func TestAckedCeilingKeepsItsBound(t *testing.T) {
 	t.Parallel()
 	tr := attention.NewTracker()
 	cfg := defaults()
-	_, ok := tr.Observe("ha", cfg, posts(1, 0), at(10*m))
-	require.True(t, ok)
-	tr.Shown("ha", true, at(10*m))
-	_, ok = tr.Observe("ha", cfg, ceilingPost(posts(1, 0), 11*m), at(11*m))
+	old := ceilingPost(posts(1, 0), 0)
+	for _, d := range mins(2, 7) {
+		_, ok := tr.Observe("ha", cfg, old, at(d))
+		require.True(t, ok)
+		tr.Shown("ha", true, at(d))
+	}
+	_, ok := tr.Observe("ha", cfg, ceilingPost(old, 11*m), at(11*m))
 	require.False(t, ok, "the ceiling at 11 sets the bound at 13")
 	remaining := acked(ceilingPost(posts(1, 0), 12*m), 12*m)
 	_, ok = tr.Observe("ha", cfg, remaining, at(12*m))

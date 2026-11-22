@@ -686,10 +686,9 @@ func TestCeilingBetweenRemindersAlertsAtCeilingAfter(t *testing.T) {
 	got := run(defaults(), 56*m, m, state, nil)
 	assert.Equal(t, mins(10, 15, 25, 28, 48, 55), times(got))
 
-	// A ceiling stamped at the alert at 15, as a line the same poll stores
-	// after the alert, is first seen with a read at 16. It is not newer
-	// than the last shown alert, which the read keeps, so it bounds
-	// nothing: the read's later of 21 and 11 stands.
+	// A ceiling stamped at the alert at 15 is first seen with a read
+	// at 16. Its timestamp matches the last alert, so the first poll
+	// that sees it arms the deadline at 18.
 	sameTime := func(d time.Duration) attention.State {
 		if d < 16*m {
 			return posts(2, 0)
@@ -698,7 +697,7 @@ func TestCeilingBetweenRemindersAlertsAtCeilingAfter(t *testing.T) {
 		s.BossMark = 1
 		return s
 	}
-	assert.Equal(t, mins(10, 15, 21), times(run(defaults(), 22*m, m, sameTime, nil)), "a ceiling as old as the last alert")
+	assert.Equal(t, mins(10, 15, 18), times(run(defaults(), 22*m, m, sameTime, nil)), "a first-seen ceiling as old as the last alert")
 }
 
 // TestAppendedHeldCeilingAlertsMidEpisode (C1): a ceiling line appended to

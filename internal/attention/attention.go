@@ -94,6 +94,7 @@ type episode struct {
 	// ceiling since the last boss read or empty ceiling set. Posting a held
 	// message never lowers it.
 	bound, tried, newest time.Time
+	firstSeenBound       time.Time     // deadline from the first poll of this pending ceiling set
 	every                time.Duration // Every at the last try, for Shown
 	outstanding          bool          // an alert was tried and Shown has not answered it
 }
@@ -119,7 +120,8 @@ type episode struct {
 //     the ordinary reminder quiet until Every after the last acknowledgement.
 //     A ceiling can still alert during that interval.
 //   - Below the limit, a ceiling newer than the last shown alert is never
-//     held back (bound).
+//     held back (bound). When ceilings become pending after a poll with
+//     none, the first poll that sees them also arms CeilingAfter.
 //   - Alerts > 0 stops the episode after that many shown alerts, but for
 //     the oldest pending ceiling or the newest ceiling post, when newer than
 //     the last shown alert: one more each.
@@ -159,10 +161,19 @@ func (t *Tracker) Observe(project string, c Config, s State, now time.Time) (Ale
 	e.mark, e.ack = s.BossMark, s.LastAck
 	// A held ceiling can become a post with an older timestamp. Keep its
 	// armed deadline through an acknowledgement alone while any ceiling remains.
+	hadCeiling := !e.newest.IsZero()
 	if read || s.NewestCeiling.IsZero() {
 		e.newest = s.NewestCeiling
 	} else {
 		e.newest = later(e.newest, s.NewestCeiling)
+	}
+	// A ceiling that counts again can have an old timestamp. Give it a
+	// deadline from this poll even when that timestamp cannot arm a bound.
+	switch {
+	case s.NewestCeiling.IsZero():
+		e.firstSeenBound = time.Time{}
+	case !hadCeiling:
+		e.firstSeenBound = now.Add(c.CeilingAfter)
 	}
 	stopped := c.Alerts > 0 && e.count >= c.Alerts
 	e.keepBound(c)
@@ -174,6 +185,7 @@ func (t *Tracker) Observe(project string, c Config, s State, now time.Time) (Ale
 		return Alert{}, false
 	}
 	e.tried, e.bound, e.every, e.outstanding = e.newest, time.Time{}, c.Every, true
+	e.firstSeenBound = time.Time{}
 	return e.alert(c, s, now), true
 }
 
@@ -238,7 +250,7 @@ func (e *episode) due(c Config, s State, stopped bool) time.Time {
 		}
 		at = earliest(ordinary, ceiling)
 	}
-	return earliest(at, e.bound)
+	return earliest(at, earliest(e.bound, e.firstSeenBound))
 }
 
 // gap is the wait after the k-th shown alert, min(Every × 2^(k−1),
