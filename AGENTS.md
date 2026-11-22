@@ -191,7 +191,11 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   the A28 addendum, A49).
   It types each queued message into its recipient with `agent.prompt`, by
   the agent name the poll's last model shows where it belongs, or a pane
-  sender's by the pane showing its terminal, returns an ended binding's
+  sender's by the pane showing its terminal, posts a board-mode boss's
+  queue on its board instead, oldest first, 100 rows a call, passes back to
+  back while more remain, and holds it, never typed, while that
+  boss's agent has not been seen since the start; the ◆ spaces stay typed
+  (`boarddelivery.go`, A74), returns an ended binding's
   queue to its boss, and fails, never retrying, whatever a timeout or a
   crash may have typed (`messages.go`, A2, A30). The `send` op queues them
   (`docs/messaging.md`).
@@ -225,8 +229,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   one message per gap, repeats and muted workers dropped, 8 KiB a message),
   the boss's mutes (`Mutes`) and the `Sink` that delivers it: the daemon's
   appends each message to the boss's notice still queued in the inbox
-  (`AppendTo`, `store.Notify`), and logs it to daemon.log. Pure: tests
-  build models by hand.
+  (`AppendTo`, `store.Notify`), and logs it to daemon.log; and the
+  delivery a board-mode team's boss gets from the agent last seen on its
+  pane (`delivery.go`, A74). Pure: tests build models by hand.
 - `internal/attention/` — the alert that tells the user a board-mode boss
   has left posts unread, or messages waiting, too long (ADR-001 A74): when
   an episode opens, its reminders, what resets, pauses or ends it. Pure:
@@ -267,7 +272,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   project's test-slot lock files, which the daemon reads once at start
   (`tests.go`, A40), and every project's rotation thresholds, a group's
   own included, which the daemon reads once at start, the repo file
-  included (`rotation.go`, A33). A repo file is committed, so it sets only
+  included (`rotation.go`, A33), and its notices keys, `notices.delivery`
+  (typed or board, A74) included. A repo file is committed, so it sets only
   colour, github, group counts, models and rotation (A46, `repoFileKeys`,
   refused by default, an empty table adding an entry included, A53), and
   the merged model, whichever layer sets it, is checked as safe to pass to
@@ -344,8 +350,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   (`boardack.go`, migration 0012, A74), dormant until PR 3c: nothing writes
   either table, and `ReadBoard` and `LatestPosts` read one primary-key
   lookup per post they return, which `board.read` does not serve; every
-  post wakes each `board wait`. Tests open a fresh database in a temp
-  dir; the store is never mocked.
+  post wakes each `board wait`; `BoardPending` counts what a boss has left
+  unread and waiting, for the alert (A74). Tests open a fresh database in a
+  temp dir; the store is never mocked.
   `boardnotice.go` also provides the pure version-1 GitHub capture-ID helper
   and its frozen envelope/receipt types (B0a.1), and `noticeledger.go` the
   dormant notice admission ledger (B0a.2, migration 0009, one-way):
@@ -364,9 +371,14 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   `spawnkeys.go` is worker spawn's retry keys (A73, NERD-5254):
   migration 0011 (one-way) adds `spawn_requests` and `spawn_request_workers`,
   which `BeginSpawn` writes, `SpawnRecord` reads with each planned id's row
-  now and its briefs, and `DropSpawn` drops while nothing is bound; dormant
-  until `worker spawn` takes a key, and `TestSpawnKeysHaveNoProductionCaller`
-  fails on any use outside it.
+  now and its briefs, and `DropSpawn` drops while nothing is bound;
+  `BindSpawned` binds a worker and its link in one transaction, through
+  `BindWorker`'s own `checkWorker` and `bindTx`, with errors that repeat no
+  value of the worker, `FinishSpawn` stores the answer once, and
+  `PruneSpawnKeys` is the daemon's prune of them, at its start and daily.
+  Dormant until `worker spawn` takes a key:
+  `TestSpawnKeysHaveNoProductionCaller` fails on any use outside it but the
+  daemon's one prune line, in `Options.prune`.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real

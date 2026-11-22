@@ -1,7 +1,9 @@
 package store_test
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"syscall"
@@ -30,22 +32,71 @@ func TestOpenKeepsSQLitesLock(t *testing.T) {
 	fi, err := os.Stat(path)
 	require.NoError(t, err)
 	ino := fi.Sys().(*syscall.Stat_t).Ino
-	require.True(t, holdsLock(t, ino), "this process holds a POSIX lock on state.db while the store is open")
+	require.True(t, holdsLock(t, ino, func() io.ReadCloser {
+		f, err := os.Open("/proc/locks")
+		require.NoError(t, err)
+		return f
+	}), "this process holds a POSIX lock on state.db while the store is open")
 }
 
 // holdsLock reports whether /proc/locks lists a POSIX lock this process holds
 // on the file with inode ino.
-func holdsLock(t *testing.T, ino uint64) bool {
+func holdsLock(t *testing.T, ino uint64, open func() io.ReadCloser) bool {
 	t.Helper()
-	data, err := os.ReadFile("/proc/locks")
-	require.NoError(t, err)
 	pid, suffix := fmt.Sprint(os.Getpid()), fmt.Sprintf(":%d", ino)
-	for line := range strings.SplitSeq(string(data), "\n") {
-		f := strings.Fields(line)
-		// 1: POSIX  ADVISORY  READ 12345 fd:01:6815774 1073741826 1073742335
-		if len(f) >= 6 && f[1] == "POSIX" && f[4] == pid && strings.HasSuffix(f[5], suffix) {
-			return true
+	page := os.Getpagesize()
+	// Stagger page boundaries to survive a skipped lock line. See internal/testslots/testslots.go.
+	for _, first := range []int{page, page / 3, 2 * page / 3} {
+		data := readLockList(t, open(), first)
+		for line := range strings.SplitSeq(data, "\n") {
+			f := strings.Fields(line)
+			// 1: POSIX  ADVISORY  READ 12345 fd:01:6815774 1073741826 1073742335
+			if len(f) >= 6 && f[1] == "POSIX" && f[4] == pid && strings.HasSuffix(f[5], suffix) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func readLockList(t *testing.T, r io.ReadCloser, first int) string {
+	t.Helper()
+	defer func() { require.NoError(t, r.Close()) }()
+	buf := make([]byte, os.Getpagesize())
+	var list strings.Builder
+	for size := first; ; size = len(buf) {
+		n, err := r.Read(buf[:size])
+		list.Write(buf[:n])
+		if errors.Is(err, io.EOF) {
+			return list.String()
+		}
+		require.NoError(t, err)
+	}
+}
+
+// lockListing models a read that skips the target line at particular page boundaries.
+type lockListing func(first int) string
+
+func (l lockListing) Read(buf []byte) (int, error) {
+	return copy(buf, l(len(buf))), io.EOF
+}
+
+func TestHoldsLockAfterSkippedRead(t *testing.T) {
+	t.Parallel()
+	const ino = 123
+	page := os.Getpagesize()
+	misses := fmt.Sprintf("1: FLOCK ADVISORY READ %d 00:01:123 0 EOF\n"+
+		"2: POSIX ADVISORY READ 0 00:01:123 0 EOF\n"+
+		"3: POSIX ADVISORY READ %d 00:01:124 0 EOF\n", os.Getpid(), os.Getpid())
+	hit := fmt.Sprintf("4: POSIX ADVISORY READ %d 00:01:123 0 EOF\n", os.Getpid())
+	for _, visible := range []int{page, page / 3, 2 * page / 3, 0} {
+		listing := lockListing(func(first int) string {
+			if first == visible {
+				return hit
+			}
+			return misses
+		})
+		found := holdsLock(t, ino, func() io.ReadCloser { return io.NopCloser(listing) })
+		require.Equal(t, visible != 0, found, "lock visible only with first read size %d", visible)
+	}
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/notice"
+	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
 )
@@ -74,6 +75,73 @@ func EndPoll(o Options, b *notice.Batcher, s notice.Sink) (wokenAtSend []bool, w
 	n := &notices{batch: b, sink: wakeSpy{s: s, in: in, woken: &wokenAtSend}}
 	o.endPoll(context.Background(), n, in, &team.Model{})
 	return wokenAtSend, len(in.wake) == 1
+}
+
+// Poller ends team polls and runs dispatcher passes, one at a time, on one
+// inbox, one notices and one dispatcher, configured as the daemon
+// configures them: in.configure(teamConfigOf(teams, "")), the inbox's
+// delivery settings from cfgs, o.newDispatcher(st, in), and
+// notices{batch: b, configs: cfgs, sink: s}. s nil: the inbox sink the
+// daemon builds, on st and p's inbox. b nil: a Batcher on cfgs. Each call
+// keeps the same inbox, memory and notices, so a test can run poll, pass,
+// poll and pass.
+type Poller struct {
+	o  Options
+	in *inbox
+	n  *notices
+	d  *dispatcher
+}
+
+// NewPoller is a Poller on st for teams, as a daemon run with o polls them.
+func NewPoller(o Options, st *store.Store, teams []settings.Team, cfgs notice.Configs, b *notice.Batcher, s notice.Sink) *Poller {
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	if o.Team == nil {
+		o.Team = &TeamOptions{}
+	}
+	in := newInbox()
+	in.configure(teamConfigOf(teams, ""))
+	in.setConfigs(cfgs)
+	if b == nil {
+		b = notice.NewBatcher(cfgs)
+	}
+	if s == nil {
+		s = inboxSink{st: st, in: in, log: o.Logger, events: o.Team.Events, now: o.Now}
+	}
+	return &Poller{o: o, in: in, n: &notices{batch: b, configs: cfgs, sink: s}, d: o.newDispatcher(st, in)}
+}
+
+// EndPoll ends a poll on m as pollTeam does: o.endPoll, which remembers
+// m's boss agents, flushes, and gives the dispatcher m.
+func (p *Poller) EndPoll(m *team.Model) {
+	p.o.endPoll(context.Background(), p.n, p.in, m)
+}
+
+// Pass runs one dispatcher pass, as a wake does.
+func (p *Poller) Pass() {
+	p.d.pass(context.Background())
+}
+
+// Post posts to's queue on project's board as a pass does, on ctx.
+func (p *Poller) Post(ctx context.Context, to store.Address, project string) {
+	p.d.post(ctx, to, project)
+}
+
+// TakeWake empties the inbox's wake, as the dispatcher's loop takes it
+// before a pass, and reports whether it held one.
+func (p *Poller) TakeWake() bool {
+	select {
+	case <-p.in.wake:
+		return true
+	default:
+		return false
+	}
+}
+
+// Delivery is how the inbox delivers to project's boss now (A74).
+func (p *Poller) Delivery(project string) notice.Delivery {
+	return p.in.delivery(project)
 }
 
 type wakeSpy struct {

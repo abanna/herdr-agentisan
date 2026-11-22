@@ -112,6 +112,9 @@ type Config struct {
 	// Repeat is how long the same subject and kind is dropped after it was
 	// let through, for a kind that repeats (Kind.Repeats). Zero drops none.
 	Repeat time.Duration
+	// Board says the team's notices.delivery is board (A74): its boss's
+	// notices and messages are posted on its board while it runs Claude.
+	Board bool
 }
 
 // Defaults: one message every 30 s at most, and a repeat dropped for 5 min.

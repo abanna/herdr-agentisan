@@ -28,8 +28,10 @@ func defaults() *source {
 		"agent":     map[string]any{commandKey: []string{"claude"}},
 		rotationKey: map[string]any{"thresholds": []int{55, 65, 75}},
 		// One message to a boss every 30 s at most, and a repeat dropped for
-		// 5 min (A44).
-		"notices": map[string]any{"gap": 30, "repeat": 300},
+		// 5 min (A44), typed into it (A74).
+		"notices": map[string]any{"gap": 30, "repeat": 300, "delivery": DeliveryTyped, "attention": map[string]any{
+			"after": 600, "ceiling_after": 120, "every": 300, "max_every": 1200, "alerts": 0, "busy_grace": 1800, "sound": SoundRequest,
+		}},
 	}}
 }
 
