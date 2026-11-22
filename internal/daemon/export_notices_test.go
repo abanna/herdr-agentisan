@@ -159,13 +159,7 @@ func (p *Poller) HoldMu() (release func()) {
 
 // RouteHeld reports whether someone holds the inbox's route now: it fails
 // to take it, else it takes it and gives it back at once.
-func (p *Poller) RouteHeld() bool {
-	if p.in.route.mu.TryLock() {
-		p.in.route.mu.Unlock()
-		return false
-	}
-	return true
-}
+func (p *Poller) RouteHeld() bool { return p.in.route.Held() }
 
 // MuHeld reports whether someone holds the inbox's mu now, as RouteHeld
 // does for route.
@@ -177,10 +171,8 @@ func (p *Poller) MuHeld() bool {
 	return true
 }
 
-// RouteHolds is how many times route has been taken. Only the goroutine
-// holding route may call it, as the delivery probe and the store's
-// triggers do from the pass.
-func (p *Poller) RouteHolds() uint64 { return p.in.route.n }
+// RouteHolds is how many times route has been taken.
+func (p *Poller) RouteHolds() uint64 { return p.in.route.Holds() }
 
 // SetDeliveryProbe makes f the inbox's delivery probe, called at each
 // delivery read; nil removes it.

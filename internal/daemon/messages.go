@@ -13,6 +13,7 @@ import (
 
 	"github.com/rs/zerolog"
 
+	"github.com/abanna/herdr-agentisan/internal/daemon/routelock"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/store"
@@ -75,7 +76,9 @@ type inbox struct {
 	// taken before mu, at those three sites alone. Under it the board post
 	// may close the store's board-reader channel, which wakes `board wait`;
 	// the dispatcher's own backlog wake (posted) runs after it is released.
-	route routeLock
+	// It counts its holds, and its package lets nothing else here touch
+	// the mutex or the count (routelock).
+	route routelock.Mutex
 	mu    sync.Mutex
 	// Only the dispatcher writes typedBoss. It publishes a board-key boss
 	// after a durable typed claim, before releasing route, and clears it
@@ -101,23 +104,6 @@ type inbox struct {
 	last map[string]string
 	wake chan struct{}
 }
-
-// routeLock is the inbox's route: a mutex that counts its acquisitions,
-// so a test can tell one hold of it from two (claimTyped's delivery read
-// and its claim must share one). The count is written only by the holder.
-type routeLock struct {
-	mu sync.Mutex
-	n  uint64
-}
-
-// Lock takes route and counts the acquisition.
-func (l *routeLock) Lock() {
-	l.mu.Lock()
-	l.n++
-}
-
-// Unlock releases route.
-func (l *routeLock) Unlock() { l.mu.Unlock() }
 
 // bossClaim holds the single dispatcher's outstanding board-key boss
 // claim. The poll reads it concurrently with the dispatcher's stores.
