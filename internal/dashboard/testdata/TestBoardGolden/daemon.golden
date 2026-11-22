@@ -6,7 +6,7 @@
  ◀ back  BOARD · 12 posts · 2 new · daemon
 ╭──────────────────────────────────────────────────────────╮
 │ ●  16:17  ha-qa-3   QA PASS: merge check next on the Co… │
-│ ●  15:16  ha-qa-3   PR #143: every check passed          │
+│▸●  15:16  ha-qa-3   PR #143: every check passed          │
 │    14:15  ha-qa-3   ha-coder-2 is at 56% ctx (soft 55):… │
 │    10-22  ha-qa-3   ha-research-1 returned from handoff  │
 │    10-22  ha-qa-3   The user preview is required before… │

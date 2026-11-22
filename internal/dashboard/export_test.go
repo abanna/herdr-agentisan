@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"image/color"
 	"strings"
 	"time"
 
@@ -56,4 +57,20 @@ func ClipText(base []string, reverse []bool, w int) string {
 func ModelLabel(a snapshot.Agent) string {
 	text, _ := modelLabel(a)
 	return text
+}
+
+const (
+	PaletteText      = colText
+	PaletteSecondary = colDim
+	PaletteGreen     = colGreen
+	PaletteYellow    = colYellow
+	PaletteOrange    = colOrange
+	PaletteRed       = colRed
+	PaletteCyan      = colCyan
+)
+
+// PaletteForTest returns a copy of the full dashboard text palette.
+func PaletteForTest() []color.Color {
+	text := palette
+	return text[:]
 }

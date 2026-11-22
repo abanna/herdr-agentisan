@@ -12,39 +12,72 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 )
 
-// The palette. Colours are written as 24-bit; bubbletea downsamples them to
-// whatever the terminal supports.
-var (
-	colGreen  = lipgloss.Color("#50fa7b")
-	colYellow = lipgloss.Color("#f1fa8c")
-	colOrange = lipgloss.Color("#ffb86c")
-	colRed    = lipgloss.Color("#ff5555")
-	colCyan   = lipgloss.Color("#8be9fd")
-	colDim    = lipgloss.Color("#6c7086")
-	colAccent = lipgloss.Color("#bd93f9")
+const (
+	colText = iota
+	colDim
+	colGreen
+	colYellow
+	colOrange
+	colRed
+	colCyan
+	colAccent
 )
 
+// All dashboard text colours, stored as 24-bit values for downsampling.
+var palette = [...]color.Color{
+	colText:   lipgloss.Color("#eef2ff"),
+	colDim:    lipgloss.Color("#becbe3"),
+	colGreen:  lipgloss.Color("#8ae99f"),
+	colYellow: lipgloss.Color("#f3de82"),
+	colOrange: lipgloss.Color("#ffba83"),
+	colRed:    lipgloss.Color("#ff989f"),
+	colCyan:   lipgloss.Color("#9ee6fa"),
+	colAccent: lipgloss.Color("#c8b5ff"),
+}
+
+const selectionPointer = "▸"
+
+var selectionBackground = lipgloss.Color("#36476b")
+
 var (
-	plainStyle  = lipgloss.NewStyle()
-	dimStyle    = lipgloss.NewStyle().Foreground(colDim)
-	boldStyle   = lipgloss.NewStyle().Bold(true)
-	accentStyle = lipgloss.NewStyle().Foreground(colAccent)
-	errorStyle  = lipgloss.NewStyle().Foreground(colRed)
-	noteStyle   = lipgloss.NewStyle().Foreground(colYellow)
-	greenStyle  = lipgloss.NewStyle().Foreground(colGreen)
-	orangeStyle = lipgloss.NewStyle().Foreground(colOrange)
-	// buttonStyle is the btop button: bold on the accent, never reverse
-	// video, which marks the selected agent alone.
-	buttonStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#282a36")).Background(colAccent)
+	plainStyle  = lipgloss.NewStyle().Foreground(palette[colText])
+	dimStyle    = lipgloss.NewStyle().Foreground(palette[colDim])
+	boldStyle   = plainStyle.Bold(true)
+	accentStyle = lipgloss.NewStyle().Foreground(palette[colAccent])
+	errorStyle  = lipgloss.NewStyle().Foreground(palette[colRed])
+	noteStyle   = lipgloss.NewStyle().Foreground(palette[colYellow])
+	greenStyle  = lipgloss.NewStyle().Foreground(palette[colGreen])
+	orangeStyle = lipgloss.NewStyle().Foreground(palette[colOrange])
+	// buttonStyle pairs a dark foreground with the light accent background.
+	buttonStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#282a36")).Background(palette[colAccent])
 	// stageReadyStyle and stageRedStyle are a stage's READY and RED, v12's
 	// bold green and bold red.
-	stageReadyStyle = lipgloss.NewStyle().Bold(true).Foreground(colGreen)
-	stageRedStyle   = lipgloss.NewStyle().Bold(true).Foreground(colRed)
-	// staleStyle is a stale stage and its age (ADR-001 A42): dim, faint and
-	// italic, which no current stage is. Not every terminal draws faint or
-	// italic, so the age's own words, "3h ago", say the stage is old.
-	staleStyle = lipgloss.NewStyle().Foreground(colDim).Faint(true).Italic(true)
+	stageReadyStyle = lipgloss.NewStyle().Bold(true).Foreground(palette[colGreen])
+	stageRedStyle   = lipgloss.NewStyle().Bold(true).Foreground(palette[colRed])
+	// Stale stages (ADR-001 A42) use secondary text and italic. The age
+	// still identifies a stale stage when text attributes are unavailable.
+	staleStyle   = dimStyle.Italic(true)
+	pointerStyle = accentStyle.Bold(true)
 )
+
+// highlight gives each cell of a selected line the same background.
+func highlight(body line) {
+	for i := range body {
+		body[i].style = body[i].style.Background(selectionBackground)
+	}
+}
+
+// selectBox applies selection inside an already boxed worker or post row.
+// A pointer replaces the left padding cell and preserves column alignment.
+func selectBox(box line, bar, mark bool) line {
+	if bar {
+		box = slices.Clone(box)
+		highlight(box[1 : len(box)-1])
+	} else if mark {
+		box = slices.Concat(line{{"│", box[0].style}, {selectionPointer, pointerStyle}}, box[1:])
+	}
+	return box
+}
 
 // agentStageStyle is a's stage's style in a row and on the boss line:
 // staleStyle when the stage is stale, which takes no rule's colour, so an
@@ -108,13 +141,13 @@ func DefaultThresholds() Thresholds {
 func (t Thresholds) colour(ctx int) color.Color {
 	switch {
 	case ctx >= t.Ceiling:
-		return colRed
+		return palette[colRed]
 	case ctx >= t.Hard:
-		return colOrange
+		return palette[colOrange]
 	case ctx >= t.Soft:
-		return colYellow
+		return palette[colYellow]
 	default:
-		return colGreen
+		return palette[colGreen]
 	}
 }
 
@@ -223,15 +256,15 @@ func rowLabel(a snapshot.Agent) string {
 func statusStyle(s snapshot.Status) lipgloss.Style {
 	switch s {
 	case snapshot.StatusWorking:
-		return lipgloss.NewStyle().Foreground(colGreen)
+		return lipgloss.NewStyle().Foreground(palette[colGreen])
 	case snapshot.StatusIdle:
-		return lipgloss.NewStyle().Foreground(colYellow)
+		return lipgloss.NewStyle().Foreground(palette[colYellow])
 	case snapshot.StatusBlocked:
-		return lipgloss.NewStyle().Foreground(colRed)
+		return lipgloss.NewStyle().Foreground(palette[colRed])
 	case snapshot.StatusDone:
 		return dimStyle
 	case snapshot.StatusReady:
-		return lipgloss.NewStyle().Foreground(colCyan)
+		return lipgloss.NewStyle().Foreground(palette[colCyan])
 	default:
 		return plainStyle
 	}

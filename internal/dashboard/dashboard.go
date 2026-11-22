@@ -20,6 +20,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
@@ -182,6 +183,7 @@ type Model struct {
 
 	clock         time.Time
 	width, height int
+	profile       colorprofile.Profile
 	help          bool
 	sourceErr     error
 	focusErr      error
@@ -259,6 +261,9 @@ func (m Model) Init() tea.Cmd {
 // Update handles one message.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.ColorProfileMsg:
+		m.profile = msg.Profile
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.settle()
@@ -424,7 +429,11 @@ func (m Model) click(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 // View draws the frame full-screen, asking herdr to forward
 // mouse clicks and wheel events.
 func (m Model) View() tea.View {
-	v := tea.NewView(Render(m.Frame(), m.Width(), m.Height(), m.cfg.Options))
+	opts := m.cfg.Options
+	if opts.Profile == colorprofile.Unknown && (m.profile == colorprofile.ASCII || m.profile == colorprofile.NoTTY) {
+		opts.Profile = m.profile
+	}
+	v := tea.NewView(Render(m.Frame(), m.Width(), m.Height(), opts))
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	return v

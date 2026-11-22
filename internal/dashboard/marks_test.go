@@ -19,8 +19,12 @@ import (
 // covered, and one it does not is never drawn as a pass.
 func TestPRMarks(t *testing.T) {
 	t.Parallel()
-	const (
-		green, red, yellow, orange, dim = "#50fa7b", "#ff5555", "#f1fa8c", "#ffb86c", "#6c7086"
+	var (
+		green  = paletteHex(dashboard.PaletteGreen)
+		red    = paletteHex(dashboard.PaletteRed)
+		yellow = paletteHex(dashboard.PaletteYellow)
+		orange = paletteHex(dashboard.PaletteOrange)
+		dim    = paletteHex(dashboard.PaletteSecondary)
 	)
 	tests := map[string]struct {
 		pr         snapshot.PR

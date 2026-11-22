@@ -6,7 +6,7 @@
  ◀ back  BOARD · 16 posts · 3 new · team + daemon
 ╭───────────────────────────────────────────────────────────────────────────────────────────────╮
 │ ●  17:18  team    ha-coder-5      post         BOSS: PR #143 open                             │
-│ ●  16:17  daemon  ha-qa-3         ci_passed    QA PASS: merge check next on the Codex goldens │
+│▸●  16:17  daemon  ha-qa-3         ci_passed    QA PASS: merge check next on the Codex goldens │
 │                                                and README.                                    │
 │                                                The panel keeps the post body in its own       │
 │                                                column, including longer follow-up context.    │

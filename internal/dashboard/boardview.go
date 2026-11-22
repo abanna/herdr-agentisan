@@ -78,11 +78,6 @@ func planBoard(l layout, b BoardFrame) *boardView {
 				lead = line{{strings.Repeat(" ", prefix.width()), plainStyle}}
 			}
 			ln := slices.Concat(lead, line{{text, plainStyle}}).truncate(rowWidth(l.w))
-			if selected {
-				for k := range ln {
-					ln[k].style = ln[k].style.Reverse(true)
-				}
-			}
 			v.add(boardBox(ln, l.w), i)
 		}
 		if selected {
@@ -176,7 +171,7 @@ func boardPrefix(p daemon.BoardPostView, mark int64, now time.Time, w int) (line
 	return out, max(1, w-out.width())
 }
 
-func (l layout) drawBoard(canvas []line) {
+func (l layout) drawBoard(canvas []line, selected int, bar bool) {
 	v := l.board
 	for i := range l.avail {
 		idx := i
@@ -189,7 +184,12 @@ func (l layout) drawBoard(canvas []line) {
 		if idx >= len(v.rows) {
 			break
 		}
-		canvas[l.top+i] = v.rows[idx]
+		row := v.rows[idx]
+		if selected >= 0 && v.posts[idx] == selected {
+			first := i == 2 || v.posts[idx-1] != selected
+			row = selectBox(row, bar, first)
+		}
+		canvas[l.top+i] = row
 	}
 }
 

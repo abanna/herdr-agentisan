@@ -59,21 +59,20 @@ func staleSnapshot() *snapshot.Snapshot {
 	}}}}
 }
 
-// TestStaleStageStyle: under TrueColor a stale stage and its age are dim,
-// faint and italic, which no current stage is, not even one that matches no
-// colour rule and so is dim already; an old "blocked" takes no red and no
+// TestStaleStageStyle: a stale stage and its age use the secondary colour
+// and italic. The stage keeps its full contrast and an old "blocked" takes no red and no
 // bold (A42's F4). It holds in a row, on the boss line and in the group
-// view. Not every terminal draws faint or italic, so the words say it too
+// view. Not every terminal draws italic, so the words say it too
 // (TestStaleStageWords).
 func TestStaleStageStyle(t *testing.T) {
 	t.Parallel()
-	const dim = "#6c7086"
+	dim := paletteHex(dashboard.PaletteSecondary)
 	stale := func(t *testing.T, out, text string, n int) {
 		t.Helper()
 		sets := sgrBefore(t, out, text)
 		require.Len(t, sets, n, "%q is drawn %d times", text, n)
 		for _, set := range sets {
-			assert.True(t, set["2"], "%q is faint: %v", text, set)
+			assert.False(t, set["2"], "%q is not faint: %v", text, set)
 			assert.True(t, set["3"], "%q is italic: %v", text, set)
 			assert.True(t, set[truecolor(dim)], "%q is dim: %v", text, set)
 			assert.False(t, set["1"], "%q is not bold: %v", text, set)
@@ -202,7 +201,7 @@ func TestBossLineGivesAStaleStagesAgeFirst(t *testing.T) {
 			coloured := dashboard.Render(dashboard.Frame{Snapshot: boss(tc.stage, true, tc.aged), Selection: dashboard.Selection{Group: -1}, Now: at}, bare[0], 24, dashboard.Options{Profile: colorprofile.TrueColor})
 			sets := sgrBefore(t, coloured, tc.shows)
 			require.Len(t, sets, 1)
-			assert.True(t, sets[0]["2"], "the bare stage is faint: %v", sets[0])
+			assert.False(t, sets[0]["2"], "the bare stage is not faint: %v", sets[0])
 			assert.True(t, sets[0]["3"], "and italic: %v", sets[0])
 		})
 	}

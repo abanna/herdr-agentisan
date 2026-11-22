@@ -84,7 +84,7 @@ type Options struct {
 	Thresholds Thresholds
 	// Profile is the colour profile the frame is written for. NoTTY strips
 	// colour and attributes alike, which is what golden frames want; ASCII
-	// keeps attributes such as reverse video. Unknown means TrueColor.
+	// keeps attributes. Both use a selection pointer. Unknown means TrueColor.
 	Profile colorprofile.Profile
 }
 
@@ -157,13 +157,14 @@ func Render(f Frame, w, h int, opts Options) string {
 	}
 	th := opts.thresholds()
 	l := plan(f, w, h)
+	bar := opts.Profile != colorprofile.ASCII && opts.Profile != colorprofile.NoTTY
 
 	canvas := make([]line, h)
 	l.drawHeader(canvas, f, th)
 	switch {
 	case l.avail == 0:
 	case l.board != nil:
-		l.drawBoard(canvas)
+		l.drawBoard(canvas, f.Board.Selected, bar)
 	case f.Snapshot == nil && f.NoTeam != nil:
 		body := noTeamToShow
 		if errors.Is(f.NoTeam, ErrNotATeamsWorkspace) {
@@ -177,13 +178,13 @@ func Render(f Frame, w, h int, opts Options) string {
 	case len(l.groups) == 0:
 		canvas[l.top] = line{{" ", plainStyle}, {noTeam, dimStyle}}
 	case l.view != nil:
-		l.drawView(canvas, th)
+		l.drawView(canvas, th, bar)
 	default:
 		for i := range l.avail {
 			if l.offset+i >= len(l.rows) {
 				break
 			}
-			canvas[l.top+i] = l.drawRow(l.rows[l.offset+i], th)
+			canvas[l.top+i] = l.drawRow(l.rows[l.offset+i], th, bar)
 		}
 	}
 	if l.footer >= 0 {
@@ -789,7 +790,7 @@ func (l layout) borderStyle(g int) lipgloss.Style {
 }
 
 // drawRow draws one line of the groups, w cells wide.
-func (l layout) drawRow(r row, th Thresholds) line {
+func (l layout) drawRow(r row, th Thresholds, bar bool) line {
 	g := l.groups[r.group]
 	border := l.borderStyle(r.group)
 	inner := rowWidth(l.w)
@@ -808,12 +809,11 @@ func (l layout) drawRow(r row, th Thresholds) line {
 		return boxed(line{{noAgents, dimStyle}}, inner, border)
 	default:
 		body := l.cols.row(g.Agents[r.agent], l.now, th).truncate(inner).pad(inner)
+		box := boxed(body, inner, border)
 		if l.selOK && l.sel == (Selection{Group: r.group, Agent: r.agent}) {
-			for i := range body {
-				body[i].style = body[i].style.Reverse(true)
-			}
+			box = selectBox(box, bar, true)
 		}
-		return boxed(body, inner, border)
+		return box
 	}
 }
 
@@ -1348,7 +1348,7 @@ func (l line) truncate(w int) line {
 // pad extends l with spaces to w cells.
 func (l line) pad(w int) line {
 	if gap := w - l.width(); gap > 0 {
-		return append(l, seg{strings.Repeat(" ", gap), plainStyle})
+		return append(l, seg{text: strings.Repeat(" ", gap)})
 	}
 	return l
 }
