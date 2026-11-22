@@ -48,11 +48,61 @@ func _() {
 	require.Contains(t, string(data), "example.com/m/internal/live/live.go:")
 	require.NotContains(t, string(data), "example.com/m/internal/blank/")
 
-	pkgs, err := devctl.FloorPackages(t.Context(), dir)
+	pkgs, err := devctl.FloorPackages(t.Context(), dir, false)
 	require.NoError(t, err)
 	missing, err := devctl.MissingPackages(strings.NewReader(string(data)), pkgs)
 	require.NoError(t, err)
 	assert.Empty(t, missing, "Go emitted blocks for every package with instrumentable statements")
+}
+
+func TestCoverageRequiresNonRacePackageOnlyWithoutRace(t *testing.T) {
+	profile := coverageWithTaggedPackage(t, "!race")
+
+	t.Run("race profile", func(t *testing.T) {
+		out, err := runDev(t, "coverage", "--profile", profile, "--min", "0")
+		require.NoError(t, err, out)
+	})
+	t.Run("non-race profile", func(t *testing.T) {
+		_, err := runDev(t, "coverage", "--profile", profile, "--min", "0", "--race=false")
+		require.ErrorIs(t, err, devctl.ErrMissingCoveragePackages)
+		assert.ErrorContains(t, err, "example.com/m/internal/conditional")
+	})
+}
+
+func TestCoverageRequiresRacePackageOnlyWithRace(t *testing.T) {
+	profile := coverageWithTaggedPackage(t, "race")
+
+	t.Run("race profile", func(t *testing.T) {
+		_, err := runDev(t, "coverage", "--profile", profile, "--min", "0")
+		require.ErrorIs(t, err, devctl.ErrMissingCoveragePackages)
+		assert.ErrorContains(t, err, "example.com/m/internal/conditional")
+	})
+	t.Run("non-race profile", func(t *testing.T) {
+		out, err := runDev(t, "coverage", "--profile", profile, "--min", "0", "--race=false")
+		require.NoError(t, err, out)
+	})
+}
+
+// The profile covers the always-built package. A missing block for the
+// conditional package is only an error in the build that selects its code.
+func coverageWithTaggedPackage(t *testing.T, tag string) string {
+	t.Helper()
+	t.Setenv("GOWORK", "off")
+	t.Setenv("GOFLAGS", "")
+	dir := t.TempDir()
+	t.Chdir(dir)
+	for name, source := range map[string]string{
+		"go.mod":                         "module example.com/m\n\ngo 1.26\n",
+		"internal/conditional/doc.go":    "package conditional\n",
+		"internal/conditional/tagged.go": "//go:build " + tag + "\n\npackage conditional\nfunc F() int { return 1 }\n",
+		"internal/live/live.go":          "package live\n\nfunc F() int { return 1 }\n",
+		"coverage.out":                   "mode: atomic\nexample.com/m/internal/live/live.go:3.14,3.26 1 1\n",
+	} {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(source), 0o600))
+	}
+	return filepath.Join(dir, "coverage.out")
 }
 
 func TestFloorPackagesReadsBeyondTheFirstSourceFile(t *testing.T) {
@@ -64,7 +114,7 @@ func TestFloorPackagesReadsBeyondTheFirstSourceFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "a_types.go"), []byte("package multi\ntype T int\n"), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "b_code.go"), []byte("package multi\nfunc F() T { return 1 }\n"), 0o600))
 
-	pkgs, err := devctl.FloorPackages(t.Context(), dir)
+	pkgs, err := devctl.FloorPackages(t.Context(), dir, false)
 	require.NoError(t, err)
 	require.Len(t, pkgs, 1)
 	assert.True(t, pkgs[0].HasStatements, "the second file contains statements")
@@ -72,9 +122,9 @@ func TestFloorPackagesReadsBeyondTheFirstSourceFile(t *testing.T) {
 
 func TestFloorPackagesPropagatesGoListFailure(t *testing.T) {
 	t.Setenv("GOWORK", "off")
-	_, err := devctl.FloorPackages(t.Context(), t.TempDir())
+	_, err := devctl.FloorPackages(t.Context(), t.TempDir(), false)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "go list -json=ImportPath,Dir,GoFiles,CgoFiles ./internal/...")
+	assert.ErrorContains(t, err, "go list -race=false -json=ImportPath,Dir,GoFiles,CgoFiles ./internal/...")
 }
 
 func TestMissingPackagesRequiresModeHeader(t *testing.T) {
@@ -144,7 +194,7 @@ func TestCoverageRefusesAProfileMissingAPackage(t *testing.T) {
 			require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 			require.NoError(t, os.WriteFile(path, []byte(src), 0o600))
 		}
-		got, err := devctl.FloorPackages(t.Context(), dir)
+		got, err := devctl.FloorPackages(t.Context(), dir, false)
 		require.NoError(t, err)
 		assert.Equal(t, []devctl.Package{
 			{ImportPath: "example.com/m/internal/cgo", GoFiles: []string{"cgo.go"}, HasStatements: true},
@@ -191,7 +241,7 @@ func TestCoverageCommandNamesAPackageMissingFromTheProfile(t *testing.T) {
 // lines after them, and returns its path.
 func floorProfile(t *testing.T, skip string, extra ...string) string {
 	t.Helper()
-	pkgs, err := devctl.FloorPackages(t.Context(), "../..")
+	pkgs, err := devctl.FloorPackages(t.Context(), "../..", true)
 	require.NoError(t, err)
 	require.NotEmpty(t, pkgs)
 	var b strings.Builder

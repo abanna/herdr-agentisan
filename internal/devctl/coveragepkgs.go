@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -27,12 +28,12 @@ type Package struct {
 	HasStatements bool
 }
 
-// FloorPackages lists the internal packages and identifies those that have
-// instrumentable statements in a non-test function or function literal.
-func FloorPackages(ctx context.Context, root string) ([]Package, error) {
+// FloorPackages lists internal packages in the profile's race configuration
+// and identifies those with instrumentable non-test statements.
+func FloorPackages(ctx context.Context, root string, race bool) ([]Package, error) {
 	ctx, cancel := context.WithTimeout(ctx, goListBudget)
 	defer cancel()
-	out, err := goList(ctx, root, "-json=ImportPath,Dir,GoFiles,CgoFiles", CoverPattern)
+	out, err := goList(ctx, root, "-race="+strconv.FormatBool(race), "-json=ImportPath,Dir,GoFiles,CgoFiles", CoverPattern)
 	if err != nil {
 		return nil, err
 	}
@@ -126,8 +127,8 @@ func MissingPackages(profile io.Reader, pkgs []Package) ([]string, error) {
 // ErrMissingCoveragePackages reports that the profile omitted a package with statements.
 var ErrMissingCoveragePackages = errors.New("coverage profile lacks blocks")
 
-func checkCoveragePackages(ctx context.Context, root, profile string) error {
-	pkgs, err := FloorPackages(ctx, root)
+func checkCoveragePackages(ctx context.Context, root, profile string, race bool) error {
+	pkgs, err := FloorPackages(ctx, root, race)
 	if err != nil {
 		return err
 	}
