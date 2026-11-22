@@ -387,9 +387,10 @@ This takes prefix+b from herdr's default `toggle_sidebar`; see
 
 ## `$team`, the ctx display and the focused team in the sidebar
 
-The daemon pushes each team's workspace its `$team` token every 3 s. `4 agents · 0 working · 1 ready`, with
-` · 2 blocked` when any are, where `ready` counts the agents waiting for a
-handoff. It pushes every agent pane its context use as well, seven
+The daemon pushes each team's workspace its `$team` token every 3 s.
+A count like `4 agents · 0 working · 1 ready` reports one agent waiting for
+a handoff. If two agents are blocked, the token adds ` · 2 blocked`.
+The daemon pushes every agent pane its context use as well, seven
 characters wide (`ctx  9%`, `ctx 56%`; `ctx  --` when the agent reports
 none), in one of three tokens by band: `$ctx_ok` up to 55%, `$ctx_warn` above
 55% and `$ctx_hot` above 65%, and its stage, in `$stage_now` while it is
@@ -601,13 +602,12 @@ GitHub.
 
 ## Teams: one workspace, one tab per worker
 
-Each configured project has one herdr
-workspace labelled with the project's name, the boss's tab `<short>-boss`,
-and one tab per worker, `<short>-<type>-<n>`, such as `ha-coder-2`. Give each
-project a `short` code in `herdr-agentisan.toml`. The daemon pushes the
-team's workspace one `$team` for the whole team, the boss left out, and reads
-the teams when it starts: run the `daemon-restart` action after adding one.
-See ADR-001 A19.
+Each configured project has one herdr workspace labelled with the project's
+name. The boss's tab is `<short>-boss`, and each worker gets a tab like
+`ha-coder-2` using `<short>-<type>-<n>`. Give each project a `short` code in
+`herdr-agentisan.toml`. The workspace's `$team` counts workers. The daemon
+reads the teams at startup, so run the `daemon-restart` action after adding
+one. See ADR-001 A19.
 
 The old `◆ <group>` workspaces are ordinary workspaces outside every team
 (NERD-5670). They get no `$team` token, team snapshot, or focused team
