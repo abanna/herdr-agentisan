@@ -29,11 +29,11 @@ everything.
 | Lint | `go tool golangci-lint run --allow-serial-runners ./...` |
 | Format check | `go tool golangci-lint fmt --diff ./...` |
 | Vet | `go vet ./...` |
-| Run the dashboard race test shard | `go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-dashboard"` |
-| Run the store race test shard | `go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-store"` |
-| Run the daemon race test shard | `go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-daemon"` |
-| Run the workforce race test shard | `go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-workforce"` |
-| Run the rest race test shard | `go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-rest"` |
+| Run the dashboard race test shard | `go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${AGENTISAN_SHARD_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-dashboard"` |
+| Run the store race test shard | `go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${AGENTISAN_SHARD_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-store"` |
+| Run the daemon race test shard | `go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${AGENTISAN_SHARD_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-daemon"` |
+| Run the workforce race test shard | `go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${AGENTISAN_SHARD_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-workforce"` |
+| Run the rest race test shard | `go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${AGENTISAN_SHARD_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-rest"` |
 | Merge the test jobs' coverage data | `go tool covdata textfmt -i=bin/covdata/covdata-dashboard,bin/covdata/covdata-store,bin/covdata/covdata-daemon,bin/covdata/covdata-workforce,bin/covdata/covdata-rest -o coverage.out` |
 | Enforce the coverage floor | `go run ./cmd/devctl coverage --profile coverage.out --min 75` |
 | Static security scan | `go tool gosec -quiet ./...` |

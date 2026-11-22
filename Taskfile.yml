@@ -180,13 +180,19 @@ tasks:
   test:unit:
     desc: Run all five race test shards and collect their coverage data
     # Each shard replaces its own directory before testing to discard old counters.
+    # Task gives inherited variables precedence over env, so selectors reject an
+    # inherited AGENTISAN_SHARD_PACKAGES before it can replace the selected list.
     deps: [test:unit:dashboard, test:unit:store, test:unit:daemon, test:unit:workforce, test:unit:rest]
 
   test:unit:dashboard:
     desc: Run the dashboard race test shard
     env:
-      TEST_PACKAGES:
+      AGENTISAN_SHARD_PACKAGES:
         sh: |
+          if [ "${AGENTISAN_SHARD_PACKAGES+x}" ]; then
+            echo "AGENTISAN_SHARD_PACKAGES is reserved for the race test tasks; unset it" >&2
+            exit 1
+          fi
           packages=$(go run ./cmd/devctl test-packages dashboard) || exit $?
           case "$packages" in
             *[![:space:]]*) printf '%s\n' "$packages" ;;
@@ -195,13 +201,17 @@ tasks:
     cmds:
       - cmd: rm -rf bin/covdata/covdata-dashboard
       - cmd: mkdir -p bin/covdata/covdata-dashboard
-      - go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-dashboard"
+      - go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${AGENTISAN_SHARD_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-dashboard"
 
   test:unit:store:
     desc: Run the store race test shard
     env:
-      TEST_PACKAGES:
+      AGENTISAN_SHARD_PACKAGES:
         sh: |
+          if [ "${AGENTISAN_SHARD_PACKAGES+x}" ]; then
+            echo "AGENTISAN_SHARD_PACKAGES is reserved for the race test tasks; unset it" >&2
+            exit 1
+          fi
           packages=$(go run ./cmd/devctl test-packages store) || exit $?
           case "$packages" in
             *[![:space:]]*) printf '%s\n' "$packages" ;;
@@ -210,13 +220,17 @@ tasks:
     cmds:
       - cmd: rm -rf bin/covdata/covdata-store
       - cmd: mkdir -p bin/covdata/covdata-store
-      - go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-store"
+      - go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${AGENTISAN_SHARD_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-store"
 
   test:unit:daemon:
     desc: Run the daemon race test shard
     env:
-      TEST_PACKAGES:
+      AGENTISAN_SHARD_PACKAGES:
         sh: |
+          if [ "${AGENTISAN_SHARD_PACKAGES+x}" ]; then
+            echo "AGENTISAN_SHARD_PACKAGES is reserved for the race test tasks; unset it" >&2
+            exit 1
+          fi
           packages=$(go run ./cmd/devctl test-packages daemon) || exit $?
           case "$packages" in
             *[![:space:]]*) printf '%s\n' "$packages" ;;
@@ -225,13 +239,17 @@ tasks:
     cmds:
       - cmd: rm -rf bin/covdata/covdata-daemon
       - cmd: mkdir -p bin/covdata/covdata-daemon
-      - go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-daemon"
+      - go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${AGENTISAN_SHARD_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-daemon"
 
   test:unit:workforce:
     desc: Run the workforce race test shard
     env:
-      TEST_PACKAGES:
+      AGENTISAN_SHARD_PACKAGES:
         sh: |
+          if [ "${AGENTISAN_SHARD_PACKAGES+x}" ]; then
+            echo "AGENTISAN_SHARD_PACKAGES is reserved for the race test tasks; unset it" >&2
+            exit 1
+          fi
           packages=$(go run ./cmd/devctl test-packages workforce) || exit $?
           case "$packages" in
             *[![:space:]]*) printf '%s\n' "$packages" ;;
@@ -240,13 +258,17 @@ tasks:
     cmds:
       - cmd: rm -rf bin/covdata/covdata-workforce
       - cmd: mkdir -p bin/covdata/covdata-workforce
-      - go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-workforce"
+      - go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${AGENTISAN_SHARD_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-workforce"
 
   test:unit:rest:
     desc: Run the rest race test shard
     env:
-      TEST_PACKAGES:
+      AGENTISAN_SHARD_PACKAGES:
         sh: |
+          if [ "${AGENTISAN_SHARD_PACKAGES+x}" ]; then
+            echo "AGENTISAN_SHARD_PACKAGES is reserved for the race test tasks; unset it" >&2
+            exit 1
+          fi
           packages=$(go run ./cmd/devctl test-packages rest) || exit $?
           case "$packages" in
             *[![:space:]]*) printf '%s\n' "$packages" ;;
@@ -255,7 +277,7 @@ tasks:
     cmds:
       - cmd: rm -rf bin/covdata/covdata-rest
       - cmd: mkdir -p bin/covdata/covdata-rest
-      - go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-rest"
+      - go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${AGENTISAN_SHARD_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-rest"
 
   cover:
     desc: Merge all five shards' coverage data and enforce the coverage floor
