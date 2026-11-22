@@ -141,7 +141,9 @@ func TestBoardModeDecisionsSurviveAPollInEveryGap(t *testing.T) {
 				return time.Now()
 			}
 			r.p = daemon.NewPoller(r.o, r.st, r.teams, cfgs, b, nil)
+			// Queue the older notice on the typed path before arming the pass.
 			b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Blocked, Text: "before"}})
+			r.p.EndPoll(haModel(bossPane("ha-boss", "codex")))
 			r.p.EndPoll(haModel(bossPane("ha-boss", c.from)))
 			r.p.SetDeliveryProbe(checkpoint)
 			armed = true
@@ -263,8 +265,12 @@ func TestAPollWaitsForAPassHoldingRoute(t *testing.T) {
 				return time.Now()
 			}
 			r.p = daemon.NewPoller(r.o, r.st, r.teams, cfgs, b, nil)
+			// Queue the older notice on the typed path before arming the pass.
 			b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Blocked, Text: "before"}})
+			r.p.EndPoll(haModel(bossPane("ha-boss", "codex")))
 			r.p.EndPoll(haModel(bossPane("ha-boss", c.from)))
+			// Keep any claimed prompt in flight until the switching poll has flushed.
+			releasePrompt := r.pr.hold(t, "ha-boss")
 			pause.Store(true)
 			passed := make(chan struct{})
 			go func() {
@@ -290,8 +296,9 @@ func TestAPollWaitsForAPassHoldingRoute(t *testing.T) {
 			case <-time.After(300 * time.Millisecond):
 			}
 			close(resume)
-			<-passed
 			<-polled
+			releasePrompt()
+			<-passed
 			assert.True(t, held, "the pass was paused with route held")
 
 			var bodies, texts []string
