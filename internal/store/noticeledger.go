@@ -38,6 +38,10 @@ const (
 const (
 	noticeFromGitHub = "github"
 	noticeFromDaemon = "daemon"
+	// noticeKindCeiling is notice.CtxCeiling, a worker's context reaching
+	// D7's ceiling: Q8 never refuses it from the daemon (B0a.4-hour). The
+	// store does not import internal/notice; a test pins the two equal.
+	noticeKindCeiling = "ctx_ceiling"
 )
 
 // NoticeAdmission is what AdmitNotice did with a notice.
@@ -128,7 +132,8 @@ VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`
 //     not the ID. An ID drawn twice is ErrStore, and nothing is written.
 //   - It is recorded pending, with its payload, unless it would exceed a
 //     quota: it faces what a pending GitHub notice faces but Q3, since it
-//     has no pull request, and a refusal writes nothing.
+//     has no pull request, and a refusal writes nothing. A ctx_ceiling
+//     also passes Q8: it counts toward the hour, but Q8 never refuses it.
 //
 // It writes no table but the ledger's and wakes no reader.
 func (s *Store) AdmitNotice(ctx context.Context, e NoticeEnvelope, at time.Time) (NoticeAdmission, error) {
@@ -174,7 +179,7 @@ func (s *Store) AdmitNotice(ctx context.Context, e NoticeEnvelope, at time.Time)
 	if err := tx.QueryRowContext(ctx, selectNoticeSeen, e.Project, r.Repo, r.PR, e.Kind, r.Key).Scan(&seen); err != nil {
 		return NoticeAdmission{}, ledgerFailed("read the github seen-set", err)
 	}
-	if err := checkNoticeQuotas(ctx, tx, s.quotas, e.Project, e.Receipt, c.bytes, !seen, ns); err != nil {
+	if err := checkNoticeQuotas(ctx, tx, s.quotas, e.Project, e.Source, e.Kind, e.Receipt, c.bytes, !seen, ns); err != nil {
 		return NoticeAdmission{}, err
 	}
 	got = NoticeAdmission{CaptureID: c.id, State: noticePending}
@@ -309,7 +314,7 @@ func (s *Store) admitDaemonNotice(ctx context.Context, e NoticeEnvelope, at time
 		return NoticeAdmission{}, ledgerFailed("admit a notice", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // a no-op once committed; a refusal writes nothing to commit
-	if err := checkNoticeQuotas(ctx, tx, s.quotas, e.Project, nil, size, true, ns); err != nil {
+	if err := checkNoticeQuotas(ctx, tx, s.quotas, e.Project, e.Source, e.Kind, nil, size, true, ns); err != nil {
 		return NoticeAdmission{}, err
 	}
 	// An ID drawn twice fails the primary key: ErrStore, never a Duplicate.

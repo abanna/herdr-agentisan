@@ -216,13 +216,17 @@ room by evicting what was admitted. Q1 to Q3 count pending notices: 1,000 a
 project, 5,000 in the store and 32 a pull request. Q4 and Q5 sum their bytes,
 as `notice_payloads.bytes` stores them: 8 MiB a project and 32 MiB in the
 store. Q6 and Q7 count notices in every state: 100,000 a project and 500,000
-in the store. Q8 counts a project's admissions, in every state: 600 an hour.
+in the store. Q8 counts a project's admissions of one source, GitHub or
+daemon, in every state: 600 an hour each (B0a.4-hour). A daemon `ctx_ceiling`
+is never refused by Q8, though it counts.
 
 A pending notice faces all eight, an import (an event `github_seen` already
 holds) Q6 to Q8, and a duplicate or an invalid envelope none, since
 `AdmitNotice` returns both before the quotas run. So a duplicate stays a
 duplicate however full the ledger is. A daemon notice (B0a.4) faces every
-quota but Q3, which counts a pull request's pending notices: it has none.
+quota but Q3, which counts a pull request's pending notices: it has none. A
+daemon `ctx_ceiling` also passes Q8: it counts toward the hour, but Q8 never
+refuses it.
 
 Each refusal is its quota's own error, which wraps `ErrNoticeQuota`. It names
 only the quota and its limit, never the notice, and writes nothing: the
@@ -232,9 +236,15 @@ several are full is not part of the contract.
 The checks run in the admission's transaction, after the dedupe and the
 `github_seen` lookup, on the store's one connection, so no admission overtakes
 another between a count and its insert. Each reads at most its cap's rows,
-however large the ledger grows. Q8's window is one hour, bounded below only:
-an admission exactly an hour old is out, and one stamped after the admission
-being checked counts.
+however large the ledger grows, except Q8, which reads the project's
+admissions of the last hour, of both sources, and names its index (`INDEXED BY
+notice_identities_by_state`) so that no index without the project can take it
+over. That is no fixed bound: Q8 caps a project's hour at 600 GitHub notices
+and 600 daemon notices other than `ctx_ceiling`, but no hourly quota caps the
+ceilings: only the other quotas bound them, by pending count (Q1, Q2), bytes
+(Q4, Q5) and count in every state (Q6, Q7). Q8's window is one hour, bounded
+below only: an admission exactly an hour old is out, and one stamped after the
+admission being checked counts.
 
 Q6 and Q7 read the totals of the section above. A missing store total, or a
 missing total of a project that has identities, is `ErrStore`; a project with
@@ -249,8 +259,7 @@ with their metadata, never their text or receipt key; a pending notice with no
 payload is `ErrStore`. `NoticeStats` returns the exact counts the quotas
 compare, for a project and for the store, from the quotas' own queries without
 their caps. It counts the project's hour per source, GitHub and daemon, as Q8
-does from B0a.4-hour on; before it, Q8 counts the two together. Both only
-read, and are dormant.
+does. Both only read, and are dormant.
 
 ## Allocated notice IDs, the prune and the daemon's memory (B0a.4)
 
