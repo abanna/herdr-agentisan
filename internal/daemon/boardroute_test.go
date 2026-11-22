@@ -196,6 +196,116 @@ func TestRememberTakesRouteBeforeMu(t *testing.T) {
 	}
 }
 
+// TestRememberWaitsForAHeldRoute: a poll that comes while route is held
+// does not change the remembered agent until route is released (#187's
+// fourth re-check, NERD-5533 b200696a, F2). A remember that went on without
+// route when it found it taken (MV5) changes it at once.
+func TestRememberWaitsForAHeldRoute(t *testing.T) {
+	t.Parallel()
+	r := newBoardRig(t, []settings.Team{haTabs}, boardOn("ha"), nil)
+	r.p.EndPoll(haModel(bossPane("ha-boss", "codex")))
+	release := r.p.HoldRoute()
+	t.Cleanup(release)
+	polled := make(chan struct{})
+	go func() {
+		defer close(polled)
+		r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
+	}()
+	select {
+	case <-polled:
+		t.Error("the poll ended while route was held")
+	case <-time.After(300 * time.Millisecond):
+	}
+	assert.Equal(t, notice.DeliverTyped, r.p.Delivery("ha"), "the remembered agent waits for route")
+	release()
+	select {
+	case <-polled:
+	case <-time.After(ready):
+		t.Fatal("the poll did not end once route was released")
+	}
+	assert.Equal(t, notice.DeliverBoard, r.p.Delivery("ha"), "then the poll remembers Claude")
+}
+
+// TestAPollWaitsForAPassHoldingRoute: a poll that comes while a board-key
+// boss's pass holds route, from its decision to its write, waits for the
+// pass (#187's fourth re-check, b200696a, F2). The pass is paused at its
+// first clock read, the claim's or the post's, which it makes with route
+// held; a poll that changes the remembered agent and flushes a notice is
+// started then and given 300 ms before the pass goes on. With route waited
+// for, the typed boss is typed the row as it stood, and the board boss's
+// post holds only what was queued before. A remember that went on without
+// route (MV5) switches the boss mid-decision, and the notice it flushes is
+// appended to the row being claimed or posted.
+func TestAPollWaitsForAPassHoldingRoute(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct{ from, to string }{
+		"the typed claim": {"codex", "claude"},
+		"the board post":  {"claude", "codex"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cfgs := boardOn("ha")
+			b := notice.NewBatcher(cfgs)
+			r := newBoardRig(t, []settings.Team{haTabs}, cfgs, b)
+			var pause atomic.Bool
+			atClock, resume := make(chan struct{}), make(chan struct{})
+			r.o.Now = func() time.Time {
+				if pause.Swap(false) {
+					close(atClock)
+					<-resume
+				}
+				return time.Now()
+			}
+			r.p = daemon.NewPoller(r.o, r.st, r.teams, cfgs, b, nil)
+			b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Blocked, Text: "before"}})
+			r.p.EndPoll(haModel(bossPane("ha-boss", c.from)))
+			pause.Store(true)
+			passed := make(chan struct{})
+			go func() {
+				defer close(passed)
+				r.p.Pass()
+			}()
+			select {
+			case <-atClock:
+			case <-time.After(ready):
+				close(resume)
+				t.Fatal("the pass never read the clock")
+			}
+			held := r.p.RouteHeld()
+			b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Gone, Text: "after the switch"}})
+			polled := make(chan struct{})
+			go func() {
+				defer close(polled)
+				r.p.EndPoll(haModel(bossPane("ha-boss", c.to)))
+			}()
+			select {
+			case <-polled:
+				t.Error("the poll ended while the pass held route")
+			case <-time.After(300 * time.Millisecond):
+			}
+			close(resume)
+			<-passed
+			<-polled
+			assert.True(t, held, "the pass was paused with route held")
+
+			var bodies, texts []string
+			for _, p := range r.posts(t, "ha") {
+				bodies = append(bodies, p.Body)
+			}
+			for _, p := range r.pr.all() {
+				texts = append(texts, p.Text)
+			}
+			if c.from == "codex" {
+				assert.Equal(t, []string{"[agentisan] notices:\nbefore"}, texts, "typed as claimed")
+				assert.Empty(t, bodies, "nothing posted in this pass")
+			} else {
+				assert.Equal(t, []string{"before"}, bodies, "posted as decided")
+				assert.Empty(t, texts, "nothing typed in this pass")
+			}
+		})
+	}
+}
+
 // TestBoardModeLogsRunOffRoute: what a board-key boss's pass logs after
 // its decision, a held queue's warning and a post's Info line, is written
 // with route released (#187's pre-check, M11). Two checks, so one that
