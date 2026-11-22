@@ -70,7 +70,7 @@ func TestNoticesForTheDaemon(t *testing.T) {
 		"a gap in words":      {file: "[notices]\ngap = \"30s\"\n", wantErr: settings.ErrInvalid},
 		"a fractional gap":    {file: "[notices]\ngap = 1.5\n", wantErr: settings.ErrInvalid},
 		"an unknown key":      {file: "[notices]\nmute = [\"qa\"]\n", wantErr: settings.ErrUnknownKey},
-		"a bad project value": {file: "[projects.app]\nrepo = \"/x\"\n[projects.app.notices]\nrepeat = -5\n", wantErr: settings.ErrInvalid},
+		"a bad project value": {file: "[projects.app]\nrepo = \"/x\"\nshort = \"ap\"\n[projects.app.notices]\nrepeat = -5\n", wantErr: settings.ErrInvalid},
 		"a broken file":       {file: "[notices\n", wantErr: settings.ErrInvalid},
 	}
 	for name, tc := range tests {
@@ -106,7 +106,7 @@ func TestNoticesForTheDaemon(t *testing.T) {
 func TestNoticesResolveWithProvenance(t *testing.T) {
 	t.Parallel()
 	repo, dir := newRepo(t), t.TempDir()
-	writeFile(t, dir, settings.FileName, "schema_version = 1\n[notices]\ngap = 10\n[projects.app]\nrepo = \"REPO\"\n[projects.app.notices]\nskip = [\"unknown\"]\n", repo)
+	writeFile(t, dir, settings.FileName, "schema_version = 1\n[notices]\ngap = 10\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n[projects.app.notices]\nskip = [\"unknown\"]\n", repo)
 
 	got, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", Set: []string{"notices.repeat=60"}, LookupEnv: envOf(nil)})
 	require.NoError(t, err)
@@ -176,7 +176,7 @@ func TestNoticesDeliveryRefusesOtherValues(t *testing.T) {
 func TestRepoFileCannotSetNoticesDelivery(t *testing.T) {
 	t.Parallel()
 	repo, dir := newRepo(t), t.TempDir()
-	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n", repo)
+	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n", repo)
 	writeFile(t, repo, settings.RepoFileName, "schema_version = 1\n[notices]\ndelivery = \"board\"\n", repo)
 	_, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
 	require.ErrorIs(t, err, settings.ErrUnknownKey)
@@ -294,7 +294,7 @@ func TestAttentionPerProject(t *testing.T) {
 func TestRepoFileCannotSetAttention(t *testing.T) {
 	t.Parallel()
 	repo, dir := newRepo(t), t.TempDir()
-	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n", repo)
+	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n", repo)
 	writeFile(t, repo, settings.RepoFileName, "schema_version = 1\n[notices.attention]\nafter = 0\n", repo)
 	_, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
 	require.ErrorIs(t, err, settings.ErrUnknownKey)

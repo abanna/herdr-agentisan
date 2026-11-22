@@ -6,14 +6,12 @@ import (
 	"slices"
 )
 
-// The layouts a project's team can have in herdr (ADR-001 A17, A19).
+// Team layouts in herdr (ADR-001 A17, A19).
 const (
 	// LayoutTabs is one workspace labelled with the project's name and one
-	// tab per worker, labelled <short>-<type>-<n>. Every project but the
-	// [spaces] project has it.
+	// tab per worker, labelled <short>-<type>-<n>.
 	LayoutTabs = "tabs"
-	// LayoutSpaces is the ◆ group spaces, which only the [spaces] project
-	// has.
+	// LayoutSpaces identifies the daemon and workforce's unnamed ◆ team.
 	LayoutSpaces = "spaces"
 )
 
@@ -30,8 +28,7 @@ var shortPattern = regexp.MustCompile(`^[a-z][a-z0-9]{0,7}$`)
 type Team struct {
 	// Project is the project's name, which labels a tabs team's workspace.
 	Project string
-	// Short is the project's short code; "" for a spaces team that sets
-	// none.
+	// Short is the project's required short code.
 	Short string
 	// Layout is LayoutTabs or LayoutSpaces.
 	Layout string
@@ -93,35 +90,17 @@ func (m merged) str(path string) string {
 	return s
 }
 
-// teams settles spaces.project, then reads every project's team from its
-// view and checks the rules that span projects: the [spaces] project is
-// always spaces and no other project is; a tabs project needs a short code;
-// no two projects share one.
-func (m merged) teams(names []string, views map[string]merged) ([]Team, error) {
-	if err := m.spaces(names, views); err != nil {
-		return nil, err
-	}
-	spaces := m.str(spacesProjectPath)
+// teams reads each project's team from its view and checks that short
+// codes are unique across projects.
+func teams(names []string, views map[string]merged) ([]Team, error) {
 	var out []Team
 	owner := map[string]string{}
 	for _, name := range names {
 		v := views[name]
 		t := Team{Project: name, Short: v.str("short"), Layout: LayoutTabs, Color: v.str("color"), Descriptions: v.descriptions()}
-		layout, set := v.get("layout")
-		switch {
-		case set && layout != LayoutTabs && layout != LayoutSpaces:
-			return nil, v.invalidf("layout", "%s is not %q or %q", FormatValue(layout), LayoutTabs, LayoutSpaces)
-		case name == spaces && layout == LayoutTabs:
-			return nil, v.invalidf("layout", "%s is the [spaces] project, which is always %q", name, LayoutSpaces)
-		case name == spaces:
-			t.Layout = LayoutSpaces
-		case layout == LayoutSpaces:
-			return nil, v.invalidf("layout", "only the [spaces] project is %q; set spaces.project = %q instead", LayoutSpaces, name)
-		}
 		switch other, taken := owner[t.Short]; {
-		case t.Short == "" && t.Layout == LayoutTabs:
-			return nil, fmt.Errorf("projects.%s.short: %w: a %q project needs a short code, which starts its tab labels and agent names", name, ErrInvalid, LayoutTabs)
 		case t.Short == "":
+			return nil, fmt.Errorf("projects.%s.short: %w: a tabs project needs a short code, which starts its tab labels and agent names", name, ErrInvalid)
 		case !shortPattern.MatchString(t.Short):
 			return nil, v.invalidf("short", "%s must match %s", FormatValue(t.Short), shortPattern)
 		case taken:

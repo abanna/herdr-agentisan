@@ -821,60 +821,6 @@ func TestTeamPushFollowsARelabel(t *testing.T) {
 	}
 }
 
-// TestTeamPushReadsTheConfiguredProject: the daemon reads [spaces] project
-// once when it starts. No configuration at all, which is the user's case
-// today, is the unnamed project; a file that does not resolve is logged and
-// the spaces fall back to the unnamed project, since $team does not depend
-// on it and focus and Back must keep working. Pushes go out either way.
-func TestTeamPushReadsTheConfiguredProject(t *testing.T) {
-	t.Parallel()
-
-	tests := map[string]struct {
-		file     string // the config file; "" for none, "nodir" for no config dir
-		want     string
-		wantLogs []string
-	}{
-		"no config dir":    {file: "nodir", want: ""},
-		"no config file":   {want: ""},
-		"the key":          {file: "[spaces]\nproject = \"b\"\n[projects.a]\nrepo = \"/x\"\nshort = \"a\"\n[projects.b]\nrepo = \"/y\"\n", want: "b"},
-		"the sole project": {file: "[projects.a]\nrepo = \"/x\"\n", want: "a"},
-		"several, no key":  {file: "[projects.a]\nrepo = \"/x\"\nshort = \"a\"\n[projects.b]\nrepo = \"/y\"\nshort = \"b\"\n", want: ""},
-		"tabs teams, no short": {
-			file: "[projects.a]\nrepo = \"/x\"\n[projects.b]\nrepo = \"/y\"\n", want: "", wantLogs: []string{`"level":"error"`, "projects.a.short"},
-		},
-		"an unknown project":  {file: "[spaces]\nproject = \"c\"\n[projects.a]\nrepo = \"/x\"\n", want: "", wantLogs: []string{`"level":"error"`, "no such project"}},
-		"an unsupported file": {file: "-", want: "", wantLogs: []string{`"level":"error"`, "schema_version"}},
-		"a non-ASCII project": {file: "[spaces]\nproject = \"ä\"\n[projects.a]\nrepo = \"/x\"\n", want: "", wantLogs: []string{`"level":"error"`}},
-	}
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			dir := t.TempDir()
-			switch tc.file {
-			case "nodir":
-				dir = ""
-			case "":
-			case "-":
-				require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte("schema_version = 2\n"), 0o600))
-			default:
-				require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte("schema_version = 1\n"+tc.file), 0o600))
-			}
-			th := newSpacesHerdr(t)
-			var logs lockedLog
-			o := teamOpts(t, shortDir(t), th, dir)
-			o.Logger = zerolog.New(&logs)
-			serving(t, o, th.fakeHerdr)
-
-			polled(t, th.srv, 1)
-			assert.Len(t, pushes(t, th.srv), 3, "the pushes do not depend on the project")
-			assert.Contains(t, logs.String(), fmt.Sprintf(`"project":%q`, tc.want))
-			for _, s := range tc.wantLogs {
-				assert.Contains(t, logs.String(), s)
-			}
-		})
-	}
-}
-
 // lockedLog is a log sink safe to read while the daemon writes it.
 type lockedLog struct {
 	mu sync.Mutex

@@ -11,7 +11,7 @@ import (
 // workflow events to (ADR-001 D10, A21).
 const telemetryEndpointPath = "telemetry.endpoint"
 
-// telemetrySchema is [telemetry]. Like [spaces] it belongs to the shared file
+// telemetrySchema is [telemetry]. It belongs to the shared file
 // and --set only: there is one daemon per herdr server, not one per project.
 // The token for a collector across the network arrives with TLS (A21); until
 // then any other key is unknown.

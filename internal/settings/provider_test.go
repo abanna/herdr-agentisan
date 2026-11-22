@@ -249,6 +249,7 @@ model = "gpt-6.1-sol"
 
 [projects.app]
 repo = "REPO"
+short = "ap"
 
 [projects.app.groups.coder]
 workers = 1
@@ -334,7 +335,7 @@ func TestLoadRefusesProviderTables(t *testing.T) {
 			t.Parallel()
 			repo, dir := newRepo(t), t.TempDir()
 			shared := tc.shared
-			project := "[projects.app]\nrepo = \"REPO\"\n"
+			project := "[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n"
 			if strings.Contains(shared, "[projects.app.") {
 				shared = strings.Replace(shared, "[projects.app.", project+"[projects.app.", 1)
 			} else {
@@ -381,7 +382,7 @@ func TestCheckModelProviders(t *testing.T) {
 			t.Parallel()
 			repo, dir := newRepo(t), t.TempDir()
 			body := tc.body
-			project := "[projects.app]\nrepo = \"REPO\"\n"
+			project := "[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n"
 			if strings.Contains(body, "[projects.app.") {
 				body = strings.Replace(body, "[projects.app.", project+"[projects.app.", 1)
 			} else {

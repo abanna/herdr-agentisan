@@ -126,6 +126,7 @@ func TestLoadedProfileSharesNoSlice(t *testing.T) {
 shell_ready_keys = ["enter"]
 [projects.app]
 repo = "REPO"
+short = "ap"
 [projects.app.groups.research]
 workers = 0
 slots = 1
@@ -224,7 +225,7 @@ func TestLoadRefusesWorkforceKeys(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			repo, dir := newRepo(t), t.TempDir()
-			writeFile(t, dir, settings.FileName, "schema_version = 1\n"+tc.body+"[projects.app]\nrepo = \"REPO\"\n", repo)
+			writeFile(t, dir, settings.FileName, "schema_version = 1\n"+tc.body+"[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n", repo)
 
 			_, err := settings.Load(settings.LoadOptions{ConfigDir: dir, LookupEnv: envOf(nil)})
 			require.ErrorIs(t, err, tc.wantErr)
@@ -285,7 +286,7 @@ func TestLoadAcceptsTheWorkforceEdges(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			repo, dir := newRepo(t), t.TempDir()
-			writeFile(t, dir, settings.FileName, "schema_version = 1\n"+body+"[projects.app]\nrepo = \"REPO\"\n", repo)
+			writeFile(t, dir, settings.FileName, "schema_version = 1\n"+body+"[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n", repo)
 
 			_, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
 			require.NoError(t, err)
@@ -298,12 +299,12 @@ func TestLoadAcceptsTheWorkforceEdges(t *testing.T) {
 func TestLoadRefusesADebuggerCommandFromAnyLayer(t *testing.T) {
 	t.Parallel()
 	repo, dir := newRepo(t), t.TempDir()
-	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n[projects.app.groups.debugger]\nworkers = 0\nslots = 1\nagent = { command = [\"claude\"] }\n", repo)
+	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n[projects.app.groups.debugger]\nworkers = 0\nslots = 1\nagent = { command = [\"claude\"] }\n", repo)
 	_, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
 	require.ErrorIs(t, err, settings.ErrInvalid)
 	assert.Contains(t, err.Error(), "groups.debugger.agent.command")
 
-	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n[projects.app.groups.debugger]\nworkers = 0\nslots = 1\nagent = { model = \"sonnet\" }\n", repo)
+	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n[projects.app.groups.debugger]\nworkers = 0\nslots = 1\nagent = { model = \"sonnet\" }\n", repo)
 	res, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
 	require.NoError(t, err)
 	assert.Equal(t, settings.Agent{Command: []string{"claude"}, Model: "sonnet"}, agentFor(t, *res.Profile, "debugger"))

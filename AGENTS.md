@@ -280,8 +280,11 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   key.
   Tests drive a fake herdr (`fake_test.go`) and a fresh state.db.
 - `internal/settings/` — the versioned `herdr-agentisan.toml` contract (ADR-001
-  D9, D12) behind `config resolve`: layered precedence with provenance, secret
-  references (`{ env }`, `{ op = "op://…" }`) and the Agentisan launch check,
+  D9, D12) behind `config resolve`: every project is a tabs team and needs
+  `short`. The retired `[spaces]` table, `spaces.project` and
+  `layout = "spaces"` are refused (NERD-5670). It resolves layered settings
+  with provenance and checks secret references (`{ env }`, `{ op = "op://…" }`)
+  and the Agentisan launch,
   each group's one-line description (A36), never from a repo file, and each
   project's test-slot lock files, which the daemon reads once at start
   (`tests.go`, A40), and every project's rotation thresholds, a group's

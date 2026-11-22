@@ -12,13 +12,13 @@ import (
 )
 
 // TestTelemetryEndpointPrecedence: [telemetry] endpoint is the collector the
-// daemon sends its workflow events to (A21). Like [spaces] it is a shared
+// daemon sends its workflow events to (A21). It is a shared
 // key: the shared file sets it, --set overrides it, and its provenance is
 // reported like any leaf. Unset, nothing is exported.
 func TestTelemetryEndpointPrecedence(t *testing.T) {
 	t.Parallel()
 
-	const app = "[projects.app]\nrepo = \"REPO\"\n"
+	const app = "[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n"
 	tests := map[string]struct {
 		file    string // the shared file after schema_version; "-" for no file
 		project string
@@ -72,7 +72,7 @@ func TestTelemetryEndpointPrecedence(t *testing.T) {
 func TestTelemetryEndpointErrors(t *testing.T) {
 	t.Parallel()
 
-	const app = "[projects.app]\nrepo = \"REPO\"\n"
+	const app = "[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n"
 	bad := func(endpoint string) string { return "[telemetry]\nendpoint = \"" + endpoint + "\"\n" + app }
 	tests := map[string]struct {
 		file     string
@@ -194,7 +194,7 @@ func TestTelemetryEndpointForTheDaemon(t *testing.T) {
 		"no file":                             {},
 		"a config dir that does not exist":    {file: "missing"},
 		"the key":                             {file: "[telemetry]\nendpoint = \"localhost:4318\"\n", want: "localhost:4318"},
-		"no key":                              {file: "[spaces]\n"},
+		"no key":                              {file: "[telemetry]\n"},
 		"the override beats the key":          {file: "[telemetry]\nendpoint = \"localhost:4318\"\n", override: "collector:4318", want: "collector:4318"},
 		"the override with no config dir":     {file: "nodir", override: "localhost:4318", want: "localhost:4318"},
 		"the override, the file broken":       {file: "color = \"red\"\n", override: "localhost:4318", want: "localhost:4318"},
