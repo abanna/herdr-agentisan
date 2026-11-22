@@ -198,7 +198,7 @@ func TestBoardPendingHeldAckLegsAreEachScoped(t *testing.T) {
 		require.NoError(t, err)
 		_, err = s.AckUpto(t.Context(), "ha", boss.ID, 0, "", minute(6))
 		require.NoError(t, err)
-		// A newer seq at an older time: only the seq leg counts it.
+		// Send stamps the older clock. The unstamped case above isolates the seq leg.
 		_, err = s.Send(t.Context(), boss, pane, "new seq, older time", minute(4))
 		require.NoError(t, err)
 		_, err = s.Send(t.Context(), other, pane, "the other boss's", minute(7))
