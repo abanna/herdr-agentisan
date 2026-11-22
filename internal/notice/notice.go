@@ -89,10 +89,15 @@ type Notice struct {
 	Kind   Kind
 	// Text is the line itself.
 	Text string
-	// Ack, when set, runs once the notice is settled: sent in a message the
-	// sink accepted, or dropped as configured, muted or as a repeat. A
-	// notice cut for size, or in a message the sink refused, is not
-	// acknowledged.
+	// Ack, when set, runs once the notice is settled: kept in the message
+	// the sink committed; in a message the sink accepted for a project no
+	// boss is configured for, which goes only to the log (A44); or dropped
+	// as configured, muted or as a repeat. A notice cut for size, the inbox
+	// header's cut included, or in a message the sink refused, is not
+	// acknowledged, so it remains eligible to be told again: its source
+	// tells it again if it still observes it. The known limit: one settled
+	// in an earlier message that a later append to that message, still
+	// queued, cuts is not told again; the header counts it.
 	Ack func()
 }
 
@@ -138,7 +143,11 @@ func (c Configs) For(project string) Config {
 	return c.Default
 }
 
-// Sink delivers a message to its team's boss.
+// Sink delivers a message to its team's boss. On success it returns kept,
+// how many of m's lines, the newest, the message it committed holds, or
+// every line of a message for a project no boss is configured for, which it
+// only logs (A44), and the caller settles those alone (Message.Settle); on
+// an error, none.
 type Sink interface {
-	Send(ctx context.Context, m Message) error
+	Send(ctx context.Context, m Message) (kept int, err error)
 }

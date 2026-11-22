@@ -100,6 +100,27 @@ repeat = 300
 # the quick board path is installed: its alert lands last.
 delivery = "typed"
 
+# When the user is alerted that a board-mode boss (delivery = "board") has
+# left posts unread, or messages waiting, too long (ADR-001 A74). Times are
+# in seconds. Set in [notices.attention] or [projects.<p>.notices.attention],
+# never in a repo file. Read once at start.
+[notices.attention]
+# The oldest unread post or held message waits this long before the first
+# alert: 0 (off), or 60..86400.
+after = 600
+# A context ceiling waits this long, busy or not: 30..3600.
+ceiling_after = 120
+# The first reminder's gap, doubled after each one up to max_every: 60..3600.
+every = 300
+# The longest gap between reminders: every..14400.
+max_every = 1200
+# The most alerts one episode shows: 0 (no limit, until someone reacts)..100.
+alerts = 0
+# Stands in for after, when longer, while the boss is working: 0..86400.
+busy_grace = 1800
+# The alert's sound: none, done or request.
+sound = "request"
+
 # Each group is a worker type: coder, precheck, qa, review (Codex), research,
 # librarian or debugger. workers is how many `team up` starts, slots is the
 # cap the boss can scale to (64 >= slots >= workers >= 0). boss is not a

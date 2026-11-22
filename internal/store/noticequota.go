@@ -20,7 +20,7 @@ import (
 // already holds) Q6 to Q8 only, and a duplicate or an invalid envelope
 // none: AdmitNotice returns both before the quotas run. A daemon notice
 // (B0a.4) is pending and has no pull request, so it faces every quota but
-// Q3. A count quota refuses when count >= limit, a byte quota when the
+// Q3; a ctx_ceiling skips Q8 (B0a.4-hour). A count quota refuses when count >= limit, a byte quota when the
 // pending bytes plus this notice's would pass its limit.
 type noticeQuotas struct {
 	PendingPerProject, PendingInStore, PendingPerPR int64
@@ -61,14 +61,21 @@ var (
 	ErrNoticeIdentitiesPerProject = fmt.Errorf("%w: notices per project", ErrNoticeQuota)
 	// ErrNoticeIdentitiesInStore is Q7: the store's notices, every state.
 	ErrNoticeIdentitiesInStore = fmt.Errorf("%w: notices in the store", ErrNoticeQuota)
-	// ErrNoticeAdmissionRate is Q8: a project's admissions in the last hour.
-	ErrNoticeAdmissionRate = fmt.Errorf("%w: notices admitted per project in an hour", ErrNoticeQuota)
+	// ErrNoticeAdmissionRate is Q8: a project's admissions of one source in
+	// the last hour.
+	ErrNoticeAdmissionRate = fmt.Errorf("%w: notices of one source admitted per project in an hour", ErrNoticeQuota)
 )
 
 // The quotas' queries, run on the admission's transaction. Each walk stops
-// at its LIMIT, a bound parameter, so no check reads more than its cap's
-// rows however large the ledger grows. Q4 and Q5 walk at most Q1's and
-// Q2's caps: their LIMIT cuts rows only when Q1 or Q2 refuses anyway.
+// at its LIMIT, a bound parameter, so each check reads at most its cap's
+// rows, however large the ledger grows, except Q8, which reads the
+// project's admissions of the last hour, of both sources, and names its
+// index (INDEXED BY notice_identities_by_state) so that no index without
+// the project can take it over. That is no fixed bound: Q8 caps the hour at
+// 600 of each source but ctx_ceiling, which no hourly quota caps; only the
+// other quotas bound the ceilings (pending, bytes, every state). Q4 and Q5
+// walk at most Q1's and Q2's caps: their LIMIT cuts rows only when Q1 or Q2
+// refuses anyway.
 // Q6 and Q7 read 0010's totals, one row each.
 const (
 	selectPendingPerProject = `SELECT count(*) FROM (SELECT 1 FROM notice_identities WHERE project = ?1 AND state = 'pending' LIMIT ?2)`
@@ -78,13 +85,14 @@ const (
 	selectBytesInStore      = `SELECT coalesce(sum(p.bytes), 0) FROM (SELECT capture_id FROM notice_identities WHERE state = 'pending' LIMIT ?1) AS i JOIN notice_payloads AS p USING (capture_id)`
 	// Q6: the project's total, and whether it has any identity, so a
 	// missing total is told from a project with none.
-	selectProjectIdentities  = `SELECT (SELECT identities FROM notice_counts WHERE project = ?1), EXISTS (SELECT 1 FROM notice_identities WHERE project = ?1)`
-	selectStoreIdentities    = `SELECT identities FROM notice_store_counts WHERE id = 1`
-	selectAdmissionsInWindow = `SELECT count(*) FROM (SELECT 1 FROM notice_identities WHERE project = ?1 AND state IN ('pending', 'imported', 'posted', 'dropped') AND admitted_at >= ?2 LIMIT ?3)`
-	// selectSourceAdmissionsInWindow is Q8 per source: a project's admissions
-	// of one source, in every state, at or after ?2. B0a.4-hour points Q8 at
-	// it and pins it to notice_identities_by_state.
-	selectSourceAdmissionsInWindow = `SELECT count(*) FROM (SELECT 1 FROM notice_identities
+	selectProjectIdentities = `SELECT (SELECT identities FROM notice_counts WHERE project = ?1), EXISTS (SELECT 1 FROM notice_identities WHERE project = ?1)`
+	selectStoreIdentities   = `SELECT identities FROM notice_store_counts WHERE id = 1`
+	// selectSourceAdmissionsInWindow is Q8: a project's admissions of one
+	// source, in every state, at or after ?2. It names its index, which leads
+	// with the project, so an index without one (the prune's by_source) never
+	// takes it over and walks that source's hour across every project
+	// (B0a.4-hour).
+	selectSourceAdmissionsInWindow = `SELECT count(*) FROM (SELECT 1 FROM notice_identities INDEXED BY notice_identities_by_state
   WHERE project = ?1 AND source = ?4 AND state IN ('pending', 'imported', 'posted', 'dropped')
     AND admitted_at >= ?2 LIMIT ?3)`
 )
@@ -114,14 +122,17 @@ func readQuota(ctx context.Context, tx *sql.Tx, query string, args ...any) (int6
 	return n, nil
 }
 
-// checkNoticeQuotas checks a notice of project, on r's pull request if r
-// is not nil (a daemon notice has none), whose canonical encoding is bytes
-// long, admitted at ns, against q, on the admission's transaction tx, and
-// returns the first quota it would pass, Q1 to Q8 in order. A pending
-// notice faces all eight, an import Q6 to Q8. Writes are serialized on the
-// store's one connection, so nothing overtakes a count between it and the
-// insert after it.
-func checkNoticeQuotas(ctx context.Context, tx *sql.Tx, q noticeQuotas, project string, r *NoticeReceipt, bytes int64, pending bool, ns int64) error {
+// checkNoticeQuotas checks a notice of project, from source and of kind,
+// on r's pull request if r is not nil (a daemon notice has none), whose
+// canonical encoding is bytes long, admitted at ns, against q, on the
+// admission's transaction tx, and returns the first quota it would pass, Q1
+// to Q8 in order. A pending notice faces all eight, an import Q6 to Q8. Q8
+// counts the notice's source only, and a daemon context ceiling skips it
+// (B0a.4-hour). Writes are serialized on the store's one connection, so
+// nothing overtakes a count between it and the insert after it.
+func checkNoticeQuotas(ctx context.Context, tx *sql.Tx, q noticeQuotas, project, source, kind string,
+	r *NoticeReceipt, bytes int64, pending bool, ns int64,
+) error {
 	if pending {
 		if err := checkPendingQuotas(ctx, tx, q, project, r, bytes); err != nil {
 			return err
@@ -150,7 +161,10 @@ func checkNoticeQuotas(ctx context.Context, tx *sql.Tx, q noticeQuotas, project 
 	if all >= q.IdentitiesInStore {
 		return quotaRefused(ErrNoticeIdentitiesInStore, q.IdentitiesInStore)
 	}
-	n, err := readQuota(ctx, tx, selectAdmissionsInWindow, project, rateWindowStart(ns), q.AdmissionsPerHour)
+	if source == noticeFromDaemon && kind == noticeKindCeiling {
+		return nil
+	}
+	n, err := readQuota(ctx, tx, selectSourceAdmissionsInWindow, project, rateWindowStart(ns), q.AdmissionsPerHour, source)
 	if err != nil {
 		return err
 	}

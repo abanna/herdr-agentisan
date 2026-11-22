@@ -19,7 +19,54 @@ import (
 func InboxNotice(o Options, st *store.Store, bosses map[string]string, m notice.Message) error {
 	in := newInbox()
 	in.bosses = bosses
-	return inboxSink{st: st, in: in, log: o.Logger, events: o.Team.Events, now: o.Now}.Send(context.Background(), m)
+	_, err := inboxSink{st: st, in: in, log: o.Logger, events: o.Team.Events, now: o.Now}.Send(context.Background(), m)
+	return err
+}
+
+// FlushToInbox flushes b's waiting notices as the poll does, through its
+// inbox sink on st, with bosses, by project, as the poll gives them in
+// (A44), and settles what the sink kept.
+func FlushToInbox(o Options, st *store.Store, bosses map[string]string, b *notice.Batcher) {
+	in := newInbox()
+	in.bosses = bosses
+	o.flushNotices(context.Background(), &notices{batch: b, sink: inboxSink{st: st, in: in, log: o.Logger, events: o.Team.Events, now: o.Now}})
+}
+
+// NoticeCycle is one daemon's notices on a store, with no loop of its own:
+// the team poll's notices, which go through the inbox (A44), the GitHub
+// collector's source that feeds them (A45), and the dispatcher that types
+// the boss's inbox, so a test runs each step in turn.
+type NoticeCycle struct {
+	o      Options
+	n      *notices
+	src    GitHubSource
+	d      *dispatcher
+	bosses map[string]string
+}
+
+// NewNoticeCycle is o's notices, GitHub source and dispatcher on st, with
+// bosses, by project, as the poll gives them in.
+func NewNoticeCycle(o Options, st *store.Store, bosses map[string]string) *NoticeCycle {
+	in := newInbox()
+	in.bosses = bosses
+	n := o.newNotices(st, in, nil)
+	return &NoticeCycle{o: o, n: n, src: GitHubSource{o.newGitHubNotices(st, n)}, d: o.newDispatcher(st, in), bosses: bosses}
+}
+
+// Source is the cycle's GitHub source; what it collects, Take hands back.
+func (c *NoticeCycle) Source() GitHubSource { return c.src }
+
+// Add gives the cycle's Batcher ns at now, as a source does.
+func (c *NoticeCycle) Add(now time.Time, ns []notice.Notice) { c.n.batch.Add(now, ns) }
+
+// Flush ends a poll's notices as endPoll does: what has waited its gap goes
+// into the inbox, and what the inbox kept is settled.
+func (c *NoticeCycle) Flush(ctx context.Context) { c.o.flushNotices(ctx, c.n) }
+
+// Serve types boss's inbox into the agent named boss, as a dispatcher pass
+// does with the poll's bosses, until nothing is queued for it.
+func (c *NoticeCycle) Serve(ctx context.Context, boss string) {
+	c.d.serve(ctx, c.bosses, store.Address{Kind: store.KindBoss, ID: boss}, boss)
 }
 
 // EndPoll ends a poll as pollTeam does, with b's notices for s, and
@@ -150,7 +197,7 @@ type wakeSpy struct {
 	woken *[]bool
 }
 
-func (w wakeSpy) Send(ctx context.Context, m notice.Message) error {
+func (w wakeSpy) Send(ctx context.Context, m notice.Message) (int, error) {
 	*w.woken = append(*w.woken, len(w.in.wake) == 1)
 	return w.s.Send(ctx, m) //nolint:wrapcheck // a test's pass-through
 }

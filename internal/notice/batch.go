@@ -24,7 +24,9 @@ type Message struct {
 	Lines   []string
 	// Dropped counts the oldest notices cut to keep the body under MaxBody.
 	Dropped int
-	acks    []func()
+	// acks holds each line's notice's acknowledgement, by position, nil
+	// for a notice with none: a sink keeps the newest lines (Sink).
+	acks []func()
 }
 
 // Body is the message as one text: a line saying how many notices were cut,
@@ -37,11 +39,14 @@ func (m Message) Body() string {
 	return strings.Join(lines, "\n")
 }
 
-// Settle acknowledges every notice in m. The caller runs it once the sink
-// has accepted m.
-func (m Message) Settle() {
-	for _, ack := range m.acks {
-		ack()
+// Settle acknowledges the notices of m's last kept lines, the ones the
+// message the sink committed holds (Sink): the caller runs it once the sink
+// has accepted m. A line cut before the sink committed it is not settled.
+func (m Message) Settle(kept int) {
+	for _, ack := range m.acks[len(m.acks)-min(max(kept, 0), len(m.acks)):] {
+		if ack != nil {
+			ack()
+		}
 	}
 }
 
@@ -150,9 +155,7 @@ func message(project string, ns []Notice) Message {
 	m := Message{Project: project, Dropped: dropped}
 	for _, n := range ns {
 		m.Lines = append(m.Lines, n.Text)
-		if n.Ack != nil {
-			m.acks = append(m.acks, n.Ack)
-		}
+		m.acks = append(m.acks, n.Ack)
 	}
 	return m
 }
