@@ -77,9 +77,10 @@ type episode struct {
 	// start is the oldest post or held message pending when the episode
 	// opened, so a ceiling already pending then is not older than it,
 	// after a restart too; now when that is earlier or there is none.
-	start time.Time
-	mark  int64     // BossMark at the last Observe
-	ack   time.Time // LastAck at the last Observe
+	start     time.Time
+	mark      int64     // BossMark at the last Observe
+	ack       time.Time // LastAck at the last Observe
+	openedAck time.Time // the acknowledgement at opening, capped at that poll
 	// count is the alerts shown since the episode opened or the last
 	// reaction, and lastShown the time of the last one; a reaction resets
 	// the count, not the time.
@@ -90,8 +91,8 @@ type episode struct {
 	// bound is when a ceiling newer than the last shown alert makes the
 	// next alert due at the latest, and tried the newest ceiling at the
 	// last try, which no longer bounds anything. newest tracks the newest
-	// ceiling since the last boss read, empty ceiling set, or acknowledgement
-	// without an armed bound. Posting a held message never lowers it.
+	// ceiling since the last boss read or empty ceiling set. Posting a held
+	// message never lowers it.
 	bound, tried, newest time.Time
 	every                time.Duration // Every at the last try, for Shown
 	outstanding          bool          // an alert was tried and Shown has not answered it
@@ -114,7 +115,9 @@ type episode struct {
 //     MaxEvery). One not shown is tried again Every later.
 //   - A rise of BossMark or a newer LastAck is a reaction: the count goes
 //     to 0 and the next alert waits for the later of Every after the
-//     reaction and the first alert's time. Opening an episode seeds both.
+//     reaction and the first alert's time. Opening an episode also keeps
+//     the ordinary reminder quiet until Every after the last acknowledgement.
+//     A ceiling can still alert during that interval.
 //   - Below the limit, a ceiling newer than the last shown alert is never
 //     held back (bound).
 //   - Alerts > 0 stops the episode after that many shown alerts, but for
@@ -128,7 +131,14 @@ func (t *Tracker) Observe(project string, c Config, s State, now time.Time) (Ale
 	}
 	e := t.episodes[project]
 	if e == nil {
-		e = &episode{start: earliest(earliest(s.Oldest, s.OldestHeld), now), mark: s.BossMark, ack: s.LastAck}
+		e = &episode{
+			start: earliest(earliest(s.Oldest, s.OldestHeld), now),
+			mark:  s.BossMark, ack: s.LastAck,
+			openedAck: s.LastAck,
+		}
+		if e.openedAck.After(now) {
+			e.openedAck = now
+		}
 		t.episodes[project] = e
 	}
 	read, acked := s.BossMark > e.mark, s.LastAck.After(e.ack)
@@ -145,7 +155,7 @@ func (t *Tracker) Observe(project string, c Config, s State, now time.Time) (Ale
 	e.mark, e.ack = s.BossMark, s.LastAck
 	// A held ceiling can become a post with an older timestamp. Keep its
 	// armed deadline through an acknowledgement alone while any ceiling remains.
-	if read || s.NewestCeiling.IsZero() || (acked && e.bound.IsZero()) {
+	if read || s.NewestCeiling.IsZero() {
 		e.newest = s.NewestCeiling
 	} else {
 		e.newest = later(e.newest, s.NewestCeiling)
@@ -218,7 +228,11 @@ func (e *episode) due(c Config, s State, stopped bool) time.Time {
 	case !e.reacted.IsZero():
 		at = later(e.reacted.Add(c.Every), first(c, s))
 	default:
-		at = first(c, s)
+		ordinary, ceiling := firstTimes(c, s)
+		if !ordinary.IsZero() && !e.openedAck.IsZero() {
+			ordinary = later(ordinary, e.openedAck.Add(c.Every))
+		}
+		at = earliest(ordinary, ceiling)
 	}
 	return earliest(at, e.bound)
 }

@@ -47,15 +47,75 @@ func TestPartialAckKeepsTheEpisode(t *testing.T) {
 	assert.Equal(t, mins(10, 15, 25, 35, 40), times(got))
 }
 
-// TestAckBeforeTheEpisodeIsNoReaction (A74): the first poll after a
-// restart has a recent acknowledgement in state.db. Remember it without
-// delaying the alert already due for the remaining post.
-func TestAckBeforeTheEpisodeIsNoReaction(t *testing.T) {
+func TestAckQuietIntervalSurvivesRestart(t *testing.T) {
 	t.Parallel()
 	tr := attention.NewTracker()
-	a, ok := tr.Observe("app", defaults(), acked(posts(1, 0), 8*m), at(10*m))
-	require.True(t, ok, "the remaining post is due at 10 even though another was acknowledged at 8")
+	state := acked(posts(1, 0), 8*m)
+	_, ok := tr.Observe("app", defaults(), state, at(10*m))
+	require.False(t, ok, "an acknowledgement at 8 quiets the reminder until 13")
+	a, ok := tr.Observe("app", defaults(), state, at(13*m))
+	require.True(t, ok, "the remaining post is due when the quiet interval ends")
 	assert.Equal(t, 1, a.N)
+}
+
+func TestAckQuietIntervalSurvivesAnEmptyBoard(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name                  string
+		before, during, after attention.State
+	}{
+		{"partial acknowledgement then append", postsWithHeld(), posts(1, 0), postsWithHeld()},
+		{"full acknowledgement then append", held(1, 0), boss(), held(1, 0)},
+		{"full acknowledgement then drain", held(1, 0), boss(), posts(1, 0)},
+		{"full acknowledgement then worker return", held(1, 0), boss(), held(1, 0)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			state := func(d time.Duration) attention.State {
+				switch {
+				case d < 12*m:
+					return c.before
+				case d < 13*m:
+					return acked(c.during, 12*m)
+				default:
+					return acked(c.after, 12*m)
+				}
+			}
+			assert.Equal(t, mins(10, 17), times(run(defaults(), 20*m, m, state, nil)))
+		})
+	}
+}
+
+func postsWithHeld() attention.State {
+	s := posts(1, 0)
+	s.Held, s.OldestHeld = 1, at(0)
+	return s
+}
+
+func TestNewPostAfterAckKeepsItsFirstAlertTime(t *testing.T) {
+	t.Parallel()
+	state := func(d time.Duration) attention.State {
+		if d < 13*m {
+			return acked(boss(), 12*m)
+		}
+		return acked(posts(1, 13*m), 12*m)
+	}
+	assert.Equal(t, mins(23), times(run(defaults(), 25*m, m, state, nil)))
+}
+
+func TestCeilingBoundCanAlertDuringTheQuietInterval(t *testing.T) {
+	t.Parallel()
+	tr := attention.NewTracker()
+	cfg := defaults()
+	_, ok := tr.Observe("app", cfg, acked(boss(), 12*m), at(12*m))
+	require.False(t, ok)
+	state := acked(ceilingPost(boss(), 13*m), 12*m)
+	_, ok = tr.Observe("app", cfg, state, at(13*m))
+	require.False(t, ok)
+	a, ok := tr.Observe("app", cfg, state, at(15*m))
+	require.True(t, ok, "a ceiling bound at 15 can fire before the quiet interval ends at 17")
+	assert.True(t, a.Ceiling)
 }
 
 // TestEarlierAckIsNoReaction (A74): a LastAck earlier than the last one
@@ -191,4 +251,47 @@ func TestAckingTheOnlyPendingCeilingClearsItsBound(t *testing.T) {
 	}
 	got := run(defaults(), 22*m, m, state, nil)
 	assert.Equal(t, mins(10, 15, 22), times(got), "ordinary work follows the acknowledgement cadence")
+}
+
+func TestCeilingAfterQuietIntervalAlertGetsItsOwnDeadline(t *testing.T) {
+	t.Parallel()
+	state := func(d time.Duration) attention.State {
+		switch {
+		case d < 12*m:
+			return held(1, 0)
+		case d < 15*m:
+			return acked(boss(), 12*m)
+		}
+		s := acked(posts(1, 0), 12*m)
+		if d >= 16*m {
+			s.Held, s.OldestHeld = 1, at(16*m)
+		}
+		if d >= 17*m {
+			// The reminder due at 17 covers the first line.
+			s.OldestHeldCeiling, s.NewestCeiling = at(16*m), at(17*m)
+		}
+		if d >= 18*m {
+			// The second line arrives after that alert consumed the bound.
+			s.NewestCeiling = at(18 * m)
+		}
+		return s
+	}
+	assert.Equal(t, mins(10, 17, 20), times(run(defaults(), 20*m, m, state, nil)))
+}
+
+func TestReopenedOldestCeilingKeepsItsFirstAlertTime(t *testing.T) {
+	t.Parallel()
+	cfg := defaults()
+	tr := attention.NewTracker()
+	s := acked(posts(1, 0), 12*m)
+	_, ok := tr.Observe("app", cfg, s, at(13*m))
+	require.False(t, ok, "the ordinary reminder is quiet until 17")
+
+	// A drain posts an old ceiling at the same time as a new ceiling
+	// arrives. The old ceiling is already due and the new one's bound is
+	// at 16.
+	s = ceilingPost(ceilingPost(s, 0), 14*m)
+	a, ok := tr.Observe("app", cfg, s, at(14*m))
+	require.True(t, ok)
+	assert.True(t, a.Ceiling)
 }

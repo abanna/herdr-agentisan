@@ -226,3 +226,60 @@ func TestBoardPendingHeldAckLegsAreEachScoped(t *testing.T) {
 		assert.Equal(t, 1, pending(t, s).Held, "aa's later record hides nothing on ha")
 	})
 }
+
+func TestBoardPendingAppendedNoticeKeepsItsCreationAge(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	_, _, err := s.Notify(ctx, boss, minute(0), func(q string) (string, bool) {
+		return "a turn ended", q == ""
+	})
+	require.NoError(t, err)
+	_, err = s.AckUpto(ctx, "ha", boss.ID, 0, "", minute(30))
+	require.NoError(t, err)
+	require.Zero(t, pending(t, s).Held)
+
+	_, appended, err := s.Notify(ctx, boss, minute(31), func(q string) (string, bool) {
+		return q + "\nanother turn ended", q != ""
+	})
+	require.NoError(t, err)
+	require.True(t, appended)
+	got := pending(t, s)
+	require.Equal(t, 1, got.Held)
+	assert.Equal(t, minute(0), got.OldestHeld)
+}
+
+func TestBoardPendingDrainedAcknowledgedMessageCountsAsAPost(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	_, err := s.Send(ctx, boss, pane, "first", minute(0))
+	require.NoError(t, err)
+	_, err = s.AckUpto(ctx, "ha", boss.ID, 0, "", minute(30))
+	require.NoError(t, err)
+	before := pending(t, s)
+	require.Zero(t, before.Held+before.Pending)
+
+	out, err := s.PostQueued(ctx, boss, "ha", minute(31))
+	require.NoError(t, err)
+	require.Len(t, out.Posts, 1)
+	got := pending(t, s)
+	assert.Equal(t, 1, got.Pending)
+	assert.Zero(t, got.Held)
+	assert.Equal(t, minute(0), got.Oldest)
+	assert.Equal(t, minute(30), got.LastAck)
+}
+
+func TestBoardPendingHeldAckHidesAnEqualStamp(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	_, err := s.AckUpto(ctx, "ha", boss.ID, 0, "", minute(10))
+	require.NoError(t, err)
+	_, err = s.Send(ctx, boss, pane, "stamped ahead of its clock", minute(5))
+	require.NoError(t, err)
+	require.Equal(t, 1, pending(t, s).Held)
+	_, err = s.AckUpto(ctx, "ha", boss.ID, 0, "", minute(6))
+	require.NoError(t, err)
+	assert.Zero(t, pending(t, s).Held)
+}
