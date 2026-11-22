@@ -308,7 +308,7 @@ func quotaField(q *store.NoticeQuotas, quota int) *int64 {
 // quota set to its stat refuses the next admission and one more admits it;
 // a byte quota set to its stat plus the next notice's bytes admits it and
 // one byte less refuses it. Q8 is run on hb, whose window holds GitHub rows
-// only, so it compares GitHubLastHour before B0a.4-hour and after it. The
+// only, so it compares GitHubLastHour. The
 // stats are exact, never capped at their quotas' limits.
 func TestStatsMatchTheQuotas(t *testing.T) {
 	t.Parallel()

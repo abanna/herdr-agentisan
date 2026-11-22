@@ -5,6 +5,7 @@
 
 ╭─ CODER · 4 ◐3 ●1 ────────────────────────────────────────────────────────────╮
 │ write the code                                                               │
+│   Worker          Status   Model   Ctx         Item         Stage        Age │
 │ ◐ ha-coder-1      working  opus    ▓▓▓░░  57%  NERD-5504    review loo…  14m │
 │ ◐ ha-coder-2      working  sol6.1  ▓▓░░░  33%  NERD-5289    go-review …   5m │
 │ ● ha-coder-3      idle     sol6    ▓░░░░  12%  PR#118       BOSS: PR #…  39m │
@@ -12,13 +13,12 @@
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ QA · 2 ◐2 ──────────────────────────────────────────────────────────────────╮
 │ verify each handoff                                                          │
+│   Worker          Status   Model   Ctx         Item         Stage        Age │
 │ ◐ ha-qa-1         working  son     ▓▓░░░  41%  PR#118       merge check   9m │
 │ ◐ ha-qa-2         working  gpt5.5  ▓░░░░  22%  PR#121       QA PASS       1m │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ REVIEW · 2 ◐1 ●1 ───────────────────────────────────────────────────────────╮
+│   Worker          Status   Model   Ctx         Item         Stage        Age │
 │ ◐ ha-review-1     working  sol6.1  ▓░░░░  18%  PR#120       reading th…   3m │
 │ ● ha-review-2     idle     sol5.6  ░░░░░   9%               BOSS: no f…  24m │
-╰──────────────────────────────────────────────────────────────────────────────╯
-╭─ LIBRARIAN · 2 ◐1 ●1 ────────────────────────────────────────────────────────╮
-│ ◐ ha-librarian-1  working  hai     ▓░░░░  15%  NERD-5501    filing sub…   2m │
- enter jump · ↑↓ move · b board · ctrl-b m btop · ? help · q quit            ↓4
+ enter jump · ↑↓ move · b board · m btop · ? help · q quit                   ↓5

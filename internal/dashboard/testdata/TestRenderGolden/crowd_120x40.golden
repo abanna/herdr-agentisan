@@ -4,6 +4,7 @@
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 
 ╭─ CODERS · 20 ✔2 ◐9 ●5 ⚠2 ⟳1 ?1 ──────────────────────────────────────────────────────────────────────────────────────╮
+│   Worker Status   Model Ctx         Item       Stage                                                                 │
 │ ◐ pee01  working  opus  ░░░░░   7%  NERD-5301  go-coder                                                              │
 │ ● pee02  idle     opus  ▓░░░░  14%  NERD-5302  precheck                                                              │
 │ ◐ pee03  working  opus  ▓░░░░  21%  NERD-5303  go-coder                                                              │
@@ -36,5 +37,4 @@
 
 
 
-
- enter jump · ↑↓ move · b board · ctrl-b m btop · ? help · q quit
+ enter jump · ↑↓ move · b board · m btop · ? help · q quit
