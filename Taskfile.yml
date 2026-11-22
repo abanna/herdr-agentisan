@@ -3,7 +3,6 @@ version: "3"
 vars:
   BINARY_DIR: bin
   COVERAGE_PROFILE: coverage.out
-  COVERAGE_MIN: "75"
   # Single source for build provenance: go's own VCS stamping walks past a
   # linked worktree's `.git` FILE to the parent repo's `.git` DIRECTORY, so a
   # build inside a worktree would stamp the MAIN checkout's HEAD and dirty
@@ -179,14 +178,98 @@ tasks:
       - go tool govulncheck ./...
 
   test:unit:
-    desc: Run the unit suite with a coverage profile
+    desc: Run all five race test shards and collect their coverage data
+    # Each shard replaces its own directory before testing to discard old counters.
+    deps: [test:unit:dashboard, test:unit:store, test:unit:daemon, test:unit:workforce, test:unit:rest]
+
+  test:unit:dashboard:
+    desc: Run the dashboard race test shard
+    env:
+      TEST_PACKAGES:
+        sh: |
+          packages=$(go run ./cmd/devctl test-packages dashboard) || exit $?
+          case "$packages" in
+            *[![:space:]]*) printf '%s\n' "$packages" ;;
+            *) echo "empty test package list" >&2; exit 1 ;;
+          esac
     cmds:
-      - go test -race -timeout 5m -coverpkg=./internal/... -coverprofile={{.COVERAGE_PROFILE}} -covermode=atomic ./...
+      - cmd: rm -rf bin/covdata/covdata-dashboard
+      - cmd: mkdir -p bin/covdata/covdata-dashboard
+      - go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-dashboard"
+
+  test:unit:store:
+    desc: Run the store race test shard
+    env:
+      TEST_PACKAGES:
+        sh: |
+          packages=$(go run ./cmd/devctl test-packages store) || exit $?
+          case "$packages" in
+            *[![:space:]]*) printf '%s\n' "$packages" ;;
+            *) echo "empty test package list" >&2; exit 1 ;;
+          esac
+    cmds:
+      - cmd: rm -rf bin/covdata/covdata-store
+      - cmd: mkdir -p bin/covdata/covdata-store
+      - go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-store"
+
+  test:unit:daemon:
+    desc: Run the daemon race test shard
+    env:
+      TEST_PACKAGES:
+        sh: |
+          packages=$(go run ./cmd/devctl test-packages daemon) || exit $?
+          case "$packages" in
+            *[![:space:]]*) printf '%s\n' "$packages" ;;
+            *) echo "empty test package list" >&2; exit 1 ;;
+          esac
+    cmds:
+      - cmd: rm -rf bin/covdata/covdata-daemon
+      - cmd: mkdir -p bin/covdata/covdata-daemon
+      - go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-daemon"
+
+  test:unit:workforce:
+    desc: Run the workforce race test shard
+    env:
+      TEST_PACKAGES:
+        sh: |
+          packages=$(go run ./cmd/devctl test-packages workforce) || exit $?
+          case "$packages" in
+            *[![:space:]]*) printf '%s\n' "$packages" ;;
+            *) echo "empty test package list" >&2; exit 1 ;;
+          esac
+    cmds:
+      - cmd: rm -rf bin/covdata/covdata-workforce
+      - cmd: mkdir -p bin/covdata/covdata-workforce
+      - go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-workforce"
+
+  test:unit:rest:
+    desc: Run the rest race test shard
+    env:
+      TEST_PACKAGES:
+        sh: |
+          packages=$(go run ./cmd/devctl test-packages rest) || exit $?
+          case "$packages" in
+            *[![:space:]]*) printf '%s\n' "$packages" ;;
+            *) echo "empty test package list" >&2; exit 1 ;;
+          esac
+    cmds:
+      - cmd: rm -rf bin/covdata/covdata-rest
+      - cmd: mkdir -p bin/covdata/covdata-rest
+      - go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-rest"
 
   cover:
-    desc: Enforce the coverage floor (go test cannot do this itself)
+    desc: Merge all five shards' coverage data and enforce the coverage floor
     cmds:
-      - go run ./cmd/devctl coverage --profile {{.COVERAGE_PROFILE}} --min {{.COVERAGE_MIN}}
+      - cmd: |
+          for shard in dashboard store daemon workforce rest; do
+            set -- bin/covdata/covdata-"$shard"/covcounters.*
+            if [ ! -s "$1" ]; then
+              echo "missing coverage counters for $shard" >&2
+              exit 1
+            fi
+          done
+      - go tool covdata textfmt -i=bin/covdata/covdata-dashboard,bin/covdata/covdata-store,bin/covdata/covdata-daemon,bin/covdata/covdata-workforce,bin/covdata/covdata-rest -o coverage.out
+      - go run ./cmd/devctl coverage --profile coverage.out --min 75
 
   cover:html:
     desc: Open the coverage profile as HTML

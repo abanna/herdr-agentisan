@@ -29,8 +29,8 @@ jobs:
       - run: go tool golangci-lint fmt --diff ./...
       - run: go vet ./...
 
-  test:
-    name: test
+  test-dashboard:
+    name: test (dashboard)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -38,7 +38,154 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
-      - run: go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage.out -covermode=atomic ./...
+      - shell: bash
+        run: |
+          mkdir -p bin/covdata/covdata-dashboard
+          TEST_PACKAGES=$(go run ./cmd/devctl test-packages dashboard)
+          case "$TEST_PACKAGES" in
+            *[![:space:]]*) ;;
+            *) echo "empty test package list" >&2; exit 1 ;;
+          esac
+          printf '%s\n' "$TEST_PACKAGES"
+          go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-dashboard"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: covdata-dashboard
+          path: bin/covdata/covdata-dashboard/
+          if-no-files-found: error
+          overwrite: true
+
+  test-store:
+    name: test (store)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - shell: bash
+        run: |
+          mkdir -p bin/covdata/covdata-store
+          TEST_PACKAGES=$(go run ./cmd/devctl test-packages store)
+          case "$TEST_PACKAGES" in
+            *[![:space:]]*) ;;
+            *) echo "empty test package list" >&2; exit 1 ;;
+          esac
+          printf '%s\n' "$TEST_PACKAGES"
+          go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-store"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: covdata-store
+          path: bin/covdata/covdata-store/
+          if-no-files-found: error
+          overwrite: true
+
+  test-daemon:
+    name: test (daemon)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - shell: bash
+        run: |
+          mkdir -p bin/covdata/covdata-daemon
+          TEST_PACKAGES=$(go run ./cmd/devctl test-packages daemon)
+          case "$TEST_PACKAGES" in
+            *[![:space:]]*) ;;
+            *) echo "empty test package list" >&2; exit 1 ;;
+          esac
+          printf '%s\n' "$TEST_PACKAGES"
+          go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-daemon"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: covdata-daemon
+          path: bin/covdata/covdata-daemon/
+          if-no-files-found: error
+          overwrite: true
+
+  test-workforce:
+    name: test (workforce)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - shell: bash
+        run: |
+          mkdir -p bin/covdata/covdata-workforce
+          TEST_PACKAGES=$(go run ./cmd/devctl test-packages workforce)
+          case "$TEST_PACKAGES" in
+            *[![:space:]]*) ;;
+            *) echo "empty test package list" >&2; exit 1 ;;
+          esac
+          printf '%s\n' "$TEST_PACKAGES"
+          go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-workforce"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: covdata-workforce
+          path: bin/covdata/covdata-workforce/
+          if-no-files-found: error
+          overwrite: true
+
+  test-rest:
+    name: test (rest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - shell: bash
+        run: |
+          mkdir -p bin/covdata/covdata-rest
+          TEST_PACKAGES=$(go run ./cmd/devctl test-packages rest)
+          case "$TEST_PACKAGES" in
+            *[![:space:]]*) ;;
+            *) echo "empty test package list" >&2; exit 1 ;;
+          esac
+          printf '%s\n' "$TEST_PACKAGES"
+          go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${TEST_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-rest"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: covdata-rest
+          path: bin/covdata/covdata-rest/
+          if-no-files-found: error
+          overwrite: true
+
+  test:
+    name: test
+    needs: [test-dashboard, test-store, test-daemon, test-workforce, test-rest]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all test jobs to pass
+        if: ${{ !cancelled() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'skipped') || contains(needs.*.result, 'cancelled')) }}
+        run: exit 1
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: covdata-*
+          path: bin/covdata
+      - run: |
+          for shard in dashboard store daemon workforce rest; do
+            set -- bin/covdata/covdata-"$shard"/covcounters.*
+            if [ ! -s "$1" ]; then
+              echo "missing coverage counters for $shard" >&2
+              exit 1
+            fi
+          done
+          go tool covdata textfmt -i=bin/covdata/covdata-dashboard,bin/covdata/covdata-store,bin/covdata/covdata-daemon,bin/covdata/covdata-workforce,bin/covdata/covdata-rest -o coverage.out
       - run: go run ./cmd/devctl coverage --profile coverage.out --min 75
 
   security:
