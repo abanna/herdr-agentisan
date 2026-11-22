@@ -169,22 +169,28 @@ func TestBoardModeDecisionsSurviveAPollInEveryGap(t *testing.T) {
 
 // TestRememberTakesRouteBeforeMu pins the poll's lock order where its
 // locks are taken (#187's re-check ab09c058, M05 and M06): with mu held
-// elsewhere, a poll's remember still takes route, then waits for mu. A
-// remember that took mu first, or took no route, would never hold route
-// here; and the dispatcher, which takes route and then mu, could deadlock
-// against the first.
+// elsewhere, a poll's remember still takes route, then waits for mu with
+// route held. A remember that took mu first, or took no route, would never
+// take route here; and the dispatcher, which takes route and then mu, could
+// deadlock against the first. One that let route go before taking mu (the
+// round-5 mutant N2) takes it, then frees it while it waits: route's count
+// says when it was taken, so its release is seen at once.
 func TestRememberTakesRouteBeforeMu(t *testing.T) {
 	t.Parallel()
 	r := newBoardRig(t, []settings.Team{haTabs}, boardOn("ha"), nil)
 	r.p.EndPoll(haModel(bossPane("ha-boss", "codex")))
 	release := r.p.HoldMu()
 	t.Cleanup(release)
+	start := r.p.RouteHolds()
 	polled := make(chan struct{})
 	go func() {
 		defer close(polled)
 		r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
 	}()
-	took := assert.Eventually(t, r.p.RouteHeld, 2*time.Second, time.Millisecond, "remember takes route while mu is held elsewhere")
+	took := assert.Eventually(t, func() bool { return r.p.RouteHolds() > start }, 2*time.Second, time.Millisecond, "remember takes route while mu is held elsewhere")
+	if took {
+		assert.Never(t, func() bool { return !r.p.RouteHeld() }, 100*time.Millisecond, time.Millisecond, "and keeps it while it waits for mu")
+	}
 	release()
 	select {
 	case <-polled:
