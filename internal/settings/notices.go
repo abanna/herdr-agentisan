@@ -13,10 +13,22 @@ const (
 	noticesSkipPath   = "notices.skip"
 	noticesGapPath    = "notices.gap"
 	noticesRepeatPath = "notices.repeat"
+	// noticesDeliveryPath is how a team's boss is told (A74): typed into
+	// it, or posted on its board while it runs Claude.
+	noticesDeliveryPath = "notices.delivery"
 	// MaxNoticeGap bounds notices.gap, in seconds: an hour.
 	MaxNoticeGap = 3600
 	// MaxNoticeRepeat bounds notices.repeat, in seconds: a day.
 	MaxNoticeRepeat = 86400
+)
+
+// The values of notices.delivery (A74).
+const (
+	// DeliveryTyped types the boss's notices and messages into it (A30,
+	// A44): the default.
+	DeliveryTyped = "typed"
+	// DeliveryBoard posts them on its team's board while it runs Claude.
+	DeliveryBoard = "board"
 )
 
 // noticesSchema is how the daemon tells the boss what its team poll sees
@@ -28,6 +40,8 @@ var noticesSchema = &node{kind: kindTable, fields: map[string]*node{
 	"skip":   leafOf(kindStrings),
 	"gap":    leafOf(kindInt),
 	"repeat": leafOf(kindInt),
+	// delivery is typed or board (A74).
+	"delivery": leafOf(kindString),
 }}
 
 // NoticeKinds are the daemon's notice kinds (notice.Kinds), which a test
@@ -46,6 +60,8 @@ type NoticeConfig struct {
 	Gap time.Duration
 	// Repeat is how long a repeat of one notice is dropped.
 	Repeat time.Duration
+	// Delivery is DeliveryTyped or DeliveryBoard (A74).
+	Delivery string
 }
 
 // NoticeSettings are every project's notices settings, and the settings of
@@ -57,8 +73,12 @@ type NoticeSettings struct {
 }
 
 // checkNotices: notices.skip names known kinds, each once; notices.gap and
-// notices.repeat are seconds within their bounds.
+// notices.repeat are seconds within their bounds; notices.delivery is typed
+// or board.
 func (m merged) checkNotices() error {
+	if v, ok := m.get(noticesDeliveryPath); ok && v != DeliveryTyped && v != DeliveryBoard {
+		return m.invalidf(noticesDeliveryPath, "%s is not typed or board", FormatValue(v))
+	}
 	if v, ok := m.get(noticesSkipPath); ok {
 		skip, _ := v.([]string)
 		for i, k := range skip {
@@ -93,7 +113,9 @@ func (m merged) noticeConfig() NoticeConfig {
 	}
 	v, _ := m.get(noticesSkipPath)
 	skip, _ := v.([]string)
-	return NoticeConfig{Skip: slices.Clone(skip), Gap: seconds(noticesGapPath), Repeat: seconds(noticesRepeatPath)}
+	delivery, _ := m.get(noticesDeliveryPath)
+	d, _ := delivery.(string)
+	return NoticeConfig{Skip: slices.Clone(skip), Gap: seconds(noticesGapPath), Repeat: seconds(noticesRepeatPath), Delivery: d}
 }
 
 // Notices reads every project's notices settings from the shared file in
