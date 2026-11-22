@@ -390,8 +390,8 @@ func noticeRig(t *testing.T, o func(*daemon.Options)) (*boardRig, *notice.Batche
 // the one read as typed, and the notice, flushed after the claim, goes into
 // a row of its own and is posted, never typed.
 //
-// The order is forced: the pass is paused inside route, at the claim's
-// clock, when the poll starts, so the claim wins whenever the poll runs.
+// The order is forced, whatever the locks do: the poll starts only once
+// the pass has ended.
 // The poll-wins order is TestBossThatTurnsClaudeBeforeTheClaimGetsNoLaterNotice;
 // the lock itself is pinned by TestBoardModeCriticalSectionsHoldRoute and
 // TestRememberTakesRouteBeforeMu.
@@ -425,9 +425,10 @@ func TestBossThatTurnsClaudeAtTheClaimGetsNoLaterNotice(t *testing.T) {
 	polled := make(chan struct{})
 	go func() {
 		defer close(polled)
+		<-passed // the order this test names: the pass first, then the poll
 		r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
 	}()
-	close(resume) // the pass holds route: whenever the poll runs, it comes after
+	close(resume)
 	for _, c := range []chan struct{}{passed, polled} {
 		select {
 		case <-c:
@@ -534,8 +535,8 @@ func TestBossThatTurnsClaudeAfterTheClaimTypesOnlyWhatWasClaimed(t *testing.T) {
 // before the switch is posted, and the notice is typed into the Codex boss,
 // never posted (A74: a Codex boss is never posted to).
 //
-// The order is forced: the pass is paused inside route, at the post's
-// clock, when the poll starts, so the post wins whenever the poll runs.
+// The order is forced, whatever the locks do: the poll starts only once
+// the pass has ended.
 // The poll-wins order is TestBossThatTurnsCodexBeforeThePostIsTyped; the
 // lock itself is pinned by TestBoardModeCriticalSectionsHoldRoute and
 // TestRememberTakesRouteBeforeMu.
@@ -573,9 +574,10 @@ func TestBossThatTurnsCodexAtThePostIsNotPosted(t *testing.T) {
 	polled := make(chan struct{})
 	go func() {
 		defer close(polled)
+		<-passed // the order this test names: the pass first, then the poll
 		r.p.EndPoll(haModel(bossPane("ha-boss", "codex")))
 	}()
-	close(resume) // the pass holds route: whenever the poll runs, it comes after
+	close(resume)
 	for _, c := range []chan struct{}{passed, polled} {
 		select {
 		case <-c:

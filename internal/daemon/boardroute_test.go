@@ -53,13 +53,21 @@ func onSQL(t *testing.T, r *boardRig, trigger string, f func()) {
 // is made with route held, and so is the durable write it decides: the
 // typed claim's UPDATE to dispatching for a Codex boss, and the board
 // post's INSERT for a Claude one. Both are made within ONE hold of route,
-// the one the read was made in, so no unlock and relock between the
-// decision and the write, wherever it is put, gets past this.
+// the one the read was made in, and route is taken exactly once per
+// decision with one read in each hold, so no unlock and relock between
+// the decision and the write gets past this, even one followed by a
+// second, weaker read (the third re-check, 1a1bbe3f).
 func TestBoardModeCriticalSectionsHoldRoute(t *testing.T) {
 	t.Parallel()
-	for name, c := range map[string]struct{ agent, trigger string }{
-		"the typed claim": {"codex", "BEFORE UPDATE OF state ON messages WHEN new.state = 'dispatching'"},
-		"the board post":  {"claude", "BEFORE INSERT ON board_posts"},
+	for name, c := range map[string]struct {
+		agent, trigger string
+		holds          uint64 // route's holds in the pass: one per decision
+	}{
+		// untyped's decision, then claimTyped's: the claim, and the next
+		// attempt, which finds the queue empty.
+		"the typed claim": {"codex", "BEFORE UPDATE OF state ON messages WHEN new.state = 'dispatching'", 3},
+		// untyped's decision, which posts.
+		"the board post": {"claude", "BEFORE INSERT ON board_posts", 1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -74,6 +82,7 @@ func TestBoardModeCriticalSectionsHoldRoute(t *testing.T) {
 			)
 			r.p.EndPoll(haModel(bossPane("ha-boss", c.agent)))
 			m := sent(t, r.st, haBoss, coder, "done")
+			start := r.p.RouteHolds()
 			r.p.SetDeliveryProbe(func() { reads = append(reads, seen{r.p.RouteHeld(), r.p.RouteHolds()}) })
 			onSQL(t, r, c.trigger, func() {
 				before = len(reads)
@@ -82,6 +91,8 @@ func TestBoardModeCriticalSectionsHoldRoute(t *testing.T) {
 			r.p.Pass()
 			r.p.SetDeliveryProbe(nil)
 
+			assert.Equal(t, c.holds, r.p.RouteHolds()-start, "route is taken once per decision, and never let go and retaken within one")
+			assert.Len(t, reads, int(c.holds), "one delivery read in each hold")
 			require.NotEmpty(t, reads, "the pass read the delivery")
 			for i, read := range reads {
 				assert.True(t, read.held, "delivery read %d is made with route held", i)
@@ -91,6 +102,67 @@ func TestBoardModeCriticalSectionsHoldRoute(t *testing.T) {
 			require.Positive(t, before, "a delivery read came before the write")
 			assert.Equal(t, reads[before-1].holds, writes[0].holds, "the write is made in the same hold of route as the read it acts on")
 			assert.Equal(t, store.MessageDelivered, stateOf(t, r.st, m.ID).State)
+		})
+	}
+}
+
+// TestBoardModeDecisionsSurviveAPollInEveryGap puts a real poll in every
+// gap the test can reach between a board-key boss's delivery read and the
+// durable write it decides (#187's third re-check, NERD-5533 1a1bbe3f, as
+// ruled). Its checkpoints are each delivery read (the probe) and each clock
+// read (the claim's, the post's and the settlements'). At the first one
+// where route is free, a real poll changes the remembered agent and
+// flushes a notice. With route held from the decision through the write,
+// that poll can only come after the write: the typed boss is typed the row
+// as it stood when claimed, and the board boss's post holds only what was
+// queued before.
+func TestBoardModeDecisionsSurviveAPollInEveryGap(t *testing.T) {
+	t.Parallel()
+	for name, c := range map[string]struct{ from, to string }{
+		"the typed claim": {"codex", "claude"},
+		"the board post":  {"claude", "codex"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			cfgs := boardOn("ha")
+			b := notice.NewBatcher(cfgs)
+			r := newBoardRig(t, []settings.Team{haTabs}, cfgs, b)
+			var armed, switched bool
+			checkpoint := func() {
+				if !armed || switched || r.p.RouteHeld() {
+					return
+				}
+				switched = true
+				b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Gone, Text: "after the switch"}})
+				r.p.EndPoll(haModel(bossPane("ha-boss", c.to)))
+			}
+			r.o.Now = func() time.Time {
+				checkpoint()
+				return time.Now()
+			}
+			r.p = daemon.NewPoller(r.o, r.st, r.teams, cfgs, b, nil)
+			b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Blocked, Text: "before"}})
+			r.p.EndPoll(haModel(bossPane("ha-boss", c.from)))
+			r.p.SetDeliveryProbe(checkpoint)
+			armed = true
+			r.p.Pass()
+			armed = false
+			r.p.SetDeliveryProbe(nil)
+
+			var bodies, texts []string
+			for _, p := range r.posts(t, "ha") {
+				bodies = append(bodies, p.Body)
+			}
+			for _, p := range r.pr.all() {
+				texts = append(texts, p.Text)
+			}
+			if c.from == "codex" {
+				assert.Equal(t, []string{"[agentisan] notices:\nbefore"}, texts, "typed as claimed: no notice flushed by a poll after the decision")
+				assert.Empty(t, bodies, "nothing posted in this pass")
+			} else {
+				assert.Equal(t, []string{"before"}, bodies, "posted as decided: no notice flushed by a poll after the decision")
+				assert.Empty(t, texts, "nothing typed in this pass")
+			}
 		})
 	}
 }
@@ -112,7 +184,7 @@ func TestRememberTakesRouteBeforeMu(t *testing.T) {
 		defer close(polled)
 		r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
 	}()
-	took := assert.Eventually(t, r.p.RouteHeld, ready, time.Millisecond, "remember takes route while mu is held elsewhere")
+	took := assert.Eventually(t, r.p.RouteHeld, 2*time.Second, time.Millisecond, "remember takes route while mu is held elsewhere")
 	release()
 	select {
 	case <-polled:
