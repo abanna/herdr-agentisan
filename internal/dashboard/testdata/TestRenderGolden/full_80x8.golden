@@ -2,7 +2,7 @@
  boss ▸ ◐ working · #867 release · review · ctx ▓▓░░░░░░ 23% · up 2h14m   17:19
 ╭─ CODERS · 9 ✔1 ◐4 ●2 ⚠1 ⟳1 ──────────────────────────────────────────────────╮
 │ write the code                                                               │
+│   Worker     Status   Model Ctx         Item       Stage                 Age │
 │ ◐ pee01      working  opus  ▓▓░░░  38%  r2         J1 re-run             12m │
 │ ◐ pee02      working  opus  ▓▓░░░  30%             J1 re-queued          21m │
-│ ● pee03      idle     opus  ▓░░░░  22%  PR3a       committed           1h39m │
- enter jump · ↑↓ move · b board · m btop · ? help · q quit                  ↓12
+ enter jump · ↑↓ move · b board · m btop · ? help · q quit                  ↓13

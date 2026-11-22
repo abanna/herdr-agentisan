@@ -160,7 +160,7 @@ func TestUpgradeFrom8(t *testing.T) {
 	seedWorker(t, v8, "w", "w14:p2", 1)
 	_, err = store.DB(v8).ExecContext(ctx, "INSERT INTO handoffs (logical_id, old_pane, new_pane, state, created_at, updated_at) VALUES ('w', 'w14:p1', 'w14:p2', 'acknowledged', 1, 2)")
 	require.NoError(t, err)
-	send(t, v8, worker("w"), boss, "before 0009")
+	sendBefore12(t, v8, "w", "before 0009")
 	post(t, v8, teamPost("ha", "w", "before 0009"))
 	_, err = v8.MarkSeen(ctx, "ha", store.ReaderUser, 1)
 	require.NoError(t, err)
@@ -378,7 +378,7 @@ func TestUpgradeToTheAcks(t *testing.T) {
 	seedWorker(t, v11, "w", "w14:p2", 1)
 	_, err = db11.ExecContext(ctx, "INSERT INTO handoffs (logical_id, old_pane, new_pane, state, created_at, updated_at) VALUES ('w', 'w14:p1', 'w14:p2', 'acknowledged', 1, 2)")
 	require.NoError(t, err)
-	send(t, v11, worker("w"), boss, "before 0012")
+	sendBefore12(t, v11, "w", "before 0012")
 	post(t, v11, teamPost("ha", "w", "before 0012"))
 	_, err = v11.MarkSeen(ctx, "ha", store.ReaderUser, 1)
 	require.NoError(t, err)
@@ -476,7 +476,7 @@ func TestUpgradeFrom10(t *testing.T) {
 	seedWorker(t, v10, "w", "w14:p2", 1)
 	_, err = db10.ExecContext(ctx, "INSERT INTO handoffs (logical_id, old_pane, new_pane, state, created_at, updated_at) VALUES ('w', 'w14:p1', 'w14:p2', 'acknowledged', 1, 2)")
 	require.NoError(t, err)
-	send(t, v10, worker("w"), boss, "before 0011")
+	sendBefore12(t, v10, "w", "before 0011")
 	post(t, v10, teamPost("ha", "w", "before 0011"))
 	_, err = v10.MarkSeen(ctx, "ha", store.ReaderUser, 1)
 	require.NoError(t, err)
@@ -523,4 +523,17 @@ func TestUpgradeFrom10(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&check))
 	assert.Equal(t, "ok", check)
 	assert.Empty(t, queryRows(t, db, "PRAGMA foreign_key_check"))
+}
+
+// sendBefore12 queues a boss's message on a live worker binding using the
+// historical schema. Current Send needs the held cutoff table from 0012.
+func sendBefore12(t *testing.T, s *store.Store, id, body string) {
+	t.Helper()
+	res, err := store.DB(s).ExecContext(t.Context(), `INSERT INTO messages (id, recipient_kind, recipient, project, generation, sender_kind, sender, body, created_at, updated_at)
+SELECT '01JZ0000000000000000OLDSND', 'worker', logical_id, project, generation, 'boss', ?1, ?2, ?3, ?3
+FROM workers WHERE logical_id = ?4 AND retired_at IS NULL`, boss.ID, body, t1.UnixNano(), id)
+	require.NoError(t, err)
+	n, err := res.RowsAffected()
+	require.NoError(t, err)
+	require.EqualValues(t, 1, n)
 }
