@@ -67,7 +67,7 @@ type Config struct {
 	// Focuser is called on Enter and a click. Nil turns focus off; say why
 	// in Note.
 	Focuser Focuser
-	// Btop is called on a click of [ btop ]. Nil draws neither the button
+	// Btop is called by m or a click on [ btop ]. Nil draws neither the button
 	// nor its hint.
 	Btop BtopOpener
 	// Interval between polls. Zero means DefaultInterval.
@@ -318,6 +318,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.key(msg)
 	case tea.MouseClickMsg:
 		return m.click(msg)
+	case tea.MouseWheelMsg:
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			return m.key(tea.KeyPressMsg{Code: tea.KeyUp})
+		case tea.MouseWheelDown:
+			return m.key(tea.KeyPressMsg{Code: tea.KeyDown})
+		}
 	}
 	return m, nil
 }
@@ -327,10 +334,14 @@ func (m Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.search.on {
 		return m.searchKey(msg)
 	}
+	k := msg.String()
+	if k == "m" {
+		return m, m.openBtop()
+	}
 	if m.board.Open {
 		return m.boardKey(msg)
 	}
-	switch k := msg.String(); k {
+	switch k {
 	case "b":
 		cmd := m.openBoard()
 		return m, cmd
@@ -410,8 +421,8 @@ func (m Model) click(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-// View draws the frame full-screen, asking for mouse clicks so herdr
-// forwards them.
+// View draws the frame full-screen, asking herdr to forward
+// mouse clicks and wheel events.
 func (m Model) View() tea.View {
 	v := tea.NewView(Render(m.Frame(), m.Width(), m.Height(), m.cfg.Options))
 	v.AltScreen = true

@@ -1332,9 +1332,9 @@ func TestRenderFooter(t *testing.T) {
 		want  string
 	}{
 		"hints alone": {frame: dashboard.Frame{Snapshot: one, Now: at}, want: " " + hints},
-		// ctrl-b m is herdr's popup key for btop in this setup; it is only
+		// m opens btop from the dashboard. The shortcut is only
 		// advertised where herdr is reachable.
-		"the btop hint with herdr": {frame: dashboard.Frame{Snapshot: one, Now: at, Btop: true}, want: " enter jump · ↑↓ move · b board · ctrl-b m btop · ? help · q quit"},
+		"the btop hint with herdr": {frame: dashboard.Frame{Snapshot: one, Now: at, Btop: true}, want: " enter jump · ↑↓ move · b board · m btop · ? help · q quit"},
 		"a note leads the hints": {
 			frame: dashboard.Frame{Snapshot: one, Now: at, Note: "focus off"},
 			want:  " focus off · " + hints,
@@ -1360,7 +1360,7 @@ func TestRenderFooter(t *testing.T) {
 		// Enter and the arrows act on an agent: with none on the screen they
 		// do nothing, and are not offered, so help and quit fit.
 		"no board yet":   {frame: dashboard.Frame{Now: at}, want: " b board · ? help · q quit"},
-		"no board, btop": {frame: dashboard.Frame{Now: at, Btop: true}, want: " b board · ctrl-b m btop · ? help · q quit"},
+		"no board, btop": {frame: dashboard.Frame{Now: at, Btop: true}, want: " b board · m btop · ? help · q quit"},
 		"no team here": {
 			frame: dashboard.Frame{Now: at, NoTeam: dashboard.ErrNotATeamsWorkspace, Errors: []error{errors.New("this workspace (w9) is not a team's; pass --project")}},
 			want:  " ✖ this workspace (w9) is not a team's; pass --project · b board · ? help · q …",
@@ -1408,10 +1408,11 @@ func TestHelpOverlay(t *testing.T) {
 		t.Run(fmt.Sprint("btop=", btop), func(t *testing.T) {
 			t.Parallel()
 			out := dashboard.Render(dashboard.Frame{Snapshot: fixture(t, "full"), Now: at, Help: true, Btop: btop}, 120, 40, plain)
-			for _, s := range []string{"╭ help", "↑ ↓", "enter", "click", "/         search", "?", "q", "◐ working", "● idle", "⚠ blocked", "✔ done", "⟳ ready", "? unknown", "▸ shell"} {
+			for _, s := range []string{"╭ help", "↑ ↓", "enter", "click", "?", "q", "◐ working", "● idle", "⚠ blocked", "✔ done", "⟳ ready", "? unknown", "▸ shell"} {
 				assert.Contains(t, out, s)
 			}
-			assert.Equal(t, btop, strings.Contains(out, "[ btop ]  btop in a herdr popup"))
+			assert.Regexp(t, `/ +search`, out)
+			assert.Equal(t, btop, strings.Contains(out, "m / click"))
 			for _, s := range []string{"← →", "b back"} {
 				assert.NotContains(t, out, s, "keys that do nothing are not advertised")
 			}
