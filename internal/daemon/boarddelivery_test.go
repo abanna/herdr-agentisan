@@ -936,7 +936,7 @@ func TestNoKeyIsStillTyped(t *testing.T) {
 // key board and their boss showing Claude (A74).
 func TestSpacesStayTyped(t *testing.T) {
 	t.Parallel()
-	th := newTeamHerdr(t)
+	th := newSpacesHerdr(t)
 	th.setAgents(named("wJ:p1", "boss"))
 	th.setPane("wJ:p1", "agent", "claude")
 	p := newPrompter(th)

@@ -19,12 +19,12 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 )
 
-// describedConfig is everyTeamConfig with group descriptions: the ◆ spaces'
-// by space name, one for a space herdr does not show, and a shared one for
-// every project's coder group.
-const describedConfig = everyTeamConfig + `[projects.agentisan.groups.coders]
+// describedConfig is everyTeamConfig with group descriptions: agentisan's
+// own by worker type, one for a group herdr does not show, and a shared one
+// for every project's coder group, which agentisan's own replaces.
+const describedConfig = everyTeamConfig + `[projects.agentisan.groups.coder]
 description = "write fixes + new code · run their own review loop"
-[projects.agentisan.groups.research]
+[projects.agentisan.groups.qa]
 description = "read-only digging"
 [projects.agentisan.groups.clerk]
 description = "keeps Linear in sync"
@@ -56,7 +56,7 @@ func describedDaemon(t *testing.T, file string, logs *lockedLog) (*teamHerdr, st
 
 // TestSnapshotCarriesGroupDescriptions is A36's snapshot: each team's groups
 // carry the descriptions its project configures, matched by the group's
-// name, the ◆ spaces' by space name and a tabs team's by worker type; a
+// name, a tabs team's worker type; a
 // group none names has none, and a description for a group herdr does not
 // show adds nothing. Everything else is A24's snapshot, byte for byte.
 func TestSnapshotCarriesGroupDescriptions(t *testing.T) {
@@ -71,7 +71,7 @@ func TestSnapshotCarriesGroupDescriptions(t *testing.T) {
 			s.Groups[i].Description = by[s.Groups[i].Name]
 		}
 	}
-	describe("agentisan", map[string]string{"coders": "write fixes + new code · run their own review loop", "research": "read-only digging"})
+	describe("agentisan", map[string]string{"coder": "write fixes + new code · run their own review loop", "qa": "read-only digging"})
 	describe("alpha", map[string]string{"coder": "writes code"})
 	for project, w := range want {
 		data, code := snapshotOp(t, sock, fmt.Sprintf(`{"project":%q}`, project))
@@ -203,17 +203,17 @@ func TestGroupDescriptionsFollowTheFile(t *testing.T) {
 }
 
 // TestGroupDescriptionsWithoutAConfigDir: with no config dir the poll reads
-// nothing and no group has a description.
+// nothing and no group of the ◆ spaces has a description.
 func TestGroupDescriptionsWithoutAConfigDir(t *testing.T) {
 	t.Parallel()
 	var logs lockedLog
-	th := newTeamHerdr(t)
+	th := newSpacesHerdr(t)
 	dir := shortDir(t)
 	o := teamOpts(t, dir, th, "")
 	o.Logger = zerolog.New(&logs)
 	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
-	served(t, sock, anySnapshot)
+	servedTeam(t, sock, "", anySnapshot)
 	data, code := snapshotOp(t, sock, "")
 	require.Empty(t, code)
 	s, err := snapshot.Decode(bytes.NewReader(data))

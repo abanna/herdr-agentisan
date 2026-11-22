@@ -71,12 +71,11 @@ func noticeLines(logs *lockedLog) []string {
 	return out
 }
 
-// noticesConfig is a config dir whose shared file sets [notices] body.
+// noticesConfig is a config dir naming the live team (liveConfig), whose
+// shared file sets [notices] body.
 func noticesConfig(t *testing.T, body string) string {
 	t.Helper()
-	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte("schema_version = 1\n[notices]\n"+body), 0o600))
-	return dir
+	return liveConfig(t, "[notices]\n"+body)
 }
 
 // noticeRun runs a daemon on th with config dir cfg, its log in logs,
@@ -109,17 +108,17 @@ func waitLine(t *testing.T, logs *lockedLog, want string) int {
 func TestNoticesReachTheLog(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	th.setAgents(turned("wJ:p1", "boss", nil), turned("wN:p1", "pee01", nil), turned("wY:p1", "", 3))
+	th.setAgents(turned("wJ:p1", liveShort+"-boss", nil), turned("wN:p1", "pee01", nil), turned("wY:p1", "", 3))
 	var logs lockedLog
 	noticeRun(t, th, noticesConfig(t, "gap = 0\n"), &logs)
 
 	waitLine(t, &logs, "the daemon started")
 	polled(t, th.srv, 2)
-	require.Equal(t, []noticeMsg{{Project: "", Notices: []string{"agentisan: the daemon started; turns that ended while it was down are not reported"}}}, noticesIn(&logs),
+	require.Equal(t, []noticeMsg{{Project: liveProject, Notices: []string{"agentisan: the daemon started; turns that ended while it was down are not reported"}}}, noticesIn(&logs),
 		"the first poll is the baseline: no blocked pane or ready agent is told")
 
 	th.setPane("wN:p1", "agent_status", "done")
-	th.setAgents(turned("wJ:p1", "boss", 9), turned("wN:p1", "pee01", 7), turned("wY:p1", "", 3))
+	th.setAgents(turned("wJ:p1", liveShort+"-boss", 9), turned("wN:p1", "pee01", 7), turned("wY:p1", "", 3))
 	waitLine(t, &logs, "pee01 finished a turn · ctx 40%")
 
 	th.setPane("wN:p1", "agent_status", "blocked")
@@ -188,7 +187,7 @@ func TestNoticesFollowTheConfig(t *testing.T) {
 // logged, and every boss gets the defaults.
 func TestNoticesWithABrokenConfig(t *testing.T) {
 	t.Parallel()
-	th := newTeamHerdr(t)
+	th := newSpacesHerdr(t)
 	var logs lockedLog
 	noticeRun(t, th, noticesConfig(t, "gap = -1\n"), &logs)
 	waitLine(t, &logs, "the daemon started")
@@ -225,14 +224,14 @@ func TestNoticesQueueOneNoticePerBoss(t *testing.T) {
 			th.setPane("wN:p1", "agent_status", "blocked")
 			waitLine(t, &logs, "pee01 is blocked")
 			polled(t, th.srv, 2)
-			assert.Equal(t, []string{"boss boss daemon agentisan queued " + strings.Join([]string{
+			assert.Equal(t, []string{"boss ag-boss daemon agentisan queued " + strings.Join([]string{
 				"[agentisan] notices:",
 				"agentisan: the daemon started; turns that ended while it was down are not reported",
 				"pee01 finished a turn · ctx 40%",
 				"pee01 is blocked · ctx 40%",
 			}, "\n")}, query(t, paths(t, dir, th.fakeHerdr).DB,
 				"SELECT recipient_kind || ' ' || recipient || ' ' || sender_kind || ' ' || sender || ' ' || state || ' ' || body FROM messages"),
-				"no agent named boss is in the ◆ boss space, so the one notice waits")
+				"no agent named ag-boss is in the boss's tab, so the one notice waits")
 
 			var inboxes []string
 			appended := []bool{}
@@ -382,7 +381,7 @@ func TestNoticesDropARepeat(t *testing.T) {
 // resolve gives every boss the default 30 s gap, not none.
 func TestNoticesWithABrokenConfigKeepTheDefaultGap(t *testing.T) {
 	t.Parallel()
-	th := newTeamHerdr(t)
+	th := newSpacesHerdr(t)
 	var logs lockedLog
 	noticeRun(t, th, noticesConfig(t, "gap = -1\n"), &logs)
 	waitLine(t, &logs, "the daemon started")
@@ -398,7 +397,7 @@ func TestNoticesFollowEachProjectsTable(t *testing.T) {
 	th := newTeamHerdr(t)
 	withTeam(th)
 	var logs lockedLog
-	noticeRun(t, th, haNotices(t, "[projects.ha.notices]\nskip = [\"blocked\"]\n[notices]\ngap = 0\n"), &logs)
+	noticeRun(t, th, haNotices(t, liveTOML+"[projects.ha.notices]\nskip = [\"blocked\"]\n[notices]\ngap = 0\n"), &logs)
 	waitLine(t, &logs, "the daemon started")
 	polled(t, th.srv, 2)
 	th.setPane("w14:p2", "agent_status", "blocked")

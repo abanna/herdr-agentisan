@@ -122,7 +122,7 @@ func TestMuteOverTheSocket(t *testing.T) {
 	th, _, dir := haTeam(t)
 	th.setAgents(named("w14:p1", "ha-boss"), named("w14:p2", "ha-coder-1"), turned("wN:p1", "pee01", 1))
 	var logs lockedLog
-	o := teamOpts(t, dir, th, haNotices(t, "[notices]\ngap = 0\n"))
+	o := teamOpts(t, dir, th, haNotices(t, liveTOML+"[notices]\ngap = 0\n"))
 	logger, err := logging.New(&logs, "info", "json")
 	require.NoError(t, err)
 	o.Logger = logger
