@@ -5,6 +5,7 @@
 
 ╭─ CODERS · 9 ✔1 ◐4 ●2 ⚠1 ⟳1 ──────────────────────────────────────────────────╮
 │ write the code                                                               │
+│   Worker     Status   Model Ctx         Item       Stage                 Age │
 │ ◐ pee01      working  opus  ▓▓░░░  38%  r2         J1 re-run             12m │
 │ ◐ pee02      working  opus  ▓▓░░░  30%             J1 re-queued          21m │
 │ ● pee03      idle     opus  ▓░░░░  22%  PR3a       committed           1h39m │
@@ -16,9 +17,8 @@
 │ ◐ pee09      working  opus  ▓▓▓░░  69%  NERD-5268  precheck: tdaddy …        │
 ╰──────────────────────────────────────────────────────────────────────────────╯
 ╭─ PRECHECK · 2 ◐1 ●1 ─────────────────────────────────────────────────────────╮
+│   Worker     Status   Model Ctx         Item       Stage                 Age │
 │ ◐ precheck   working  son   ▓▓░░░  37%             running                8m │
 │ ● precheck2  idle     son   ▓░░░░  10%                                       │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-╭─ QA · 1 ✔1 ──────────────────────────────────────────────────────────────────╮
-│ ✔ qa         done     son   ▓░░░░  12%             queue empty         3h19m │
- /▏ · enter jump · ↑↓ move · esc clear                                       ↓3
+ /▏ · enter jump · ↑↓ move · esc clear                                       ↓4

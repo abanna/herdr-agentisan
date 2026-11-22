@@ -24,8 +24,12 @@ var headerOf = regexp.MustCompile(`^\[agentisan\] notices(?: \(([1-9][0-9]*) ear
 // m's notices after its own, or m's body alone when queued is "". The oldest
 // lines are cut, and counted in the header, until the body fits MaxBody,
 // the inbox's cap; the newest line always stays. It reports false when
-// queued is not a body AppendTo wrote, which is never appended to.
+// queued is not a body AppendTo wrote, which is never appended to, and when
+// m is a Tail message and queued is not "".
 func (m Message) AppendTo(queued string) (string, bool) {
+	if m.Tail && queued != "" {
+		return "", false
+	}
 	dropped, lines := m.Dropped, []string{}
 	if queued != "" {
 		head, rest, _ := strings.Cut(queued, "\n")
@@ -51,6 +55,14 @@ func (m Message) AppendTo(queued string) (string, bool) {
 		lines, dropped = lines[1:], dropped+1
 	}
 	return strings.Join(append([]string{inboxHeader(dropped)}, lines...), "\n"), true
+}
+
+// Kept is how many of m's lines, the newest, body holds: body is the one
+// AppendTo wrote for m, as the inbox committed it. AppendTo cuts from the
+// front and none of its lines holds a line break, so they are the last
+// min(len(m.Lines), the lines after the header) of m's (NERD-5533).
+func (m Message) Kept(body string) int {
+	return min(len(m.Lines), strings.Count(body, "\n"))
 }
 
 func inboxHeader(dropped int) string {

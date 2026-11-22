@@ -10,8 +10,8 @@ import (
 
 // The notice ledger's metadata (NERD-5533 B0a.3-queries): what it holds,
 // read without changing it. Each count is read with its quota's own query,
-// so it is the number that quota compares, but for the hour: it is counted
-// per source, as Q8 counts it from B0a.4-hour on. It is dormant, as the
+// so it is the number that quota compares: the hour is counted per source,
+// as Q8 counts it. It is dormant, as the
 // ledger is: nothing in production reads it yet.
 
 // NoticeMeta is what the ledger tells about a pending notice without its
@@ -93,10 +93,9 @@ func (s *Store) PendingNotices(ctx context.Context, project string, limit int) (
 // at, each exact, never capped at its quota's limit, all read in one
 // snapshot. A count quota refuses exactly when its count reaches its limit,
 // a byte quota when the count plus the next notice's bytes would pass it.
-// The hour is counted per source, GitHub and daemon, as Q8 counts it from
-// B0a.4-hour on; before it, Q8 compares their sum. at must be a time the
-// store can hold, else it is ErrInvalid; a total 0010 keeps that is
-// missing is ErrStore. Its cost is not bounded by the quotas' caps: it is
+// The hour is counted per source, GitHub and daemon, as Q8 counts it. at
+// must be a time the store can hold, else it is ErrInvalid; a total 0010
+// keeps that is missing is ErrStore. Its cost is not bounded by the quotas' caps: it is
 // off the admission path. It writes nothing and wakes no reader.
 func (s *Store) NoticeStats(ctx context.Context, project string, at time.Time) (NoticeStats, error) {
 	ns, err := nanos(at)

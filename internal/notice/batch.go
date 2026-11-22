@@ -24,7 +24,42 @@ type Message struct {
 	Lines   []string
 	// Dropped counts the oldest notices cut to keep the body under MaxBody.
 	Dropped int
-	acks    []func()
+	// Tail queues this message as a new inbox row, never appended to one
+	// still queued.
+	Tail bool
+	// acks has one slot per batched notice, nil for a notice without an Ack.
+	// Cut notices form a prefix; the last len(Lines) slots align with Lines.
+	acks []func()
+	// all keeps the board fields of every notice, including the cut prefix.
+	all []Entry
+}
+
+// Entry is one notice of a message as a board post carries it (A74).
+type Entry struct {
+	Kind            Kind
+	Subject, Worker string
+	Body            string
+}
+
+// Entries is every notice of m, oldest first, the ones its lines cut for
+// size included. Each body is the notice's line as the inbox writes it, or
+// "(no text)" for an empty one.
+func (m Message) Entries() []Entry {
+	out := make([]Entry, len(m.all))
+	for i, e := range m.all {
+		e.Body = inboxLine(e.Body)
+		if e.Body == "" {
+			e.Body = "(no text)"
+		}
+		out[i] = e
+	}
+	return out
+}
+
+// SettleAll acknowledges every notice of m, the cut ones included. The
+// caller runs it, in place of Settle, once a sink has taken every entry.
+func (m Message) SettleAll() {
+	settle(m.acks)
 }
 
 // Body is the message as one text: a line saying how many notices were cut,
@@ -37,11 +72,19 @@ func (m Message) Body() string {
 	return strings.Join(lines, "\n")
 }
 
-// Settle acknowledges every notice in m. The caller runs it once the sink
-// has accepted m.
-func (m Message) Settle() {
-	for _, ack := range m.acks {
-		ack()
+// Settle acknowledges the notices of m's last kept lines, the ones the
+// message the sink committed holds (Sink): the caller runs it once the sink
+// has accepted m. A line cut before the sink committed it is not settled.
+func (m Message) Settle(kept int) {
+	n := min(max(kept, 0), len(m.acks), len(m.Lines))
+	settle(m.acks[len(m.acks)-n:])
+}
+
+func settle(acks []func()) {
+	for _, ack := range acks {
+		if ack != nil {
+			ack()
+		}
 	}
 }
 
@@ -131,8 +174,10 @@ func (b *Batcher) Flush(now time.Time) []Message {
 	return out
 }
 
-// message is ns as one message, the oldest cut until its body fits MaxBody.
+// message is ns as one message, the oldest cut until its body fits MaxBody;
+// it keeps every notice of ns for Entries and SettleAll.
 func message(project string, ns []Notice) Message {
+	all := ns
 	size := func(ns []Notice, dropped int) int {
 		n := 0
 		if dropped > 0 {
@@ -147,12 +192,13 @@ func message(project string, ns []Notice) Message {
 	for len(ns) > 1 && size(ns, dropped) > MaxBody {
 		ns, dropped = ns[1:], dropped+1
 	}
-	m := Message{Project: project, Dropped: dropped}
+	m := Message{Project: project, Dropped: dropped, all: make([]Entry, len(all)), acks: make([]func(), len(all))}
+	for i, n := range all {
+		m.all[i] = Entry{Kind: n.Kind, Subject: n.Subject, Worker: n.Worker, Body: n.Text}
+		m.acks[i] = n.Ack
+	}
 	for _, n := range ns {
 		m.Lines = append(m.Lines, n.Text)
-		if n.Ack != nil {
-			m.acks = append(m.acks, n.Ack)
-		}
 	}
 	return m
 }

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"io"
 	"io/fs"
+	"sync/atomic"
 	"time"
 )
 
@@ -36,11 +37,15 @@ func NoticeQuotasOf(s *Store) NoticeQuotas { return s.quotas }
 // NoticeRateWindow is Q8's window.
 const NoticeRateWindow = noticeRateWindow
 
+// NoticeKindCeiling is the daemon's context ceiling kind, which Q8 never
+// refuses: C2 pins it to notice.CtxCeiling.
+const NoticeKindCeiling = noticeKindCeiling
+
 // NoticeQuotaQueries are the quotas' queries, by quota.
 var NoticeQuotaQueries = map[string]string{
 	"Q1": selectPendingPerProject, "Q2": selectPendingInStore, "Q3": selectPendingPerPR,
 	"Q4": selectBytesPerProject, "Q5": selectBytesInStore,
-	"Q6": selectProjectIdentities, "Q7": selectStoreIdentities, "Q8": selectAdmissionsInWindow,
+	"Q6": selectProjectIdentities, "Q7": selectStoreIdentities, "Q8": selectSourceAdmissionsInWindow,
 }
 
 // SetNoticeEntropy sets the reader s draws its daemon notices' IDs' random
@@ -70,4 +75,25 @@ func (r Row) InUTC() Row {
 		r.Routing = &rt
 	}
 	return r
+}
+
+// CountBoardSignals installs a forwarding wake on this test's private store
+// before its first writer starts. A second signal still counts when the
+// first already closed the wait channel.
+func CountBoardSignals(s *Store) func() int64 {
+	rec := &countingBoardWake{next: s.wake}
+	s.wake = rec
+	return rec.calls.Load
+}
+
+type countingBoardWake struct {
+	next  boardNotifier
+	calls atomic.Int64
+}
+
+func (w *countingBoardWake) changed() <-chan struct{} { return w.next.changed() }
+
+func (w *countingBoardWake) signal() {
+	w.calls.Add(1)
+	w.next.signal()
 }

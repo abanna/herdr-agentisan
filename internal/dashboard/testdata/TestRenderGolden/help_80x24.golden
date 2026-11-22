@@ -1,24 +1,24 @@
 ╭──────────────────────────────────────────────────────────────────────────────╮
 │ agentisan · PRs 5 · issues 14 · slots 2/2                           [ btop ] │
-│ boss ▸ ◐ working · #867 release · review · ctx ▓▓░░░░░░ 23%            17:19 │
+│ boss ▸ ◐ working╭ help ────────────────────────────────────╮           17:19 │
+╰─────────────────│ ↑ ↓ / wheel move or scroll expanded post │─────────────────╯
+                  │ pgup/pgdown page through expanded post   │
+╭─ CODERS · 9 ✔1 ◐│ home/end    start/end of expanded post   │─────────────────╮
+│ write the code  │ enter       jump; expand/collapse post   │                 │
+│   Worker     Sta│ click       jump to agent or open group  │             Age │
+│ ◐ pee01      wor│ 1-9         open that group's view       │             12m │
+│ ◐ pee02      wor│ esc / ←     back; esc closes post/help   │ued          21m │
+│ ● pee03      idl│ /           search name/group/item/stage │           1h39m │
+│ ◐ pee04      wor│ b           open or close the board      │              3m │
+│ ⚠ pee05      blo│ t / d       board team / daemon filter   │n boss     1h09m │
+│ ● pee06      idl│ m / click   btop in a herdr popup        │                 │
+│ ✔ pee07      don│ ?           close this help              │           2d08h │
+│ ⟳ pee08      rea│ q           quit                         │ead           0m │
+│ ◐ pee09      wor│ ◐ working   ● idle                       │ tdaddy …        │
+╰─────────────────│ ⚠ blocked   ✔ done                       │─────────────────╯
+╭─ PRECHECK · 2 ◐1│ ⟳ ready     ? unknown                    │─────────────────╮
+│   Worker     Sta│ ▸ shell                                  │             Age │
+│ ◐ precheck   wor╰──────────────────────────────────────────╯              8m │
+│ ● precheck2  idle     son   ▓░░░░  10%                                       │
 ╰──────────────────────────────────────────────────────────────────────────────╯
-
-╭─ CODERS · 9 ✔1 ╭ help ─────────────────────────────────────╮─────────────────╮
-│ write the code │ ↑ ↓       move through the agents         │                 │
-│ ◐ pee01      wo│ enter     jump; on board, expand post     │             12m │
-│ ◐ pee02      wo│ click     jump; a title opens its group   │ued          21m │
-│ ● pee03      id│ 1-9       open that group's view          │           1h39m │
-│ ◐ pee04      wo│ esc ←     back from a group's view        │              3m │
-│ ⚠ pee05      bl│ /         search name, group, item, stage │n boss     1h09m │
-│ ● pee06      id│ b         open or close the board         │                 │
-│ ✔ pee07      do│ t / d     board: team / daemon filter     │           2d08h │
-│ ⟳ pee08      re│ [ btop ]  btop in a herdr popup           │ead           0m │
-│ ◐ pee09      wo│ ?         close this help                 │ tdaddy …        │
-╰────────────────│ q         quit                            │─────────────────╯
-╭─ PRECHECK · 2 ◐│ ◐ working   ● idle                        │─────────────────╮
-│ ◐ precheck   wo│ ⚠ blocked   ✔ done                        │              8m │
-│ ● precheck2  id│ ⟳ ready     ? unknown                     │                 │
-╰────────────────│ ▸ shell                                   │─────────────────╯
-╭─ QA · 1 ✔1 ────╰───────────────────────────────────────────╯─────────────────╮
-│ ✔ qa         done     son   ▓░░░░  12%             queue empty         3h19m │
- enter jump · ↑↓ move · b board · ctrl-b m btop · ? help · q quit            ↓3
+ enter jump · ↑↓ move · b board · m btop · ? help · q quit                   ↓4

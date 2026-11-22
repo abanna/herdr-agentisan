@@ -17,7 +17,7 @@ WHERE recipient_kind = 'boss' AND recipient = ?1 AND sender_kind = 'daemon' AND 
 ORDER BY seq DESC LIMIT 1`
 
 // appendNotice rewrites the queued message ?1's body to ?2, at ?3.
-const appendNotice = `UPDATE messages SET body = ?2, updated_at = max(?3, created_at)
+const appendNotice = `UPDATE messages SET body = ?2, updated_at = max(?3, created_at, coalesce(` + heldAfterRow + `, ?3))
 WHERE id = ?1 AND state = 'queued'
 RETURNING ` + messageColumns
 

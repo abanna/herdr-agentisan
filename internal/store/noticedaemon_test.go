@@ -508,6 +508,28 @@ func TestDaemonNoticeFacesTheQuotas(t *testing.T) {
 	}
 }
 
+// TestTheCeilingPassesAFullHour (S13): with Q8 at 0, a daemon ctx_ceiling
+// is admitted, while a daemon ctx_hard and a GitHub notice are refused at
+// Q8; the ceiling counts in the daemon's hour. It skips Q8 alone: with Q1
+// at 0 too, a ceiling is refused at Q1.
+func TestTheCeilingPassesAFullHour(t *testing.T) {
+	t.Parallel()
+	f := newQuotaFixture(t)
+	f.set(func(q *store.NoticeQuotas) { q.AdmissionsPerHour = 0 })
+	ceiling := func() store.NoticeEnvelope {
+		return daemonNotice(func(e *store.NoticeEnvelope) { e.Kind = string(notice.CtxCeiling) })
+	}
+	admitDaemon(t, f.s, ceiling(), daemonAt)
+	f.refused(daemonNotice(func(e *store.NoticeEnvelope) { e.Kind = string(notice.CtxHard) }), daemonAt, 8)
+	f.refused(f.notice("ha", 50), daemonAt, 8)
+	st, err := f.s.NoticeStats(t.Context(), "ha", daemonAt)
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), st.DaemonLastHour, "the ceiling counts")
+
+	f.set(func(q *store.NoticeQuotas) { q.PendingPerProject = 0 })
+	f.refused(ceiling(), daemonAt, 1)
+}
+
 // TestDaemonNoticeHasNoEffect (S6): admitting a daemon notice, or refusing
 // one, writes no table but the ledger's and wakes no board reader.
 func TestDaemonNoticeHasNoEffect(t *testing.T) {
@@ -764,7 +786,8 @@ func TestDaemonNoticeIDMustParse(t *testing.T) {
 
 // TestNoticeKindsFitTheDaemonSource (C2, the kinds): each of notice.Kinds
 // that B0a.1's receipt grammar takes, GitHub's six, is refused as a daemon
-// notice, and every other kind is admitted.
+// notice, and every other kind is admitted. The store's own ceiling kind,
+// which Q8 never refuses, is notice.CtxCeiling.
 func TestNoticeKindsFitTheDaemonSource(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
@@ -781,6 +804,7 @@ func TestNoticeKindsFitTheDaemonSource(t *testing.T) {
 		assert.Equal(t, "pending", got.State)
 	}
 	assert.Equal(t, []string{"merged", "ci_failed", "ci_passed", "dirty", "approved", "review"}, fromGitHub)
+	assert.Equal(t, string(notice.CtxCeiling), store.NoticeKindCeiling, "the store's ceiling kind is the daemon's")
 }
 
 // githubGrammarTakes reports whether B0a.1's grammar takes a GitHub notice

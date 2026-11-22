@@ -42,3 +42,13 @@ key = "prefix+d"
 type = "shell"
 command = "herdr plugin pane open --plugin nerdsrun.agentisan --entrypoint dashboard --focus"
 description = "Agentisan: open the team dashboard"
+
+# btop from any herdr pane. Inside the dashboard, m also opens btop.
+
+[[keys.command]]
+key = "prefix+m"
+type = "popup"
+command = "btop"
+width = "92%"
+height = "92%"
+description = "Open btop"
