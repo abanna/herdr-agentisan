@@ -87,6 +87,16 @@ func settledOnce(t *testing.T, acked map[string]int, ns []notice.Notice, msg str
 	assert.Equal(t, want, got, msg)
 }
 
+// counted wraps n's acknowledgement, the real one, with a counter, and
+// returns the count: the seen-set upserts a key, so a second settlement of
+// the same notice leaves state.db as one would, and only the count tells
+// them apart (NERD-5533 b343f372, Q1).
+func counted(n *notice.Notice) *int {
+	calls, ack := new(int), n.Ack
+	n.Ack = func() { *calls++; ack() }
+	return calls
+}
+
 // queuedFor is the body of the message queued for to, claimed.
 func queuedFor(t *testing.T, st *store.Store, to store.Address, now time.Time) string {
 	t.Helper()
@@ -172,8 +182,10 @@ func TestACutCIFailureStillFailingIsToldAgainByTheRunningSource(t *testing.T) {
 	again := collectCI(t, c.Source(), snapshot.CIFailure)
 	require.Len(t, again, 1, "still failing, never typed, never recorded: the running source tells it again")
 	assert.Equal(t, line, again[0].Text)
+	retried := counted(&again[0])
 	c.Add(now, again)
 	c.Flush(t.Context())
+	assert.Equal(t, 1, *retried, "the retry, committed whole, is settled once: its real acknowledgement runs once")
 	assert.Equal(t, map[store.GitHubEvent]bool{ciFailed: true}, seenOnDisk(t, st), "the retry, committed whole, is settled: its key alone is recorded")
 	c.Serve(t.Context(), ciBosses["app"])
 	require.Len(t, p.all(), 2)
@@ -219,8 +231,10 @@ func TestACutCIFailureStillFailingIsToldAgainAfterARestart(t *testing.T) {
 	again := collectCI(t, c.Source(), snapshot.CIFailure)
 	require.Len(t, again, 1, "still failing, never recorded: the restarted daemon tells it again")
 	assert.Equal(t, line, again[0].Text)
+	retried := counted(&again[0])
 	c.Add(now, again)
 	c.Flush(t.Context())
+	assert.Equal(t, 1, *retried, "the retry, committed whole, is settled once: its real acknowledgement runs once")
 	assert.Equal(t, map[store.GitHubEvent]bool{ciFailed: true}, seenOnDisk(t, st), "the retry, committed whole, is settled: its key alone is recorded")
 	c.Serve(t.Context(), ciBosses["app"])
 	require.Len(t, p.all(), 2)
