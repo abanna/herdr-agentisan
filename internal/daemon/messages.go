@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unicode"
 	"unicode/utf8"
@@ -76,6 +77,11 @@ type inbox struct {
 	// the dispatcher's own backlog wake (posted) runs after it is released.
 	route sync.Mutex
 	mu    sync.Mutex
+	// Only the dispatcher writes typedBoss. It publishes a board-key boss
+	// after a durable typed claim, before releasing route, and clears it
+	// after attempting to settle the prompt. A poll can then read it
+	// after remember without holding a lock across either sink.
+	typedBoss bossClaim
 	// probe, nil outside tests, is called just before remember takes route
 	// ("remember") and at each delivery read ("delivery"): the tests check
 	// what is held at those points (export_notices_test.go's SetProbe).
@@ -95,7 +101,16 @@ type inbox struct {
 	wake chan struct{}
 }
 
-func newInbox() *inbox { return &inbox{wake: make(chan struct{}, 1), last: map[string]string{}} }
+// bossClaim holds the single dispatcher's outstanding board-key boss
+// claim. The poll reads it concurrently with the dispatcher's stores.
+type bossClaim interface {
+	Load() *store.Address
+	Store(*store.Address)
+}
+
+func newInbox() *inbox {
+	return &inbox{wake: make(chan struct{}, 1), last: map[string]string{}, typedBoss: new(atomic.Pointer[store.Address])}
+}
 
 // configure records each team's boss: <short>-boss for a tabs team, boss for
 // the ◆ spaces (UQ2).
@@ -409,6 +424,9 @@ func (d *dispatcher) claim(ctx context.Context, to store.Address) (store.Message
 // deliverable message into a failure; a cancelled context would also interrupt the
 // write's statement (NERD-5355). It reports whether m landed.
 func (d *dispatcher) deliver(ctx context.Context, m store.Message, target string) bool {
+	if m.To.Kind == store.KindBoss && d.in.typedBoss.Load() != nil {
+		defer d.in.typedBoss.Store(nil)
+	}
 	ctx = context.WithoutCancel(ctx)
 	_, err := d.c.PromptAgent(ctx, target, offToken(cleanText(textOf(m))))
 	sctx, cancel := context.WithTimeout(ctx, settleTimeout)

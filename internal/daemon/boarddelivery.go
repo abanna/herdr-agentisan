@@ -90,7 +90,11 @@ func (d *dispatcher) claimTyped(ctx context.Context, bosses map[string]string, t
 	if d.in.delivery(project) != notice.DeliverTyped {
 		return store.Message{}, false, nil
 	}
-	return d.claim(ctx, to)
+	m, ok, err := d.claim(ctx, to)
+	if ok && err == nil {
+		d.in.typedBoss.Store(&to)
+	}
+	return m, ok, err
 }
 
 // boardBoss is the project to is the boss of, and whether its key is board:

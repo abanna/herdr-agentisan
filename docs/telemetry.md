@@ -309,10 +309,11 @@ id> handoff <step>`.
 
 ### `agentisan.board.posted`
 
-The emitter is reserved for per-notice board delivery (ADR-001 A74).
-The daemon has no production caller yet. The record describes a committed
-batch. Its body reads `<posts> posts on <project>'s board`. Notice text
-stays out of the record.
+One flush of a board-mode team's notices posted on its board (ADR-001
+A74): one post per notice, in one transaction. It is one event per board
+flush; a notice a board flush posts gives no `agentisan.message.*` event.
+The body reads `<posts> posts on <project>'s board`, and never carries a
+post's body.
 
 | Attribute | Type | Value |
 | --- | --- | --- |
