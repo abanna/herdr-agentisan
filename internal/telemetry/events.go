@@ -154,6 +154,47 @@ const (
 	HandoffFailed    = "failed"
 )
 
+// EventBoardPosted is one flush of a board-mode team's notices posted on its
+// board (A74): one post per notice, in one transaction.
+const EventBoardPosted = "agentisan.board.posted"
+
+// The attribute keys of EventBoardPosted.
+const (
+	// AttrBoardProject is the team whose board it is.
+	AttrBoardProject = "agentisan.board.project"
+	// AttrBoardChannel is the channel posted on: daemon for notices.
+	AttrBoardChannel = "agentisan.board.channel"
+	// AttrBoardPosts counts the posts.
+	AttrBoardPosts = "agentisan.board.posts"
+	// AttrBoardFirstSeq and AttrBoardLastSeq are the first post's seq and
+	// the last's.
+	AttrBoardFirstSeq = "agentisan.board.first_seq"
+	AttrBoardLastSeq  = "agentisan.board.last_seq"
+)
+
+// BoardPost is one EventBoardPosted: the posts, never their bodies.
+type BoardPost struct {
+	Project, Channel  string
+	Posts             int
+	FirstSeq, LastSeq int64
+}
+
+// BoardPosted emits p as an EventBoardPosted record.
+func (e *Events) BoardPosted(ctx context.Context, p BoardPost) {
+	if e == nil {
+		return
+	}
+	r := record(EventBoardPosted, fmt.Sprintf("%d posts on %s's board", p.Posts, p.Project))
+	r.AddAttributes(
+		attribute.String(AttrBoardProject, p.Project),
+		attribute.String(AttrBoardChannel, p.Channel),
+		attribute.Int(AttrBoardPosts, p.Posts),
+		attribute.Int64(AttrBoardFirstSeq, p.FirstSeq),
+		attribute.Int64(AttrBoardLastSeq, p.LastSeq),
+	)
+	e.logger.Emit(ctx, r)
+}
+
 // scope names the instrumentation the events come from.
 const scope = "github.com/abanna/herdr-agentisan/internal/telemetry"
 

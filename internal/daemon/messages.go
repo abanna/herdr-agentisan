@@ -208,12 +208,9 @@ func (in *inbox) view() (*team.Model, map[string]string) {
 // dispatcher delivers state.db's queued messages, one prompt in flight at a
 // time (Q2). Only its goroutine touches it.
 type dispatcher struct {
-	st     *store.Store
-	c      herdr.Client
-	in     *inbox
-	events *telemetry.Events
-	log    zerolog.Logger
-	now    func() time.Time
+	boardWriter
+	c  herdr.Client
+	in *inbox
 	// warned is, by recipient, why its messages last waited: logged at warn
 	// when it begins, then at debug while it lasts (Q3), until the reason
 	// changes or the recipient has nothing queued.
@@ -227,7 +224,7 @@ type dispatcher struct {
 func (o Options) newDispatcher(st *store.Store, in *inbox) *dispatcher {
 	c, _ := o.Herdr.(herdr.Client)
 	return &dispatcher{
-		st: st, c: c, in: in, events: o.Team.Events, log: o.Logger, now: o.Now,
+		boardWriter: o.boardWriter(st), c: c, in: in,
 		warned: map[store.Address]string{},
 	}
 }
