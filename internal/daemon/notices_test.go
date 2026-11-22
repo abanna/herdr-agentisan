@@ -323,16 +323,18 @@ func TestNoticeLineSaysWhatWasDropped(t *testing.T) {
 // failingSink refuses every message.
 type failingSink struct{}
 
-func (failingSink) Send(context.Context, notice.Message) error { return errors.New("refused") }
+func (failingSink) Send(context.Context, notice.Message) (int, error) {
+	return 0, errors.New("refused")
+}
 
 // orderSink records each send, and whether the ack had run by then.
 type orderSink struct {
 	acked, sentBeforeAck *bool
 }
 
-func (s orderSink) Send(context.Context, notice.Message) error {
+func (s orderSink) Send(_ context.Context, m notice.Message) (int, error) {
 	*s.sentBeforeAck = !*s.acked
-	return nil
+	return len(m.Lines), nil
 }
 
 // TestNoticesSettleOnlyWhatTheSinkAccepted is Stage 3's flush rule: a
