@@ -314,11 +314,10 @@ func TestWatchAgentExited(t *testing.T) {
 // them.
 func TestWatchAgentExitNeedsAgentList(t *testing.T) {
 	t.Parallel()
-	ws := []herdr.WorkspaceInfo{{WorkspaceID: "wN", Label: "◆ coders"}}
-	panes := []herdr.PaneInfo{{PaneID: "wN:p1", WorkspaceID: "wN", AgentStatus: "working"}}
+	panes := []herdr.PaneInfo{{PaneID: "wN:p1", WorkspaceID: liveWS, TabID: liveTab.TabID, AgentStatus: "working"}}
 	agents := []herdr.AgentInfo{{PaneID: "wN:p1", Name: "pee01", TerminalID: "t1"}}
 	build := func(panes []herdr.PaneInfo, agents []herdr.AgentInfo) team.Model {
-		return team.Build(team.Layout{Workspaces: ws, Panes: panes, Agents: agents}, team.Spaces{}, nil)
+		return team.Build(liveLayout(panes, agents), liveTeam, nil)
 	}
 	w := notice.NewWatch()
 	w.Observe(build(panes, agents), agents, true)
@@ -373,8 +372,32 @@ func TestWatchAcrossAFailedAgentList(t *testing.T) {
 	}
 }
 
-// poll is one team poll's answers, for one ◆ space, wN: pane.list's, and
-// agent.list's when it answered (named).
+// The live team, a tabs team (A19), whose one coder's tab the polls answer
+// for.
+const (
+	liveProject = "agentisan"
+	// liveWS is its workspace, labelled liveProject.
+	liveWS = "wT"
+)
+
+// liveTeam resolves the live team.
+var liveTeam = team.Tabs{Project: liveProject, Short: "ag"}
+
+// liveTab is its first coder's tab.
+var liveTab = herdr.TabInfo{TabID: liveWS + ":t1", WorkspaceID: liveWS, Label: "ag-coder-1"}
+
+// liveLayout is the live team's workspace and tab, with panes and agents.
+func liveLayout(panes []herdr.PaneInfo, agents []herdr.AgentInfo) team.Layout {
+	return team.Layout{
+		Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: liveWS, Label: liveProject}},
+		Tabs:       []herdr.TabInfo{liveTab},
+		Panes:      panes,
+		Agents:     agents,
+	}
+}
+
+// poll is one team poll's answers, for the live team's coder's tab:
+// pane.list's, and agent.list's when it answered (named).
 type poll struct {
 	panes  []herdr.PaneInfo
 	agents []herdr.AgentInfo
@@ -389,11 +412,13 @@ func answered(panes []herdr.PaneInfo, agents []herdr.AgentInfo) poll {
 	return poll{panes, agents, true}
 }
 
-// paneOn is pane.list's answer for wN with one pane, wN:p1, showing
-// terminal term ("" for none listed), with the agent herdr detected there,
-// kind ("" for none), in status.
+// paneOn is pane.list's answer for the live team's coder's tab with one
+// pane, wN:p1, showing terminal term ("" for none listed), with the agent
+// herdr detected there, kind ("" for none), in status. The pane id is the ◆
+// space's, which ids are opaque to the watch: only its workspace and tab
+// moved.
 func paneOn(term, kind, status string) []herdr.PaneInfo {
-	return []herdr.PaneInfo{{PaneID: "wN:p1", WorkspaceID: "wN", TerminalID: term, Agent: kind, AgentStatus: status}}
+	return []herdr.PaneInfo{{PaneID: "wN:p1", WorkspaceID: liveWS, TabID: liveTab.TabID, TerminalID: term, Agent: kind, AgentStatus: status}}
 }
 
 // listed is agent.list's answer with one agent, in pane id on terminal term,
@@ -405,11 +430,10 @@ func listed(id, term, name string) []herdr.AgentInfo {
 // observeTexts is a new Watch's notices for polls, each model built as the
 // poll builds it: one entry per poll after the first, its texts joined.
 func observeTexts(polls []poll) []string {
-	ws := []herdr.WorkspaceInfo{{WorkspaceID: "wN", Label: "◆ coders"}}
 	w := notice.NewWatch()
 	var got []string
 	for i, p := range polls {
-		ns := w.Observe(team.Build(team.Layout{Workspaces: ws, Panes: p.panes, Agents: p.agents}, team.Spaces{}, nil), p.agents, p.named)
+		ns := w.Observe(team.Build(liveLayout(p.panes, p.agents), liveTeam, nil), p.agents, p.named)
 		if i == 0 {
 			continue
 		}

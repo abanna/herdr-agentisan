@@ -183,24 +183,25 @@ func TestHandoffReadyTrustsTheRowOverTheTab(t *testing.T) {
 
 // TestHandoffReadyMarksOnlyATeamsWorkers: the boss's tab, a shell, a pane in
 // no team's group and names nobody holds, the boss's tab label among them,
-// are refused and nothing is written; a ◆ space's agent is the unnamed
-// project's worker, ◆ boss is the boss's, and an agent herdr knows only by
-// name, as a held one, is a worker.
+// are refused and nothing is written; another team's worker is that team's,
+// its boss's tab is the boss's, and an agent herdr knows only by name, as a
+// held one, is a worker.
 func TestHandoffReadyMarksOnlyATeamsWorkers(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, teamConfig)
+	f := newFixture(t, sendConfig)
 	f.worker(t, "ha-coder-1", "coder")
 	shell := f.h.addTab(f.ws, "ha-coder-2", "", "unknown")
 	split := f.h.addPane(f.boss, "claude", "idle")
 	notes := f.h.addTab(f.ws, "notes", "claude", "idle")
 	theirs := f.h.addTab(f.h.addWorkspace("elsewhere"), "ha-coder-6", "claude", "idle")
-	spacesBoss := f.h.addTab(f.h.addWorkspace("◆ boss"), "1", "claude", "working")
-	spacesCoder := f.h.addTab(f.h.addWorkspace("◆ coders"), "1", "claude", "idle")
+	assay := f.h.addWorkspace("assay")
+	theirBoss := f.h.addTab(assay, "as-boss", "claude", "working")
+	theirCoder := f.h.addTab(assay, "as-coder-1", "claude", "idle")
 
 	for name, target := range map[string]string{
 		"the boss's pane":           f.boss,
 		"a split in the boss's tab": split,
-		"◆ boss":                    spacesBoss,
+		"another team's boss":       theirBoss,
 		"a shell by tab label":      "ha-coder-2",
 		"a shell by pane id":        shell,
 		"a tab that is no worker's": notes,
@@ -218,15 +219,33 @@ func TestHandoffReadyMarksOnlyATeamsWorkers(t *testing.T) {
 	assert.Empty(t, f.h.params("pane.report_metadata"))
 	assert.Empty(t, f.h.params("pane.get"), "nothing is proven for a refusal")
 
-	res, err := f.svc.HandoffReady(t.Context(), workforce.HandoffReadyRequest{Target: spacesCoder})
+	res, err := f.svc.HandoffReady(t.Context(), workforce.HandoffReadyRequest{Target: theirCoder})
 	require.NoError(t, err)
-	assert.Equal(t, workforce.HandoffReadyResult{ID: spacesCoder, Project: "", Group: "coders", PaneID: spacesCoder, Ready: true, Changed: true}, res)
+	assert.Equal(t, workforce.HandoffReadyResult{ID: theirCoder, Project: "assay", Group: "coder", PaneID: theirCoder, Ready: true, Changed: true}, res)
 
 	held := f.h.addTab(f.ws, "ha-coder-5", "claude", "idle")
 	f.h.setPane(held, func(p *fakePane) { p.agent = "" })
 	res, err = f.svc.HandoffReady(t.Context(), workforce.HandoffReadyRequest{Target: "ha-coder-5"})
 	require.NoError(t, err, "an agent herdr knows only by name, as a held one, is no shell")
 	assert.Equal(t, held, res.PaneID)
+}
+
+// TestHandoffReadyOnTheSpaces is TestHandoffReadyMarksOnlyATeamsWorkers on
+// the ◆ spaces: ◆ boss is the boss's, and refused, and a ◆ space's agent is
+// the unnamed project's worker.
+func TestHandoffReadyOnTheSpaces(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	spacesBoss := f.h.addTab(f.h.addWorkspace("◆ boss"), "1", "claude", "working")
+	spacesCoder := f.h.addTab(f.h.addWorkspace("◆ coders"), "1", "claude", "idle")
+
+	_, err := f.svc.HandoffReady(t.Context(), workforce.HandoffReadyRequest{Target: spacesBoss})
+	require.ErrorIs(t, err, workforce.ErrNotAWorker, "◆ boss")
+	assert.Empty(t, f.h.params("pane.report_metadata"))
+
+	res, err := f.svc.HandoffReady(t.Context(), workforce.HandoffReadyRequest{Target: spacesCoder})
+	require.NoError(t, err)
+	assert.Equal(t, workforce.HandoffReadyResult{ID: spacesCoder, Project: "", Group: "coders", PaneID: spacesCoder, Ready: true, Changed: true}, res)
 }
 
 // TestHandoffReadyRechecksThePaneBeforeWriting: a pane that shows another
