@@ -181,9 +181,12 @@ func TestReplayBuilder(t *testing.T) {
 
 	t.Run("a stored result that does not decode", func(t *testing.T) {
 		t.Parallel()
-		for _, result := range []string{`{"workers":3}`, `{"workers":[{"id":"ha-coder-1","generation":99999999999999999999}]}`} {
+		// Only a hand-edited or damaged store holds one: not JSON at all,
+		// or JSON of another shape. Its own sentinel answers store_failed,
+		// never failed (A73).
+		for _, result := range []string{`{`, `{"workers":3}`, `{"workers":[{"id":"ha-coder-1","generation":99999999999999999999}]}`} {
 			_, err := workforce.Replay(done(store.SpawnAnswer{Code: "ok", Result: []byte(result)}, linked("ha-coder-1", 0, store.StatusActive, "w9:p1", 0)))
-			require.Error(t, err, result)
+			require.ErrorIs(t, err, workforce.ErrStoredAnswerUnreadable, result)
 			var refused *workforce.RefusalError
 			assert.False(t, errors.As(err, &refused), result)
 		}

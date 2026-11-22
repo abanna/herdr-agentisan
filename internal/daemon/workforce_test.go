@@ -843,6 +843,7 @@ func TestWorkforceCodes(t *testing.T) {
 		workforce.ErrSpawnUnsettled:                                                                     "spawn_unsettled",
 		fmt.Errorf("finish a spawn: %w", store.ErrSpawnKeyChanged):                                      "spawn_unsettled",
 		fmt.Errorf("begin a spawn: %w", store.ErrSpawnKeyExists):                                        "store_failed",
+		fmt.Errorf("replay: %w", workforce.ErrStoredAnswerUnreadable):                                   "store_failed",
 		fmt.Errorf("bind a spawned worker: %w", store.ErrNoSpawnKey):                                    "failed",
 		&workforce.RefusalError{Code: "slot_cap", Err: store.ErrStore}:                                  "slot_cap",
 		fmt.Errorf("spawn: %w", &workforce.RefusalError{Code: "pane_changed", Err: workforce.ErrHerdr}): "pane_changed",
@@ -859,6 +860,7 @@ func TestWorkforceCodes(t *testing.T) {
 	assert.Equal(t, []error{workforce.ErrRetryKeyReused}, from["retry_key_mismatch"])
 	assert.ElementsMatch(t, []error{workforce.ErrSpawnUnsettled, store.ErrSpawnKeyChanged}, from["spawn_unsettled"])
 	assert.Contains(t, from["store_failed"], store.ErrSpawnKeyExists)
+	assert.Contains(t, from["store_failed"], workforce.ErrStoredAnswerUnreadable)
 }
 
 // TestOpBudgets: team status, retire, send and handoff ready get 10 s, spawn

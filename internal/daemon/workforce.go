@@ -121,12 +121,14 @@ var workforceCodes = []struct {
 	{workforce.ErrSpawnFailed, "spawn_failed"},
 	// A73's retry keys: a store's changed record, which only a race the
 	// keys in flight exclude reaches, is answered unsettled, so a retry with
-	// the same key replays or settles it; a hand-edited store's known key is
-	// a store failure, never failed.
+	// the same key replays or settles it; a hand-edited store's known key,
+	// or its stored answer that does not decode, is a store failure, never
+	// failed.
 	{workforce.ErrRetryKeyReused, "retry_key_mismatch"},
 	{workforce.ErrSpawnUnsettled, codeSpawnUnsettled},
 	{store.ErrSpawnKeyChanged, codeSpawnUnsettled},
 	{store.ErrSpawnKeyExists, codeStoreFailed},
+	{workforce.ErrStoredAnswerUnreadable, codeStoreFailed},
 	{workforce.ErrUnknownRecipient, "unknown_recipient"},
 	{workforce.ErrUnknownSender, "unknown_sender"},
 	{store.ErrTooLarge, "too_large"},

@@ -84,6 +84,10 @@ var (
 	// ErrReplayed is a replayed refusal's cause: a stored answer, whose own
 	// cause is gone, so only its code says what it was (A73).
 	ErrReplayed = errors.New("a stored answer, replayed")
+	// ErrStoredAnswerUnreadable means a done record's stored result does
+	// not decode, which only a hand-edited or damaged store holds: a store
+	// failure, never failed, and the key stays as it is (A73).
+	ErrStoredAnswerUnreadable = errors.New("the retry key's stored answer does not decode")
 )
 
 // Defaults for the waits; Service fields of the same name override them.

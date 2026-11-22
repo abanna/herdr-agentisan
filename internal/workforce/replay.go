@@ -21,8 +21,9 @@ const superseded = "superseded"
 // pane id only while its row is live; a superseded worker has neither. For
 // a refusal it is a *RefusalError of the stored code, the key spent, its message
 // between the replay's prefix and what each planned worker is now, its
-// cause ErrReplayed. A record still running is ErrSpawnUnsettled. It reads
-// nothing but r.
+// cause ErrReplayed. A record still running is ErrSpawnUnsettled, and a
+// stored result that does not decode ErrStoredAnswerUnreadable. It reads
+// nothing but r and writes nothing.
 func Replay(r store.SpawnRecord) (SpawnResult, error) {
 	if r.State != "done" {
 		return SpawnResult{}, fmt.Errorf("%w: replay a request still running", ErrSpawnUnsettled)
@@ -38,7 +39,7 @@ func Replay(r store.SpawnRecord) (SpawnResult, error) {
 	}
 	var res SpawnResult
 	if err := json.Unmarshal(r.Answer.Result, &res); err != nil {
-		return SpawnResult{}, fmt.Errorf("replay the stored answer: %w", err)
+		return SpawnResult{}, fmt.Errorf("%w: %w", ErrStoredAnswerUnreadable, err)
 	}
 	links := map[string]store.SpawnLink{}
 	for _, l := range r.Planned {
