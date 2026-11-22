@@ -263,26 +263,31 @@ func TestBoardPendingIgnoresACeilingQuotedInAFailureNotice(t *testing.T) {
 // deletes this test. No non-test file in internal/ or cmd/ but board.go uses
 // the name, a selector, a method value or an interface's method alike; and in
 // board.go, where the type is declared and used, only the method's
-// definition is exempt: a selector of it there is a caller too.
+// definition is exempt: a selector of it there is a caller too. The same
+// scan keeps the daemon from importing the dormant attention tracker.
 func TestBoardPendingHasNoProductionCaller(t *testing.T) {
 	t.Parallel()
 	const own = "internal/store/board.go"
+	const tracker = "github.com/abanna/herdr-agentisan/internal/attention"
 	uses := map[string][]string{}
+	imports := map[string][]string{}
 	parsed := 0
 	for _, dir := range []string{"internal", "cmd"} {
-		names, _, _, files := productionUses(t, filepath.Join("..", ".."), dir, []string{"BoardPending"}, nil)
+		names, paths, _, files := productionUses(t, filepath.Join("..", ".."), dir, []string{"BoardPending"}, []string{tracker})
 		maps.Copy(uses, names)
+		maps.Copy(imports, paths)
 		parsed += files
 	}
 	assert.Greater(t, parsed, 100, "the scan reached the module's packages")
 	assert.NotEmpty(t, uses[own], "the scan finds BoardPending in %s", own)
 	delete(uses, own)
 	assert.Empty(t, uses, "BoardPending is dormant until PR 3b's poll calls it (A74)")
+	assert.Empty(t, imports, "the attention tracker is dormant until PR 3b's poll calls it (A74)")
 
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, filepath.Join("..", "..", own), nil, parser.SkipObjectResolution)
 	require.NoError(t, err)
-	queries := []string{"pendingPosts", "pendingHeld"}
+	queries := []string{"pendingPosts", "pendingHeld", "pendingLastAck"}
 	var method *ast.FuncDecl
 	selectors, declared := []string{}, map[*ast.Ident]bool{}
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -306,7 +311,7 @@ func TestBoardPendingHasNoProductionCaller(t *testing.T) {
 	})
 	require.NotNil(t, method, "the scan finds the method's definition in %s", own)
 	assert.Empty(t, selectors, "BoardPending is dormant in its own file too: only its definition is exempt (ef44f246)")
-	// Its queries run only inside it: a use of either outside its body and
+	// Its queries run only inside it: a use of any outside its body and
 	// their declarations is a caller under another name (71cf5dd9).
 	queryUses := []string{}
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -315,7 +320,7 @@ func TestBoardPendingHasNoProductionCaller(t *testing.T) {
 		}
 		return true
 	})
-	assert.Len(t, declared, len(queries), "the scan finds both queries' declarations in %s", own)
+	assert.Len(t, declared, len(queries), "the scan finds all query declarations in %s", own)
 	assert.Empty(t, queryUses, "BoardPending's queries run only inside it (71cf5dd9)")
 	others, _, _, _ := productionUses(t, filepath.Join("..", ".."), "internal/store", queries, nil)
 	delete(others, own)

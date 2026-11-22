@@ -359,9 +359,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   lookup per post they return, which `board.read` does not serve. On a
   write to a boss's inbox, the queue writers read `board_held_acks` to stamp
   the row past that boss's latest held cutoff across projects. Every
-  post wakes each `board wait`; `BoardPending` counts what a boss has left
-  unread and waiting, for the alert (A74). Tests open a fresh database in a
-  temp dir; the store is never mocked.
+  post wakes each `board wait`. The dormant `BoardPending` counts what a
+  boss has left unread and waiting, excluding acknowledgements, and reports
+  the latest acknowledgement for the alert (A74). Tests open a fresh
+  database in a temp dir. The store is never mocked.
   The board batch (`PostAll`, `FitID`) and notice message operations
   (`Entries`, `SettleAll`, `Tail`) are dormant until daemon wiring (A74),
   guarded by `TestBoardNoticeBatchHasNoProductionCaller`.

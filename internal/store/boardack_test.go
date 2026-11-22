@@ -512,8 +512,9 @@ BEGIN SELECT RAISE(ABORT, 'injected'); END`)
 
 // TestAcksHaveNoProductionCaller pins the dormant acknowledgement writes.
 // Production code outside boardack.go never uses AckPost, AckUpto,
-// AckResult or their write helpers. board.go reads board_acks when listing
-// posts and messages.go reads board_held_acks when stamping queue writes.
+// AckResult or their write helpers. board.go reads acknowledgements when
+// listing posts or counting what is pending. messages.go reads board_held_acks
+// when stamping queue writes.
 // The scan reads individual literals. It permits exactly the three stamp
 // fragments in messages.go, including when SQL is assembled from literals.
 func TestAcksHaveNoProductionCaller(t *testing.T) {
@@ -559,7 +560,7 @@ func TestAcksHaveNoProductionCaller(t *testing.T) {
 					lit := strings.ToLower(n.Value)
 					for table, allowed := range map[string][]string{
 						"board_acks":      {ackFile, boardFile},
-						"board_held_acks": {ackFile, messagesFile},
+						"board_held_acks": {ackFile, boardFile, messagesFile},
 					} {
 						switch {
 						case !strings.Contains(lit, table):
@@ -583,7 +584,7 @@ func TestAcksHaveNoProductionCaller(t *testing.T) {
 	assert.Greater(t, parsed, 100, "the scan reached the module's packages")
 	// The scan finds the names and the table where they are: it cannot pass
 	// by seeing nothing.
-	for _, name := range append(names, "board_acks in "+ackFile, "board_acks in "+boardFile, "board_held_acks in "+ackFile) {
+	for _, name := range append(names, "board_acks in "+ackFile, "board_acks in "+boardFile, "board_held_acks in "+ackFile, "board_held_acks in "+boardFile) {
 		assert.True(t, found[name], "the scan finds %s", name)
 	}
 	assert.ElementsMatch(t, []string{

@@ -437,38 +437,50 @@ type BoardPending struct {
 	OldestHeldCeiling     time.Time // the oldest held daemon row holding ceilingMark; zero: none
 	NewestCeiling         time.Time // the latest ceiling change pending: max(created_at) of the ceiling posts, max(updated_at) of the held daemon rows holding ceilingMark; zero: none
 	NewestCeilingPost     time.Time // max(created_at) of the ceiling posts alone, for rule 5 past a limit (user decision 2026-11-20); zero: none
+	LastAck               time.Time // the latest acknowledgement of a post on the project or of this boss's held messages; zero: none
 }
 
 // pendingPosts is the posts after the boss's mark on a project's board
-// (?1), with its ceilings, ?2 being the ceiling mark: a daemon post of kind
-// ctx_ceiling, or a daemon notices post holding the mark. It runs on
-// board_posts_by_project (project = ? AND seq > ?).
+// (?1) that the user has not acknowledged, with its ceilings, ?2 being
+// the ceiling mark: a daemon post of kind ctx_ceiling, or a daemon notices
+// post holding the mark. It runs on board_posts_by_project (project = ? AND
+// seq > ?) and looks up each post in board_acks by its key.
 const pendingPosts = `SELECT count(*), min(created_at),
   min(CASE WHEN channel = 'daemon' AND (kind = 'ctx_ceiling' OR (kind = 'notices' AND instr(body, ?2) > 0)) THEN created_at END),
   max(CASE WHEN channel = 'daemon' AND (kind = 'ctx_ceiling' OR (kind = 'notices' AND instr(body, ?2) > 0)) THEN created_at END),
   (SELECT coalesce(max(seq), 0) FROM board_marks WHERE project = ?1 AND reader = 'boss')
 FROM board_posts
-WHERE project = ?1 AND seq > (SELECT coalesce(max(seq), 0) FROM board_marks WHERE project = ?1 AND reader = 'boss')`
+WHERE project = ?1 AND seq > (SELECT coalesce(max(seq), 0) FROM board_marks WHERE project = ?1 AND reader = 'boss')
+  AND NOT EXISTS (SELECT 1 FROM board_acks a WHERE a.seq = board_posts.seq)`
 
-// pendingHeld is the messages queued for a boss (?1) in its inbox, with its
-// held ceilings, ?2 being the ceiling mark: a daemon notice holding the
-// mark, the oldest timed by its creation, at or before its ceiling line,
-// the newest change by its last update, which an appended line moves. A
+// pendingHeld is the messages queued for a boss (?1) that the user has
+// not acknowledged on project ?3's board, with its held ceilings, ?2 being
+// the ceiling mark. A daemon notice that holds the mark contributes its
+// creation time to the oldest ceiling and its last update to the newest
+// change, which moves when a line is appended. A
 // notice of a failed delivery (notice_of) or a returned row (returned_from)
 // is none, whatever it quotes: posted, rowPosts gives it no notices kind. It
-// runs on messages_inbox. PR 3c adds its acknowledgement filter to this
-// WHERE, and the ceilings are then read over the same rows.
+// runs on messages_inbox and looks up the project's record for this boss
+// by key. A row counts when its seq or updated_at exceeds the record.
 const pendingHeld = `SELECT count(*), min(created_at),
   min(CASE WHEN sender_kind = 'daemon' AND notice_of = '' AND returned_from = '' AND instr(body, ?2) > 0 THEN created_at END),
   max(CASE WHEN sender_kind = 'daemon' AND notice_of = '' AND returned_from = '' AND instr(body, ?2) > 0 THEN updated_at END)
 FROM messages
-WHERE recipient_kind = 'boss' AND recipient = ?1 AND state = 'queued'`
+WHERE recipient_kind = 'boss' AND recipient = ?1 AND state = 'queued'
+  AND (seq > coalesce((SELECT through_seq FROM board_held_acks WHERE project = ?3 AND boss = ?1), 0)
+    OR updated_at > coalesce((SELECT through_at FROM board_held_acks WHERE project = ?3 AND boss = ?1), 0))`
+
+// pendingLastAck finds the latest acknowledgement of a post on project ?1
+// or of boss ?2's held messages. It returns NULL when there is neither.
+const pendingLastAck = `SELECT max(x) FROM (SELECT max(acked_at) AS x FROM board_acks WHERE project = ?1
+  UNION ALL SELECT acked_at FROM board_held_acks WHERE project = ?1 AND boss = ?2)`
 
 // BoardPending is what the boss of project has left waiting on its board
-// and in its inbox, in one read transaction (ADR-001 A74). ceilingMark is
-// notice.CeilingMark. The user's read mark is never read: the dashboard's
-// panel moves it. An empty ceilingMark is refused (ErrInvalid): it would be
-// in every body, and every daemon notice would read as a ceiling.
+// and in its inbox, less what the user has acknowledged, with the latest
+// acknowledgement as LastAck, in one read transaction (ADR-001 A74).
+// ceilingMark is notice.CeilingMark. The dashboard moves the user's read mark,
+// which this query does not read. An empty ceilingMark is refused (ErrInvalid)
+// because every daemon notice would read as a ceiling.
 func (s *Store) BoardPending(ctx context.Context, project, boss, ceilingMark string) (BoardPending, error) {
 	if ceilingMark == "" {
 		return BoardPending{}, fmt.Errorf("%w: an empty ceiling mark matches every notice", ErrInvalid)
@@ -484,10 +496,15 @@ func (s *Store) BoardPending(ctx context.Context, project, boss, ceilingMark str
 	if err != nil {
 		return BoardPending{}, fmt.Errorf("%w: read %q's pending posts: %w", ErrStore, project, err)
 	}
-	err = tx.QueryRowContext(ctx, pendingHeld, boss, ceilingMark).Scan(&p.Held, &oldestHeld, &oldestHeldCeiling, &newestHeldCeiling)
+	err = tx.QueryRowContext(ctx, pendingHeld, boss, ceilingMark, project).Scan(&p.Held, &oldestHeld, &oldestHeldCeiling, &newestHeldCeiling)
 	if err != nil {
 		return BoardPending{}, fmt.Errorf("%w: read %q's held messages: %w", ErrStore, boss, err)
 	}
+	var lastAck sql.NullInt64
+	if err := tx.QueryRowContext(ctx, pendingLastAck, project, boss).Scan(&lastAck); err != nil {
+		return BoardPending{}, fmt.Errorf("%w: read %q's last acknowledgement: %w", ErrStore, project, err)
+	}
+	p.LastAck = pendingTime(lastAck)
 	p.Oldest, p.OldestCeiling, p.OldestHeld, p.OldestHeldCeiling = pendingTime(oldest), pendingTime(oldestCeiling), pendingTime(oldestHeld), pendingTime(oldestHeldCeiling)
 	p.NewestCeiling = pendingTime(newestCeiling)
 	p.NewestCeilingPost = p.NewestCeiling
