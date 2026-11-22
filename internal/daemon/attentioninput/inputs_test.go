@@ -40,7 +40,7 @@ func TestBoardAlertInputsPendingAndBossPlace(t *testing.T) {
 	t.Parallel()
 
 	at := time.Unix(1000, 0).UTC()
-	pending := store.BoardPending{
+	pending := store.BoardPendingSnapshot{
 		Pending: 2, Oldest: at, OldestCeiling: at.Add(time.Minute), BossMark: 33,
 		Held: 4, OldestHeld: at.Add(2 * time.Minute), OldestHeldCeiling: at.Add(3 * time.Minute),
 		NewestCeiling: at.Add(5 * time.Minute), NewestCeilingPost: at.Add(4 * time.Minute),
@@ -54,7 +54,7 @@ func TestBoardAlertInputsPendingAndBossPlace(t *testing.T) {
 	}}
 
 	got := attentioninput.State(pending, built, "studio", "boss")
-	for field := range reflect.TypeFor[store.BoardPending]().Fields() {
+	for field := range reflect.TypeFor[store.BoardPendingSnapshot]().Fields() {
 		value := reflect.ValueOf(pending).FieldByName(field.Name)
 		require.False(t, value.IsZero(), "test must set %s", field.Name)
 		mapped := reflect.ValueOf(got).FieldByName(field.Name)
@@ -129,7 +129,7 @@ func TestBoardAlertInputsEachPostedCeilingPastLimit(t *testing.T) {
 		Every: 5 * time.Minute, MaxEvery: 20 * time.Minute, Alerts: 1,
 	}
 	tracker := attention.NewTracker()
-	pending := store.BoardPending{Pending: 1, Oldest: at}
+	pending := store.BoardPendingSnapshot{Pending: 1, Oldest: at}
 	observe := func(minute int) (attention.Alert, bool) {
 		state := attentioninput.State(pending, built, "studio", "boss")
 		return tracker.Observe("studio", cfg, state, clock(minute))

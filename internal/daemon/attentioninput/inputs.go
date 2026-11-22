@@ -36,7 +36,7 @@ func (c Configs) For(project string) attention.Config {
 
 // State combines the pending read with the boss place. The
 // tracker can pause when the place is empty or when the poll has no model.
-func State(p store.BoardPending, built *team.Model, project, boss string) attention.State {
+func State(p store.BoardPendingSnapshot, built *team.Model, project, boss string) attention.State {
 	state := attention.State{
 		Boss: boss, Pending: p.Pending, Oldest: p.Oldest, OldestCeiling: p.OldestCeiling, BossMark: p.BossMark,
 		Held: p.Held, OldestHeld: p.OldestHeld, OldestHeldCeiling: p.OldestHeldCeiling,
