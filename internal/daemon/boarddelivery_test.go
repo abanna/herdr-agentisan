@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -358,6 +359,360 @@ func TestBossThatTurnsClaudeMidDrainGetsTheRestPosted(t *testing.T) {
 	}
 	assert.Equal(t, []string{b.ID, c.ID}, ids, "the rest posted, in order, each once")
 	assert.Len(t, r.pr.all(), 1, "nothing more typed")
+}
+
+// noticeRig is a board rig for the ha team, its key board, whose notices
+// go out every poll, with a notice "before" already queued in the inbox for
+// its boss while it runs Codex: one daemon row, the one A44 appends a later
+// notice to while it is still queued.
+func noticeRig(t *testing.T, o func(*daemon.Options)) (*boardRig, *notice.Batcher, store.Message) {
+	t.Helper()
+	cfgs := boardOn("ha")
+	b := notice.NewBatcher(cfgs)
+	r := newBoardRig(t, []settings.Team{haTabs}, cfgs, b)
+	if o != nil {
+		o(&r.o)
+		r.p = daemon.NewPoller(r.o, r.st, r.teams, cfgs, b, nil)
+	}
+	b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Blocked, Text: "before"}})
+	r.p.EndPoll(haModel(bossPane("ha-boss", "codex")))
+	ids := query(t, r.db, "SELECT id FROM messages WHERE recipient = 'ha-boss' AND state = 'queued'")
+	require.Len(t, ids, 1, "the notice is queued for the Codex boss")
+	return r, b, stateOf(t, r.st, ids[0])
+}
+
+// TestBossThatTurnsClaudeAtTheClaimGetsNoLaterNotice is must-fix 1 of PR
+// 2's pre-check (NERD-5533 cbf65a5e), on the checker's schedule: a pass has
+// read the delivery as typed for a Codex boss and is about to claim when a
+// poll remembers Claude and flushes a notice, which A44 appends to the
+// boss's row while it is still queued. The poll waits for the claim: the
+// pass reads and claims under the lock remember takes, so the row typed is
+// the one read as typed, and the notice, flushed after the claim, goes into
+// a row of its own and is posted, never typed.
+//
+// The order is forced, whatever the locks do: the poll starts only once
+// the pass has ended.
+// The poll-wins order is TestBossThatTurnsClaudeBeforeTheClaimGetsNoLaterNotice;
+// the lock itself is pinned by TestBoardModeCriticalSectionsHoldRoute and
+// TestRememberTakesRouteBeforeMu.
+func TestBossThatTurnsClaudeAtTheClaimGetsNoLaterNotice(t *testing.T) {
+	t.Parallel()
+	var pause atomic.Bool
+	atClaim, resume := make(chan struct{}), make(chan struct{})
+	r, b, row := noticeRig(t, func(o *daemon.Options) {
+		o.Now = func() time.Time {
+			if pause.Swap(false) {
+				close(atClaim)
+				<-resume
+			}
+			return time.Now()
+		}
+	})
+	pause.Store(true) // the pass's first clock read is its claim's
+	passed := make(chan struct{})
+	go func() {
+		defer close(passed)
+		r.p.Pass()
+	}()
+	select {
+	case <-atClaim:
+	case <-time.After(ready):
+		close(resume)
+		t.Fatal("the pass never came to its claim")
+	}
+	require.Equal(t, store.MessageQueued, stateOf(t, r.st, row.ID).State, "paused before the claim")
+	b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Gone, Text: "after the switch"}})
+	polled := make(chan struct{})
+	go func() {
+		defer close(polled)
+		<-passed // the order this test names: the pass first, then the poll
+		r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
+	}()
+	close(resume)
+	for _, c := range []chan struct{}{passed, polled} {
+		select {
+		case <-c:
+		case <-time.After(ready):
+			t.Fatal("the pass or the poll did not end")
+		}
+	}
+
+	require.Len(t, r.pr.all(), 1, "the row claimed is typed")
+	assert.Equal(t, "[agentisan] notices:\nbefore", r.pr.all()[0].Text, "as it stood at the claim: no notice flushed after the switch")
+	assert.Equal(t, store.MessageDelivered, stateOf(t, r.st, row.ID).State)
+	r.p.Pass()
+	var bodies []string
+	for _, p := range r.posts(t, "ha") {
+		bodies = append(bodies, p.Body)
+	}
+	assert.Equal(t, []string{"after the switch"}, bodies, "the later notice, in a row of its own, is posted")
+	assert.Len(t, r.pr.all(), 1, "nothing more typed")
+}
+
+// TestBossThatTurnsClaudeBeforeTheClaimGetsNoLaterNotice is the poll
+// winning: while a pass types the Codex boss an older message, a poll
+// remembers Claude and flushes a notice, which A44 appends to the boss's
+// notice row still queued behind it. The pass claims nothing more, and the
+// row, both notices in it, is posted, never typed.
+func TestBossThatTurnsClaudeBeforeTheClaimGetsNoLaterNotice(t *testing.T) {
+	t.Parallel()
+	cfgs := boardOn("ha")
+	b := notice.NewBatcher(cfgs)
+	r := newBoardRig(t, []settings.Team{haTabs}, cfgs, b)
+	a := sent(t, r.st, haBoss, coder, "a")
+	b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Blocked, Text: "before"}})
+	r.p.EndPoll(haModel(bossPane("ha-boss", "codex")))
+	release := r.pr.hold(t, "ha-boss")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.p.Pass()
+	}()
+	assert.Equal(t, "[msg "+a.ID+" from ha-coder-1] a", r.pr.next(t).Text, "the oldest is typed first")
+	b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Gone, Text: "after the switch"}})
+	r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
+	release()
+	select {
+	case <-done:
+	case <-time.After(ready):
+		t.Fatal("the pass did not end")
+	}
+
+	require.Len(t, r.pr.all(), 1, "only the message already being typed is typed")
+	r.p.Pass()
+	var bodies []string
+	for _, p := range r.posts(t, "ha") {
+		bodies = append(bodies, p.Body)
+	}
+	assert.Equal(t, []string{"before\nafter the switch"}, bodies, "the notice row, the later notice appended, is posted")
+	assert.Len(t, r.pr.all(), 1, "nothing more typed")
+}
+
+// TestBossThatTurnsClaudeAfterTheClaimTypesOnlyWhatWasClaimed is the
+// other order: the pass has claimed the boss's row and is typing it when a
+// poll remembers Claude and flushes a notice. The row typed is the one
+// claimed, as it stood: A44 appends only to a row still queued, so the
+// notice goes into a row of its own, which is posted.
+func TestBossThatTurnsClaudeAfterTheClaimTypesOnlyWhatWasClaimed(t *testing.T) {
+	t.Parallel()
+	r, b, row := noticeRig(t, nil)
+	release := r.pr.hold(t, "ha-boss")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.p.Pass()
+	}()
+	first := r.pr.next(t)
+	assert.Contains(t, first.Text, "before")
+	require.Equal(t, store.MessageDispatching, stateOf(t, r.st, row.ID).State, "claimed and being typed")
+	b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Gone, Text: "after the switch"}})
+	r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
+	release()
+	select {
+	case <-done:
+	case <-time.After(ready):
+		t.Fatal("the pass did not end")
+	}
+
+	require.Len(t, r.pr.all(), 1, "only the row claimed before the switch is typed")
+	assert.NotContains(t, r.pr.all()[0].Text, "after the switch", "typed as it was claimed")
+	assert.Equal(t, store.MessageDelivered, stateOf(t, r.st, row.ID).State)
+	r.p.Pass()
+	var bodies []string
+	for _, p := range r.posts(t, "ha") {
+		bodies = append(bodies, p.Body)
+	}
+	assert.Equal(t, []string{"after the switch"}, bodies, "the later notice, in a row of its own, is posted")
+	assert.Len(t, r.pr.all(), 1, "nothing more typed")
+}
+
+// TestBossThatTurnsCodexAtThePostIsNotPosted is the reverse switch (the
+// cold check of PR 2's design, NERD-5533 7c30e8aa, C2), on its probe's
+// schedule: a pass has read the delivery as board for a Claude boss and is
+// about to post when a poll remembers Codex and flushes a notice, which
+// goes into the inbox to be typed. The poll waits for the post: the pass
+// reads and posts under the lock remember takes, so only the row queued
+// before the switch is posted, and the notice is typed into the Codex boss,
+// never posted (A74: a Codex boss is never posted to).
+//
+// The order is forced, whatever the locks do: the poll starts only once
+// the pass has ended.
+// The poll-wins order is TestBossThatTurnsCodexBeforeThePostIsTyped; the
+// lock itself is pinned by TestBoardModeCriticalSectionsHoldRoute and
+// TestRememberTakesRouteBeforeMu.
+func TestBossThatTurnsCodexAtThePostIsNotPosted(t *testing.T) {
+	t.Parallel()
+	var pause atomic.Bool
+	atPost, resume := make(chan struct{}), make(chan struct{})
+	cfgs := boardOn("ha")
+	b := notice.NewBatcher(cfgs)
+	r := newBoardRig(t, []settings.Team{haTabs}, cfgs, b)
+	r.o.Now = func() time.Time {
+		if pause.Swap(false) {
+			close(atPost)
+			<-resume
+		}
+		return time.Now()
+	}
+	r.p = daemon.NewPoller(r.o, r.st, r.teams, cfgs, b, nil)
+	r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
+	row := sent(t, r.st, haBoss, coder, "worker row")
+	pause.Store(true) // the pass's first clock read is its post's
+	passed := make(chan struct{})
+	go func() {
+		defer close(passed)
+		r.p.Pass()
+	}()
+	select {
+	case <-atPost:
+	case <-time.After(ready):
+		close(resume)
+		t.Fatal("the pass never came to its post")
+	}
+	require.Zero(t, boardCount(t, r.db), "paused before the post")
+	b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Blocked, Text: "after the switch"}})
+	polled := make(chan struct{})
+	go func() {
+		defer close(polled)
+		<-passed // the order this test names: the pass first, then the poll
+		r.p.EndPoll(haModel(bossPane("ha-boss", "codex")))
+	}()
+	close(resume)
+	for _, c := range []chan struct{}{passed, polled} {
+		select {
+		case <-c:
+		case <-time.After(ready):
+			t.Fatal("the pass or the poll did not end")
+		}
+	}
+
+	var bodies []string
+	for _, p := range r.posts(t, "ha") {
+		bodies = append(bodies, p.Body)
+	}
+	assert.Equal(t, []string{"worker row"}, bodies, "only the row queued before the switch is posted")
+	assert.Equal(t, store.MessageDelivered, stateOf(t, r.st, row.ID).State)
+	r.p.Pass()
+	require.Len(t, r.pr.all(), 1, "the notice is typed into the Codex boss")
+	assert.Equal(t, "[agentisan] notices:\nafter the switch", r.pr.all()[0].Text)
+	assert.Len(t, r.posts(t, "ha"), 1, "nothing more posted")
+}
+
+// TestBossThatTurnsCodexBeforeThePostIsTyped is the reverse switch with
+// the poll winning: a poll remembers Codex for a board-mode boss, with a
+// notice to flush, before the pass decides. The pass reads typed, so the
+// row queued while the boss ran Claude and the notice are both typed into
+// Codex, and nothing is posted.
+func TestBossThatTurnsCodexBeforeThePostIsTyped(t *testing.T) {
+	t.Parallel()
+	cfgs := boardOn("ha")
+	b := notice.NewBatcher(cfgs)
+	r := newBoardRig(t, []settings.Team{haTabs}, cfgs, b)
+	r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
+	row := sent(t, r.st, haBoss, coder, "worker row")
+	b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Blocked, Text: "after the switch"}})
+	r.p.EndPoll(haModel(bossPane("ha-boss", "codex")))
+	r.p.Pass()
+
+	assert.Empty(t, r.posts(t, "ha"), "nothing posted for a Codex boss")
+	var texts []string
+	for _, p := range r.pr.all() {
+		texts = append(texts, p.Text)
+	}
+	assert.Equal(t, []string{"[msg " + row.ID + " from ha-coder-1] worker row", "[agentisan] notices:\nafter the switch"}, texts, "both typed, oldest first")
+}
+
+// TestBoardModeDecisionsReadTheClockUnderRoute is C4 of the cold check
+// (NERD-5533 7c30e8aa): the schedules alone pass on code that reads the
+// clock outside the lock, so this pins it. A board-key boss's typed claim
+// and its board post each read the clock with route held: the delivery
+// they acted on cannot have turned since.
+func TestBoardModeDecisionsReadTheClockUnderRoute(t *testing.T) {
+	t.Parallel()
+	for name, agent := range map[string]string{"the typed claim": "codex", "the board post": "claude"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			var (
+				pause atomic.Bool
+				held  atomic.Int32 // 0 not read, 1 held, 2 free
+				p     *daemon.Poller
+			)
+			cfgs := boardOn("ha")
+			r := newBoardRig(t, []settings.Team{haTabs}, cfgs, nil)
+			r.o.Now = func() time.Time {
+				if pause.Swap(false) {
+					if p.RouteHeld() {
+						held.Store(1)
+					} else {
+						held.Store(2)
+					}
+				}
+				return time.Now()
+			}
+			p = daemon.NewPoller(r.o, r.st, r.teams, cfgs, nil, nil)
+			p.EndPoll(haModel(bossPane("ha-boss", agent)))
+			sent(t, r.st, haBoss, coder, "done")
+			pause.Store(true) // the pass's first clock read is its claim's or its post's
+			p.Pass()
+			assert.Equal(t, int32(1), held.Load(), "the clock is read with route held")
+			assert.Equal(t, store.MessageDelivered, stateOf(t, r.st, query(t, r.db, "SELECT id FROM messages")[0]).State)
+		})
+	}
+}
+
+// TestTypedClaimsTakeNoRoute: only the boss of a tabs team whose key is
+// board takes the route lock, for its board decision (untyped) and its
+// claim (claimTyped). With the key unset, and for the ◆ spaces under the
+// shared key board, a pass types its boss while another holds route, so
+// the typed path waits on nothing it did not wait on before the lock
+// (NERD-5533 cbf65a5e, 7c30e8aa).
+func TestTypedClaimsTakeNoRoute(t *testing.T) {
+	t.Parallel()
+	spaces := settings.Team{Project: "spaces", Layout: settings.LayoutSpaces}
+	spacesBoss := store.Address{Kind: store.KindBoss, ID: team.SpacesBoss}
+	for name, c := range map[string]struct {
+		teams []settings.Team
+		cfgs  notice.Configs
+		to    store.Address
+		model *team.Model
+	}{
+		"the key unset": {[]settings.Team{haTabs}, notice.Configs{}, haBoss, haModel(bossPane("ha-boss", "claude"))},
+		"the spaces, the shared key board": {
+			[]settings.Team{spaces},
+			notice.Configs{Default: notice.Config{Board: true}},
+			spacesBoss,
+			&team.Model{Projects: []team.Project{{Name: "spaces", Boss: []team.Worker{{ID: "wJ:p1", Pane: team.Pane{ID: "wJ:p1", TerminalID: "term_wJ:p1", Name: team.SpacesBoss, Agent: "claude"}}}}}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			r := newBoardRig(t, c.teams, c.cfgs, nil)
+			r.th.setAgents(named("w14:p1", "ha-boss"), named("w14:p2", "ha-coder-1"), named("wJ:p1", team.SpacesBoss))
+			m := sent(t, r.st, c.to, coder, "done")
+			r.p.EndPoll(c.model)
+			release := r.p.HoldRoute()
+			t.Cleanup(release)
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				r.p.Pass()
+			}()
+			select {
+			case <-done:
+			case <-time.After(ready):
+				release()
+				<-done
+				t.Fatal("the typed pass waited on route")
+			}
+			assert.Equal(t, []string{"[msg " + m.ID + " from ha-coder-1] done"}, func() []string {
+				var out []string
+				for _, p := range r.pr.all() {
+					out = append(out, p.Text)
+				}
+				return out
+			}(), "typed while route is held")
+		})
+	}
 }
 
 // TestBossNotSeenSinceStartIsHeld: until a poll sees the boss's agent

@@ -18,7 +18,7 @@ import (
 )
 
 // pending is ha-boss's BoardPending on project ha.
-func pending(t *testing.T, s *store.Store) store.BoardPending {
+func pending(t *testing.T, s *store.Store) store.BoardPendingSnapshot {
 	t.Helper()
 	p, err := s.BoardPending(t.Context(), "ha", "ha-boss", notice.CeilingMark)
 	require.NoError(t, err)
@@ -46,12 +46,12 @@ func TestBoardPendingCountsPostsAfterTheBossMark(t *testing.T) {
 		seqs = append(seqs, post(t, s, p).Seq)
 	}
 	post(t, s, teamPost("web", "web-coder-1", "another team's post"))
-	assert.Equal(t, store.BoardPending{Pending: 4, Oldest: boardAt}, pending(t, s), "mark 0")
+	assert.Equal(t, store.BoardPendingSnapshot{Pending: 4, Oldest: boardAt}, pending(t, s), "mark 0")
 	for _, c := range []struct{ read, want int }{{2, 2}, {3, 1}, {4, 0}} {
 		mark := seqs[c.read-1]
 		_, err := s.MarkSeen(t.Context(), "ha", "boss", mark)
 		require.NoError(t, err)
-		want := store.BoardPending{Pending: c.want, BossMark: mark}
+		want := store.BoardPendingSnapshot{Pending: c.want, BossMark: mark}
 		if c.want > 0 {
 			want.Oldest = boardAt.Add(time.Duration(c.read) * time.Minute)
 		}
