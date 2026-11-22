@@ -187,10 +187,11 @@ func TestInboxNoticeWithNoBoss(t *testing.T) {
 	assert.True(t, acked, "settled")
 }
 
-// sinkFunc is a notice.Sink from a func.
+// sinkFunc is a notice.Sink from a func, which keeps every line of a
+// message it accepts.
 type sinkFunc func(notice.Message) error
 
-func (f sinkFunc) Send(_ context.Context, m notice.Message) error { return f(m) }
+func (f sinkFunc) Send(_ context.Context, m notice.Message) (int, error) { return len(m.Lines), f(m) }
 
 // TestInboxNoticeOnAFailedStore: a message the store cannot queue is
 // logged all the same, without an inbox message, and the error returned,

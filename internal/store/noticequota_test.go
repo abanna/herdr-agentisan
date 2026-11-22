@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"database/sql"
 	"fmt"
 	"math"
 	"slices"
@@ -619,34 +620,125 @@ func TestQuotaQueriesUseTheirIndexes(t *testing.T) {
 		"Q5": {[]any{5000}, []string{"USING INDEX notice_identities_store_state", "USING INDEX sqlite_autoindex_notice_payloads_1"}},
 		"Q6": {[]any{"ha"}, []string{"USING INDEX sqlite_autoindex_notice_counts_1", "USING COVERING INDEX notice_identities_by_state"}},
 		"Q7": {nil, []string{"USING INTEGER PRIMARY KEY"}},
-		"Q8": {[]any{"ha", 0, 600}, []string{"USING COVERING INDEX notice_identities_by_state (project=? AND state=? AND admitted_at>?)"}},
+		"Q8": {[]any{"ha", 0, 600, "github"}, []string{"USING INDEX notice_identities_by_state (project=? AND state=? AND admitted_at>?)"}},
 	} {
 		query, ok := store.NoticeQuotaQueries[quota]
 		require.True(t, ok, quota)
-		var plan []string
-		for _, row := range queryRows(t, db, "EXPLAIN QUERY PLAN "+query, tc.args...) {
-			detail, ok := row[3].(string)
-			require.True(t, ok, "%s: a plan line: %v", quota, row)
-			plan = append(plan, detail)
-		}
+		plan := queryPlan(t, db, query, tc.args...)
 		t.Logf("%s plan: %q", quota, plan)
 		for _, use := range tc.uses {
 			assert.True(t, slices.ContainsFunc(plan, func(line string) bool { return strings.Contains(line, use) }),
 				"%s's plan %q uses %s", quota, plan, use)
 		}
-		walks := map[string]bool{"CONSTANT ROW": true}
-		for _, line := range plan {
-			for _, kind := range []string{"CO-ROUTINE ", "MATERIALIZE "} {
-				if name, ok := strings.CutPrefix(line, kind); ok {
-					walks[name] = true
-				}
-			}
-		}
-		for _, line := range plan {
-			if name, ok := strings.CutPrefix(line, "SCAN "); ok {
-				assert.True(t, walks[name], "%s's plan %q scans %s, a table", quota, plan, name)
+		assertNoTableScan(t, plan)
+	}
+	assert.Len(t, store.NoticeQuotaQueries, 8)
+}
+
+// queryPlan is the detail of each line of query's plan on db, with args.
+func queryPlan(t *testing.T, db *sql.DB, query string, args ...any) []string {
+	t.Helper()
+	var plan []string
+	for _, row := range queryRows(t, db, "EXPLAIN QUERY PLAN "+query, args...) {
+		detail, ok := row[3].(string)
+		require.True(t, ok, "a plan line: %v", row)
+		plan = append(plan, detail)
+	}
+	return plan
+}
+
+// assertNoTableScan fails on a line of plan that scans a table. A SCAN
+// line passes only if the rest of it, compared whole, is CONSTANT ROW, a
+// name a CO-ROUTINE or MATERIALIZE line of the same plan introduced, or
+// one of allowed. Every other line is not a scan.
+func assertNoTableScan(t *testing.T, plan []string, allowed ...string) {
+	t.Helper()
+	walks := map[string]bool{"CONSTANT ROW": true}
+	for _, name := range allowed {
+		walks[name] = true
+	}
+	for _, line := range plan {
+		for _, kind := range []string{"CO-ROUTINE ", "MATERIALIZE "} {
+			if name, ok := strings.CutPrefix(line, kind); ok {
+				walks[name] = true
 			}
 		}
 	}
-	assert.Len(t, store.NoticeQuotaQueries, 8)
+	for _, line := range plan {
+		if name, ok := strings.CutPrefix(line, "SCAN "); ok {
+			assert.True(t, walks[name], "the plan %q scans %s, a table", plan, name)
+		}
+	}
+}
+
+// TestQ8KeepsItsIndex (S14): Q8 names its index, so an index without the
+// project, such as the prune's by_source, never takes it over. The test
+// makes such an index itself, so it holds on any schema. Self-check: the
+// same query without its INDEXED BY plans on that index, so the test can
+// tell a lost pin.
+func TestQ8KeepsItsIndex(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	db := store.DB(s)
+	_, err := db.ExecContext(t.Context(), `CREATE INDEX t_by_source ON notice_identities (source, state, admitted_at)`)
+	require.NoError(t, err)
+	args := []any{"ha", 0, 600, "github"}
+
+	q8 := store.NoticeQuotaQueries["Q8"]
+	plan := queryPlan(t, db, q8, args...)
+	t.Logf("Q8 plan: %q", plan)
+	assert.True(t, slices.ContainsFunc(plan, func(line string) bool {
+		return strings.Contains(line, "USING INDEX notice_identities_by_state (project=? AND state=? AND admitted_at>?)")
+	}), "Q8's plan %q seeks notice_identities_by_state by project, state and time", plan)
+	assertNoTableScan(t, plan)
+
+	unpinned := strings.Replace(q8, "INDEXED BY notice_identities_by_state", "", 1)
+	require.NotEqual(t, q8, unpinned, "Q8 names its index")
+	lost := queryPlan(t, db, unpinned, args...)
+	t.Logf("Q8 unpinned plan: %q", lost)
+	assert.True(t, slices.ContainsFunc(lost, func(line string) bool { return strings.Contains(line, "USING INDEX t_by_source") }),
+		"without its pin, Q8's plan %q moves to t_by_source", lost)
+}
+
+// TestQ8CountsPerSource (S12): Q8 counts a project's admissions of one
+// source. With Q8 at 3, a source's three admissions leave the other's hour
+// whole, in either order, and a fourth of either source is refused, by an
+// error that says the limit is per source. NoticeStats counts each
+// source's three. Every notice is admitted at daemonAt, so both sources
+// share one window.
+func TestQ8CountsPerSource(t *testing.T) {
+	t.Parallel()
+	for name, githubFirst := range map[string]bool{"GitHub first": true, "the daemon first": false} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := newQuotaFixture(t)
+			f.set(func(q *store.NoticeQuotas) { q.AdmissionsPerHour = 3 })
+			github := func() {
+				for pr := range int64(3) {
+					f.admitAt(f.notice("ha", 50+pr), daemonAt, "pending")
+				}
+			}
+			daemon := func() {
+				for range 3 {
+					admitDaemon(t, f.s, daemonNotice(), daemonAt)
+				}
+			}
+			if githubFirst {
+				github()
+				daemon()
+			} else {
+				daemon()
+				github()
+			}
+			for _, next := range []store.NoticeEnvelope{f.notice("ha", 53), daemonNotice()} {
+				_, err := f.s.AdmitNotice(t.Context(), next, daemonAt)
+				assert.ErrorContains(t, err, "notices of one source admitted per project in an hour", "a %s notice", next.Source)
+				f.refused(next, daemonAt, 8)
+			}
+			st, err := f.s.NoticeStats(t.Context(), "ha", daemonAt)
+			require.NoError(t, err)
+			assert.Equal(t, int64(3), st.GitHubLastHour)
+			assert.Equal(t, int64(3), st.DaemonLastHour)
+		})
+	}
 }

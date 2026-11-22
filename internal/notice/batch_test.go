@@ -139,8 +139,43 @@ func TestBatcherSettle(t *testing.T) {
 	got := b.Flush(t0)
 	require.Len(t, got, 1)
 	assert.Empty(t, acks, "not before the sink accepts")
-	got[0].Settle()
+	got[0].Settle(len(got[0].Lines))
 	assert.Equal(t, map[string]int{"a": 1, "c": 1}, acks)
+}
+
+// TestMessageSettlesTheLinesItKept (NERD-5533): a sink keeps a message's
+// newest lines; Kept counts them in the body the inbox committed, and Settle
+// acknowledges those alone, by position, so a line with no acknowledgement
+// still holds its place.
+func TestMessageSettlesTheLinesItKept(t *testing.T) {
+	t.Parallel()
+	b := notice.NewBatcher(notice.Configs{})
+	var acked []string
+	add := func(text string) notice.Notice {
+		n := note("ha", text, notice.Blocked, text)
+		n.Ack = func() { acked = append(acked, text) }
+		return n
+	}
+	b.Add(t0, []notice.Notice{add("a"), note("ha", "b", notice.Blocked, "b"), add("c")})
+	got := b.Flush(t0)
+	require.Len(t, got, 1)
+	m := got[0]
+	body, ok := m.AppendTo("")
+	require.True(t, ok)
+	assert.Equal(t, 3, m.Kept(body), "nothing cut")
+	assert.Equal(t, 2, m.Kept("[agentisan] notices (1 earlier dropped):\nb\nc"), "the header cut a")
+	assert.Equal(t, 3, m.Kept("[agentisan] notices:\nolder\nold\na\nb\nc"), "an append: only m's own lines count")
+	assert.Equal(t, 0, m.Kept(""), "an empty body keeps none")
+	m.Settle(2)
+	assert.Equal(t, []string{"c"}, acked, "b holds its place: a is not settled")
+	acked = nil
+	m.Settle(0)
+	m.Settle(-1)
+	assert.Empty(t, acked, "none: zero, or below")
+	m.Settle(4)
+	assert.Equal(t, []string{"a", "c"}, acked, "one past every line: each once")
+	assert.Equal(t, 0, notice.Message{}.Kept("[agentisan] notices:\nx"), "a message with no lines keeps none")
+	assert.NotPanics(t, func() { notice.Message{Lines: []string{"x"}}.Settle(1) }, "a message built without acks settles nothing")
 }
 
 // TestBatcherCapsTheBody: a body never passes the inbox's cap. The oldest
@@ -166,7 +201,7 @@ func TestBatcherCapsTheBody(t *testing.T) {
 	assert.True(t, strings.HasPrefix(m.Body(), "("), m.Body()[:40])
 	assert.Contains(t, m.Body(), "earlier notices dropped)\n")
 	assert.Equal(t, ns[39].Text, m.Lines[len(m.Lines)-1], "the newest stays")
-	m.Settle()
+	m.Settle(len(m.Lines))
 	assert.Equal(t, len(m.Lines), acked, "a cut notice is not acknowledged")
 }
 
