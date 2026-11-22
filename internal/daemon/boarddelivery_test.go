@@ -396,10 +396,11 @@ func noticeRig(t *testing.T, o func(*daemon.Options)) (*boardRig, *notice.Batche
 // the one read as typed, and the notice, flushed after the claim, goes into
 // a row of its own and is posted, never typed.
 //
-// The claim's clock read is paused inside that lock, so the test releases
-// it once the poll has come to remember (the probe), without waiting for
-// the poll, which waits for it. The lock's placement is pinned
-// deterministically by TestBoardModeCriticalSectionsHoldRoute.
+// The order is forced, whatever the locks do: the poll starts only once
+// the pass has ended.
+// The poll-wins order is TestBossThatTurnsClaudeBeforeTheClaimGetsNoLaterNotice;
+// the lock itself is pinned by TestBoardModeCriticalSectionsHoldRoute and
+// TestRememberTakesRouteBeforeMu.
 func TestBossThatTurnsClaudeAtTheClaimGetsNoLaterNotice(t *testing.T) {
 	t.Parallel()
 	var pause atomic.Bool
@@ -427,23 +428,12 @@ func TestBossThatTurnsClaudeAtTheClaimGetsNoLaterNotice(t *testing.T) {
 	}
 	require.Equal(t, store.MessageQueued, stateOf(t, r.st, row.ID).State, "paused before the claim")
 	b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Gone, Text: "after the switch"}})
-	atRemember := make(chan struct{})
-	r.p.SetProbe(func(at string) {
-		if at == "remember" {
-			close(atRemember)
-		}
-	})
 	polled := make(chan struct{})
 	go func() {
 		defer close(polled)
+		<-passed // the order this test names: the pass first, then the poll
 		r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
 	}()
-	select {
-	case <-atRemember: // the poll is at remember's route, which the pass holds
-	case <-time.After(ready):
-		close(resume)
-		t.Fatal("the poll never came to remember")
-	}
 	close(resume)
 	for _, c := range []chan struct{}{passed, polled} {
 		select {
@@ -551,10 +541,11 @@ func TestBossThatTurnsClaudeAfterTheClaimTypesOnlyWhatWasClaimed(t *testing.T) {
 // before the switch is posted, and the notice is typed into the Codex boss,
 // never posted (A74: a Codex boss is never posted to).
 //
-// The post's clock read is paused inside that lock, so the test releases
-// it once the poll has come to remember (the probe), without waiting for
-// the poll, which waits for it. The lock's placement is pinned
-// deterministically by TestBoardModeCriticalSectionsHoldRoute.
+// The order is forced, whatever the locks do: the poll starts only once
+// the pass has ended.
+// The poll-wins order is TestBossThatTurnsCodexBeforeThePostIsTyped; the
+// lock itself is pinned by TestBoardModeCriticalSectionsHoldRoute and
+// TestRememberTakesRouteBeforeMu.
 func TestBossThatTurnsCodexAtThePostIsNotPosted(t *testing.T) {
 	t.Parallel()
 	var pause atomic.Bool
@@ -586,23 +577,12 @@ func TestBossThatTurnsCodexAtThePostIsNotPosted(t *testing.T) {
 	}
 	require.Zero(t, boardCount(t, r.db), "paused before the post")
 	b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Blocked, Text: "after the switch"}})
-	atRemember := make(chan struct{})
-	r.p.SetProbe(func(at string) {
-		if at == "remember" {
-			close(atRemember)
-		}
-	})
 	polled := make(chan struct{})
 	go func() {
 		defer close(polled)
+		<-passed // the order this test names: the pass first, then the poll
 		r.p.EndPoll(haModel(bossPane("ha-boss", "codex")))
 	}()
-	select {
-	case <-atRemember: // the poll is at remember's route, which the pass holds
-	case <-time.After(ready):
-		close(resume)
-		t.Fatal("the poll never came to remember")
-	}
 	close(resume)
 	for _, c := range []chan struct{}{passed, polled} {
 		select {
@@ -622,6 +602,30 @@ func TestBossThatTurnsCodexAtThePostIsNotPosted(t *testing.T) {
 	require.Len(t, r.pr.all(), 1, "the notice is typed into the Codex boss")
 	assert.Equal(t, "[agentisan] notices:\nafter the switch", r.pr.all()[0].Text)
 	assert.Len(t, r.posts(t, "ha"), 1, "nothing more posted")
+}
+
+// TestBossThatTurnsCodexBeforeThePostIsTyped is the reverse switch with
+// the poll winning: a poll remembers Codex for a board-mode boss, with a
+// notice to flush, before the pass decides. The pass reads typed, so the
+// row queued while the boss ran Claude and the notice are both typed into
+// Codex, and nothing is posted.
+func TestBossThatTurnsCodexBeforeThePostIsTyped(t *testing.T) {
+	t.Parallel()
+	cfgs := boardOn("ha")
+	b := notice.NewBatcher(cfgs)
+	r := newBoardRig(t, []settings.Team{haTabs}, cfgs, b)
+	r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
+	row := sent(t, r.st, haBoss, coder, "worker row")
+	b.Add(time.Now(), []notice.Notice{{Project: "ha", Kind: notice.Blocked, Text: "after the switch"}})
+	r.p.EndPoll(haModel(bossPane("ha-boss", "codex")))
+	r.p.Pass()
+
+	assert.Empty(t, r.posts(t, "ha"), "nothing posted for a Codex boss")
+	var texts []string
+	for _, p := range r.pr.all() {
+		texts = append(texts, p.Text)
+	}
+	assert.Equal(t, []string{"[msg " + row.ID + " from ha-coder-1] worker row", "[agentisan] notices:\nafter the switch"}, texts, "both typed, oldest first")
 }
 
 // TestBoardModeDecisionsReadTheClockUnderRoute is C4 of the cold check

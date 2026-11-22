@@ -133,10 +133,10 @@ func (o Options) boardWriter(st *store.Store) boardWriter {
 // postQueued posts the oldest MaxQueuePost rows of to's queue on project's
 // board instead of typing them (A74), in one transaction that marks each
 // row delivered, or failed where the board refuses it. Like claim, a stop
-// does not cut it short. The cap bounds the count, not the time: the store
-// starts no new row past half its budget, measured from before it takes
-// the connection, commits the rows it has posted and says more remain, so
-// a pass that gets the connection always posts; but a statement once
+// does not cut it short. The cap bounds the count, not the time: after
+// attempting the first row, the store starts no further row at or past
+// half its budget, measured from before it takes the connection, commits
+// the rows it has posted and says more remain; but a statement once
 // started, and the commit, run to their end. untyped runs it under route,
 // so a poll can wait behind one post as long as it takes, which delays
 // that poll's remember, its flush and its model hand-off (polled).
