@@ -1,4 +1,5 @@
-package daemon
+// Package attentioninput projects the daemon's resolved inputs for the board alert.
+package attentioninput
 
 import (
 	"github.com/abanna/herdr-agentisan/internal/attention"
@@ -7,14 +8,15 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/team"
 )
 
-// attentionConfigs keeps the resolved alert settings for the team poll.
-type attentionConfigs struct {
+// Configs keeps the resolved alert settings for the team poll.
+type Configs struct {
 	Default  attention.Config
 	Projects map[string]attention.Config
 }
 
-func newAttentionConfigs(ns settings.NoticeSettings) attentionConfigs {
-	cfgs := attentionConfigs{
+// NewConfigs converts the resolved default and project overrides.
+func NewConfigs(ns settings.NoticeSettings) Configs {
+	cfgs := Configs{
 		Default:  attention.Config(ns.Default.Attention),
 		Projects: make(map[string]attention.Config, len(ns.Projects)),
 	}
@@ -24,16 +26,17 @@ func newAttentionConfigs(ns settings.NoticeSettings) attentionConfigs {
 	return cfgs
 }
 
-func (c attentionConfigs) For(project string) attention.Config {
+// For returns the project's settings, or the default if it has none.
+func (c Configs) For(project string) attention.Config {
 	if cfg, ok := c.Projects[project]; ok {
 		return cfg
 	}
 	return c.Default
 }
 
-// attentionStateOf combines the pending read with the boss place. The
+// State combines the pending read with the boss place. The
 // tracker can pause when the place is empty or when the poll has no model.
-func attentionStateOf(p store.BoardPending, built *team.Model, project, boss string) attention.State {
+func State(p store.BoardPending, built *team.Model, project, boss string) attention.State {
 	state := attention.State{
 		Boss: boss, Pending: p.Pending, Oldest: p.Oldest, OldestCeiling: p.OldestCeiling, BossMark: p.BossMark,
 		Held: p.Held, OldestHeld: p.OldestHeld, OldestHeldCeiling: p.OldestHeldCeiling,

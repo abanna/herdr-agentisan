@@ -1,4 +1,4 @@
-package daemon_test
+package attentioninput_test
 
 import (
 	"reflect"
@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/abanna/herdr-agentisan/internal/attention"
-	"github.com/abanna/herdr-agentisan/internal/daemon"
+	"github.com/abanna/herdr-agentisan/internal/daemon/attentioninput"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
@@ -17,17 +17,23 @@ import (
 func TestBoardAlertInputsProjectSettings(t *testing.T) {
 	t.Parallel()
 
-	shared := settings.AttentionConfig{After: time.Minute, CeilingAfter: 2 * time.Minute,
+	shared := settings.AttentionConfig{
+		After: time.Minute, CeilingAfter: 2 * time.Minute,
 		Every: 3 * time.Minute, MaxEvery: 4 * time.Minute, BusyGrace: 5 * time.Minute,
-		Alerts: 6, Sound: settings.SoundRequest}
-	own := settings.AttentionConfig{After: 0, CeilingAfter: 7 * time.Minute,
+		Alerts: 6, Sound: settings.SoundRequest,
+	}
+	own := settings.AttentionConfig{
+		After: 0, CeilingAfter: 7 * time.Minute,
 		Every: 8 * time.Minute, MaxEvery: 9 * time.Minute, BusyGrace: 10 * time.Minute,
-		Alerts: 11, Sound: settings.SoundDone}
-	resolved := settings.NoticeSettings{Default: settings.NoticeConfig{Attention: shared},
-		Projects: map[string]settings.NoticeConfig{"studio": {Attention: own}}}
+		Alerts: 11, Sound: settings.SoundDone,
+	}
+	resolved := settings.NoticeSettings{
+		Default:  settings.NoticeConfig{Attention: shared},
+		Projects: map[string]settings.NoticeConfig{"studio": {Attention: own}},
+	}
 
-	require.Equal(t, attention.Config(shared), daemon.AttentionConfigForTest(resolved, "other"))
-	require.Equal(t, attention.Config(own), daemon.AttentionConfigForTest(resolved, "studio"))
+	require.Equal(t, attention.Config(shared), attentioninput.NewConfigs(resolved).For("other"))
+	require.Equal(t, attention.Config(own), attentioninput.NewConfigs(resolved).For("studio"))
 }
 
 func TestBoardAlertInputsPendingAndBossPlace(t *testing.T) {
@@ -47,7 +53,7 @@ func TestBoardAlertInputsPendingAndBossPlace(t *testing.T) {
 		}},
 	}}
 
-	got := daemon.AttentionStateForTest(pending, built, "studio", "boss")
+	got := attentioninput.State(pending, built, "studio", "boss")
 	for field := range reflect.TypeFor[store.BoardPending]().Fields() {
 		value := reflect.ValueOf(pending).FieldByName(field.Name)
 		require.False(t, value.IsZero(), "test must set %s", field.Name)
@@ -60,13 +66,13 @@ func TestBoardAlertInputsPendingAndBossPlace(t *testing.T) {
 	require.Equal(t, team.StatusWorking, got.Status)
 	require.Equal(t, "claude", got.Agent)
 
-	unnamed := daemon.AttentionStateForTest(pending, built, "studio", "missing")
+	unnamed := attentioninput.State(pending, built, "studio", "missing")
 	require.True(t, unnamed.Place)
 	require.Equal(t, team.StatusUnknown, unnamed.Status)
 	require.Empty(t, unnamed.Agent)
 
 	for _, model := range []*team.Model{nil, built} {
-		absent := daemon.AttentionStateForTest(pending, model, "absent", "boss")
+		absent := attentioninput.State(pending, model, "absent", "boss")
 		require.False(t, absent.Place)
 		require.Equal(t, team.StatusUnknown, absent.Status)
 		require.Empty(t, absent.Agent)
@@ -78,7 +84,7 @@ func TestBoardAlertInputsDefaultCadenceAndSound(t *testing.T) {
 
 	resolved, err := settings.Notices("")
 	require.NoError(t, err)
-	cfg := daemon.AttentionConfigForTest(resolved, "studio")
+	cfg := attentioninput.NewConfigs(resolved).For("studio")
 	at := time.Unix(1000, 0).UTC()
 	state := attention.State{Boss: "boss", Place: true, Pending: 1, Oldest: at}
 
@@ -118,12 +124,14 @@ func TestBoardAlertInputsEachPostedCeilingPastLimit(t *testing.T) {
 	built := &team.Model{Projects: []team.Project{{Name: "studio", Boss: []team.Worker{
 		{Pane: team.Pane{Name: "boss", Status: team.StatusIdle}},
 	}}}}
-	cfg := attention.Config{After: 10 * time.Minute, CeilingAfter: 2 * time.Minute,
-		Every: 5 * time.Minute, MaxEvery: 20 * time.Minute, Alerts: 1}
+	cfg := attention.Config{
+		After: 10 * time.Minute, CeilingAfter: 2 * time.Minute,
+		Every: 5 * time.Minute, MaxEvery: 20 * time.Minute, Alerts: 1,
+	}
 	tracker := attention.NewTracker()
 	pending := store.BoardPending{Pending: 1, Oldest: at}
 	observe := func(minute int) (attention.Alert, bool) {
-		state := daemon.AttentionStateForTest(pending, built, "studio", "boss")
+		state := attentioninput.State(pending, built, "studio", "boss")
 		return tracker.Observe("studio", cfg, state, clock(minute))
 	}
 
