@@ -155,7 +155,7 @@ func checkShardSelector(t *testing.T, script, shard string) {
 		{"valid", "example.com/m/" + shard, "0", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			out, err := runShardShell(t, dir, script, "SELECT_PACKAGES="+tc.packages, "SELECT_STATUS="+tc.status)
+			out, err := runShardShell(t, dir, script, "SHARD_PACKAGES="+tc.packages, "SHARD_EXIT_STATUS="+tc.status)
 			if tc.fails {
 				assert.Error(t, err, "%s", out)
 				assert.NotContains(t, out, "test operand ", "go test must not run")
@@ -207,7 +207,7 @@ func fakeShardGo(t *testing.T) string {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go"), []byte(`#!/bin/sh
 case "$1" in
-  run) printf '%s\n' "$SELECT_PACKAGES"; exit "$SELECT_STATUS" ;;
+  run) printf '%s\n' "$SHARD_PACKAGES"; exit "$SHARD_EXIT_STATUS" ;;
   test) printf 'test operand %s\n' "$@" ;;
   tool) printf 'ran covdata\n' ;;
   *) exit 2 ;;
