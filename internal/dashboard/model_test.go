@@ -222,7 +222,7 @@ func TestScrollFollowsTheSelection(t *testing.T) {
 	}
 	require.Equal(t, "clerk", selected(t, m))
 	bottom := contentTop(t, m)
-	assert.True(t, strings.HasPrefix(bottom, "╭─ PRECHECK"), "scrolled to the end: %q", bottom)
+	assert.True(t, strings.HasPrefix(bottom, "╭─ QA"), "scrolled to the end: %q", bottom)
 
 	m, _ = update(t, m, keyUp)
 	m, _ = update(t, m, keyUp)
