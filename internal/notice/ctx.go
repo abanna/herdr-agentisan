@@ -12,6 +12,12 @@ import (
 // level is told again (ADR-001 A33): to the threshold less Rearm, or under.
 const Rearm = 5
 
+// CeilingMark is in every ceiling line ctxText writes, and in no other: by
+// it the board's pending read finds a ceiling in a notices post or a held
+// notice (ADR-001 A74). It follows ctxText's "(%s: %d%%)", the level
+// named ceiling (team.LevelCeiling).
+const CeilingMark = "% context (ceiling: "
+
 // CtxWatch is the context levels' source (ADR-001 D7, A33): it tells a
 // team's boss when a pane's ctx crosses one of its rotation thresholds. Only
 // one goroutine uses it, the team poll's.
