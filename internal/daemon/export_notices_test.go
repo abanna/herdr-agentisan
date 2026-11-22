@@ -103,20 +103,21 @@ func (p *Poller) HoldRoute() (release func()) {
 	return func() { once.Do(p.in.route.Unlock) }
 }
 
+// HoldMu takes the inbox's mu until release is called.
+func (p *Poller) HoldMu() (release func()) {
+	p.in.mu.Lock()
+	var once sync.Once
+	return func() { once.Do(p.in.mu.Unlock) }
+}
+
 // RouteHeld reports whether someone holds the inbox's route now: it fails
 // to take it, else it takes it and gives it back at once.
 func (p *Poller) RouteHeld() bool {
-	if p.in.route.TryLock() {
-		p.in.route.Unlock()
+	if p.in.route.mu.TryLock() {
+		p.in.route.mu.Unlock()
 		return false
 	}
 	return true
-}
-
-// SetProbe makes f the inbox's probe: called just before remember takes
-// route ("remember") and at each delivery read ("delivery"). nil removes it.
-func (p *Poller) SetProbe(f func(at string)) {
-	p.in.probe = f
 }
 
 // MuHeld reports whether someone holds the inbox's mu now, as RouteHeld
@@ -128,6 +129,15 @@ func (p *Poller) MuHeld() bool {
 	}
 	return true
 }
+
+// RouteHolds is how many times route has been taken. Only the goroutine
+// holding route may call it, as the delivery probe and the store's
+// triggers do from the pass.
+func (p *Poller) RouteHolds() uint64 { return p.in.route.n }
+
+// SetDeliveryProbe makes f the inbox's delivery probe, called at each
+// delivery read; nil removes it.
+func (p *Poller) SetDeliveryProbe(f func()) { p.in.deliveryProbe = f }
 
 // Delivery is how the inbox delivers to project's boss now (A74).
 func (p *Poller) Delivery(project string) notice.Delivery {

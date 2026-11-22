@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -14,6 +15,7 @@ import (
 	"modernc.org/sqlite"
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
+	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
 )
@@ -46,11 +48,13 @@ func onSQL(t *testing.T, r *boardRig, trigger string, f func()) {
 
 // TestBoardModeCriticalSectionsHoldRoute pins the whole of each critical
 // section the route lock guards (#187's pre-check, NERD-5533 a15c65f8,
-// must-fix 3), where the schedule tests can pass on a lock that covers
-// only part of one: a board-key boss's delivery read is made with route
-// held, and so is the durable write it decides, the typed claim's UPDATE
-// to dispatching for a Codex boss and the board post's INSERT for a Claude
-// one; remember takes route before mu, holding neither when it asks.
+// must-fix 3, and its re-check ab09c058), where the schedule tests can pass
+// on a lock that covers only part of one. A board-key boss's delivery read
+// is made with route held, and so is the durable write it decides: the
+// typed claim's UPDATE to dispatching for a Codex boss, and the board
+// post's INSERT for a Claude one. Both are made within ONE hold of route,
+// the one the read was made in, so no unlock and relock between the
+// decision and the write, wherever it is put, gets past this.
 func TestBoardModeCriticalSectionsHoldRoute(t *testing.T) {
 	t.Parallel()
 	for name, c := range map[string]struct{ agent, trigger string }{
@@ -60,67 +64,128 @@ func TestBoardModeCriticalSectionsHoldRoute(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			r := newBoardRig(t, []settings.Team{haTabs}, boardOn("ha"), nil)
+			type seen struct {
+				held  bool
+				holds uint64
+			}
 			var (
-				reads, writes []bool
-				order         []string
+				reads, writes []seen
+				before        int // reads made before the write
 			)
-			r.p.SetProbe(func(at string) {
-				switch at {
-				case "delivery":
-					reads = append(reads, r.p.RouteHeld())
-				case "remember":
-					if r.p.RouteHeld() || r.p.MuHeld() {
-						order = append(order, "remember asked for route with a lock held")
-					}
-				}
-			})
 			r.p.EndPoll(haModel(bossPane("ha-boss", c.agent)))
 			m := sent(t, r.st, haBoss, coder, "done")
-			onSQL(t, r, c.trigger, func() { writes = append(writes, r.p.RouteHeld()) })
+			r.p.SetDeliveryProbe(func() { reads = append(reads, seen{r.p.RouteHeld(), r.p.RouteHolds()}) })
+			onSQL(t, r, c.trigger, func() {
+				before = len(reads)
+				writes = append(writes, seen{r.p.RouteHeld(), r.p.RouteHolds()})
+			})
 			r.p.Pass()
-			r.p.SetProbe(nil)
+			r.p.SetDeliveryProbe(nil)
 
-			assert.Empty(t, order, "remember takes route first, holding nothing")
 			require.NotEmpty(t, reads, "the pass read the delivery")
-			for i, held := range reads {
-				assert.True(t, held, "delivery read %d is made with route held", i)
+			for i, read := range reads {
+				assert.True(t, read.held, "delivery read %d is made with route held", i)
 			}
 			require.Len(t, writes, 1, "one durable write")
-			assert.True(t, writes[0], "the durable write is made with route held")
+			assert.True(t, writes[0].held, "the durable write is made with route held")
+			require.Positive(t, before, "a delivery read came before the write")
+			assert.Equal(t, reads[before-1].holds, writes[0].holds, "the write is made in the same hold of route as the read it acts on")
 			assert.Equal(t, store.MessageDelivered, stateOf(t, r.st, m.ID).State)
 		})
 	}
 }
 
+// TestRememberTakesRouteBeforeMu pins the poll's lock order where its
+// locks are taken (#187's re-check ab09c058, M05 and M06): with mu held
+// elsewhere, a poll's remember still takes route, then waits for mu. A
+// remember that took mu first, or took no route, would never hold route
+// here; and the dispatcher, which takes route and then mu, could deadlock
+// against the first.
+func TestRememberTakesRouteBeforeMu(t *testing.T) {
+	t.Parallel()
+	r := newBoardRig(t, []settings.Team{haTabs}, boardOn("ha"), nil)
+	r.p.EndPoll(haModel(bossPane("ha-boss", "codex")))
+	release := r.p.HoldMu()
+	t.Cleanup(release)
+	polled := make(chan struct{})
+	go func() {
+		defer close(polled)
+		r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
+	}()
+	took := assert.Eventually(t, r.p.RouteHeld, ready, time.Millisecond, "remember takes route while mu is held elsewhere")
+	release()
+	select {
+	case <-polled:
+	case <-time.After(ready):
+		t.Fatal("the poll did not end")
+	}
+	if took {
+		assert.Equal(t, notice.DeliverBoard, r.p.Delivery("ha"), "the poll remembered Claude")
+	}
+}
+
 // TestBoardModeLogsRunOffRoute: what a board-key boss's pass logs after
 // its decision, a held queue's warning and a post's Info line, is written
-// with route released, so a poll never waits behind a log writer (#187's
-// pre-check, M11).
+// with route released (#187's pre-check, M11). Two checks, so one that
+// is lost leaves the other: route is free when the line is written, and a
+// real poll that changes the remembered agent completes while the log
+// writer is stalled on that line (re-check ab09c058, C2).
 func TestBoardModeLogsRunOffRoute(t *testing.T) {
 	t.Parallel()
-	for name, c := range map[string]struct{ agent, line string }{
-		"held":   {"", heldMsg},
-		"posted": {"claude", "messages: posted to the board"},
+	for name, c := range map[string]struct{ agent, line, then string }{
+		"held":   {"", heldMsg, "claude"},
+		"posted": {"claude", "messages: posted to the board", "codex"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			cfgs := boardOn("ha")
 			r := newBoardRig(t, []settings.Team{haTabs}, cfgs, nil)
-			var seen, held atomic.Bool
-			var p *daemon.Poller
+			var (
+				p     *daemon.Poller
+				held  atomic.Bool
+				once  sync.Once
+				atLog = make(chan struct{})
+				go_   = make(chan struct{})
+			)
+			unstall := sync.OnceFunc(func() { close(go_) })
+			t.Cleanup(unstall)
 			r.o.Logger = zerolog.New(writerFunc(func(b []byte) (int, error) {
 				if strings.Contains(string(b), c.line) {
-					seen.Store(true)
-					held.Store(p.RouteHeld())
+					once.Do(func() {
+						held.Store(p.RouteHeld())
+						close(atLog)
+						<-go_
+					})
 				}
 				return len(b), nil
 			}))
 			p = daemon.NewPoller(r.o, r.st, r.teams, cfgs, nil, nil)
 			p.EndPoll(haModel(bossPane("ha-boss", c.agent)))
 			sent(t, r.st, haBoss, coder, "done")
-			p.Pass()
-			require.True(t, seen.Load(), "the pass logged %q", c.line)
+			passed := make(chan struct{})
+			go func() {
+				defer close(passed)
+				p.Pass()
+			}()
+			select {
+			case <-atLog:
+			case <-time.After(ready):
+				t.Fatal("the pass never logged " + c.line)
+			}
 			assert.False(t, held.Load(), "logged with route released")
+			polled := make(chan struct{})
+			go func() {
+				defer close(polled)
+				p.EndPoll(haModel(bossPane("ha-boss", c.then)))
+			}()
+			select {
+			case <-polled:
+			case <-time.After(ready):
+				t.Error("a poll waited for the pass's log line")
+			}
+			unstall()
+			<-passed
+			<-polled
 		})
 	}
 }
