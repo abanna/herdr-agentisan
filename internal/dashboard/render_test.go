@@ -390,11 +390,11 @@ func lineWith(t *testing.T, frame, s string) string {
 
 // TestRenderLayout: the header is a box across the terminal, one blank line
 // separates it from the groups, and the groups stack under it, each a box
-// as wide as the terminal and as tall as its agents, in display order.
+// as wide as the terminal and sized for its rows, in display order.
 func TestRenderLayout(t *testing.T) {
 	t.Parallel()
 
-	out := dashboard.Render(dashboard.Frame{Snapshot: fixture(t, "full"), Now: at, Btop: true}, 120, 40, plain)
+	out := dashboard.Render(dashboard.Frame{Snapshot: fixture(t, "full"), Now: at, Btop: true}, 120, 44, plain)
 	ls := lines(out)
 	assert.Equal(t, "╭"+strings.Repeat("─", 118)+"╮", ls[0])
 	assert.True(t, strings.HasPrefix(ls[1], "│ agentisan · PRs "), ls[1])
@@ -417,9 +417,9 @@ func TestRenderLayout(t *testing.T) {
 		}
 	}
 	assert.Equal(t, []string{"CODERS", "PRECHECK", "QA", "CODEX", "RESEARCH", "CLERK"}, tops)
-	// 5 header lines, 30 lines of groups, then blank lines down to the footer.
-	assert.True(t, strings.HasPrefix(ls[34], "╰"), ls[34])
-	for _, l := range ls[35:39] {
+	// 5 header lines, 36 lines of groups including 6 headings, then blank lines.
+	assert.True(t, strings.HasPrefix(ls[40], "╰"), ls[40])
+	for _, l := range ls[41:43] {
 		assert.Empty(t, l)
 	}
 }
@@ -525,7 +525,8 @@ func TestRenderContents(t *testing.T) {
 		// know is drawn and counted as unknown.
 		"an invalid status counts as unknown": {
 			frame: of(one("t", snapshot.Agent{Name: "x", Status: "asleep"}), 80, 24),
-			want:  []string{"╭─ G · 1 ?1 ─", "│ ? x  unknown "},
+			want:  []string{"╭─ G · 1 ?1 ─"},
+			match: []string{`│ \? x +unknown `},
 			not:   []string{"asleep"},
 		},
 		// A plain shell is ▸ and "shell", and its title counts it so (ADR-001
@@ -590,7 +591,7 @@ func TestRenderContents(t *testing.T) {
 		"invalid UTF-8 in text is replaced": {frame: of(one("a\xffb", working("x", nil)), 80, 24), want: []string{"a�b"}},
 		"a truncated multibyte is replaced": {frame: of(one("x\xe2\x82", working("x", nil)), 80, 24), want: []string{"x�"}},
 		"NUL, CR and CRLF become spaces":    {frame: of(one("a\x00b\rc\r\nd", working("x", nil)), 80, 24), want: []string{"a b c  d"}},
-		"empty text fields":                 {frame: of(one("", snapshot.Agent{Name: "x", Status: snapshot.StatusIdle}), 80, 24), want: []string{"│ ● x  idle  ░░░░░   -- "}},
+		"empty text fields":                 {frame: of(one("", snapshot.Agent{Name: "x", Status: snapshot.StatusIdle}), 80, 24), match: []string{`│ ● x +idle +░░░░░   -- `}},
 		"wide and combining text keeps place": {
 			frame: from("wide", 120, 40),
 			want:  []string{"エージェント", "👍👍👍", "nfd-é", "日本 ", "とても長い段階名がカードからはみ出します"},
@@ -627,7 +628,11 @@ func columnsOf(t *testing.T, w int) []string {
 	ls := lines(out)
 	desc := slices.IndexFunc(ls, func(l string) bool { return strings.HasPrefix(l, "│ write the") })
 	require.GreaterOrEqual(t, desc, 0, "at %d:\n%s", w, out)
-	row := ls[desc+4]
+	first := desc + 1
+	if strings.Contains(ls[first], "Ctx") {
+		first++
+	}
+	row := ls[first+3]
 	cols := []string{}
 	// The stage is at least 8 cells wide, so "go-rev" survives its cut.
 	for _, c := range [][2]string{{"state", "working"}, {"model", "opus"}, {"item", "NERD-5255"}, {"stage", "go-rev"}, {"time", " 3m "}} {
@@ -728,13 +733,13 @@ func TestRenderScroll(t *testing.T) {
 		not    []string
 		footer string
 	}{
-		"the first agent: no scroll":             {sel: dashboard.Selection{}, want: []string{"╭─ CODERS", "pee01", "qa"}, not: []string{"codex", "CLERK"}, footer: "↓3"},
-		"the last agent: scrolled to the end":    {sel: dashboard.Selection{Group: 5}, want: []string{"╭─ CLERK", "? clerk"}, not: []string{"pee05", "CODERS"}, footer: "↑9"},
-		"a kept scroll stays while it can":       {sel: dashboard.Selection{Agent: 8}, scroll: 4, want: []string{"pee03", "pee09", "PRECHECK"}, not: []string{"pee02"}, footer: "↑2 ↓2"},
-		"a scroll that hides the selection":      {sel: dashboard.Selection{}, scroll: 9, want: []string{"╭─ CODERS", "pee01"}, footer: "↓3"},
-		"a negative scroll is none":              {sel: dashboard.Selection{}, scroll: -3, want: []string{"╭─ CODERS"}, footer: "↓3"},
-		"a scroll past the end stops at the end": {sel: dashboard.Selection{Group: 5}, scroll: 1 << 30, want: []string{"╰" + strings.Repeat("─", 78) + "╯"}, footer: "↑9"},
-		"a group's first agent shows its title":  {sel: dashboard.Selection{Group: 3}, want: []string{"╭─ CODEX", "Codex review triage"}, not: []string{"│ ◐ pee01"}, footer: "↑3 ↓2"},
+		"the first agent: no scroll":             {sel: dashboard.Selection{}, want: []string{"╭─ CODERS", "pee01", "precheck2"}, not: []string{"qa", "codex", "CLERK"}, footer: "↓4"},
+		"the last agent: scrolled to the end":    {sel: dashboard.Selection{Group: 5}, want: []string{"╭─ CLERK", "? clerk"}, not: []string{"pee05", "CODERS"}, footer: "↑11"},
+		"a kept scroll stays while it can":       {sel: dashboard.Selection{Agent: 8}, scroll: 5, want: []string{"pee03", "pee09", "PRECHECK"}, not: []string{"pee02"}, footer: "↑2 ↓3"},
+		"a scroll that hides the selection":      {sel: dashboard.Selection{}, scroll: 9, want: []string{"╭─ CODERS", "pee01"}, footer: "↓4"},
+		"a negative scroll is none":              {sel: dashboard.Selection{}, scroll: -3, want: []string{"╭─ CODERS"}, footer: "↓4"},
+		"a scroll past the end stops at the end": {sel: dashboard.Selection{Group: 5}, scroll: 1 << 30, want: []string{"╰" + strings.Repeat("─", 78) + "╯"}, footer: "↑11"},
+		"a group's first agent shows its title":  {sel: dashboard.Selection{Group: 3}, want: []string{"╭─ CODEX", "Codex review triage"}, not: []string{"│ ◐ pee01"}, footer: "↑6 ↓2"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -1387,7 +1392,7 @@ func TestRenderFooter(t *testing.T) {
 		},
 		"the agents out of view, on the right": {
 			frame: dashboard.Frame{Snapshot: &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "g", Agents: slices.Repeat([]snapshot.Agent{{Name: "a", Status: snapshot.StatusIdle}}, 40)}}}, Now: at},
-			want:  " " + hints + strings.Repeat(" ", 80-1-len([]rune(hints))-1-4) + " ↓23",
+			want:  " " + hints + strings.Repeat(" ", 80-1-len([]rune(hints))-1-4) + " ↓24",
 		},
 	}
 	for name, tc := range tests {
