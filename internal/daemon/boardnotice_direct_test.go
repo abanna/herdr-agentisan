@@ -107,17 +107,21 @@ func TestDirectOversizedNoticeUsesQueuedBodyParts(t *testing.T) {
 	assert.Equal(t, []string{"turn_ended", "turn_ended"}, kinds(posts[2:]))
 }
 
-func TestDirectNoticeFailedCommitKeepsEarlierChunk(t *testing.T) {
+func TestDirectNoticeFlushStopsAtFirstFailedChunk(t *testing.T) {
 	cfg := boardOn("ha")
 	acks := map[string]int{}
-	ns := directNotices(102)
+	ns := directNotices(201)
 	b := batch(notice.NewBatcher(cfg), acks, ns...)
 	r := newBoardRig(t, []settings.Team{haTabs}, cfg, b)
 	rawExec(t, r.db, `CREATE TABLE parent_notice (id INTEGER PRIMARY KEY);
 	CREATE TABLE child_notice (parent INTEGER REFERENCES parent_notice DEFERRABLE INITIALLY DEFERRED);
 	CREATE TRIGGER fail_notice_commit AFTER INSERT ON board_posts WHEN NEW.body = 'notice 101'
 	BEGIN INSERT INTO child_notice VALUES (1); END;`)
+	attempted := 0
+	onSQL(t, r, "BEFORE INSERT ON board_posts", func() { attempted++ })
 	r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
+
+	assert.Equal(t, 200, attempted, "the third chunk never starts")
 
 	want := ns[:100]
 	assert.Equal(t, texts(want), query(t, r.db, "SELECT body FROM board_posts ORDER BY seq"))
@@ -126,7 +130,7 @@ func TestDirectNoticeFailedCommitKeepsEarlierChunk(t *testing.T) {
 	assert.Empty(t, queuedNotices(t, r.db, "ha-boss"))
 	lines := noticeLog(t, r.logs)
 	require.Len(t, lines, 1)
-	assert.EqualValues(t, 2, lines[0]["dropped"])
+	assert.EqualValues(t, 101, lines[0]["dropped"])
 }
 
 func directNotices(count int) []notice.Notice {

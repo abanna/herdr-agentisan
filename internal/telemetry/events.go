@@ -154,8 +154,7 @@ const (
 	HandoffFailed    = "failed"
 )
 
-// EventBoardPosted is one flush of a board-mode team's notices posted on its
-// board (A74): one post per notice, in one transaction.
+// EventBoardPosted counts the committed posts from one direct notice flush.
 const EventBoardPosted = "agentisan.board.posted"
 
 // The attribute keys of EventBoardPosted.

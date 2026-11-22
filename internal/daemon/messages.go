@@ -82,8 +82,8 @@ type inbox struct {
 	mu    sync.Mutex
 	// Only the dispatcher writes typedBoss. It publishes a board-key boss
 	// after a durable typed claim, before releasing route, and clears it
-	// after attempting to settle the prompt. A poll can then read it
-	// after remember without holding a lock across either sink.
+	// after attempting to settle the prompt. The poll reads the claim
+	// under the route hold that protects direct delivery.
 	typedBoss bossClaim
 	// deliveryProbe is nil outside tests, and is called at each delivery
 	// read. It is the one observation point inside the dispatcher's
