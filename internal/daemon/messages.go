@@ -68,7 +68,18 @@ func refusal(err error) string {
 // built, which every target is checked against, each configured team's
 // boss, how each boss is delivered to (A74), and a wake.
 type inbox struct {
+	// route orders a poll's remember with the dispatcher's decisions for
+	// the boss of a board-mode team: its typed claim (claimTyped) and its
+	// board post (untyped), each with the delivery read it acts on. It is
+	// taken before mu, at those three sites alone. Under it the board post
+	// may close the store's board-reader channel, which wakes `board wait`;
+	// the dispatcher's own backlog wake (posted) runs after it is released.
+	route sync.Mutex
 	mu    sync.Mutex
+	// probe, nil outside tests, is called just before remember takes route
+	// ("remember") and at each delivery read ("delivery"): the tests check
+	// what is held at those points (export_notices_test.go's SetProbe).
+	probe func(at string)
 	model *team.Model
 	// bosses is each configured project's boss, by the agent name herdr
 	// knows it by.
@@ -111,8 +122,15 @@ func (in *inbox) setConfigs(cfgs notice.Configs) {
 // remember records, for each tabs team, the agent this poll's model m shows
 // on the pane in its boss place that bears its boss's name (A74). A nil
 // model, a failed agent.list, no named pane and an empty agent each change
-// nothing remembered.
+// nothing remembered. It takes route first, so a pass deciding for a
+// board-mode boss finishes its claim or its post before the remembered
+// agent changes (claimTyped, untyped).
 func (in *inbox) remember(m *team.Model) {
+	if in.probe != nil {
+		in.probe("remember")
+	}
+	in.route.Lock()
+	defer in.route.Unlock()
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	for project := range in.tabs {
@@ -126,12 +144,23 @@ func (in *inbox) remember(m *team.Model) {
 // ◆ spaces and any project that is not a tabs team, else by its key and the
 // agent last seen on its boss's pane.
 func (in *inbox) delivery(project string) notice.Delivery {
+	if in.probe != nil {
+		in.probe("delivery")
+	}
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	if !in.tabs[project] {
 		return notice.DeliverTyped
 	}
 	return notice.DeliveryOf(in.cfgs.For(project).Board, in.last[project])
+}
+
+// boardKey reports whether project is a tabs team whose key is board
+// (A74): only its boss's claims and posts take route.
+func (in *inbox) boardKey(project string) bool {
+	in.mu.Lock()
+	defer in.mu.Unlock()
+	return in.tabs[project] && in.cfgs.For(project).Board
 }
 
 // polled replaces the model with a poll's, nil when the poll built none, and
@@ -332,15 +361,13 @@ func (d *dispatcher) terminals(ctx context.Context) (map[string]string, error) {
 // a failure ends to's turn this pass, so neither a refused recipient nor a
 // stuck pane holds up the others. It reports false once the daemon is
 // stopping, which ends the pass; a stop is checked before each claim, never
-// inside one (claim). So is a board-mode boss's delivery: once a poll has
-// turned it from typed, the message being typed finishes typed and the rest
-// wait for the next pass's board path (stillTyped, A74).
+// inside one (claim). So is a board-mode boss's delivery, with the claim:
+// once a poll has turned it from typed, the message already claimed
+// finishes typed, as it was claimed, and the rest wait for the next pass's
+// board path (claimTyped, A74).
 func (d *dispatcher) serve(ctx context.Context, bosses map[string]string, to store.Address, target string) bool {
 	for ctx.Err() == nil {
-		if !d.stillTyped(bosses, to) {
-			return true
-		}
-		m, ok, err := d.claim(ctx, to)
+		m, ok, err := d.claimTyped(ctx, bosses, to)
 		if err != nil {
 			d.warnUnlessStopping(ctx, err, "messages: claim "+to.ID+"'s next message")
 			return true
