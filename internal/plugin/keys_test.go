@@ -114,3 +114,16 @@ func TestKeySnippetOpensTheDashboard(t *testing.T) {
 	require.GreaterOrEqual(t, j, 0, "the snippet opens an entrypoint the manifest declares")
 	assert.Equal(t, "split", m.Panes[j].Placement, "the CLI leaves the placement to the manifest")
 }
+
+func TestKeySnippetOpensBtopPopup(t *testing.T) {
+	t.Parallel()
+	_, cfg := readKeySnippet(t)
+	i := slices.IndexFunc(cfg.Keys.Command, func(k keyBinding) bool { return k.Key == "prefix+m" })
+	require.GreaterOrEqual(t, i, 0, "the sample binds no prefix+m")
+	k := cfg.Keys.Command[i]
+	assert.Equal(t, "popup", k.Type)
+	assert.Equal(t, "btop", k.Command)
+	assert.Equal(t, "92%", k.Width)
+	assert.Equal(t, "92%", k.Height)
+	assert.NotEmpty(t, strings.TrimSpace(k.Description))
+}
