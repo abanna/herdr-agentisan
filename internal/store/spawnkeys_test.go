@@ -4,11 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -643,15 +647,22 @@ VALUES (?, 'worker', ?, 'agentisan', ?, ?, 'ha-sender', ?, 'a brief', ?, 1, 1)`,
 	}
 }
 
-// TestSpawnKeysHaveNoProductionCaller (A9): the retry keys are dormant. No
+// TestSpawnKeysHaveNoProductionCaller (A9): the retry keys are dormant but
+// for what part B wires, each name in the one file it may use it in: the
+// daemon's prune line, its one use, in Options.prune's registry. No other
 // non-test file in internal/ or cmd/ but spawnkeys.go uses their names or
-// names their tables, and no Go string names a table of theirs with REPLACE.
+// names their tables, and no Go string names a table of theirs with
+// REPLACE.
 func TestSpawnKeysHaveNoProductionCaller(t *testing.T) {
 	t.Parallel()
 	const own = "internal/store/spawnkeys.go"
 	spawnNames := []string{
 		"SpawnKeyRetention", "SpawnKey", "SpawnAnswer", "SpawnRecord", "SpawnLink",
-		"BeginSpawn", "DropSpawn", "ErrNoSpawnKey", "ErrSpawnKeyExists", "ErrSpawnKeyChanged",
+		"BeginSpawn", "DropSpawn", "BindSpawned", "FinishSpawn", "PruneSpawnKeys",
+		"ErrNoSpawnKey", "ErrSpawnKeyExists", "ErrSpawnKeyChanged",
+	}
+	wired := map[string][]string{
+		"internal/daemon/daemon.go": {"PruneSpawnKeys"},
 	}
 	names, tables := map[string][]string{}, map[string][]string{}
 	var replaces []string
@@ -664,19 +675,51 @@ func TestSpawnKeysHaveNoProductionCaller(t *testing.T) {
 		parsed += files
 	}
 	assert.Greater(t, parsed, 100, "the scan reached the module's packages")
-	found := map[string]bool{}
-	for _, use := range names[own] {
-		found[use[strings.LastIndexByte(use, ' ')+1:]] = true
+	used := func(file string) []string {
+		found := map[string]bool{}
+		for _, use := range names[file] {
+			found[use[strings.LastIndexByte(use, ' ')+1:]] = true
+		}
+		return slices.Sorted(maps.Keys(found))
 	}
-	for _, name := range spawnNames {
-		assert.True(t, found[name], "the scan finds %s in %s", name, own)
-	}
+	assert.Equal(t, slices.Sorted(slices.Values(spawnNames)), used(own), "the scan finds every name in %s", own)
 	assert.NotEmpty(t, tables[own], "the scan finds the retry keys' SQL")
 	delete(names, own)
 	delete(tables, own)
+	daemonUses := names["internal/daemon/daemon.go"]
+	if assert.Len(t, daemonUses, 1, "daemon.go names PruneSpawnKeys once") {
+		assert.True(t, inMethod(t, "Options", "prune", daemonUses[0]), "its one use is Options.prune's registry: %s", daemonUses[0])
+	}
+	for file, want := range wired {
+		assert.Equal(t, want, used(file), "%s uses exactly the names part B wires there", file)
+		delete(names, file)
+	}
 	assert.Empty(t, names, "the retry keys are dormant until worker spawn takes a key (NERD-5254)")
 	assert.Empty(t, tables, "only spawnkeys.go names their tables in SQL")
 	assert.Empty(t, replaces, "no Go string names a retry key table with REPLACE in it")
+}
+
+// inMethod reports whether use, a productionUses entry ("path:line:col
+// name"), lies in recv's method name in its file.
+func inMethod(t *testing.T, recv, name, use string) bool {
+	t.Helper()
+	parts := strings.SplitN(strings.Fields(use)[0], ":", 3)
+	require.Len(t, parts, 3, use)
+	line, err := strconv.Atoi(parts[1])
+	require.NoError(t, err)
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, parts[0], nil, parser.SkipObjectResolution)
+	require.NoError(t, err)
+	for _, d := range f.Decls {
+		fn, ok := d.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != name || fn.Recv == nil || len(fn.Recv.List) != 1 {
+			continue
+		}
+		if id, ok := fn.Recv.List[0].Type.(*ast.Ident); ok && id.Name == recv {
+			return fset.Position(fn.Pos()).Line <= line && line <= fset.Position(fn.End()).Line
+		}
+	}
+	return false
 }
 
 // TestDropSpawnOnlyWhenNothingBound (A10): DropSpawn deletes a running

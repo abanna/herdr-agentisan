@@ -99,6 +99,14 @@ func TestConfigResolveText(t *testing.T) {
 color = "#123456"  # project
 integrations.github.token = { env = "GITHUB_TOKEN" }  # shared
 integrations.linear.token = { op = "`+linearRef+`" }  # project
+notices.attention.after = 600  # default
+notices.attention.alerts = 0  # default
+notices.attention.busy_grace = 1800  # default
+notices.attention.ceiling_after = 120  # default
+notices.attention.every = 300  # default
+notices.attention.max_every = 1200  # default
+notices.attention.sound = "request"  # default
+notices.delivery = "typed"  # default
 notices.gap = 30  # default
 notices.repeat = 300  # default
 repo = "`+repo+`"  # project
@@ -116,6 +124,14 @@ func TestConfigResolveWithoutAProjectListsThem(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, `agent.command = ["claude"]  # default
 integrations.github.token = { env = "GITHUB_TOKEN" }  # shared
+notices.attention.after = 600  # default
+notices.attention.alerts = 0  # default
+notices.attention.busy_grace = 1800  # default
+notices.attention.ceiling_after = 120  # default
+notices.attention.every = 300  # default
+notices.attention.max_every = 1200  # default
+notices.attention.sound = "request"  # default
+notices.delivery = "typed"  # default
 notices.gap = 30  # default
 notices.repeat = 300  # default
 rotation.thresholds = [55, 65, 75]  # default
@@ -126,6 +142,14 @@ projects: alpha, app
 	out, err = runCtx(configCtx(t, nil, nil), "config", "resolve", "--config-dir", t.TempDir())
 	require.NoError(t, err, "no shared file: the defaults alone")
 	assert.Equal(t, `agent.command = ["claude"]  # default
+notices.attention.after = 600  # default
+notices.attention.alerts = 0  # default
+notices.attention.busy_grace = 1800  # default
+notices.attention.ceiling_after = 120  # default
+notices.attention.every = 300  # default
+notices.attention.max_every = 1200  # default
+notices.attention.sound = "request"  # default
+notices.delivery = "typed"  # default
 notices.gap = 30  # default
 notices.repeat = 300  # default
 rotation.thresholds = [55, 65, 75]  # default
@@ -237,15 +261,23 @@ func TestConfigResolveJSON(t *testing.T) {
 				assert.Equal(t, map[string]any{"env": "GITHUB_TOKEN"}, integrations["github"].(map[string]any)["token"])
 				assert.Equal(t, map[string]any{"op": linearRef}, integrations["linear"].(map[string]any)["token"])
 				assert.Equal(t, map[string]any{
-					"agent.command":             settings.LayerDefault,
-					"color":                     settings.LayerProject,
-					"integrations.github.token": settings.LayerShared,
-					"integrations.linear.token": settings.LayerProject,
-					"notices.gap":               settings.LayerDefault,
-					"notices.repeat":            settings.LayerDefault,
-					"repo":                      settings.LayerProject,
-					"rotation.thresholds":       settings.LayerDefault,
-					"short":                     settings.LayerProject,
+					"agent.command":                   settings.LayerDefault,
+					"color":                           settings.LayerProject,
+					"integrations.github.token":       settings.LayerShared,
+					"integrations.linear.token":       settings.LayerProject,
+					"notices.attention.after":         settings.LayerDefault,
+					"notices.attention.alerts":        settings.LayerDefault,
+					"notices.attention.busy_grace":    settings.LayerDefault,
+					"notices.attention.ceiling_after": settings.LayerDefault,
+					"notices.attention.every":         settings.LayerDefault,
+					"notices.attention.max_every":     settings.LayerDefault,
+					"notices.attention.sound":         settings.LayerDefault,
+					"notices.delivery":                settings.LayerDefault,
+					"notices.gap":                     settings.LayerDefault,
+					"notices.repeat":                  settings.LayerDefault,
+					"repo":                            settings.LayerProject,
+					"rotation.thresholds":             settings.LayerDefault,
+					"short":                           settings.LayerProject,
 				}, got["sources"])
 				assert.Equal(t, []any{"alpha", "app"}, got["projects"])
 				assert.Equal(t, defaultPolicy(t), got["routing_policy"])
@@ -531,7 +563,7 @@ func TestConfigResolveRendersAnyValue(t *testing.T) {
 			out, err := runCtx(configCtx(t, nil, nil), args...)
 			require.NoError(t, err)
 			assert.Contains(t, out, tc.wantText+"\n")
-			assert.Len(t, strings.Split(strings.TrimSuffix(out, "\n"), "\n"), 11, "one line per leaf, then the routing policy: %q", out)
+			assert.Len(t, strings.Split(strings.TrimSuffix(out, "\n"), "\n"), 19, "one line per leaf, then the routing policy: %q", out)
 
 			out, err = runCtx(configCtx(t, nil, nil), append(args, "--json")...)
 			require.NoError(t, err)

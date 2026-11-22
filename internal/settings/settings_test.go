@@ -320,17 +320,25 @@ short = "a"
 	assert.Nil(t, got.Profile)
 	assert.Equal(t, []string{"alpha", "zeta"}, got.Projects)
 	assert.Equal(t, map[string]string{
-		"agent.command":       settings.LayerDefault,
-		"agent.model":         settings.LayerShared,
-		"notices.gap":         settings.LayerDefault,
-		"notices.repeat":      settings.LayerDefault,
-		"rotation.thresholds": settings.LayerFlag,
+		"agent.command":                   settings.LayerDefault,
+		"agent.model":                     settings.LayerShared,
+		"notices.attention.after":         settings.LayerDefault,
+		"notices.attention.alerts":        settings.LayerDefault,
+		"notices.attention.busy_grace":    settings.LayerDefault,
+		"notices.attention.ceiling_after": settings.LayerDefault,
+		"notices.attention.every":         settings.LayerDefault,
+		"notices.attention.max_every":     settings.LayerDefault,
+		"notices.attention.sound":         settings.LayerDefault,
+		"notices.delivery":                settings.LayerDefault,
+		"notices.gap":                     settings.LayerDefault,
+		"notices.repeat":                  settings.LayerDefault,
+		"rotation.thresholds":             settings.LayerFlag,
 	}, got.Sources, "no project's values leak into a no-project resolve")
 	var paths []string
 	for _, l := range got.Leaves() {
 		paths = append(paths, l.Path)
 	}
-	assert.Equal(t, []string{"agent.command", "agent.model", "notices.gap", "notices.repeat", "rotation.thresholds"}, paths, "leaves are sorted")
+	assert.Equal(t, []string{"agent.command", "agent.model", "notices.attention.after", "notices.attention.alerts", "notices.attention.busy_grace", "notices.attention.ceiling_after", "notices.attention.every", "notices.attention.max_every", "notices.attention.sound", "notices.delivery", "notices.gap", "notices.repeat", "rotation.thresholds"}, paths, "leaves are sorted")
 }
 
 // TestLoadMissingFilesAreNotErrors: with no shared file only the defaults
@@ -343,10 +351,18 @@ func TestLoadMissingFilesAreNotErrors(t *testing.T) {
 	assert.NotNil(t, got.Projects, "an empty list, not null, so --json prints []")
 	assert.Empty(t, got.Projects)
 	assert.Equal(t, map[string]string{
-		"agent.command":       settings.LayerDefault,
-		"notices.gap":         settings.LayerDefault,
-		"notices.repeat":      settings.LayerDefault,
-		"rotation.thresholds": settings.LayerDefault,
+		"agent.command":                   settings.LayerDefault,
+		"notices.attention.after":         settings.LayerDefault,
+		"notices.attention.alerts":        settings.LayerDefault,
+		"notices.attention.busy_grace":    settings.LayerDefault,
+		"notices.attention.ceiling_after": settings.LayerDefault,
+		"notices.attention.every":         settings.LayerDefault,
+		"notices.attention.max_every":     settings.LayerDefault,
+		"notices.attention.sound":         settings.LayerDefault,
+		"notices.delivery":                settings.LayerDefault,
+		"notices.gap":                     settings.LayerDefault,
+		"notices.repeat":                  settings.LayerDefault,
+		"rotation.thresholds":             settings.LayerDefault,
 	}, got.Sources)
 
 	repo, dir := newRepo(t), t.TempDir()
