@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -335,6 +337,10 @@ func TestApplyJevKeepsTheBossEffortAndTheFilters(t *testing.T) {
 	}
 }
 
+func typeSafeJevClient(srv *httptest.Server, key string) jev.Client {
+	return jev.Client{URL: srv.URL, Key: key, HTTP: srv.Client()}
+}
+
 // TestJevThroughTypeSafe: the decision a TypeSafe fake answers. The body is
 // the template's; 401, 422, 429 and 529, and an answer held past the rules'
 // 2 s, keep the default with jev_failure, asked once each; the key is never
@@ -357,7 +363,7 @@ func TestJevThroughTypeSafe(t *testing.T) {
 		d := asking(t, p)
 		body, err := p.JevRequest(coderTask())
 		require.NoError(t, err)
-		a, err := jev.Client{URL: srv.URL, Key: key}.Ask(t.Context(), body, p.JevTimeout())
+		a, err := typeSafeJevClient(srv, key).Ask(t.Context(), body, p.JevTimeout())
 		// Close waits for the handler, so what it recorded is read after it.
 		srv.Close()
 		got := p.ApplyJev(d, a.Model, a.Answers, err)
@@ -406,6 +412,50 @@ func TestJevThroughTypeSafe(t *testing.T) {
 		assert.Equal(t, routing.ReasonJevFailure, got.FallbackReason)
 		assert.Contains(t, got.JevError, "deadline exceeded")
 	})
+}
+
+func TestJev529SurvivesSiblingServerClose(t *testing.T) {
+	sibling := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(sibling.Close)
+	var hits atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.WriteHeader(529)
+	}))
+	t.Cleanup(srv.Close)
+
+	var conn net.Conn
+	idled := make(chan error, 1)
+	askReturned := make(chan struct{})
+	ctx := httptrace.WithClientTrace(t.Context(), &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) { conn = info.Conn },
+		PutIdleConn: func(err error) {
+			idled <- err
+			if err != nil {
+				return
+			}
+			// Go pools the empty response's connection before handing off
+			// the status. If the sibling closed it, hold the handoff until
+			// Ask observes the close so the two events cannot race.
+			sibling.Close()
+			if errors.Is(conn.SetReadDeadline(time.Time{}), net.ErrClosed) {
+				<-askReturned
+			}
+		},
+	})
+	_, err := typeSafeJevClient(srv, "k-for-tests").Ask(ctx, []byte("{}"), 2*time.Second)
+	close(askReturned)
+
+	select {
+	case idleErr := <-idled:
+		require.NoError(t, idleErr, "the response connection entered the idle pool")
+	default:
+		t.Fatal("the response connection never reached PutIdleConn")
+	}
+	assert.Equal(t, int32(1), hits.Load(), "no retry")
+	require.ErrorIs(t, err, jev.ErrStatus)
+	assert.ErrorContains(t, err, "HTTP 529")
 }
 
 // TestApplyJevBoundsWhatItRecords: a decision keeps at most 200 bytes of
