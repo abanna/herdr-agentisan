@@ -75,18 +75,19 @@ type inbox struct {
 	// taken before mu, at those three sites alone. Under it the board post
 	// may close the store's board-reader channel, which wakes `board wait`;
 	// the dispatcher's own backlog wake (posted) runs after it is released.
-	route sync.Mutex
+	route routeLock
 	mu    sync.Mutex
 	// Only the dispatcher writes typedBoss. It publishes a board-key boss
 	// after a durable typed claim, before releasing route, and clears it
 	// after attempting to settle the prompt. A poll can then read it
 	// after remember without holding a lock across either sink.
 	typedBoss bossClaim
-	// probe, nil outside tests, is called just before remember takes route
-	// ("remember") and at each delivery read ("delivery"): the tests check
-	// what is held at those points (export_notices_test.go's SetProbe).
-	probe func(at string)
-	model *team.Model
+	// deliveryProbe is nil outside tests, and is called at each delivery
+	// read. It is the one observation point inside the dispatcher's
+	// critical section that the tests need (export_notices_test.go's
+	// SetDeliveryProbe), and changes nothing when nil.
+	deliveryProbe func()
+	model         *team.Model
 	// bosses is each configured project's boss, by the agent name herdr
 	// knows it by.
 	bosses map[string]string
@@ -100,6 +101,23 @@ type inbox struct {
 	last map[string]string
 	wake chan struct{}
 }
+
+// routeLock is the inbox's route: a mutex that counts its acquisitions,
+// so a test can tell one hold of it from two (claimTyped's delivery read
+// and its claim must share one). The count is written only by the holder.
+type routeLock struct {
+	mu sync.Mutex
+	n  uint64
+}
+
+// Lock takes route and counts the acquisition.
+func (l *routeLock) Lock() {
+	l.mu.Lock()
+	l.n++
+}
+
+// Unlock releases route.
+func (l *routeLock) Unlock() { l.mu.Unlock() }
 
 // bossClaim holds the single dispatcher's outstanding board-key boss
 // claim. The poll reads it concurrently with the dispatcher's stores.
@@ -141,9 +159,6 @@ func (in *inbox) setConfigs(cfgs notice.Configs) {
 // board-mode boss finishes its claim or its post before the remembered
 // agent changes (claimTyped, untyped).
 func (in *inbox) remember(m *team.Model) {
-	if in.probe != nil {
-		in.probe("remember")
-	}
 	in.route.Lock()
 	defer in.route.Unlock()
 	in.mu.Lock()
@@ -159,8 +174,8 @@ func (in *inbox) remember(m *team.Model) {
 // ◆ spaces and any project that is not a tabs team, else by its key and the
 // agent last seen on its boss's pane.
 func (in *inbox) delivery(project string) notice.Delivery {
-	if in.probe != nil {
-		in.probe("delivery")
+	if in.deliveryProbe != nil {
+		in.deliveryProbe()
 	}
 	in.mu.Lock()
 	defer in.mu.Unlock()
