@@ -46,6 +46,7 @@ func TestBoardAlertInputsPendingAndBossPlace(t *testing.T) {
 		NewestCeiling: at.Add(5 * time.Minute), NewestCeilingPost: at.Add(4 * time.Minute),
 	}
 	built := &team.Model{Projects: []team.Project{
+		{Name: "empty"},
 		{Name: "other", Boss: []team.Worker{{Pane: team.Pane{Name: "boss", Agent: "codex", Status: team.StatusIdle}}}},
 		{Name: "studio", Boss: []team.Worker{
 			{Pane: team.Pane{Name: "unbound", Status: team.StatusDone}},
@@ -70,6 +71,9 @@ func TestBoardAlertInputsPendingAndBossPlace(t *testing.T) {
 	require.True(t, unnamed.Place)
 	require.Equal(t, team.StatusUnknown, unnamed.Status)
 	require.Empty(t, unnamed.Agent)
+
+	empty := attentioninput.State(pending, built, "empty", "boss")
+	require.False(t, empty.Place, "a project with no boss pane has no place")
 
 	for _, model := range []*team.Model{nil, built} {
 		absent := attentioninput.State(pending, model, "absent", "boss")

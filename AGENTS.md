@@ -239,6 +239,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   has left posts unread, or messages waiting, too long (ADR-001 A74): when
   an episode opens, its reminders, what resets, pauses or ends it. Pure:
   tests build its inputs by hand.
+- `internal/daemon/attentioninput/` projects the resolved alert settings,
+  pending board and inbox counts, and boss pane into the tracker inputs.
+  `TestBoardAttentionHasNoProductionCaller` keeps both packages dormant
+  until the daemon poll wires the alerts in 3b-ii.
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
   `team status`, `team up`, `worker spawn` and `worker retire`, and `send`'s
   sender and recipient (A30): each group's counts and members on a tabs team
