@@ -177,9 +177,10 @@ type inboxSink struct {
 
 // Send queues m for its boss and logs it, and keeps the lines the committed
 // body holds: AppendTo cuts from the front, its header included. A project
-// with no boss is only logged, and kept whole, so settled: told again, it
-// would still have nowhere to go, since the daemon reads its teams once. A
-// failed write is logged too, and returned, so m is not settled.
+// with no boss goes only to daemon.log (at info; above that level, nowhere),
+// and is kept whole, so settled: told again, it would still have nowhere to
+// go, since the daemon reads its teams once. A failed write is logged too,
+// and returned, so m is not settled.
 func (s inboxSink) Send(ctx context.Context, m notice.Message) (int, error) {
 	_, bosses := s.in.view()
 	e := s.log.Info().Str("project", m.Project).Strs("notices", m.Lines)

@@ -350,8 +350,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   (`boardack.go`, migration 0012, A74), dormant until PR 3c: nothing writes
   either table, and `ReadBoard` and `LatestPosts` read one primary-key
   lookup per post they return, which `board.read` does not serve; every
-  post wakes each `board wait`. Tests open a fresh database in a temp
-  dir; the store is never mocked.
+  post wakes each `board wait`; `BoardPending` counts what a boss has left
+  unread and waiting, for the alert (A74). Tests open a fresh database in a
+  temp dir; the store is never mocked.
   The board batch (`PostAll`, `FitID`) and notice message operations
   (`Entries`, `SettleAll`, `Tail`) are dormant until daemon wiring (A74),
   guarded by `TestBoardNoticeBatchHasNoProductionCaller`.
@@ -373,9 +374,14 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   `spawnkeys.go` is worker spawn's retry keys (A73, NERD-5254):
   migration 0011 (one-way) adds `spawn_requests` and `spawn_request_workers`,
   which `BeginSpawn` writes, `SpawnRecord` reads with each planned id's row
-  now and its briefs, and `DropSpawn` drops while nothing is bound; dormant
-  until `worker spawn` takes a key, and `TestSpawnKeysHaveNoProductionCaller`
-  fails on any use outside it.
+  now and its briefs, and `DropSpawn` drops while nothing is bound;
+  `BindSpawned` binds a worker and its link in one transaction, through
+  `BindWorker`'s own `checkWorker` and `bindTx`, with errors that repeat no
+  value of the worker, `FinishSpawn` stores the answer once, and
+  `PruneSpawnKeys` is the daemon's prune of them, at its start and daily.
+  Dormant until `worker spawn` takes a key:
+  `TestSpawnKeysHaveNoProductionCaller` fails on any use outside it but the
+  daemon's one prune line, in `Options.prune`.
 - `internal/herdr/` — the herdr socket client (newline-delimited JSON, one
   request per connection). `herdrtest` is an in-process fake server: tests
   must dial it, never `HERDR_SOCKET_PATH` — a shell inside herdr has the real

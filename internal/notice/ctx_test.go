@@ -253,3 +253,29 @@ func TestCrossingAlert(t *testing.T) {
 	boss := notice.Crossing{Project: "ha", Boss: true, Worker: team.Worker{ID: "w1:p0", Pane: team.Pane{ID: "w1:p0", Name: "ha-boss\n"}}, Ctx: 90, Level: team.LevelCeiling, Threshold: 75}
 	assert.Equal(t, herdr.Notification{Title: "agentisan: ha-boss at 90% context", Body: "the boss is past the 75% ceiling and is told to hand off", Sound: "request"}, boss.Alert())
 }
+
+// TestCeilingMarkIsInEveryCeilingLineOnly: CeilingMark, by which the
+// board's pending read finds a ceiling in a notices post or a held notice
+// (A74), is in a boss's and a worker's ceiling line, alerted or not, and in
+// no soft or hard line.
+func TestCeilingMarkIsInEveryCeilingLineOnly(t *testing.T) {
+	t.Parallel()
+	assert.Equal(t, "% context (ceiling: ", notice.CeilingMark, "the mark is ctxText's from its percent sign: another daemon notice quoting a bare (ceiling: is none")
+	boss := team.Worker{ID: "w1:p0", Pane: team.Pane{ID: "w1:p0", Name: "ha-boss", Agent: "claude"}}
+	for _, who := range []struct {
+		name string
+		w    team.Worker
+		boss bool
+	}{{"a worker", at("99"), false}, {"the boss", boss, true}} {
+		for _, l := range []struct {
+			level          team.Level
+			ctx, threshold int
+		}{{team.LevelSoft, 56, 55}, {team.LevelHard, 66, 65}, {team.LevelCeiling, 99, 75}} {
+			for _, alerted := range []bool{false, true} {
+				c := notice.Crossing{Project: "ha", Boss: who.boss, Worker: who.w, Ctx: l.ctx, Level: l.level, Threshold: l.threshold}
+				line := c.Notice(alerted).Text
+				assert.Equal(t, l.level == team.LevelCeiling, strings.Contains(line, notice.CeilingMark), "%s, %s, alerted %v: %q", who.name, l.level, alerted, line)
+			}
+		}
+	}
+}

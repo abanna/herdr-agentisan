@@ -3,6 +3,7 @@ package daemon_test
 import (
 	"database/sql"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,4 +108,30 @@ func TestRunPrunesTheBoard(t *testing.T) {
 	require.Eventually(t, func() bool {
 		return assert.ObjectsAreEqual([]string{"recent"}, query(t, p.DB, "SELECT body FROM board_posts ORDER BY seq"))
 	}, ready, 10*time.Millisecond, "the prune at start removes the board posts past 30 days")
+}
+
+// TestRunPrunesSpawnKeys (B7, A73): the daemon's prune at start also
+// removes the spawn retry keys past their retention, and keeps a newer one.
+func TestRunPrunesSpawnKeys(t *testing.T) {
+	t.Parallel()
+	t0 := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	h := newHerdr(t, 22)
+	dir := shortDir(t)
+	p := paths(t, dir, h)
+	require.NoError(t, os.MkdirAll(p.Dir, 0o700))
+	st, err := store.Open(t.Context(), p.DB)
+	require.NoError(t, err)
+	for key, at := range map[string]time.Time{
+		strings.Repeat("a", 32): t0.Add(-store.SpawnKeyRetention - time.Second),
+		strings.Repeat("b", 32): t0.Add(-store.SpawnKeyRetention + time.Second),
+	} {
+		require.NoError(t, st.BeginSpawn(t.Context(), store.SpawnKey{Key: key, Project: "ha", Group: "coder", Count: 1}, []string{"ha-coder-1"}, at))
+	}
+	require.NoError(t, st.Close())
+	o := opts(t, dir, h)
+	o.Now = func() time.Time { return t0 }
+	serving(t, o, h)
+	require.Eventually(t, func() bool {
+		return assert.ObjectsAreEqual([]string{strings.Repeat("b", 32)}, query(t, p.DB, "SELECT retry_key FROM spawn_requests"))
+	}, ready, 10*time.Millisecond, "the prune at start removes the retry keys past their retention")
 }
