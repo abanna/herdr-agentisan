@@ -821,6 +821,70 @@ func TestTeamPushFollowsARelabel(t *testing.T) {
 	}
 }
 
+// TestTeamPollLogsAConfigThatDoesNotResolve checks that a startup config
+// error explains why the configured teams are absent and the unnamed spaces
+// still get their pushes.
+func TestTeamPollLogsAConfigThatDoesNotResolve(t *testing.T) {
+	t.Parallel()
+
+	const schema = "schema_version = 1\n"
+	const tabs = "[projects.app]\nrepo = \"/x\"\nshort = \"ap\"\n"
+	const retired = "the ◆ spaces are retired (NERD-5670). Remove this entry. Every team is a tabs team"
+	for name, tc := range map[string]struct {
+		file   string
+		reason string
+	}{
+		"missing short": {
+			file:   schema + "[projects.app]\nrepo = \"/x\"\n",
+			reason: "a tabs project needs a short code",
+		},
+		"retired table": {
+			file:   schema + "[spaces]\n" + tabs,
+			reason: retired,
+		},
+		"unsupported schema": {
+			file:   "schema_version = 2\n" + tabs,
+			reason: "schema_version is 2",
+		},
+		"retired reference to an unknown project": {
+			file:   schema + "spaces.project = \"unconfigured\"\n" + tabs,
+			reason: retired,
+		},
+		"non-ASCII project": {
+			file:   schema + "[projects.\"ä\"]\nrepo = \"/x\"\nshort = \"ap\"\n",
+			reason: "a project name must match",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			config := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(config, settings.FileName), []byte(tc.file), 0o600))
+			th := newSpacesHerdr(t)
+			var logs lockedLog
+			opts := teamOpts(t, shortDir(t), th, config)
+			opts.Logger = zerolog.New(&logs)
+			serving(t, opts, th.fakeHerdr)
+
+			polled(t, th.srv, 1)
+			assert.Len(t, pushes(t, th.srv), 3, "the unnamed spaces still receive their pushes")
+
+			var entry struct {
+				Level string `json:"level"`
+				Error string `json:"error"`
+			}
+			for line := range strings.SplitSeq(logs.String(), "\n") {
+				if strings.Contains(line, "herdr-agentisan.toml does not resolve; the ◆ spaces belong to the unnamed project") {
+					require.NoError(t, json.Unmarshal([]byte(line), &entry))
+					break
+				}
+			}
+			assert.Equal(t, "error", entry.Level, "startup log: %s", logs.String())
+			assert.Contains(t, entry.Error, tc.reason)
+		})
+	}
+}
+
 // lockedLog is a log sink safe to read while the daemon writes it.
 type lockedLog struct {
 	mu sync.Mutex
