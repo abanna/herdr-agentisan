@@ -472,18 +472,6 @@ func TestSnapshotRowStage(t *testing.T) {
 	}, rowsOf(team.Snapshot(m, liveProject, now, nil, nil)))
 }
 
-// groupsLayout is one ◆ space per name, each with one agent, listed in the
-// order given, for the tests of the ◆ spaces alone.
-func groupsLayout(names ...string) team.Layout {
-	var l team.Layout
-	for i, n := range names {
-		ws := "w" + string(rune('a'+i))
-		l.Workspaces = append(l.Workspaces, herdr.WorkspaceInfo{WorkspaceID: ws, Label: "◆ " + n})
-		l.Panes = append(l.Panes, pane(ws+":p1", ws, "claude", "idle", nil))
-	}
-	return l
-}
-
 // typesLayout is the live team with one worker's tab per type,
 // <short>-<type>-1, each with one agent, listed in the order given.
 func typesLayout(types ...string) team.Layout {
@@ -558,44 +546,6 @@ func TestSnapshotGroupOrder(t *testing.T) {
 		m := team.Build(typesLayout("debugger", "zeta", "librarian", "qa", "review", "coder", "research", "precheck"), liveTeam, nil)
 		s := team.Snapshot(m, liveProject, at, nil, nil)
 		assert.Equal(t, append(team.TypeOrder(), "zeta"), groupNames(s))
-	})
-}
-
-// TestSpacesSnapshotGroupOrder is TestSnapshotGroupOrder on the ◆ spaces,
-// whose resolver gives v12's working order (herdr-dashboard-v12.py:21,
-// without ◆ herdr, which is not in the model), then debugger. A space's
-// label may name any group, so names match exactly: "Coders" is not
-// coders.
-func TestSpacesSnapshotGroupOrder(t *testing.T) {
-	t.Parallel()
-
-	tests := map[string]struct {
-		groups []string
-		want   []string
-	}{
-		"v12's order":                 {groups: []string{"clerk", "research", "codex", "qa", "precheck", "coders"}, want: []string{"coders", "precheck", "qa", "codex", "research", "clerk"}},
-		"debugger after clerk":        {groups: []string{"debugger", "alpha", "clerk", "coders"}, want: []string{"coders", "clerk", "debugger", "alpha"}},
-		"the rest follow by name":     {groups: []string{"zeta", "beta", "qa", "alpha"}, want: []string{"qa", "alpha", "beta", "zeta"}},
-		"another case is another one": {groups: []string{"Coders", "coders", "QA"}, want: []string{"coders", "Coders", "QA"}},
-		"non-ASCII names":             {groups: []string{"ü", "a", "coders"}, want: []string{"coders", "a", "ü"}},
-		"a single group":              {groups: []string{"research"}, want: []string{"research"}},
-		"no group spaces":             {groups: nil, want: nil},
-	}
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			m := team.Build(groupsLayout(tc.groups...), team.Spaces{}, nil)
-			s := team.Snapshot(m, "", at, nil, nil)
-			assert.Equal(t, tc.want, groupNames(s))
-			assert.NotNil(t, s.Groups, "groups is a list, never null")
-		})
-	}
-	t.Run("the spaces resolver's order is v12's then debugger, a fresh copy each time", func(t *testing.T) {
-		t.Parallel()
-		got := team.Spaces{}.GroupOrder()
-		assert.Equal(t, []string{"coders", "precheck", "qa", "codex", "research", "clerk", "debugger"}, got)
-		got[0] = "x"
-		assert.Equal(t, "coders", team.Spaces{}.GroupOrder()[0])
 	})
 }
 
@@ -690,18 +640,6 @@ func TestSnapshotProject(t *testing.T) {
 		assert.Nil(t, s.Boss)
 		assert.Nil(t, s.Project, "nor its colour")
 	})
-}
-
-// TestSpacesSnapshotUnnamedProject: the ◆ spaces of a configuration that
-// names no [spaces] project are the unnamed project's, which has no name
-// and no colour.
-func TestSpacesSnapshotUnnamedProject(t *testing.T) {
-	t.Parallel()
-	m := team.Build(groupsLayout("coders"), team.Spaces{}, nil)
-	s := team.Snapshot(m, "", at, nil, nil)
-	assert.Empty(t, s.Team)
-	assert.Nil(t, s.Project)
-	assert.Equal(t, []string{"coders"}, groupNames(s))
 }
 
 // TestSnapshotDecodesStrictly: whatever the model holds, the snapshot it

@@ -507,9 +507,6 @@ func (s *Service) resolveTarget(ctx context.Context, name string) (target, *Reti
 	}
 	label := l.tabLabel(pane.TabID)
 	for _, t := range teams {
-		if t.Layout != settings.LayoutTabs {
-			continue
-		}
 		if ws, _ := tabsOf(t).Workspace(l.Workspaces); ws == pane.WorkspaceID && label == tabsOf(t).BossTab() {
 			return target{}, nil, fmt.Errorf("%w: %s is in %s, the boss's tab", ErrNotAWorker, pane.PaneID, label)
 		}
@@ -550,9 +547,6 @@ func (s *Service) paneByID(ctx context.Context, name string, l layout) (herdr.Pa
 func workerPane(id string, teams []settings.Team, l layout) (herdr.PaneInfo, bool) {
 	for _, t := range teams {
 		r := tabsOf(t)
-		if t.Layout != settings.LayoutTabs {
-			continue
-		}
 		if _, ok := r.Type(id); !ok {
 			continue
 		}

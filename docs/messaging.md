@@ -18,7 +18,7 @@ BODY
 
 | Recipient | Who it is |
 | --- | --- |
-| `boss` | Your own team's boss: `<short>-boss` for a tabs team, `boss` for the ◆ spaces |
+| `boss` | Your own team's `<short>-boss` |
 | `<short>-boss` | That team's boss |
 | A logical id, such as `ha-coder-2` | A worker that `worker spawn` started |
 
@@ -52,7 +52,7 @@ The command names the pane it runs in, once its own process lineage
 confirms it, and the daemon reads who that pane is from herdr and
 `state.db`:
 1. the worker a live row binds to the pane's terminal;
-2. else that team's boss, for a pane in its `<short>-boss` tab or ◆ boss;
+2. else that team's boss, for a pane in its `<short>-boss` tab;
 3. else the pane itself, by its terminal.
 
 `HERDR_AGENTISAN_WORKER` counts only when the command's own pane can't be

@@ -99,7 +99,7 @@ func TestSendQueuesForTheBinding(t *testing.T) {
 		"to a worker, from a worker":  {to: worker("ha-coder-1"), from: worker("ha-coder-2"), project: "agentisan", gen: 3},
 		"to the boss":                 {to: boss, from: worker("ha-coder-1")},
 		"to a pane, from the daemon":  {to: pane, from: store.Daemon},
-		"a non-ASCII id with a space": {to: store.Address{Kind: store.KindPane, ID: "◆ pané 1"}, from: store.Daemon},
+		"a non-ASCII id with a space": {to: store.Address{Kind: store.KindPane, ID: "★ pané 1"}, from: store.Daemon},
 		"an id of exactly 256 bytes":  {to: store.Address{Kind: store.KindPane, ID: strings.Repeat("p", 256)}, from: store.Daemon},
 		"from a pane":                 {to: worker("ha-coder-2"), from: pane, project: "agentisan"},
 		"from the boss":               {to: worker("ha-coder-1"), from: boss, project: "agentisan", gen: 3},

@@ -202,27 +202,14 @@ func TestGroupDescriptionsFollowTheFile(t *testing.T) {
 	require.NoError(t, err, "the tabs teams read at start are still served")
 }
 
-// TestGroupDescriptionsWithoutAConfigDir: with no config dir the poll reads
-// nothing and no group of the ◆ spaces has a description.
 func TestGroupDescriptionsWithoutAConfigDir(t *testing.T) {
-	t.Parallel()
+	dir := configDir(t, describedConfig)
+	t.Chdir(dir)
 	var logs lockedLog
-	th := newSpacesHerdr(t)
-	dir := shortDir(t)
-	o := teamOpts(t, dir, th, "")
-	o.Logger = zerolog.New(&logs)
-	serving(t, o, th.fakeHerdr)
-	sock := socketPath(t, dir, th.path)
-	servedTeam(t, sock, "", anySnapshot)
-	data, code := snapshotOp(t, sock, "")
-	require.Empty(t, code)
-	s, err := snapshot.Decode(bytes.NewReader(data))
-	require.NoError(t, err)
-	require.NotEmpty(t, s.Groups)
-	for _, g := range s.Groups {
-		assert.Empty(t, g.Description, g.Name)
-	}
-	assert.NotContains(t, logs.String(), "group descriptions")
+	g := daemon.NewGroupDescriptions("")
+	g.Refresh(zerolog.New(&logs))
+	assert.Empty(t, g.Of(liveProject))
+	assert.Empty(t, logs.String())
 }
 
 // TestGroupDescriptionsLookBeforeTheyRead: an edit that lands just after a

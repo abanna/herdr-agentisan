@@ -23,7 +23,7 @@ import (
 
 // TeamOptions turn on the team poll (D3, D4, D5): on start and every poll
 // after, the daemon rebuilds the team model from herdr and state.db, pushes
-// `$team` to every group target and tabs team and the ctx display to every
+// `$team` to each team workspace and the ctx display to every
 // agent pane (A28), and caches every team's snapshot, which the snapshot op
 // serves (A18, A24). `daemon run` always sets them.
 type TeamOptions struct {
@@ -60,41 +60,19 @@ type TeamOptions struct {
 	readLocks       func(procLocks, proc string) (*testslots.Reading, error)
 }
 
-// teamConfig is what the poll reads of the configuration: the project the ◆
-// spaces belong to, with its colour, and every tabs team.
-type teamConfig struct {
-	spaces team.Spaces
-	tabs   []team.Tabs
-}
-
-// teamConfigOf reads teams for the poll. Every tabs team leaves out its
-// dashboard pane, titled title when prefix+d opened it (team.Tabs.Dashboard).
-func teamConfigOf(teams []settings.Team, title string) teamConfig {
-	var c teamConfig
+// teamConfigOf maps each configured team to its workspace and tabs.
+func teamConfigOf(teams []settings.Team, title string) team.Resolvers {
+	r := make(team.Resolvers, 0, len(teams))
 	for _, t := range teams {
-		if t.Layout == settings.LayoutSpaces {
-			c.spaces = team.Spaces{Project: t.Project, Color: t.Color}
-			continue
-		}
-		c.tabs = append(c.tabs, team.Tabs{Project: t.Project, Short: t.Short, Color: t.Color, DashboardTitle: title})
+		r = append(r, team.Tabs{Project: t.Project, Short: t.Short, Color: t.Color, DashboardTitle: title})
 	}
-	return c
-}
-
-// resolver resolves the ◆ spaces and every tabs team.
-func (c teamConfig) resolver() team.Resolvers {
-	rs := make(team.Resolvers, 0, 1+len(c.tabs))
-	rs = append(rs, c.spaces)
-	for _, t := range c.tabs {
-		rs = append(rs, t)
-	}
-	return rs
+	return r
 }
 
 // teamPoll is what one team poll works with besides herdr and state.db. Only
 // the poll's goroutine touches it.
 type teamPoll struct {
-	cfg teamConfig
+	cfg team.Resolvers
 	// warned holds each tabs team's ignored workspaces as last logged.
 	warned map[string]string
 	// stages times each pane's stage across polls (A18).
@@ -152,14 +130,9 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 // stops: every push carries team.TTL, so they expire within about 9 s, after
 // a crash just as after a clean stop.
 //
-// The teams, with the ◆ spaces' project and its colour, are read once, here;
-// only the group descriptions are read again, at a poll that finds the file
-// changed (A36).
-// A configuration that does not resolve is logged, the spaces fall back to
-// the unnamed project, with no colour, and no tabs team is found: the
-// spaces' `$team` does not depend on the project, and a typo in the file
-// must not stop $team, the snapshot, focus and Back. `config resolve` names
-// the error.
+// The teams are read once. Group descriptions are read again when the
+// shared file changes (A36). If the configuration fails to resolve, the
+// daemon logs why and sees no teams until it restarts.
 //
 // Every call the poll makes proves, once connected and before it sends
 // anything, that the socket still names the daemon's own server (A3): a
@@ -172,16 +145,15 @@ func (o Options) startTeam(ctx context.Context, st *store.Store, ident Identity,
 func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, cache *snapshotCache, header *headerCache, idle *team.IdleClock, starts *team.StartClock, views *viewSync, ready *atomic.Bool, in *inbox, n *notices) {
 	teams, err := settings.Teams(o.Team.ConfigDir)
 	if err != nil {
-		o.Logger.Error().Err(err).Msg("herdr-agentisan.toml does not resolve; the ◆ spaces belong to the unnamed project, and no tabs team is found, until it is fixed and the daemon restarts")
-		teams = nil
+		o.Logger.Error().Err(err).Msg("team poll: herdr-agentisan.toml does not resolve. Fix it and restart the daemon to load teams")
 	}
 	cfg := teamConfigOf(teams, o.Team.Dashboard.Title)
 	in.configure(cfg)
-	tabs := make([]string, 0, len(cfg.tabs))
-	for _, t := range cfg.tabs {
+	tabs := make([]string, 0, len(cfg))
+	for _, t := range cfg {
 		tabs = append(tabs, t.Project)
 	}
-	o.Logger.Info().Str("project", cfg.spaces.Project).Str("color", cfg.spaces.Color).Strs("tabs_teams", tabs).Msg("team poll running")
+	o.Logger.Info().Strs("tabs_teams", tabs).Msg("team poll running")
 	tp := teamPoll{
 		cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, idle: idle, starts: starts, cache: cache, header: header,
 		models: newLaunchModels(), descriptions: newGroupDescriptions(o.Team.ConfigDir),
@@ -234,12 +206,12 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 }
 
 // pushTeam is one poll: it reads state.db's workers rows; lists panes,
-// workspaces, with a tabs team configured tabs, and agents; reconciles the
+// workspaces, tabs when teams are configured, and agents; reconciles the
 // rows with the panes (A35), unless the rows or the agents could not be read;
 // builds the model with the rows; caches every team's snapshot, each with its
 // project's GitHub header (A29), its project's test slots, counted once for
 // the poll (A31, A40), and its group descriptions (A36), and the workspaces
-// each team holds (A24); pushes each group target and tabs team its `$team`;
+// each team holds (A24); pushes each team its `$team`;
 // and pushes every agent pane its ctx display. A failed pane, workspace or tab
 // list costs the poll; a failed agent list costs only the snapshots, which
 // `$team` does not need, so the last ones built with names stay served, teams
@@ -276,12 +248,12 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 		return nil, "", o.teamCallFailed(ctx, err, "team poll: list workspaces")
 	}
 	var tabs []herdr.TabInfo
-	if len(tp.cfg.tabs) > 0 {
+	if len(tp.cfg) > 0 {
 		if tabs, err = c.ListTabs(ctx); err != nil {
 			return nil, "", o.teamCallFailed(ctx, err, "team poll: list tabs")
 		}
 	}
-	o.warnIgnored(tp.cfg.tabs, workspaces, tp.warned)
+	o.warnIgnored(tp.cfg, workspaces, tp.warned)
 	agents, agentsErr := c.ListAgents(ctx)
 	if agentsErr != nil {
 		if err := o.teamCallFailed(ctx, agentsErr, "team poll: list agents; the snapshot keeps its last names"); err != nil {
@@ -297,7 +269,7 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 			return nil, "", err
 		}
 	}
-	m := team.Build(l, tp.cfg.resolver(), rows)
+	m := team.Build(l, tp.cfg, rows)
 	now := o.Now()
 	// The agents' starts come before anything reads ctx, a failed agent list
 	// or not: a ctx reported before its pane's agent started is one an agent
@@ -332,7 +304,7 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 			team.Describe(s, tp.descriptions.of(project))
 			o.fillBoardUnread(ctx, st, project, s)
 		}
-		if err := tp.cache.store(m, tp.cfg.spaces.Project, now, tp.stages, tp.idle, fill); err != nil {
+		if err := tp.cache.store(m, now, tp.stages, tp.idle, fill); err != nil {
 			o.Logger.Error().Err(err).Msg("team poll: cache the snapshots; a team too large to serve keeps its last one")
 		}
 	}

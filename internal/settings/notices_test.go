@@ -20,7 +20,7 @@ var defaultNotices = settings.NoticeConfig{Gap: 30 * time.Second, Repeat: 5 * ti
 
 // TestNoticesForTheDaemon: the daemon reads every project's notices once,
 // from the shared file alone. They merge as the profile does, so a shared
-// [notices] is every project's, and every unnamed team's, unless a
+// [notices] applies to every project unless a
 // project's own table says otherwise. A file that does not resolve is its
 // error.
 func TestNoticesForTheDaemon(t *testing.T) {

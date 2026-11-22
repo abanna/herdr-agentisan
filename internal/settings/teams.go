@@ -11,8 +11,6 @@ const (
 	// LayoutTabs is one workspace labelled with the project's name and one
 	// tab per worker, labelled <short>-<type>-<n>.
 	LayoutTabs = "tabs"
-	// LayoutSpaces identifies the daemon and workforce's unnamed ◆ team.
-	LayoutSpaces = "spaces"
 )
 
 // BossType is the boss's place in a team: its tab is <short>-boss, so no
@@ -30,7 +28,7 @@ type Team struct {
 	Project string
 	// Short is the project's required short code.
 	Short string
-	// Layout is LayoutTabs or LayoutSpaces.
+	// Layout is LayoutTabs.
 	Layout string
 	// Color is the project's colour as #rrggbb; "" when unset.
 	Color string

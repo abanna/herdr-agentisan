@@ -56,7 +56,7 @@ thresholds = [70, 80, 90]
 	assert.Equal(t, []int{50, 60, 70}, got.For("unnamed").For(""), "a team the file does not name has the shared tables'")
 	assert.Equal(t, []int{45, 55, 65}, got.For("unnamed").For("coder"))
 	assert.Equal(t, []int{50, 60, 70}, app.For("Coder"), "a name is its exact bytes: Coder is not coder")
-	assert.Equal(t, []int{50, 60, 70}, app.For("cödërs ◆"), "a name no layer sets, however spelled, has the project's")
+	assert.Equal(t, []int{50, 60, 70}, app.For("cödërs ★"), "a name no layer sets, however spelled, has the project's")
 }
 
 // TestRotationsExpandTheRepo: a repo under ~ is found through HOME, as Load

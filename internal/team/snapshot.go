@@ -17,7 +17,7 @@ import (
 //   - one group per group of the project: those its Order names first, in
 //     that order, then the rest by name, each with one row per worker in the
 //     model's order (by target, then pane id). The order is the resolver's
-//     (Spaces.GroupOrder for the ◆ spaces); the dashboard keeps it;
+//     and the dashboard keeps it;
 //   - the boss: the first agent pane, by pane id, in the boss's place, or
 //     none when no agent runs there. The contract has one boss, and a shell
 //     there (this dashboard's own pane, say) is not one. Its started_at is

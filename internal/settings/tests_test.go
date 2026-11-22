@@ -198,7 +198,7 @@ func TestReadTestLocks(t *testing.T) {
 			want:    settings.TestLocks{Projects: map[string][]string{"app": {"/tmp/a.lock"}}},
 			project: "app", wantOf: []string{"/tmp/a.lock"},
 		},
-		"the unnamed project": {
+		"an unconfigured project": {
 			file: shared + "[projects.app]\nrepo = \"/x\"\nshort = \"ap\"\n[projects.app.tests]\nlocks = []\n", want: settings.TestLocks{Shared: gates, Projects: map[string][]string{"app": nil}},
 			wantOf: gates,
 		},

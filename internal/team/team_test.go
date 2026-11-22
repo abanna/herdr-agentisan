@@ -66,9 +66,7 @@ func teamOf(panes []herdr.PaneInfo, empty ...string) team.Layout {
 
 // liveLayout is the layout research found live on 2026-10-10, trimmed, as a
 // tabs team: the boss's tab, three coders' tabs, the third a shell, a qa's,
-// a tab outside the model holding a shell, and a plain workspace. The pane
-// ids are the ◆ layout's, which ids are opaque to the model: only their
-// workspace and tab moved.
+// a tab outside the model holding a shell, and a plain workspace.
 func liveLayout() team.Layout {
 	l := teamOf([]herdr.PaneInfo{
 		inTeam(p("wJ:p1", "", "working"), "boss"),

@@ -822,7 +822,6 @@ func TestWorkforceCodes(t *testing.T) {
 		workforce.ErrHandoffChanged:                                              "handoff_changed",
 		workforce.ErrStageMismatch:                                               "stage_mismatch",
 		fmt.Errorf("begin it: %w", store.ErrWorkerStarting):                      "worker_starting",
-		workforce.ErrNoTarget:                                                    "no_target",
 		workforce.ErrUnknownGroup:                                                "unknown_group",
 		routing.ErrUnknownRole:                                                   "unknown_role",
 		routing.ErrProviderMismatch:                                              "provider_mismatch",

@@ -414,9 +414,7 @@ func answered(panes []herdr.PaneInfo, agents []herdr.AgentInfo) poll {
 
 // paneOn is pane.list's answer for the live team's coder's tab with one
 // pane, wN:p1, showing terminal term ("" for none listed), with the agent
-// herdr detected there, kind ("" for none), in status. The pane id is the ◆
-// space's, which ids are opaque to the watch: only its workspace and tab
-// moved.
+// herdr detected there, kind ("" for none), in status.
 func paneOn(term, kind, status string) []herdr.PaneInfo {
 	return []herdr.PaneInfo{{PaneID: "wN:p1", WorkspaceID: liveWS, TabID: liveTab.TabID, TerminalID: term, Agent: kind, AgentStatus: status}}
 }

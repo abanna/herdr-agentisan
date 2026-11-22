@@ -7,8 +7,7 @@ import (
 	"time"
 )
 
-// The `$team` token (ADR-001 token contract): written by the daemon to every
-// group target on every poll, with source agentisan.
+// The daemon writes `$team` to each team's workspace on every poll.
 const (
 	// Key is the token's name.
 	Key = "team"
@@ -18,7 +17,7 @@ const (
 	TTL = 9 * time.Second
 )
 
-// Counts is what `$team` shows for one group target.
+// Counts is what `$team` shows for one team.
 type Counts struct {
 	// Panes counts every pane, plain shells and unknown statuses included.
 	Panes   int
@@ -68,33 +67,18 @@ type Token struct {
 	Value  string
 }
 
-// Tokens derives `$team` for every group target in m, from the workers of
-// every group sitting at that target, an empty target included, and for a
-// team's own target, which a tabs team's groups share. The boss's place gets
-// none. They are sorted by target.
+// Tokens derives one `$team` token per workspace from each team's workers.
 func Tokens(m Model) []Token {
-	at := map[Target][]Worker{}
+	var out []Token
 	for _, pr := range m.Projects {
-		if pr.Target != (Target{}) && at[pr.Target] == nil {
-			at[pr.Target] = []Worker{}
+		if pr.Target == (Target{}) {
+			continue
 		}
+		var workers []Worker
 		for _, g := range pr.Groups {
-			for _, t := range g.Targets {
-				if at[t] == nil {
-					at[t] = []Worker{}
-				}
-			}
-			for _, w := range g.Workers {
-				at[w.Target] = append(at[w.Target], w)
-			}
+			workers = append(workers, g.Workers...)
 		}
-	}
-	if len(at) == 0 {
-		return nil
-	}
-	out := make([]Token, 0, len(at))
-	for t, workers := range at {
-		out = append(out, Token{Target: t, Value: Count(workers).String()})
+		out = append(out, Token{Target: pr.Target, Value: Count(workers).String()})
 	}
 	slices.SortFunc(out, func(a, b Token) int { return strings.Compare(a.Target.WorkspaceID, b.Target.WorkspaceID) })
 	return out

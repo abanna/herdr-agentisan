@@ -183,15 +183,37 @@ func TestNoticesFollowTheConfig(t *testing.T) {
 	assert.Len(t, noticesIn(&slowLogs), 1, "inside the gap the blocked notice waits")
 }
 
-// TestNoticesWithABrokenConfig: a configuration that does not resolve is
-// logged, and every boss gets the defaults.
-func TestNoticesWithABrokenConfig(t *testing.T) {
+func TestNoticeDefaultsWhenConfigIsFixedDuringStartup(t *testing.T) {
 	t.Parallel()
-	th := newSpacesHerdr(t)
+	cfg := noticesConfig(t, "gap = -1\n")
+	th := newTeamHerdr(t)
+	th.setAgents(named("wN:p1", "pee01"))
+	th.setToken("wN:p1", "ctx", "56")
 	var logs lockedLog
-	noticeRun(t, th, noticesConfig(t, "gap = -1\n"), &logs)
-	waitLine(t, &logs, "the daemon started")
-	assert.Contains(t, logs.String(), "every boss gets the default notices")
+	o := teamOpts(t, shortDir(t), th, cfg)
+	o.Now = func() time.Time { return t0 }
+	repaired := make(chan error, 1)
+	// Notices and rotation have read the broken file. The team poll will
+	// start after this log event and read the repaired file.
+	o.Logger = zerolog.New(&logs).Hook(zerolog.HookFunc(func(_ *zerolog.Event, _ zerolog.Level, msg string) {
+		if strings.HasPrefix(msg, "rotation: cannot read settings.") {
+			repaired <- os.WriteFile(filepath.Join(cfg, settings.FileName), []byte("schema_version = 1\n"+liveTOML), 0o600)
+		}
+	}))
+	serving(t, o, th.fakeHerdr)
+	select {
+	case err := <-repaired:
+		require.NoError(t, err)
+	case <-time.After(ready):
+		t.Fatal("the daemon did not report the failed rotation settings read")
+	}
+	waitLine(t, &logs, "pee01 is at 56% context (soft: 55%)")
+	assert.Contains(t, logs.String(), "notices: cannot read settings")
+	assert.Equal(t, liveProject, noticesIn(&logs)[0].Project)
+
+	th.setPane("wN:p1", "agent_status", "blocked")
+	polled(t, th.srv, 3)
+	assert.Len(t, noticesIn(&logs), 1, "the blocked notice waits inside the default gap")
 }
 
 // TestNoticesQueueOneNoticePerBoss replaces part 1's rule that nothing is
@@ -375,19 +397,6 @@ func TestNoticesDropARepeat(t *testing.T) {
 	th.setPane("wN:p1", "agent_status", "blocked")
 	polled(t, th.srv, 3)
 	assert.Equal(t, 1, waitLine(t, &logs, "pee01 is blocked"), "the repeat inside 300 s is dropped")
-}
-
-// TestNoticesWithABrokenConfigKeepTheDefaultGap: a file that does not
-// resolve gives every boss the default 30 s gap, not none.
-func TestNoticesWithABrokenConfigKeepTheDefaultGap(t *testing.T) {
-	t.Parallel()
-	th := newSpacesHerdr(t)
-	var logs lockedLog
-	noticeRun(t, th, noticesConfig(t, "gap = -1\n"), &logs)
-	waitLine(t, &logs, "the daemon started")
-	th.setPane("wN:p1", "agent_status", "blocked")
-	polled(t, th.srv, 3)
-	assert.Len(t, noticesIn(&logs), 1, "inside the default gap the blocked notice waits")
 }
 
 // TestNoticesFollowEachProjectsTable: a project's own [projects.<p>.notices]

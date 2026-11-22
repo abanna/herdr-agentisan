@@ -44,8 +44,8 @@ func newStatusLineCmd() *cobra.Command {
 			"The team is --project's, or the one --workspace's workspace is in. With\n" +
 			"neither, it is the team of HERDR_ACTIVE_WORKSPACE_ID, which herdr sets\n" +
 			"for a tab-bar command to the focused workspace, so the line follows\n" +
-			"focus; without that, the ◆ spaces' team. Outside every team it prints\n" +
-			"an empty line, which hides the entry.\n\n" +
+			"focus. When no team is selected it prints an empty line, which hides\n" +
+			"the entry.\n\n" +
 			"The daemon is the one of the herdr server in HERDR_SOCKET_PATH, under the\n" +
 			"plugin state directory: herdr does not set HERDR_PLUGIN_STATE_DIR for a\n" +
 			"tab-bar command, so it is --state-dir, else herdr's own for this plugin,\n" +

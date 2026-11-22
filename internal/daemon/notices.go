@@ -42,14 +42,13 @@ type notices struct {
 
 // newNotices reads every team's notices settings from the configuration,
 // once, as the poll reads its teams (A19). A configuration that does not
-// resolve is logged, and every team gets the defaults: notices must not
-// stop because of a typo, any more than $team does. Its messages go to each
-// team's boss through st's inbox, by the bosses the poll gives in, and the
-// workers mutes silences are dropped.
+// resolve is logged. Use defaults if this read fails while the separate
+// team poll read succeeds. The sink queues each message for the boss the
+// poll names, and the batcher drops notices for muted workers.
 func (o Options) newNotices(st *store.Store, in *inbox, mutes *notice.Mutes) *notices {
 	ns, err := settings.Notices(o.Team.ConfigDir)
 	if err != nil {
-		o.Logger.Error().Err(err).Msg("herdr-agentisan.toml does not resolve; every boss gets the default notices until it is fixed and the daemon restarts")
+		o.Logger.Error().Err(err).Msg("notices: cannot read settings. Using defaults until the daemon restarts")
 		ns, _ = settings.Notices("")
 	}
 	cfgs := notice.Configs{Default: noticeConfig(ns.Default), Projects: map[string]notice.Config{}}
@@ -65,12 +64,12 @@ func (o Options) newNotices(st *store.Store, in *inbox, mutes *notice.Mutes) *no
 
 // newCtxWatch reads every team's rotation thresholds from the configuration
 // and each project's repo file, once (A33). A configuration that does not
-// resolve gives every team the defaults, and a repo file that cannot be read
-// its project the thresholds of its other layers; each is logged.
+// resolve gives defaults if the separate team poll read succeeds. A repo
+// file that cannot be read leaves the project's other layers in effect.
 func (o Options) newCtxWatch() *notice.CtxWatch {
 	rs, err := settings.Rotations(settings.LoadOptions{ConfigDir: o.Team.ConfigDir})
 	if err != nil {
-		o.Logger.Error().Err(err).Msg("herdr-agentisan.toml does not resolve; every team gets the default rotation thresholds until it is fixed and the daemon restarts")
+		o.Logger.Error().Err(err).Msg("rotation: cannot read settings. Using defaults until the daemon restarts")
 		rs, _ = settings.Rotations(settings.LoadOptions{})
 	}
 	for _, name := range slices.Sorted(maps.Keys(rs.Unread)) {

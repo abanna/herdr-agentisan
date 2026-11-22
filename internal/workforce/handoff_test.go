@@ -230,22 +230,15 @@ func TestHandoffReadyMarksOnlyATeamsWorkers(t *testing.T) {
 	assert.Equal(t, held, res.PaneID)
 }
 
-// TestHandoffReadyOnTheSpaces is TestHandoffReadyMarksOnlyATeamsWorkers on
-// the ◆ spaces: ◆ boss is the boss's, and refused, and a ◆ space's agent is
-// the unnamed project's worker.
-func TestHandoffReadyOnTheSpaces(t *testing.T) {
+func TestHandoffReadyRefusesFormerSpaces(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, teamConfig)
-	spacesBoss := f.h.addTab(f.h.addWorkspace("◆ boss"), "1", "claude", "working")
-	spacesCoder := f.h.addTab(f.h.addWorkspace("◆ coders"), "1", "claude", "idle")
-
-	_, err := f.svc.HandoffReady(t.Context(), workforce.HandoffReadyRequest{Target: spacesBoss})
-	require.ErrorIs(t, err, workforce.ErrNotAWorker, "◆ boss")
+	for _, workspace := range []string{"◆ boss", "◆ coders"} {
+		pane := f.h.addTab(f.h.addWorkspace(workspace), "1", "claude", "idle")
+		_, err := f.svc.HandoffReady(t.Context(), workforce.HandoffReadyRequest{Target: pane})
+		require.ErrorIs(t, err, workforce.ErrNotAWorker)
+	}
 	assert.Empty(t, f.h.params("pane.report_metadata"))
-
-	res, err := f.svc.HandoffReady(t.Context(), workforce.HandoffReadyRequest{Target: spacesCoder})
-	require.NoError(t, err)
-	assert.Equal(t, workforce.HandoffReadyResult{ID: spacesCoder, Project: "", Group: "coders", PaneID: spacesCoder, Ready: true, Changed: true}, res)
 }
 
 // TestHandoffReadyRechecksThePaneBeforeWriting: a pane that shows another

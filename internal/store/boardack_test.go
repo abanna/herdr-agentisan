@@ -119,10 +119,10 @@ func TestAckPostOnlyInItsProject(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
 	web := post(t, s, teamPost("web", "web-coder-1", "web's"))
-	unnamed := post(t, s, teamPost("", "ha-coder-1", "the unnamed project's"))
+	unnamed := post(t, s, teamPost("", "ha-coder-1", "the empty project's"))
 
 	assert.Equal(t, store.AckResult{}, ackPost(t, s, "ha", web.Seq), "not on ha's board")
-	assert.Equal(t, store.AckResult{}, ackPost(t, s, "", web.Seq), "not on the unnamed project's board")
+	assert.Equal(t, store.AckResult{}, ackPost(t, s, "", web.Seq), "not on the empty project's board")
 	assert.Empty(t, ackedSeqs(t, s))
 	assert.Equal(t, store.AckResult{Acked: 1}, ackPost(t, s, "web", web.Seq), "on its own board")
 	assert.Equal(t, store.AckResult{Acked: 1}, ackPost(t, s, "", unnamed.Seq), "on its own board")

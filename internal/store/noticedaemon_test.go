@@ -147,7 +147,7 @@ var (
 	}
 	v4Notice = store.NoticeEnvelope{
 		Version: 1, Project: "ha", Source: "daemon", Kind: "blocked", Subject: "w-2", Worker: "ha-qa-1",
-		ObservedAt: time.Date(2026, 11, 17, 18, 30, 0, 5, time.UTC), Text: "ha-qa-1 is blocked ◆ on a prompt — answer it",
+		ObservedAt: time.Date(2026, 11, 17, 18, 30, 0, 5, time.UTC), Text: "ha-qa-1 is blocked \u25c6 on a prompt — answer it",
 	}
 )
 

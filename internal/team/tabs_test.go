@@ -79,7 +79,7 @@ func TestTabsResolverLabels(t *testing.T) {
 		"an underscore type":                {label: "ha-code_review-1"},
 		"an empty label":                    {label: ""},
 		"the project name":                  {label: "herdr-agentisan"},
-		"a space-style label":               {label: "◆ coders"},
+		"a prefixed label":                  {label: "★ coders"},
 		"the team name as a short code":     {label: "herdr-agentisan-coder-1"},
 		"a type-like label with no team":    {label: "coder-1"},
 		"an option-like label":              {label: "--help"},
@@ -159,16 +159,16 @@ func TestTabsTeamWorkspace(t *testing.T) {
 			want:        "w14",
 			wantIgnored: []string{"w2"},
 		},
-		"no workspace":                 {tabs: ha},
-		"a padded label":               {tabs: ha, workspaces: []herdr.WorkspaceInfo{ws("w1", " herdr-agentisan"), ws("w2", "herdr-agentisan ")}},
-		"another case":                 {tabs: ha, workspaces: []herdr.WorkspaceInfo{ws("w1", "Herdr-agentisan")}},
-		"a ◆ label":                    {tabs: ha, workspaces: []herdr.WorkspaceInfo{ws("w1", "◆ herdr-agentisan")}},
-		"a trailing newline":           {tabs: ha, workspaces: []herdr.WorkspaceInfo{ws("w1", "herdr-agentisan\n")}},
-		"a prefix of the name":         {tabs: ha, workspaces: []herdr.WorkspaceInfo{ws("w1", "herdr")}},
-		"the short code":               {tabs: ha, workspaces: []herdr.WorkspaceInfo{ws("w1", "ha")}},
-		"an NFD look-alike":            {tabs: team.Tabs{Project: "caf\u00e9", Short: "c"}, workspaces: []herdr.WorkspaceInfo{ws("w1", "cafe\u0301")}},
-		"invalid UTF-8 is kept as is":  {tabs: team.Tabs{Project: "a\xff", Short: "a"}, workspaces: []herdr.WorkspaceInfo{ws("w1", "a\xff")}, want: "w1"},
-		"the unnamed project is never": {tabs: team.Tabs{Short: "x"}, workspaces: []herdr.WorkspaceInfo{ws("w1", "")}},
+		"no workspace":                {tabs: ha},
+		"a padded label":              {tabs: ha, workspaces: []herdr.WorkspaceInfo{ws("w1", " herdr-agentisan"), ws("w2", "herdr-agentisan ")}},
+		"another case":                {tabs: ha, workspaces: []herdr.WorkspaceInfo{ws("w1", "Herdr-agentisan")}},
+		"a ★ label":                   {tabs: ha, workspaces: []herdr.WorkspaceInfo{ws("w1", "★ herdr-agentisan")}},
+		"a trailing newline":          {tabs: ha, workspaces: []herdr.WorkspaceInfo{ws("w1", "herdr-agentisan\n")}},
+		"a prefix of the name":        {tabs: ha, workspaces: []herdr.WorkspaceInfo{ws("w1", "herdr")}},
+		"the short code":              {tabs: ha, workspaces: []herdr.WorkspaceInfo{ws("w1", "ha")}},
+		"an NFD look-alike":           {tabs: team.Tabs{Project: "caf\u00e9", Short: "c"}, workspaces: []herdr.WorkspaceInfo{ws("w1", "cafe\u0301")}},
+		"invalid UTF-8 is kept as is": {tabs: team.Tabs{Project: "a\xff", Short: "a"}, workspaces: []herdr.WorkspaceInfo{ws("w1", "a\xff")}, want: "w1"},
+		"a project needs a name":      {tabs: team.Tabs{Short: "x"}, workspaces: []herdr.WorkspaceInfo{ws("w1", "")}},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -284,46 +284,6 @@ func TestTabsTeamsResolveExactly(t *testing.T) {
 	assert.Equal(t, got, team.Build(shuffled, r, nil), "a rebuild from the same tabs and panes in another order is equal")
 }
 
-// TestTabsTeamsResolveBesideTheSpaces: the ◆ spaces resolve beside a tabs
-// team, each claiming only its own workspaces: the spaces' ◆ coders, with
-// v12's order and their colour, and the tabs team's workspace, with the
-// team model's; each gets its own $team.
-func TestTabsTeamsResolveBesideTheSpaces(t *testing.T) {
-	t.Parallel()
-	l := team.Layout{
-		Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "w14", Label: "herdr-agentisan"}, {WorkspaceID: "wN", Label: "◆ coders"}},
-		Tabs:       []herdr.TabInfo{{TabID: "w14:t2", WorkspaceID: "w14", Label: "ha-coder-1"}},
-		Panes:      []herdr.PaneInfo{inTab("w14:p2", "w14", "w14:t2", "working"), inTab("wN:p1", "wN", "wN:t1", "working")},
-	}
-	r := team.Resolvers{team.Spaces{Project: "agentisan", Color: "#0ea5e9"}, ha}
-	got := team.Build(l, r, nil)
-
-	wN, w14 := team.Target{WorkspaceID: "wN"}, team.Target{WorkspaceID: "w14"}
-	assert.Equal(t, team.Model{Projects: []team.Project{
-		{
-			Name: "agentisan", Color: "#0ea5e9", Workspaces: []string{"wN"}, Order: team.Spaces{}.GroupOrder(),
-			Groups: []team.Group{{Name: "coders", Targets: []team.Target{wN}, Workers: []team.Worker{
-				{ID: "wN:p1", Target: wN, Pane: team.Pane{ID: "wN:p1", TabID: "wN:t1", TerminalID: "term_wN:p1", Agent: "claude", Status: team.StatusWorking}},
-			}}},
-		},
-		{
-			Name: "herdr-agentisan", Short: "ha", Color: "#7c3aed", Workspaces: []string{"w14"}, Order: team.TypeOrder(), Target: w14,
-			Groups: []team.Group{{Name: "coder", Targets: []team.Target{w14}, Workers: []team.Worker{
-				{ID: "w14:p2", Target: w14, Pane: team.Pane{ID: "w14:p2", TabID: "w14:t2", TerminalID: "term_w14:p2", Agent: "claude", Status: team.StatusWorking}},
-			}}},
-		},
-	}}, got)
-	shuffled := l
-	shuffled.Workspaces, shuffled.Panes = slices.Clone(l.Workspaces), slices.Clone(l.Panes)
-	slices.Reverse(shuffled.Workspaces)
-	slices.Reverse(shuffled.Panes)
-	assert.Equal(t, got, team.Build(shuffled, r, nil), "a rebuild from the same layout in another order is equal")
-	assert.Equal(t, []team.Token{
-		{Target: w14, Value: "1 agent · 1 working · 0 ready"},
-		{Target: wN, Value: "1 agent · 1 working · 0 ready"},
-	}, team.Tokens(got))
-}
-
 // TestTabsPlacesOnlyItsOwnTabsOnce: a tab in another workspace adds no group
 // to the team, even one of a type the team lacks, and a tab tab.list names
 // twice is placed once.
@@ -380,7 +340,7 @@ func TestTabsLeavesOutTheDashboard(t *testing.T) {
 		"a case variant of team up's label":              {label: "HA-Dashboard", tab: "w14:t1", title: title, want: "boss"},
 		"the title in another case":                      {label: "agentisan dashboard", tab: "w14:t1", title: title, want: "boss"},
 		"team up's label padded":                         {label: " ha-dashboard", tab: "w14:t1", title: title, want: "boss"},
-		"a non-ASCII label":                              {label: "◆ ha-dashboard", tab: "w14:t1", title: title, want: "boss"},
+		"a non-ASCII label":                              {label: "★ ha-dashboard", tab: "w14:t1", title: title, want: "boss"},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

@@ -82,7 +82,7 @@ func TestCtxTokens(t *testing.T) {
 		return pane
 	}
 	l := team.Layout{
-		Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wN", Label: "◆ coders"}, {WorkspaceID: "w2", Label: "notes"}},
+		Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wN", Label: "coders"}, {WorkspaceID: "w2", Label: "notes"}},
 		Panes: []herdr.PaneInfo{
 			ctx("wN:p2", "wN", "codex", "70"),
 			ctx("wN:p1", "wN", "claude", "40"),

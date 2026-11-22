@@ -77,7 +77,6 @@ func (s *Service) HandoffReady(ctx context.Context, req HandoffReadyRequest) (Ha
 	if err != nil {
 		return HandoffReadyResult{}, err
 	}
-	teams = withSpaces(teams)
 	l, err := s.readLayout(ctx)
 	if err != nil {
 		return HandoffReadyResult{}, err

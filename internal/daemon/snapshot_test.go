@@ -498,7 +498,7 @@ func TestSnapshotOpBeforeTheFirstPoll(t *testing.T) {
 		healthy(t, dir, th.fakeHerdr)
 		sock := socketPath(t, dir, th.path)
 
-		_, err := daemon.Snapshot(t.Context(), sock)
+		_, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{Project: liveProject})
 		require.ErrorIs(t, err, daemon.ErrNotReady)
 		require.ErrorIs(t, err, daemon.ErrRequest)
 		answer := rawSnapshot(t, sock)
@@ -517,7 +517,7 @@ func TestSnapshotOpBeforeTheFirstPoll(t *testing.T) {
 		dir := shortDir(t)
 		run(t, opts(t, dir, h))
 		healthy(t, dir, h)
-		_, err := daemon.Snapshot(t.Context(), socketPath(t, dir, h.path))
+		_, err := daemon.SnapshotOf(t.Context(), socketPath(t, dir, h.path), daemon.Selector{Project: liveProject})
 		require.ErrorIs(t, err, daemon.ErrNotReady)
 	})
 }
@@ -583,7 +583,7 @@ func TestSnapshotKeepsTheLastGoodTeam(t *testing.T) {
 
 	polled(t, th.srv, 2)
 	assert.GreaterOrEqual(t, len(pushes(t, th.srv)[liveWorkspace]), 2, "$team is pushed without names")
-	_, err := daemon.Snapshot(t.Context(), sock)
+	_, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{Project: liveProject})
 	require.ErrorIs(t, err, daemon.ErrNotReady)
 
 	th.mu.Lock()
@@ -1085,50 +1085,25 @@ func TestSnapshotOpServesEveryTeam(t *testing.T) {
 	}
 }
 
-// TestSnapshotOpSelectsTheSpaces is A24's selection on the ◆ spaces: every
-// space is the unnamed project's workspace, ◆ boss and ◆ herdr included, and
-// neither a project nor a workspace selects the spaces.
-func TestSnapshotOpSelectsTheSpaces(t *testing.T) {
+func TestSnapshotOpWithNoSelectorIsNoTeam(t *testing.T) {
 	t.Parallel()
-	th := newSpacesHerdr(t)
+	th := newTeamHerdr(t)
+	th.relabel("w2", "◆ coders")
 	dir := shortDir(t)
 	serving(t, teamOpts(t, dir, th, liveConfig(t, "")), th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
-	servedTeam(t, sock, "", anySnapshot)
-
-	for name, tc := range map[string]struct {
-		args, code string
-	}{
-		"a group space":           {args: `{"workspace_id":"wN"}`},
-		"an empty group space":    {args: `{"workspace_id":"w0"}`},
-		"◆ boss":                  {args: `{"workspace_id":"wJ"}`},
-		"◆ herdr, the edit shell": {args: `{"workspace_id":"w12"}`},
-		"neither":                 {},
-		"empty args":              {args: `{}`},
-		"null args":               {args: `null`},
-		"empty strings":           {args: `{"project":"","workspace_id":""}`},
-		"args it does not know":   {args: `{"team":"alpha"}`},
-		"a workspace no team's":   {args: `{"workspace_id":"w2"}`, code: "no_team"},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			data, code := snapshotOp(t, sock, tc.args)
-			assert.Equal(t, tc.code, code)
-			if tc.code != "" {
-				return
-			}
-			got, err := snapshot.Decode(bytes.NewReader(data))
-			require.NoError(t, err)
-			assert.Empty(t, got.Team)
-		})
+	served(t, sock, anySnapshot)
+	for _, args := range []string{"", "{}", "null", `{"project":"","workspace_id":""}`} {
+		data, code := snapshotOp(t, sock, args)
+		assert.Equal(t, "no_team", code, "args %q", args)
+		assert.Empty(t, data, "args %q", args)
 	}
 }
 
 // TestSnapshotOpSelectsTheTeam walks the op's args (A24): a project, which
 // wins over a workspace; a workspace, through the index of every team's
 // workspaces; and what selects no team, which is no_team, matched by
-// ErrNoTeam, never another team's snapshot: neither, with no ◆ space, is
-// one.
+// ErrNoTeam.
 func TestSnapshotOpSelectsTheTeam(t *testing.T) {
 	t.Parallel()
 	_, sock := everyTeamDaemon(t)
@@ -1226,6 +1201,11 @@ func TestSnapshotOpDropsAGoneTeam(t *testing.T) {
 	}, ready, 5*time.Millisecond, "alpha is still served")
 	_, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{WorkspaceID: "w14"})
 	require.ErrorIs(t, err, daemon.ErrNoTeam)
+	polled(t, th.srv, 2)
+	before := pushes(t, th.srv)["w14"]
+	require.NotEmpty(t, before)
+	polled(t, th.srv, 2)
+	assert.Equal(t, before, pushes(t, th.srv)["w14"], "the old workspace stops receiving the token")
 	for _, project := range []string{"agentisan", "beta"} {
 		got, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{Project: project})
 		require.NoError(t, err)
@@ -1238,6 +1218,8 @@ func TestSnapshotOpDropsAGoneTeam(t *testing.T) {
 		return err == nil
 	})
 	assert.Equal(t, "agentisan", got.Team, "a team back in the layout is served again")
+	polled(t, th.srv, 2)
+	assert.Greater(t, len(pushes(t, th.srv)["w14"]), len(before), "the team's workspace receives the token again")
 }
 
 // workerNamed is a model team, project, in workspace ws, with one worker
@@ -1267,11 +1249,11 @@ func TestSnapshotCacheKeepsATeamTooLarge(t *testing.T) {
 
 	var c daemon.TeamCache
 	t1 := t0.Add(3 * time.Second)
-	require.NoError(t, c.Store(team.Model{Projects: []team.Project{workerNamed("a", "wa", "a1"), workerNamed("b", "wb", "b1")}}, "a", t0))
+	require.NoError(t, c.Store(team.Model{Projects: []team.Project{workerNamed("a", "wa", "a1"), workerNamed("b", "wb", "b1")}}, t0))
 	before, err := c.Load(daemon.Selector{Project: "a"})
 	require.NoError(t, err)
 
-	err = c.Store(team.Model{Projects: []team.Project{workerNamed("a", "wa", huge), workerNamed("b", "wb", "b2")}}, "a", t1)
+	err = c.Store(team.Model{Projects: []team.Project{workerNamed("a", "wa", huge), workerNamed("b", "wb", "b2")}}, t1)
 	require.ErrorIs(t, err, daemon.ErrSnapshotTooLarge)
 	assert.Contains(t, err.Error(), `team "a"`)
 	after, err := c.Load(daemon.Selector{Project: "a"})
@@ -1283,20 +1265,20 @@ func TestSnapshotCacheKeepsATeamTooLarge(t *testing.T) {
 	assert.True(t, b.At.Equal(t1))
 
 	var fresh daemon.TeamCache
-	err = fresh.Store(team.Model{Projects: []team.Project{workerNamed("a", "wa", huge), workerNamed("b", "wb", "b1")}}, "a", t0)
+	err = fresh.Store(team.Model{Projects: []team.Project{workerNamed("a", "wa", huge), workerNamed("b", "wb", "b1")}}, t0)
 	require.ErrorIs(t, err, daemon.ErrSnapshotTooLarge)
-	_, err = fresh.Load(daemon.Selector{})
+	_, err = fresh.Load(daemon.Selector{Project: "a"})
 	require.ErrorIs(t, err, daemon.ErrNotReady, "a team that has never fit")
 	assert.NotErrorIs(t, err, daemon.ErrNoTeam)
 	_, err = fresh.Load(daemon.Selector{WorkspaceID: "wa"})
 	require.ErrorIs(t, err, daemon.ErrNotReady)
 	assert.Equal(t, "b1", name(load(t, &fresh, daemon.Selector{Project: "b"})))
 
-	require.NoError(t, fresh.Store(team.Model{Projects: []team.Project{workerNamed("b", "wb", "b3")}}, "a", t1))
+	require.NoError(t, fresh.Store(team.Model{Projects: []team.Project{workerNamed("b", "wb", "b3")}}, t1))
 	_, err = fresh.Load(daemon.Selector{Project: "a"})
 	require.ErrorIs(t, err, daemon.ErrNoTeam, "gone from the model, a team too large to serve is gone too")
 	_, err = fresh.Load(daemon.Selector{})
-	require.ErrorIs(t, err, daemon.ErrNoTeam, "the spaces' project, with no team in the model")
+	require.ErrorIs(t, err, daemon.ErrNoTeam, "an empty selector matches no team")
 }
 
 // TestSnapshotCacheNeverPairsTwoStores is the one swap (A24) in process, with
@@ -1313,14 +1295,14 @@ func TestSnapshotCacheNeverPairsTwoStores(t *testing.T) {
 	}
 	models := []team.Model{layout("alpha", "beta"), layout("beta", "alpha")}
 	var c daemon.TeamCache
-	require.NoError(t, c.Store(models[0], "alpha", t0))
+	require.NoError(t, c.Store(models[0], t0))
 
 	var stop atomic.Bool
 	var stores atomic.Int64
 	var writer sync.WaitGroup
 	writer.Go(func() {
 		for i := 1; !stop.Load(); i++ {
-			_ = c.Store(models[i%2], "alpha", t0)
+			_ = c.Store(models[i%2], t0)
 			stores.Add(1)
 		}
 	})

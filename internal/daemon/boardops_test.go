@@ -320,7 +320,7 @@ func paneOf(id, tab string) map[string]any {
 // shell pid and foreground argv by pane. failing fails every process read.
 func placeHerdr(t *testing.T, failing bool) herdr.Client {
 	t.Helper()
-	panes := []map[string]any{paneOf("w1:pB", "t1"), paneOf("w1:pD", "t1"), paneOf("w1:pE", "t1"), paneOf("w1:pF", "t1"), paneOf("w1:p2", "t2"), paneOf("w1:pX", "t2"), paneOf("w1:pS", "t3")}
+	panes := []map[string]any{paneOf("w1:pB", "t1"), paneOf("w1:pD", "t1"), paneOf("w1:pE", "t1"), paneOf("w1:pF", "t1"), paneOf("w1:p2", "t2"), paneOf("w1:pX", "t2"), paneOf("w1:pS", "t1")}
 	shells := map[string]uint32{"w1:pB": 100, "w1:pD": 200, "w1:pE": 500, "w1:pF": 600, "w1:p2": 300, "w1:pX": 400, "w1:pS": 700}
 	dashboard := []string{"bin/herdr-agentisan", "dashboard"}
 	// pE runs another of the plugin's commands, pF another program's
@@ -384,11 +384,11 @@ func TestPlaceBoardCaller(t *testing.T) {
 	t.Parallel()
 	model := &team.Model{Projects: []team.Project{{
 		Name: "ha",
-		// A ◆ boss space holds its dashboard among the boss's panes: w1:pS,
-		// in a tab of its own.
+		// w1:pS is an unlabelled split in the boss's tab, so the tabs
+		// resolver includes it among the boss's panes.
 		Boss: []team.Worker{
 			{ID: "ha-boss", Pane: team.Pane{ID: "w1:pB", TabID: "t1", Name: "ha-boss"}},
-			{ID: "w1:pS", Pane: team.Pane{ID: "w1:pS", TabID: "t3"}},
+			{ID: "w1:pS", Pane: team.Pane{ID: "w1:pS", TabID: "t1"}},
 		},
 		Groups: []team.Group{{Name: "coder", Workers: []team.Worker{{ID: "w1:p2", Pane: team.Pane{ID: "w1:p2", TabID: "t2"}}}}},
 	}}}

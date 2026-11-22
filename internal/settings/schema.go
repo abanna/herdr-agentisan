@@ -72,7 +72,7 @@ var profileSchema = &node{kind: kindTable, fields: map[string]*node{
 	rotationKey: rotationSchema(),
 }}
 
-const retiredSpacesHelp = "the ◆ spaces are retired (NERD-5670). Remove this entry. Every team is a tabs team"
+const retiredSpacesHelp = "the spaces layout is retired (NERD-5670). Remove this entry. Every team is a tabs team"
 
 // sharedSchema is the shared file's top level and each --set: a profile body
 // plus machine-wide tables. The retired [spaces] key gets a migration error.
