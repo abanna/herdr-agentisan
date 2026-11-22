@@ -89,9 +89,9 @@ type episode struct {
 	retry     time.Time // when an alert not shown is tried again
 	// bound is when a ceiling newer than the last shown alert makes the
 	// next alert due at the latest, and tried the newest ceiling at the
-	// last try, which no longer bounds anything. newest is the newest
-	// ceiling since the last reaction, or since none was pending: a post
-	// never lowers it.
+	// last try, which no longer bounds anything. newest tracks the newest
+	// ceiling since the last boss read, empty ceiling set, or acknowledgement
+	// without an armed bound. Posting a held message never lowers it.
 	bound, tried, newest time.Time
 	every                time.Duration // Every at the last try, for Shown
 	outstanding          bool          // an alert was tried and Shown has not answered it
@@ -143,7 +143,9 @@ func (t *Tracker) Observe(project string, c Config, s State, now time.Time) (Ale
 		e.count, e.reacted, e.retry = 0, at, time.Time{}
 	}
 	e.mark, e.ack = s.BossMark, s.LastAck
-	if reacted || s.NewestCeiling.IsZero() {
+	// A held ceiling can become a post with an older timestamp. Keep its
+	// armed deadline through an acknowledgement alone while any ceiling remains.
+	if read || s.NewestCeiling.IsZero() || (acked && e.bound.IsZero()) {
 		e.newest = s.NewestCeiling
 	} else {
 		e.newest = later(e.newest, s.NewestCeiling)
@@ -181,8 +183,8 @@ func (t *Tracker) Shown(project string, shown bool, now time.Time) {
 // keepBound keeps the ceiling's bound: while the episode's newest ceiling is
 // newer than the last shown alert (before any, not older than the episode's
 // start) and newer than the one at the last try, the next alert is due no
-// later than it + CeilingAfter. A later pending ceiling keeps an armed
-// bound even when the user acknowledges the one that set it.
+// later than it + CeilingAfter. A pending ceiling keeps an armed bound
+// even when the user acknowledges the one that set it.
 // A cap on alerts a ceiling repeats would go here.
 func (e *episode) keepBound(c Config) {
 	newer := e.newest.After(e.lastShown)

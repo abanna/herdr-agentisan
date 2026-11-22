@@ -137,3 +137,58 @@ func TestAckedCeilingKeepsItsBound(t *testing.T) {
 	_, ok = tr.Observe("ha", cfg, remaining, at(13*m))
 	assert.True(t, ok, "the bound the acknowledged ceiling set, 13, not the remaining one's 14")
 }
+
+// TestDrainedCeilingKeepsItsBoundAcrossAnUnrelatedAck combines #184's drain
+// with a separate board post acknowledged in the poll that sees the drain.
+func TestDrainedCeilingKeepsItsBoundAcrossAnUnrelatedAck(t *testing.T) {
+	t.Parallel()
+	state := func(d time.Duration) attention.State {
+		if d >= 17*m {
+			// Posting keeps the inbox row's creation time of 0, and the
+			// acknowledgement removes only the unrelated board post.
+			return acked(ceilingPost(boss(), 0), 17*m)
+		}
+		s := posts(1, 0)
+		s.Held, s.OldestHeld = 1, at(0)
+		if d >= 16*m {
+			s.OldestHeldCeiling, s.NewestCeiling = at(0), at(16*m)
+		}
+		return s
+	}
+	got := run(defaults(), 22*m, m, state, nil)
+	assert.Equal(t, mins(10, 15, 18), times(got), "the armed deadline survives the drain and acknowledgement")
+}
+
+func TestAckedCeilingKeepsItsBoundWithOnlyAnOlderCeiling(t *testing.T) {
+	t.Parallel()
+	state := func(d time.Duration) attention.State {
+		old := ceilingPost(boss(), 0)
+		switch {
+		case d >= 17*m:
+			return acked(old, 17*m)
+		case d >= 16*m:
+			return ceilingPost(old, 16*m)
+		default:
+			return old
+		}
+	}
+	got := run(defaults(), 23*m, m, state, nil)
+	assert.Equal(t, mins(2, 7, 18, 23), times(got), "the older pending ceiling can receive one earlier alert at 18")
+}
+
+func TestAckingTheOnlyPendingCeilingClearsItsBound(t *testing.T) {
+	t.Parallel()
+	state := func(d time.Duration) attention.State {
+		s := posts(1, 0)
+		switch {
+		case d >= 17*m:
+			return acked(s, 17*m)
+		case d >= 16*m:
+			return ceilingPost(s, 16*m)
+		default:
+			return s
+		}
+	}
+	got := run(defaults(), 22*m, m, state, nil)
+	assert.Equal(t, mins(10, 15, 22), times(got), "ordinary work follows the acknowledgement cadence")
+}
