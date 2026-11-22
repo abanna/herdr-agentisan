@@ -123,24 +123,80 @@ func TestHeldAckStampUsesOnlyTheRecipientsRecords(t *testing.T) {
 	_, err = s.AckUpto(t.Context(), "ha", "other-boss", 0, "", latest.Add(time.Hour))
 	require.NoError(t, err)
 
-	assert.Equal(t, latest.Add(time.Nanosecond), send(t, s, boss, pane, "to the boss").UpdatedAt)
+	want := latest.Add(time.Nanosecond)
+	toBoss := send(t, s, boss, pane, "to the boss")
+	assert.Equal(t, want, toBoss.UpdatedAt)
 	sameID := store.Address{Kind: store.KindPane, ID: boss.ID}
-	assert.Equal(t, t1, send(t, s, sameID, pane, "to a pane").UpdatedAt)
+	toPane := send(t, s, sameID, pane, "to a pane")
+	assert.Equal(t, t1, toPane.UpdatedAt)
+
+	notice, appended, err := s.Notify(t.Context(), boss, t1, func(string) (string, bool) { return "new notice", true })
+	require.NoError(t, err)
+	require.False(t, appended)
+	assert.Equal(t, want, notice.UpdatedAt, "insert a notice")
+	got, appended, err := s.Notify(t.Context(), boss, t1, func(q string) (string, bool) { return q + "\nnext line", true })
+	require.NoError(t, err)
+	require.True(t, appended)
+	require.Equal(t, notice.ID, got.ID)
+	assert.Equal(t, want, got.UpdatedAt, "append to the notice")
+
+	for _, tc := range []struct {
+		sent store.Message
+		want time.Time
+	}{{toBoss, want}, {toPane, t1}} {
+		m := claim(t, s, tc.sent.To)
+		require.Equal(t, tc.sent.ID, m.ID)
+		require.NoError(t, s.Requeue(t.Context(), m.ID, "agent_not_ready", t1))
+		got, err := s.Message(t.Context(), m.ID)
+		require.NoError(t, err)
+		assert.Equal(t, tc.want, got.UpdatedAt, "requeue for %s", tc.sent.To.Kind)
+	}
+
+	seedWorker(t, s, "w", "w14:p2", 1)
+	toWorker := send(t, s, worker("w"), boss, "to the worker")
+	retire(t, s, "w")
+	returned, err := s.ReturnToBoss(t.Context(), "w", "agentisan", boss, t1)
+	require.NoError(t, err)
+	require.Len(t, returned, 1)
+	require.Equal(t, toWorker.ID, returned[0].ID)
+	assert.Equal(t, want, returned[0].UpdatedAt, "return to the boss")
 }
 
 func TestMessageWritesKeepAnUnstampedPreEpochTime(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
+	created := time.Unix(0, -2).UTC()
+	earlier := time.Unix(0, -3).UTC()
+	later := time.Unix(0, -1).UTC()
+	backdate := func(id string) {
+		t.Helper()
+		// SQL can hold a pre-1970 time even though a ULID cannot be made then.
+		_, err := store.DB(s).ExecContext(t.Context(), "UPDATE messages SET created_at = ?, updated_at = ? WHERE id = ?", created.UnixNano(), created.UnixNano(), id)
+		require.NoError(t, err)
+	}
 	m, _, err := s.Notify(t.Context(), boss, t1, func(string) (string, bool) { return "old line", true })
 	require.NoError(t, err)
-	// SQL can hold a pre-1970 time even though a ULID cannot be made then.
-	_, err = store.DB(s).ExecContext(t.Context(), "UPDATE messages SET created_at = -2, updated_at = -2 WHERE id = ?", m.ID)
-	require.NoError(t, err)
-	at := time.Unix(0, -1).UTC()
-	got, appended, err := s.Notify(t.Context(), boss, at, func(q string) (string, bool) { return q + "\nnew line", true })
+	backdate(m.ID)
+	got, appended, err := s.Notify(t.Context(), boss, later, func(q string) (string, bool) { return q + "\nnew line", true })
 	require.NoError(t, err)
 	require.True(t, appended)
-	assert.Equal(t, at, got.UpdatedAt)
+	assert.Equal(t, later, got.UpdatedAt, "append keeps the write time")
+
+	require.Equal(t, m.ID, claim(t, s, boss).ID)
+	require.NoError(t, s.Requeue(t.Context(), m.ID, "agent_not_ready", earlier))
+	got, err = s.Message(t.Context(), m.ID)
+	require.NoError(t, err)
+	assert.Equal(t, created, got.UpdatedAt, "requeue keeps the creation time")
+
+	seedWorker(t, s, "w", "w14:p2", 1)
+	toWorker := send(t, s, worker("w"), boss, "to the worker")
+	backdate(toWorker.ID)
+	retire(t, s, "w")
+	returned, err := s.ReturnToBoss(t.Context(), "w", "agentisan", boss, earlier)
+	require.NoError(t, err)
+	require.Len(t, returned, 1)
+	require.Equal(t, toWorker.ID, returned[0].ID)
+	assert.Equal(t, created, returned[0].UpdatedAt, "return keeps the creation time")
 }
 
 func TestHeldAckStampAtLatestStoreTime(t *testing.T) {

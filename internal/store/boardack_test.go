@@ -515,7 +515,8 @@ BEGIN SELECT RAISE(ABORT, 'injected'); END`)
 // AckResult or their write helpers. board.go reads acknowledgements when
 // listing posts or counting what is pending. messages.go reads board_held_acks
 // when stamping queue writes.
-// The scan reads single literals and cannot follow assembled SQL.
+// The scan reads individual literals. It permits exactly the three stamp
+// fragments in messages.go, including when SQL is assembled from literals.
 func TestAcksHaveNoProductionCaller(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join("..", "..")
@@ -524,6 +525,7 @@ func TestAcksHaveNoProductionCaller(t *testing.T) {
 	write := regexp.MustCompile(`\b(insert|update|delete|replace)\b`)
 	uses := map[string][]string{}
 	found := map[string]bool{}
+	var stampReads []string
 	parsed := 0
 	for _, dir := range []string{"internal", "cmd"} {
 		err := filepath.WalkDir(filepath.Join(root, dir), func(path string, d fs.DirEntry, err error) error {
@@ -562,6 +564,8 @@ func TestAcksHaveNoProductionCaller(t *testing.T) {
 					} {
 						switch {
 						case !strings.Contains(lit, table):
+						case rel == messagesFile && table == "board_held_acks":
+							stampReads = append(stampReads, lit)
 						case (rel == boardFile || rel == messagesFile) && write.MatchString(lit):
 							uses[rel] = append(uses[rel], fset.Position(n.Pos()).String()+" a write to "+table)
 						case slices.Contains(allowed, rel):
@@ -580,8 +584,13 @@ func TestAcksHaveNoProductionCaller(t *testing.T) {
 	assert.Greater(t, parsed, 100, "the scan reached the module's packages")
 	// The scan finds the names and the table where they are: it cannot pass
 	// by seeing nothing.
-	for _, name := range append(names, "board_acks in "+ackFile, "board_acks in "+boardFile, "board_held_acks in "+ackFile, "board_held_acks in "+boardFile, "board_held_acks in "+messagesFile) {
+	for _, name := range append(names, "board_acks in "+ackFile, "board_acks in "+boardFile, "board_held_acks in "+ackFile, "board_held_acks in "+boardFile) {
 		assert.True(t, found[name], "the scan finds %s", name)
 	}
+	assert.ElementsMatch(t, []string{
+		"` from board_held_acks as h where h.boss = ?3) end`",
+		"` from board_held_acks as h where h.boss = messages.recipient) end`",
+		"` from board_held_acks as h where h.boss = ?2)`",
+	}, stampReads, "messages.go names the held table only in the three stamp reads")
 	assert.Empty(t, uses, "the acknowledgements are dormant until PR 3c")
 }
