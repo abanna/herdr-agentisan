@@ -3,6 +3,7 @@ package workforce_test
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -66,6 +67,27 @@ func TestSpawnOpensOneTabPerWorker(t *testing.T) {
 	again, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Selector: workforce.Selector{Project: "herdr-agentisan"}, Group: "coder", Count: 1})
 	require.NoError(t, err)
 	assert.Equal(t, "ha-coder-3", again.Workers[0].ID)
+}
+
+// TestAFreshSpawnAnswersAsOnMain: a spawn with no retry key answers main's
+// JSON byte for byte (A73: no new field until worker spawn takes a key).
+// None of a keyed answer's retry_key, key_state, replayed and answered_at is
+// printed, nor a replay's status and briefs, and pane_id still is.
+func TestAFreshSpawnAnswersAsOnMain(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+
+	res, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Selector: workforce.Selector{Project: "herdr-agentisan"}, Group: "coder", Count: 2})
+	require.NoError(t, err)
+	require.Len(t, res.Workers, 2)
+	require.NotEmpty(t, res.Workers[0].PaneID, "a fresh answer names each pane")
+	require.NotEmpty(t, res.Workers[1].PaneID, "a fresh answer names each pane")
+	out, err := json.Marshal(res)
+	require.NoError(t, err)
+	assert.Equal(t, fmt.Sprintf(`{"project":"herdr-agentisan","workers":[`+
+		`{"id":"ha-coder-1","group":"coder","pane_id":%q,"generation":0,"agent":"claude"},`+
+		`{"id":"ha-coder-2","group":"coder","pane_id":%q,"generation":0,"agent":"claude"}]}`,
+		res.Workers[0].PaneID, res.Workers[1].PaneID), string(out))
 }
 
 // firstIndex and lastIndex are where v first and last is in s, or -1.

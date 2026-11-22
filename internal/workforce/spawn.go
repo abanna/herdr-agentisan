@@ -42,12 +42,19 @@ type SpawnRequest struct {
 
 // Spawned is one worker whose agent came up.
 type Spawned struct {
-	ID         string `json:"id"`
-	Group      string `json:"group"`
-	PaneID     string `json:"pane_id"`
+	ID    string `json:"id"`
+	Group string `json:"group"`
+	// PaneID is its pane; a replay gives it only while the worker is live,
+	// as a hint (A73).
+	PaneID     string `json:"pane_id,omitempty"`
 	Generation int64  `json:"generation"`
 	// Agent is herdr's kind for it: claude or codex.
 	Agent string `json:"agent"`
+	// Status and Briefs are a replay's (A73): the worker's row's status now,
+	// superseded once its id is bound again, and how many messages a boss or
+	// a pane sent it; Briefs is nil for a superseded one.
+	Status string `json:"status,omitempty"`
+	Briefs *int   `json:"briefs,omitempty"`
 	// Binding, Model and Effort are what routing chose for it, and
 	// FallbackReason why that was the role's default; empty while routing
 	// is off.
@@ -72,8 +79,15 @@ type Routed struct {
 
 // SpawnResult is worker spawn's answer.
 type SpawnResult struct {
-	Project string    `json:"project"`
-	Workers []Spawned `json:"workers"`
+	Project string `json:"project"`
+	// RetryKey and KeyState are a keyed spawn's key and its state (A73).
+	RetryKey string `json:"retry_key,omitempty"`
+	KeyState string `json:"key_state,omitempty"`
+	// Replayed marks the answer an earlier attempt of the same request was
+	// given, at AnsweredAt (RFC 3339).
+	Replayed   bool      `json:"replayed,omitempty"`
+	AnsweredAt string    `json:"answered_at,omitempty"`
+	Workers    []Spawned `json:"workers"`
 	// Warnings are what the boss should fix that did not stop the spawn,
 	// such as a Codex worker that will report no ctx.
 	Warnings []string `json:"warnings,omitempty"`

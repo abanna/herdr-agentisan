@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/settings"
+	"github.com/abanna/herdr-agentisan/internal/store"
 )
 
 // WaitForPrompt is spawn's wait for paneID's shell prompt, as cfg sets it.
@@ -40,3 +41,7 @@ const TurnHooks = turnHooks
 // WithTurnHooks is the debugger's launch args with the turn hooks in its
 // one --settings object.
 func WithTurnHooks(args []string) ([]string, error) { return withTurnHooks(args) }
+
+// NowList is what each worker r planned is now, as a mismatch, a replayed
+// refusal and an interrupted request's message end (A73).
+func NowList(r store.SpawnRecord) string { return nowList(r) }
