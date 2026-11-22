@@ -282,7 +282,7 @@ func TestBoardPendingHasNoProductionCaller(t *testing.T) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, filepath.Join("..", "..", own), nil, parser.SkipObjectResolution)
 	require.NoError(t, err)
-	queries := []string{"pendingPosts", "pendingHeld"}
+	queries := []string{"pendingPosts", "pendingHeld", "pendingLastAck"}
 	var method *ast.FuncDecl
 	selectors, declared := []string{}, map[*ast.Ident]bool{}
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -306,7 +306,7 @@ func TestBoardPendingHasNoProductionCaller(t *testing.T) {
 	})
 	require.NotNil(t, method, "the scan finds the method's definition in %s", own)
 	assert.Empty(t, selectors, "BoardPending is dormant in its own file too: only its definition is exempt (ef44f246)")
-	// Its queries run only inside it: a use of either outside its body and
+	// Its queries run only inside it: a use of any outside its body and
 	// their declarations is a caller under another name (71cf5dd9).
 	queryUses := []string{}
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -315,7 +315,7 @@ func TestBoardPendingHasNoProductionCaller(t *testing.T) {
 		}
 		return true
 	})
-	assert.Len(t, declared, len(queries), "the scan finds both queries' declarations in %s", own)
+	assert.Len(t, declared, len(queries), "the scan finds all query declarations in %s", own)
 	assert.Empty(t, queryUses, "BoardPending's queries run only inside it (71cf5dd9)")
 	others, _, _, _ := productionUses(t, filepath.Join("..", ".."), "internal/store", queries, nil)
 	delete(others, own)

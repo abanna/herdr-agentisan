@@ -350,9 +350,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   (`boardack.go`, migration 0012, A74), dormant until PR 3c: nothing writes
   either table, and `ReadBoard` and `LatestPosts` read one primary-key
   lookup per post they return, which `board.read` does not serve; every
-  post wakes each `board wait`; `BoardPending` counts what a boss has left
-  unread and waiting, for the alert (A74). Tests open a fresh database in a
-  temp dir; the store is never mocked.
+  post wakes each `board wait`; the dormant `BoardPending` counts what a
+  boss has left unread and waiting, excluding acknowledgements, and reports
+  the latest acknowledgement for the alert (A74). Tests open a fresh
+  database in a temp dir; the store is never mocked.
   `boardnotice.go` also provides the pure version-1 GitHub capture-ID helper
   and its frozen envelope/receipt types (B0a.1), and `noticeledger.go` the
   dormant notice admission ledger (B0a.2, migration 0009, one-way):
