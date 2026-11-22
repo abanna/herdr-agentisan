@@ -46,8 +46,10 @@ Two properties are enforced rather than hoped for:
 `herdr-agentisan` is the product. `devctl` is the repository's own tooling, and it
 exists because three of this repo's gates have no Go builtin:
 
-- **Coverage floor.** `go test` has no `--cov-fail-under`. `devctl coverage`
-  parses `go tool cover -func` and fails below the threshold.
+- **Coverage gate.** `go test` has no `--cov-fail-under`. `devctl coverage`
+  parses `go tool cover -func` and fails below the threshold. It also
+  fails when an internal package with instrumentable statements has no
+  block in the profile.
 - **Docs parity.** `devctl docs-parity` proves AGENTS.md, `Taskfile.yml` and
   `ci.yml` describe the same gates, and that no escape-hatch entry in
   `internal/devctl/parity.go` outlives the task or row it exempted.

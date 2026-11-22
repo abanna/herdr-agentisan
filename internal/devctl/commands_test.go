@@ -16,15 +16,19 @@ import (
 // runDev executes the devctl tree with args and returns its output.
 func runDev(t *testing.T, args ...string) (string, error) {
 	t.Helper()
+	stdout, stderr, err := runDevWithSeparateStreams(t, args...)
+	return stdout + stderr, err
+}
 
+func runDevWithSeparateStreams(t *testing.T, args ...string) (stdout, stderr string, err error) {
+	t.Helper()
 	root := devctl.Root()
-	var out bytes.Buffer
+	var out, diagnostics bytes.Buffer
 	root.SetOut(&out)
-	root.SetErr(&out)
+	root.SetErr(&diagnostics)
 	root.SetArgs(args)
-
-	err := root.ExecuteContext(t.Context())
-	return out.String(), err
+	err = root.ExecuteContext(t.Context())
+	return out.String(), diagnostics.String(), err
 }
 
 func TestDocsParityCommandPasses(t *testing.T) {

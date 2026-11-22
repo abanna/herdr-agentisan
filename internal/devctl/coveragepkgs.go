@@ -28,7 +28,7 @@ type Package struct {
 }
 
 // FloorPackages lists the internal packages and identifies those that have
-// statements in a non-test function or function literal.
+// instrumentable statements in a non-test function or function literal.
 func FloorPackages(ctx context.Context, root string) ([]Package, error) {
 	ctx, cancel := context.WithTimeout(ctx, goListBudget)
 	defer cancel()
@@ -68,17 +68,27 @@ func packageHasStatements(dir string, files []string) (bool, error) {
 		if err != nil {
 			return false, fmt.Errorf("parse coverage source: %w", err)
 		}
-		for node := range ast.Preorder(file) {
+		var hasStatements bool
+		ast.Inspect(file, func(node ast.Node) bool {
+			if hasStatements {
+				return false
+			}
 			var body *ast.BlockStmt
 			switch fn := node.(type) {
 			case *ast.FuncDecl:
+				// Go's cover skips blank functions and their entire body.
+				if fn.Name.Name == "_" {
+					return false
+				}
 				body = fn.Body
 			case *ast.FuncLit:
 				body = fn.Body
 			}
-			if body != nil && len(body.List) > 0 {
-				return true, nil
-			}
+			hasStatements = body != nil && len(body.List) > 0
+			return !hasStatements
+		})
+		if hasStatements {
+			return true, nil
 		}
 	}
 	return false, nil

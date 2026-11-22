@@ -1,16 +1,87 @@
 package devctl_test
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/abanna/herdr-agentisan/internal/devctl"
 )
+
+func TestCoverageAllowsUninstrumentedBlankFunctions(t *testing.T) {
+	t.Setenv("GOWORK", "off")
+	dir := t.TempDir()
+	for name, source := range map[string]string{
+		"go.mod": "module example.com/m\n\ngo 1.26\n",
+		"internal/blank/blank.go": `package blank
+const A = 1
+func _() {
+	var assertion [1]struct{}
+	_ = assertion[A-1]
+	_ = func() int { return A }
+}
+`,
+		"internal/live/live.go": "package live\nvar F = func() int { return 1 }\n",
+	} {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(t, os.WriteFile(path, []byte(source), 0o600))
+	}
+
+	const profile = "coverage.out"
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "go", "test", "-p=1", "-coverprofile="+profile, "-covermode=atomic", "-coverpkg=./internal/...", "./...")
+	cmd.Dir = dir
+	cmd.WaitDelay = time.Second
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	data, err := os.ReadFile(filepath.Join(dir, profile))
+	require.NoError(t, err)
+	require.Contains(t, string(data), "example.com/m/internal/live/live.go:")
+	require.NotContains(t, string(data), "example.com/m/internal/blank/")
+
+	pkgs, err := devctl.FloorPackages(t.Context(), dir)
+	require.NoError(t, err)
+	missing, err := devctl.MissingPackages(strings.NewReader(string(data)), pkgs)
+	require.NoError(t, err)
+	assert.Empty(t, missing, "Go emitted blocks for every package with instrumentable statements")
+}
+
+func TestFloorPackagesReadsBeyondTheFirstSourceFile(t *testing.T) {
+	t.Setenv("GOWORK", "off")
+	dir := t.TempDir()
+	pkgDir := filepath.Join(dir, "internal", "multi")
+	require.NoError(t, os.MkdirAll(pkgDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/m\n\ngo 1.26\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "a_types.go"), []byte("package multi\ntype T int\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "b_code.go"), []byte("package multi\nfunc F() T { return 1 }\n"), 0o600))
+
+	pkgs, err := devctl.FloorPackages(t.Context(), dir)
+	require.NoError(t, err)
+	require.Len(t, pkgs, 1)
+	assert.True(t, pkgs[0].HasStatements, "the second file contains statements")
+}
+
+func TestFloorPackagesPropagatesGoListFailure(t *testing.T) {
+	t.Setenv("GOWORK", "off")
+	_, err := devctl.FloorPackages(t.Context(), t.TempDir())
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "go list -json=ImportPath,Dir,GoFiles,CgoFiles ./internal/...")
+}
+
+func TestMissingPackagesRequiresModeHeader(t *testing.T) {
+	t.Parallel()
+	_, err := devctl.MissingPackages(strings.NewReader("example.com/m/internal/a/x.go:3.14,5.2 1 0\n"), nil)
+	require.ErrorContains(t, err, "coverage profile has no mode header")
+}
 
 // TestCoverageRefusesAProfileMissingAPackage: the floor counts each package
 // it is given that holds a statement, so one with no block in the profile is

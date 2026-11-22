@@ -134,12 +134,14 @@ func TestShardsTestEveryPackageOfThisModuleOnce(t *testing.T) {
 }
 
 func TestTestPackagesCommandPrintsAShardsPackages(t *testing.T) {
-	out, err := runDev(t, "test-packages", "store")
+	out, stderr, err := runDevWithSeparateStreams(t, "test-packages", "store")
 	require.NoError(t, err)
 	assert.Equal(t, "github.com/abanna/herdr-agentisan/internal/store\n", out)
+	assert.Empty(t, stderr)
 
-	out, err = runDev(t, "test-packages", "rest")
+	out, stderr, err = runDevWithSeparateStreams(t, "test-packages", "rest")
 	require.NoError(t, err)
+	assert.Empty(t, stderr)
 	rest := strings.Fields(out)
 	assert.Contains(t, rest, "github.com/abanna/herdr-agentisan/internal/devctl")
 	assert.NotContains(t, rest, "github.com/abanna/herdr-agentisan/internal/store")
@@ -159,9 +161,10 @@ func TestTestPackagesCommandFailsSoGoTestFails(t *testing.T) {
 		"help":      {"test-packages", "--help"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			out, err := runDev(t, args...)
+			out, stderr, err := runDevWithSeparateStreams(t, args...)
 			require.Error(t, err)
 			assert.Equal(t, devctl.FailedShardPath+"\n", out)
+			assert.Empty(t, stderr, "the root returns the diagnostic to main")
 		})
 	}
 	assert.True(t, strings.HasPrefix(devctl.FailedShardPath, "./"), "a relative path go test reads as a directory")
