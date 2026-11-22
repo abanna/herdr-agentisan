@@ -6,6 +6,7 @@
 package devctl
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -28,12 +29,13 @@ func Root() *cobra.Command {
 		Use:   "devctl",
 		Short: "Development operations and helpers for this repository",
 		Long: "devctl holds the repository's own tooling: the gates that have no\n" +
-			"Go builtin (coverage floor, docs parity, large files).",
+			"Go builtin (coverage floor, docs parity, large files), and the packages\n" +
+			"each of CI's test jobs is to test.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		Version:       fmt.Sprintf("%s (%s)", config.Version, config.Commit),
 	}
-	root.AddCommand(newParityCmd(), newCoverageCmd(), newLargeFilesCmd())
+	root.AddCommand(newParityCmd(), newCoverageCmd(), newLargeFilesCmd(), newTestPackagesCmd())
 	return root
 }
 
@@ -113,7 +115,7 @@ func newCoverageCmd() *cobra.Command {
 				return fmt.Errorf("coverage profile %s not found: run `task test:unit` first: %w", profile, err)
 			}
 
-			// #nosec G204 -- path is derived from a repo-relative flag, not user input at runtime.
+			// #nosec G204 -- path is the operator's explicit --profile file, passed as a single operand.
 			out, err := exec.CommandContext(cmd.Context(), "go", "tool", "cover", "-func", path).Output()
 			if err != nil {
 				return fmt.Errorf("run go tool cover: %w", err)
@@ -127,10 +129,11 @@ func newCoverageCmd() *cobra.Command {
 			if _, err := fmt.Fprintln(cmd.OutOrStdout(), res); err != nil {
 				return fmt.Errorf("write result: %w", err)
 			}
+			var floorErr error
 			if !res.Meets() {
-				return fmt.Errorf("coverage %.1f%% is below the %.1f%% floor", res.Percent, res.Threshold)
+				floorErr = fmt.Errorf("coverage %.1f%% is below the %.1f%% floor", res.Percent, res.Threshold)
 			}
-			return nil
+			return errors.Join(floorErr, checkCoveragePackages(cmd.Context(), root, path))
 		},
 	}
 	c.Flags().StringVar(&profile, "profile", "coverage.out", "coverage profile written by `go test -coverprofile`")
@@ -168,4 +171,46 @@ func newLargeFilesCmd() *cobra.Command {
 	}
 	c.Flags().Int64Var(&maxKB, "max-kb", DefaultMaxFileKB, "maximum size of a tracked file, in KB")
 	return c
+}
+
+func newTestPackagesCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "test-packages <shard>",
+		Short: "Print the packages one of CI's test jobs tests: " + strings.Join(Shards(), ", "),
+		// Every argument is a shard name, an option included, so every
+		// refusal prints FailedShardPath.
+		Args:               cobra.ArbitraryArgs,
+		DisableFlagParsing: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			pkgs, err := testPackages(cmd.Context(), args)
+			if err != nil {
+				if _, werr := fmt.Fprintln(cmd.OutOrStdout(), FailedShardPath); werr != nil {
+					return errors.Join(err, fmt.Errorf("write %s: %w", FailedShardPath, werr))
+				}
+				return err
+			}
+			if _, err := fmt.Fprintln(cmd.OutOrStdout(), strings.Join(pkgs, " ")); err != nil {
+				return fmt.Errorf("write packages: %w", err)
+			}
+			return nil
+		},
+	}
+}
+
+// testPackages is the one shard args names, read against this module.
+func testPackages(ctx context.Context, args []string) ([]string, error) {
+	if len(args) != 1 {
+		return nil, fmt.Errorf("want one test shard (%s), got %d arguments", strings.Join(Shards(), ", "), len(args))
+	}
+	root, err := repoRoot()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, goListBudget)
+	defer cancel()
+	module, all, err := ModulePackages(ctx, root)
+	if err != nil {
+		return nil, err
+	}
+	return ShardPackages(module, all, args[0])
 }

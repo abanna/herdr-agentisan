@@ -37,8 +37,10 @@ func TestCoverageCommandFailsBelowTheFloor(t *testing.T) {
 	// Write a profile this test controls rather than depending on the repo's
 	// coverage.out: a gate test that skips when a file is absent is a gate
 	// that can vanish on a clean checkout.
-	path := filepath.Join(t.TempDir(), "low.out")
-	require.NoError(t, os.WriteFile(path, []byte(lowCoverageProfile), 0o600))
+	path := floorProfile(t, "",
+		"github.com/abanna/herdr-agentisan/internal/devctl/coverage.go:10.20,12.2 1 1",
+		"github.com/abanna/herdr-agentisan/internal/devctl/coverage.go:14.20,16.2 1 0",
+	)
 
 	_, err := runDev(t, "coverage", "--profile", path, "--min", "90")
 	require.Error(t, err, "a profile under the floor must fail")
@@ -46,8 +48,7 @@ func TestCoverageCommandFailsBelowTheFloor(t *testing.T) {
 }
 
 func TestCoverageCommandPassesAboveTheFloor(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "high.out")
-	require.NoError(t, os.WriteFile(path, []byte(lowCoverageProfile), 0o600))
+	path := floorProfile(t, "")
 
 	// A floor of 0 is met by any profile, exercising the success path end to
 	// end: the command runs `go tool cover`, parses the total, compares and
@@ -56,14 +57,6 @@ func TestCoverageCommandPassesAboveTheFloor(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, out, "ok")
 }
-
-// lowCoverageProfile is a minimal valid coverage profile. `go tool cover`
-// resolves it against real sources, so the exact percentage it reports is not
-// the point — only that the command parses a total and applies the floor.
-const lowCoverageProfile = `mode: atomic
-github.com/abanna/herdr-agentisan/internal/devctl/coverage.go:10.20,12.2 1 1
-github.com/abanna/herdr-agentisan/internal/devctl/coverage.go:14.20,16.2 1 0
-`
 
 func TestCoverageCommandRejectsAMissingProfile(t *testing.T) {
 	_, err := runDev(t, "coverage", "--profile", "does-not-exist.out")
