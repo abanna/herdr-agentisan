@@ -117,8 +117,21 @@ func scanMessage(row interface{ Scan(...any) error }) (Message, error) {
 }
 
 const sendMessage = `INSERT INTO messages (id, recipient_kind, recipient, project, generation, sender_kind, sender, sender_generation, body, created_at, updated_at)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, max(?10, coalesce(` + heldAfterNew + `, ?10)))
 RETURNING ` + messageColumns
+
+// A write that leaves a boss's row queued takes the later of its ordinary
+// update time and one nanosecond past that boss's highest held cutoff across
+// projects. The lookup runs in the same write transaction as the change.
+// The stamp saturates at SQLite's largest INTEGER, where a strictly later
+// timestamp cannot be represented. NULL leaves the ordinary time in place
+// for a boss with no record or a recipient of another kind.
+const (
+	heldStamp     = `min(max(h.through_at), 9223372036854775806) + 1`
+	heldAfterNew  = `CASE WHEN ?2 = 'boss' THEN (SELECT ` + heldStamp + ` FROM board_held_acks AS h WHERE h.boss = ?3) END`
+	heldAfterRow  = `CASE WHEN recipient_kind = 'boss' THEN (SELECT ` + heldStamp + ` FROM board_held_acks AS h WHERE h.boss = messages.recipient) END`
+	heldAfterBoss = `(SELECT ` + heldStamp + ` FROM board_held_acks AS h WHERE h.boss = ?2)`
+)
 
 // Send queues body, from `from` to `to`, and returns the queued message. A
 // worker, as recipient or sender, must have a live workers row, or it is
@@ -236,9 +249,9 @@ func (s *Store) Delivered(ctx context.Context, id string, at time.Time) error {
 // nothing, such as a refusal before herdr wrote a byte: the next claim tries
 // again, and reason says why this one did not.
 func (s *Store) Requeue(ctx context.Context, id, reason string, at time.Time) error {
-	return s.settle(ctx, id, at, "requeue",
-		"UPDATE messages SET state = 'queued', updated_at = max(?2, created_at), reason = ?3 WHERE id = ?1 AND state = 'dispatching'",
-		CleanReason(reason))
+	const requeueMessage = `UPDATE messages SET state = 'queued', updated_at = max(?2, created_at, coalesce(` + heldAfterRow + `, ?2)), reason = ?3
+WHERE id = ?1 AND state = 'dispatching'`
+	return s.settle(ctx, id, at, "requeue", requeueMessage, CleanReason(reason))
 }
 
 // settle moves the dispatching message id with query, whose first two
@@ -357,7 +370,7 @@ RETURNING recipient, sender_kind, sender, sender_generation, body, notice_of`
 	// generation is the one it sent from.
 	sendNotice = `INSERT INTO messages (id, recipient_kind, recipient, project, generation, sender_kind, sender, body, notice_of, created_at, updated_at)
 VALUES (?1, ?2, ?3, CASE ?2 WHEN 'worker' THEN coalesce((SELECT project FROM workers WHERE logical_id = ?3), '') ELSE '' END,
-	?4, 'daemon', ?5, ?6, ?7, ?8, ?8)`
+	?4, 'daemon', ?5, ?6, ?7, ?8, max(?8, coalesce(` + heldAfterNew + `, ?8)))`
 	// noticeFormat is what a sender is told: the message's id, its
 	// recipient, why, and the body to resend.
 	noticeFormat = "[agentisan] message %s to %s may not have been delivered (%s); resend if needed: %s"
@@ -393,7 +406,8 @@ func fail(ctx context.Context, tx *sql.Tx, id, reason string, at time.Time, ns i
 // returnToBoss re-addresses ?1's queued messages in project ?4 whose
 // binding has ended to the boss ?2, at ?3, and returns them.
 const returnToBoss = `UPDATE messages
-SET recipient_kind = 'boss', recipient = ?2, generation = NULL, returned_from = ?1, updated_at = max(?3, created_at)
+SET recipient_kind = 'boss', recipient = ?2, generation = NULL, returned_from = ?1,
+	updated_at = max(?3, created_at, coalesce(` + heldAfterBoss + `, ?3))
 WHERE recipient_kind = 'worker' AND recipient = ?1 AND project = ?4 AND state = 'queued'
 	AND NOT EXISTS (SELECT 1 FROM workers AS w WHERE w.logical_id = ?1 AND w.retired_at IS NULL AND w.generation = messages.generation)
 RETURNING ` + messageColumns
