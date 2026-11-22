@@ -14,7 +14,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -33,7 +32,7 @@ type Package struct {
 func FloorPackages(ctx context.Context, root string, race bool) ([]Package, error) {
 	ctx, cancel := context.WithTimeout(ctx, goListBudget)
 	defer cancel()
-	out, err := goList(ctx, root, "-race="+strconv.FormatBool(race), "-json=ImportPath,Dir,GoFiles,CgoFiles", CoverPattern)
+	out, err := goListPackages(ctx, root, race, "-json=ImportPath,Dir,GoFiles,CgoFiles", CoverPattern)
 	if err != nil {
 		return nil, err
 	}

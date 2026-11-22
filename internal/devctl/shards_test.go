@@ -3,6 +3,7 @@ package devctl_test
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -104,33 +105,28 @@ func TestShardPackagesRefusesWhatWouldLeaveAPackageUntested(t *testing.T) {
 	}
 }
 
-// TestShardsTestEveryPackageOfThisModuleOnce is the split on the real module:
-// every package `go list ./...` prints is in exactly one shard.
+// Compare the command's shards with Go's package list for each test mode.
 func TestShardsTestEveryPackageOfThisModuleOnce(t *testing.T) {
 	t.Parallel()
 
 	require.Equal(t, []string{"dashboard", "store", "daemon", "workforce", "rest"}, devctl.Shards(), "CI's five test jobs")
-	mod, all, err := devctl.ModulePackages(t.Context(), "../..")
-	require.NoError(t, err)
-	assert.Equal(t, "github.com/abanna/herdr-agentisan", mod)
-	require.Contains(t, all, mod+"/internal/devctl")
-
-	seen := map[string]string{}
-	for _, shard := range devctl.Shards() {
-		pkgs, err := devctl.ShardPackages(mod, all, shard)
-		require.NoError(t, err, shard)
-		require.NotEmpty(t, pkgs, shard)
-		for _, p := range pkgs {
-			if prev, dup := seen[p]; dup {
-				t.Errorf("%s is in shard %s and shard %s", p, prev, shard)
-			}
-			seen[p] = shard
-		}
+	for _, mode := range []struct {
+		goFlag   string
+		devFlags []string
+	}{
+		{goFlag: "-race=true"},
+		{goFlag: "-race=false", devFlags: []string{"--race=false"}},
+	} {
+		t.Run(mode.goFlag, func(t *testing.T) {
+			cmd := exec.CommandContext(t.Context(), "go", "list", mode.goFlag, "./...")
+			cmd.Dir = "../.."
+			out, err := cmd.CombinedOutput()
+			require.NoError(t, err, "%s", out)
+			all := strings.Fields(string(out))
+			require.Contains(t, all, "github.com/abanna/herdr-agentisan/internal/devctl")
+			assert.ElementsMatch(t, all, packagesFromAllShards(t, mode.devFlags...))
+		})
 	}
-	for _, p := range all {
-		assert.Contains(t, seen, p, "a package in no shard is tested by no CI job")
-	}
-	assert.Len(t, seen, len(all))
 }
 
 func TestTestPackagesCommandPrintsAShardsPackages(t *testing.T) {
@@ -147,18 +143,83 @@ func TestTestPackagesCommandPrintsAShardsPackages(t *testing.T) {
 	assert.NotContains(t, rest, "github.com/abanna/herdr-agentisan/internal/store")
 }
 
+func TestShardsIncludeRaceOnlyTestPackageOnlyWithRace(t *testing.T) {
+	pkg := writeTaggedShardFixture(t, "race")
+	t.Run("race", func(t *testing.T) {
+		assert.Equal(t, 1, shardPackageCount(t, pkg))
+	})
+	t.Run("non-race", func(t *testing.T) {
+		assert.Zero(t, shardPackageCount(t, pkg, "--race=false"))
+	})
+}
+
+func TestShardsIncludeNonRaceOnlyTestPackageOnlyWithoutRace(t *testing.T) {
+	pkg := writeTaggedShardFixture(t, "!race")
+	t.Run("race", func(t *testing.T) {
+		assert.Zero(t, shardPackageCount(t, pkg))
+	})
+	t.Run("non-race", func(t *testing.T) {
+		assert.Equal(t, 1, shardPackageCount(t, pkg, "--race=false"))
+	})
+}
+
+func writeTaggedShardFixture(t *testing.T, tag string) string {
+	t.Helper()
+	t.Setenv("GOWORK", "off")
+	t.Setenv("GOFLAGS", "")
+	t.Chdir(t.TempDir())
+	require.NoError(t, os.WriteFile("go.mod", []byte("module "+module+"\n\ngo 1.26\n"), 0o600))
+	for _, name := range devctl.Shards() {
+		dir := filepath.Join("internal", name)
+		require.NoError(t, os.MkdirAll(dir, 0o755))
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "pkg.go"), []byte("package "+name+"\n"), 0o600))
+	}
+	const dir = "internal/conditional"
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	src := "//go:build " + tag + "\n\npackage conditional\nimport \"testing\"\nfunc TestConditional(t *testing.T) {}\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "conditional_test.go"), []byte(src), 0o600))
+	return module + "/" + dir
+}
+
+func packagesFromAllShards(t *testing.T, flags ...string) []string {
+	t.Helper()
+	var packages []string
+	for _, shard := range devctl.Shards() {
+		args := append([]string{"test-packages", shard}, flags...)
+		out, stderr, err := runDevWithSeparateStreams(t, args...)
+		require.NoError(t, err, shard)
+		require.Empty(t, stderr)
+		got := strings.Fields(out)
+		require.NotEmpty(t, got, shard)
+		packages = append(packages, got...)
+	}
+	return packages
+}
+
+func shardPackageCount(t *testing.T, want string, flags ...string) int {
+	t.Helper()
+	count := 0
+	for _, pkg := range packagesFromAllShards(t, flags...) {
+		if pkg == want {
+			count++
+		}
+	}
+	return count
+}
+
 // TestTestPackagesCommandFailsSoGoTestFails: a test job is to read the
 // command through $( ), which drops its exit code, so a refusal also prints a
 // path no package has, and go test fails on it whatever the module root holds.
 func TestTestPackagesCommandFailsSoGoTestFails(t *testing.T) {
 	for name, args := range map[string][]string{
-		"an unknown shard": {"test-packages", "nope"},
-		"no shard":         {"test-packages"},
-		"two shards":       {"test-packages", "store", "daemon"},
-		// An option is a shard name too, so it fails the same way rather
-		// than as a flag error that prints nothing.
-		"an option": {"test-packages", "--nope"},
-		"help":      {"test-packages", "--help"},
+		"an unknown shard":      {"test-packages", "nope"},
+		"no shard":              {"test-packages"},
+		"two shards":            {"test-packages", "store", "daemon"},
+		"an option":             {"test-packages", "--nope"},
+		"invalid race argument": {"test-packages", "rest", "--race=sometimes"},
+		"race flag, no shard":   {"test-packages", "--race=false"},
+		"help":                  {"test-packages", "--help"},
+		"help and a shard":      {"test-packages", "rest", "-h"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			out, stderr, err := runDevWithSeparateStreams(t, args...)
@@ -175,20 +236,20 @@ func TestTestPackagesCommandFailsSoGoTestFails(t *testing.T) {
 func TestModulePackagesRefusesWhatGoListCannotList(t *testing.T) {
 	t.Run("a directory in no module", func(t *testing.T) {
 		t.Setenv("GOWORK", "off")
-		_, _, err := devctl.ModulePackages(t.Context(), t.TempDir())
+		_, _, err := devctl.ModulePackages(t.Context(), t.TempDir(), false)
 		require.Error(t, err)
 		// Outside a module go list -m answers command-line-arguments, and
 		// go list ./... then fails.
-		assert.ErrorContains(t, err, "go list ./...")
+		assert.ErrorContains(t, err, "go list -race=false ./...")
 		assert.ErrorContains(t, err, "does not contain main module", "go list's own stderr is in the error")
 	})
 	t.Run("a root that does not exist", func(t *testing.T) {
-		_, _, err := devctl.ModulePackages(t.Context(), filepath.Join(t.TempDir(), "gone"))
+		_, _, err := devctl.ModulePackages(t.Context(), filepath.Join(t.TempDir(), "gone"), false)
 		require.Error(t, err)
 	})
 	t.Run("go is not on PATH", func(t *testing.T) {
 		t.Setenv("PATH", t.TempDir())
-		_, _, err := devctl.ModulePackages(t.Context(), "../..")
+		_, _, err := devctl.ModulePackages(t.Context(), "../..", false)
 		require.Error(t, err)
 		assert.ErrorContains(t, err, "go list -m")
 	})
@@ -202,7 +263,7 @@ func TestModulePackagesRefusesWhatGoListCannotList(t *testing.T) {
 		work := filepath.Join(dir, "go.work")
 		require.NoError(t, os.WriteFile(work, []byte("go 1.26\n\nuse (\n\t./a\n\t./b\n)\n"), 0o600))
 		t.Setenv("GOWORK", work)
-		_, _, err := devctl.ModulePackages(t.Context(), filepath.Join(dir, "a"))
+		_, _, err := devctl.ModulePackages(t.Context(), filepath.Join(dir, "a"), false)
 		require.Error(t, err)
 		assert.ErrorContains(t, err, "2 modules, want 1")
 	})

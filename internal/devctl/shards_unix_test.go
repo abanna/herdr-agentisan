@@ -29,7 +29,7 @@ func TestModulePackagesStopsAHungGoList(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	_, _, err := devctl.ModulePackages(ctx, "../..")
+	_, _, err := devctl.ModulePackages(ctx, "../..", false)
 	require.Error(t, err)
 	assert.Less(t, time.Since(start), 10*time.Second, "neither go list nor its child holds the call")
 }

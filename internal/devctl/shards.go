@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -61,9 +62,9 @@ func ShardPackages(module string, all []string, shard string) ([]string, error) 
 	return pkgs, nil
 }
 
-// ModulePackages returns the module path and every package `go list ./...`
-// prints, run in root.
-func ModulePackages(ctx context.Context, root string) (string, []string, error) {
+// ModulePackages returns the module path and packages selected in the
+// requested race configuration.
+func ModulePackages(ctx context.Context, root string, race bool) (string, []string, error) {
 	module, err := goList(ctx, root, "-m")
 	if err != nil {
 		return "", nil, err
@@ -72,11 +73,16 @@ func ModulePackages(ctx context.Context, root string) (string, []string, error) 
 	if len(modules) != 1 {
 		return "", nil, fmt.Errorf("go list -m printed %d modules, want 1", len(modules))
 	}
-	pkgs, err := goList(ctx, root, "./...")
+	pkgs, err := goListPackages(ctx, root, race, "./...")
 	if err != nil {
 		return "", nil, err
 	}
 	return modules[0], strings.Fields(string(pkgs)), nil
+}
+
+// goListPackages uses the same race setting for shard and coverage discovery.
+func goListPackages(ctx context.Context, root string, race bool, args ...string) ([]byte, error) {
+	return goList(ctx, root, append([]string{"-race=" + strconv.FormatBool(race)}, args...)...)
 }
 
 // goListWaitDelay bounds the wait for go list's output after ctx kills it,

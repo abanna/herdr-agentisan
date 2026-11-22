@@ -178,15 +178,26 @@ func newLargeFilesCmd() *cobra.Command {
 }
 
 func newTestPackagesCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "test-packages <shard>",
+	var race bool
+	c := &cobra.Command{
+		Use:   "test-packages <shard> [--race=false]",
 		Short: "Print the packages one of CI's test jobs tests: " + strings.Join(Shards(), ", "),
-		// Every argument is a shard name, an option included, so every
-		// refusal prints FailedShardPath.
+		// Parse inside RunE so flag errors and help take the same path as
+		// invalid shards and print FailedShardPath.
 		Args:               cobra.ArbitraryArgs,
 		DisableFlagParsing: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			pkgs, err := testPackages(cmd.Context(), args)
+			flags := cmd.Flags()
+			var pkgs []string
+			err := flags.Parse(args)
+			switch {
+			case err != nil:
+				err = fmt.Errorf("parse test-packages flags: %w", err)
+			case flags.Changed("help"):
+				err = errors.New(cmd.Use)
+			default:
+				pkgs, err = testPackages(cmd.Context(), flags.Args(), race)
+			}
 			if err != nil {
 				if _, werr := fmt.Fprintln(cmd.OutOrStdout(), FailedShardPath); werr != nil {
 					return errors.Join(err, fmt.Errorf("write %s: %w", FailedShardPath, werr))
@@ -199,10 +210,12 @@ func newTestPackagesCmd() *cobra.Command {
 			return nil
 		},
 	}
+	c.Flags().BoolVar(&race, "race", true, "select packages for go test -race")
+	return c
 }
 
 // testPackages is the one shard args names, read against this module.
-func testPackages(ctx context.Context, args []string) ([]string, error) {
+func testPackages(ctx context.Context, args []string, race bool) ([]string, error) {
 	if len(args) != 1 {
 		return nil, fmt.Errorf("want one test shard (%s), got %d arguments", strings.Join(Shards(), ", "), len(args))
 	}
@@ -212,7 +225,7 @@ func testPackages(ctx context.Context, args []string) ([]string, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, goListBudget)
 	defer cancel()
-	module, all, err := ModulePackages(ctx, root)
+	module, all, err := ModulePackages(ctx, root, race)
 	if err != nil {
 		return nil, err
 	}
