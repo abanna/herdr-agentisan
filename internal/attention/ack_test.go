@@ -58,6 +58,20 @@ func TestAckQuietIntervalSurvivesRestart(t *testing.T) {
 	assert.Equal(t, 1, a.N)
 }
 
+func TestOpeningAckTimeIsCappedAtThePoll(t *testing.T) {
+	t.Parallel()
+	tr := attention.NewTracker()
+	state := acked(posts(1, 0), 20*m)
+	var alerts []time.Duration
+	for d := 10 * m; d <= 30*m; d += m {
+		if _, ok := tr.Observe("app", defaults(), state, at(d)); ok {
+			alerts = append(alerts, d)
+			tr.Shown("app", true, at(d))
+		}
+	}
+	assert.Equal(t, mins(15, 20, 30), alerts)
+}
+
 func TestAckQuietIntervalSurvivesAnEmptyBoard(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -87,6 +101,25 @@ func TestAckQuietIntervalSurvivesAnEmptyBoard(t *testing.T) {
 	}
 }
 
+func TestBossReadQuietIntervalEndsWithTheEpisode(t *testing.T) {
+	t.Parallel()
+	state := func(d time.Duration) attention.State {
+		switch {
+		case d < 12*m:
+			return posts(1, 0)
+		case d < 13*m:
+			s := boss()
+			s.BossMark = 1
+			return s
+		default:
+			s := held(1, 0)
+			s.BossMark = 1
+			return s
+		}
+	}
+	assert.Equal(t, mins(10, 13, 18), times(run(defaults(), 20*m, m, state, nil)))
+}
+
 func postsWithHeld() attention.State {
 	s := posts(1, 0)
 	s.Held, s.OldestHeld = 1, at(0)
@@ -104,6 +137,19 @@ func TestNewPostAfterAckKeepsItsFirstAlertTime(t *testing.T) {
 	assert.Equal(t, mins(23), times(run(defaults(), 25*m, m, state, nil)))
 }
 
+func TestNewPostDueInsideTheAckQuietIntervalWaits(t *testing.T) {
+	t.Parallel()
+	cfg := defaults()
+	cfg.After = m
+	state := func(d time.Duration) attention.State {
+		if d < 13*m {
+			return acked(boss(), 12*m)
+		}
+		return acked(posts(1, 13*m), 12*m)
+	}
+	assert.Equal(t, mins(17), times(run(cfg, 20*m, m, state, nil)))
+}
+
 func TestCeilingBoundCanAlertDuringTheQuietInterval(t *testing.T) {
 	t.Parallel()
 	tr := attention.NewTracker()
@@ -116,6 +162,44 @@ func TestCeilingBoundCanAlertDuringTheQuietInterval(t *testing.T) {
 	a, ok := tr.Observe("app", cfg, state, at(15*m))
 	require.True(t, ok, "a ceiling bound at 15 can fire before the quiet interval ends at 17")
 	assert.True(t, a.Ceiling)
+}
+
+func TestAcknowledgedCeilingCanAlertAgainInsideTheQuietInterval(t *testing.T) {
+	t.Parallel()
+	heldCeiling := func(newest time.Duration) attention.State {
+		s := held(1, 0)
+		s.OldestHeldCeiling, s.NewestCeiling = at(0), at(newest)
+		return s
+	}
+	withPost := func(s attention.State) attention.State {
+		s.Pending, s.Oldest = 1, at(0)
+		return s
+	}
+	cases := []struct {
+		name                  string
+		before, during, after attention.State
+		alerts                []time.Duration
+	}{
+		{"partial acknowledgement then append", withPost(heldCeiling(0)), posts(1, 0), withPost(heldCeiling(13 * m)), mins(2, 7, 15, 20)},
+		{"full acknowledgement then append", heldCeiling(0), boss(), heldCeiling(13 * m), mins(2, 7, 13, 18)},
+		{"full acknowledgement then drain", heldCeiling(0), boss(), ceilingPost(boss(), 0), mins(2, 7, 13, 18)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			state := func(d time.Duration) attention.State {
+				switch {
+				case d < 12*m:
+					return c.before
+				case d < 13*m:
+					return acked(c.during, 12*m)
+				default:
+					return acked(c.after, 12*m)
+				}
+			}
+			assert.Equal(t, c.alerts, times(run(defaults(), 20*m, m, state, nil)))
+		})
+	}
 }
 
 // TestEarlierAckIsNoReaction (A74): a LastAck earlier than the last one
