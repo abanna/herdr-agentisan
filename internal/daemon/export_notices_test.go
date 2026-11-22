@@ -36,10 +36,11 @@ func FlushToInbox(o Options, st *store.Store, bosses map[string]string, b *notic
 // collector's source that feeds them (A45), and the dispatcher that types
 // the boss's inbox, so a test runs each step in turn.
 type NoticeCycle struct {
-	o   Options
-	n   *notices
-	src GitHubSource
-	d   *dispatcher
+	o      Options
+	n      *notices
+	src    GitHubSource
+	d      *dispatcher
+	bosses map[string]string
 }
 
 // NewNoticeCycle is o's notices, GitHub source and dispatcher on st, with
@@ -48,7 +49,7 @@ func NewNoticeCycle(o Options, st *store.Store, bosses map[string]string) *Notic
 	in := newInbox()
 	in.bosses = bosses
 	n := o.newNotices(st, in, nil)
-	return &NoticeCycle{o: o, n: n, src: GitHubSource{o.newGitHubNotices(st, n)}, d: o.newDispatcher(st, in)}
+	return &NoticeCycle{o: o, n: n, src: GitHubSource{o.newGitHubNotices(st, n)}, d: o.newDispatcher(st, in), bosses: bosses}
 }
 
 // Source is the cycle's GitHub source; what it collects, Take hands back.
@@ -62,9 +63,9 @@ func (c *NoticeCycle) Add(now time.Time, ns []notice.Notice) { c.n.batch.Add(now
 func (c *NoticeCycle) Flush(ctx context.Context) { c.o.flushNotices(ctx, c.n) }
 
 // Serve types boss's inbox into the agent named boss, as a dispatcher pass
-// does, until nothing is queued for it.
+// does with the poll's bosses, until nothing is queued for it.
 func (c *NoticeCycle) Serve(ctx context.Context, boss string) {
-	c.d.serve(ctx, store.Address{Kind: store.KindBoss, ID: boss}, boss)
+	c.d.serve(ctx, c.bosses, store.Address{Kind: store.KindBoss, ID: boss}, boss)
 }
 
 // EndPoll ends a poll as pollTeam does, with b's notices for s, and
