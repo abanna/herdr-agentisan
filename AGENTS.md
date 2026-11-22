@@ -201,7 +201,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   (`boarddelivery.go`, A74), returns an ended binding's
   queue to its boss, and fails, never retrying, whatever a timeout or a
   crash may have typed (`messages.go`, A2, A30). The `send` op queues them
-  (`docs/messaging.md`).
+  (`docs/messaging.md`). A board-mode boss's claims and posts, and each
+  poll's change of its agent, take the inbox's route, a mutex that counts
+  its holds, in a package of its own so nothing else can reach it
+  (`routelock/`, A74).
   `daemon start` spawns a detached `daemon run` and waits for its health or
   its exit (A48); herdr's `[[startup]]` hook runs it, and the
   `daemon-restart` action covers linking. Tests run daemons in process
