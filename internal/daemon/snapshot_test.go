@@ -1110,7 +1110,7 @@ func snapshotOp(t *testing.T, sock, args string) (json.RawMessage, string) {
 }
 
 // TestSnapshotOpServesEveryTeam is A24's daemon: one poll builds a snapshot
-// of every team, the ◆ spaces' and each tabs team's, and the op serves each
+// of every team, and the op serves each
 // byte for byte as the snapshot v1 encoding of that team, in its own group
 // order and colour, with only its own panes.
 func TestSnapshotOpServesEveryTeam(t *testing.T) {
@@ -1149,6 +1149,10 @@ func TestSnapshotOpSelectsTheSpaces(t *testing.T) {
 		"◆ boss":                  {args: `{"workspace_id":"wJ"}`, team: "agentisan"},
 		"◆ herdr, the edit shell": {args: `{"workspace_id":"w12"}`, team: "agentisan"},
 		"neither":                 {team: "agentisan"},
+		"empty args":              {args: `{}`, team: "agentisan"},
+		"null args":               {args: `null`, team: "agentisan"},
+		"empty strings":           {args: `{"project":"","workspace_id":""}`, team: "agentisan"},
+		"args it does not know":   {args: `{"team":"alpha"}`, team: "agentisan"},
 		"a workspace no team's":   {args: `{"workspace_id":"w2"}`, code: "no_team"},
 	} {
 		t.Run(name, func(t *testing.T) {

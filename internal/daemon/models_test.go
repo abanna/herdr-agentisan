@@ -80,8 +80,8 @@ func withBossStart(s snapshot.Snapshot, byPane map[string]time.Time) snapshot.Sn
 	return s
 }
 
-// TestSnapshotCarriesLaunchModels: every team's snapshot, the spaces' and
-// both tabs teams', carries each row's launch model, the boss's included
+// TestSnapshotCarriesLaunchModels: every team's snapshot, agentisan's and
+// the two other tabs teams', carries each row's launch model, the boss's included
 // (A39), each boss its agent process's start (A47), and the op's data still
 // decodes strictly. Shells and panes outside every team are never asked,
 // and a poll asks nothing for a pane that has not changed.

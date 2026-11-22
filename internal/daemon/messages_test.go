@@ -35,7 +35,7 @@ var (
 	// aPane is a sender with no other identity, by a terminal no pane
 	// shows (B3).
 	aPane = store.Address{Kind: store.KindPane, ID: "term_gone"}
-	// notes is the pane sender in liveSpaces' plain workspace, w2:p1, by its
+	// notes is the pane sender in liveTabs' plain workspace, w2:p1, by its
 	// terminal.
 	notes = store.Address{Kind: store.KindPane, ID: "term_w2:p1"}
 )
@@ -706,7 +706,7 @@ func movePane(th *teamHerdr, terminal, pane string) {
 // daemon sent that fails sends no notice.
 func TestDispatcherFailsAPaneMessageItCannotType(t *testing.T) {
 	t.Parallel()
-	shell := store.Address{Kind: store.KindPane, ID: "term_w12:p1"} // ◆ herdr's shell
+	shell := store.Address{Kind: store.KindPane, ID: "term_w12:p1"} // the shell in the tab outside the model
 	tests := map[string]struct {
 		to     store.Address
 		age    time.Duration
@@ -831,7 +831,7 @@ func TestDispatcherHoldsAPaneNoticeWhenItsListFails(t *testing.T) {
 	t.Parallel()
 	th, p, dir := haTeam(t)
 	st := stateStore(t, dir, th)
-	shell := store.Address{Kind: store.KindPane, ID: "term_w12:p1"} // ◆ herdr's shell: refused, queued again
+	shell := store.Address{Kind: store.KindPane, ID: "term_w12:p1"} // the shell in the tab outside the model: refused, queued again
 	m := sent(t, st, shell, store.Daemon, "[agentisan] a notice")
 	o := teamOpts(t, dir, th, workforceConfig(t))
 	o.Poll = time.Hour // the poll at start only: the send's wake makes the next pass

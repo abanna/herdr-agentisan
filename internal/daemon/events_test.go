@@ -382,7 +382,7 @@ func TestSetupEventsReadsTheEndpoint(t *testing.T) {
 		wantUnsaid []string
 	}{
 		"no config dir, no environment": {file: "-"},
-		"no key":                        {file: "[spaces]\n"},
+		"no key":                        {file: "[telemetry]\n"},
 		"the key":                       {file: "[telemetry]\nendpoint = \"ENDPOINT\"\n", wantSent: true, wantLogs: []string{"workflow events export over OTLP"}},
 		"the environment":               {file: "-", env: "ENDPOINT", wantSent: true},
 		"the environment beats the key": {file: "[telemetry]\nendpoint = \"localhost:1\"\n", env: "ENDPOINT", wantSent: true},

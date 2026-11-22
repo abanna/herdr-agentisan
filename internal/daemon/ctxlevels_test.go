@@ -283,7 +283,7 @@ func TestCtxWatchACodexWithNoHooksTellsNothing(t *testing.T) {
 	th := newTeamHerdr(t)
 	th.setAgents(named("wJ:p1", liveShort+"-boss"), named("wN:p1", "pee01"))
 	th.setPane("wN:p1", "agent", "codex")
-	th.setToken("wN:p1", "ctx", "") // liveSpaces gives it 40
+	th.setToken("wN:p1", "ctx", "") // liveTabs gives it 40
 	var logs lockedLog
 	_, rec := ctxRun(t, teamOpts(t, shortDir(t), th, noticesConfig(t, "gap = 0\n")), &logs)
 

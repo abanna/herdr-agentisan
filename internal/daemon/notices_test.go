@@ -31,7 +31,7 @@ func (th *teamHerdr) failAgents(fail bool) {
 }
 
 // turned is agent.list's entry for pane, named name, in its terminal of
-// liveSpaces, with its last turn's end at seq (nil for none).
+// liveTabs, with its last turn's end at seq (nil for none).
 func turned(pane, name string, seq any) map[string]any {
 	a := named(pane, name)
 	a["terminal_id"] = "term_" + pane

@@ -773,9 +773,10 @@ func TestCtxPushStopsWhenTheServerIsReplaced(t *testing.T) {
 func TestTeamPushSurvivesAFailingPush(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	// A second team, with only its boss's tab, after the live one.
-	th.workspaces = append(th.workspaces, herdr.WorkspaceInfo{WorkspaceID: "w20", Label: "assay"})
-	th.tabs = append(th.tabs, tabOf("w20:t1", "w20", "as-boss"))
+	// A second team, with only its boss's tab, whose workspace sorts after
+	// the live one's, so its push comes after the refused one.
+	th.workspaces = append(th.workspaces, herdr.WorkspaceInfo{WorkspaceID: "wZ", Label: "assay"})
+	th.tabs = append(th.tabs, tabOf("wZ:t1", "wZ", "as-boss"))
 	th.refuse[liveWorkspace] = true
 	th.refuse["wN:p1"] = true
 	var logs lockedLog
@@ -786,7 +787,7 @@ func TestTeamPushSurvivesAFailingPush(t *testing.T) {
 	polled(t, th.srv, 2)
 	got := pushes(t, th.srv)
 	assert.GreaterOrEqual(t, len(got[liveWorkspace]), 2, "the refused push is tried every poll")
-	assert.GreaterOrEqual(t, len(got["w20"]), 2, "and the next team's is still pushed")
+	assert.GreaterOrEqual(t, len(got["wZ"]), 2, "and the next team's is still pushed")
 	assert.Contains(t, logs.String(), `"workspace":"wT"`)
 	assert.Contains(t, logs.String(), "workspace_not_found")
 	ctx := panePushes(t, th.srv)
@@ -963,8 +964,8 @@ short = "as"
 
 // TestTeamPollCostsAFailedTabList: with a tabs team configured, a tab.list
 // herdr answers wrongly costs the poll, as a failed pane or workspace list
-// does: nothing is pushed, the spaces included, it is logged, and the next
-// poll tries again.
+// does: nothing is pushed, the team's workspace included, it is logged, and
+// the next poll tries again.
 func TestTeamPollCostsAFailedTabList(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
@@ -972,7 +973,7 @@ func TestTeamPollCostsAFailedTabList(t *testing.T) {
 	th.tabs = nil // tab_list with no tabs: a protocol error
 	th.mu.Unlock()
 	var logs lockedLog
-	o := teamOpts(t, shortDir(t), th, configDir(t, "[projects.ha]\nrepo = \"/x\"\nshort = \"ha\"\nlayout = \"tabs\"\n"))
+	o := teamOpts(t, shortDir(t), th, liveConfig(t, ""))
 	o.Logger = zerolog.New(&logs)
 	r := serving(t, o, th.fakeHerdr)
 
@@ -987,7 +988,7 @@ func TestTeamPollCostsAFailedTabList(t *testing.T) {
 // spaces' poll.
 func TestTeamPollListsNoTabsWithoutATabsTeam(t *testing.T) {
 	t.Parallel()
-	th := newTeamHerdr(t)
+	th := newSpacesHerdr(t)
 	serving(t, teamOpts(t, shortDir(t), th, ""), th.fakeHerdr)
 	polled(t, th.srv, 2)
 	for _, r := range th.srv.Requests() {
