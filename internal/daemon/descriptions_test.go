@@ -240,7 +240,7 @@ func TestGroupDescriptionsLookBeforeTheyRead(t *testing.T) {
 	save := func(d string) {
 		t.Helper()
 		tmp := path + ".tmp"
-		require.NoError(t, os.WriteFile(tmp, []byte("schema_version = 1\n[projects.app]\nrepo = \"/x\"\n[projects.app.groups.qa]\ndescription = \""+d+"\"\n"), 0o600))
+		require.NoError(t, os.WriteFile(tmp, []byte("schema_version = 1\n[projects.app]\nrepo = \"/x\"\nshort = \"ap\"\nlayout = \"tabs\"\n[projects.app.groups.qa]\ndescription = \""+d+"\"\n"), 0o600))
 		stamp = stamp.Add(time.Second)
 		require.NoError(t, os.Chtimes(tmp, stamp, stamp))
 		require.NoError(t, os.Rename(tmp, path))
