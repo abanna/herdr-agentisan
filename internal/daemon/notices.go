@@ -146,15 +146,17 @@ func (o Options) endPoll(ctx context.Context, n *notices, in *inbox, built *team
 }
 
 // flush sends every boss whose gap has passed its waiting notices. A
-// message the sink refuses is logged and dropped, unacknowledged.
+// message the sink refuses is logged and dropped, unacknowledged; of one it
+// accepts, only the lines the message it committed kept are settled.
 func (o Options) flushNotices(ctx context.Context, n *notices) {
 	n.batch.Add(o.Now(), n.github.take())
 	for _, m := range n.batch.Flush(o.Now()) {
-		if err := n.sink.Send(ctx, m); err != nil {
+		kept, err := n.sink.Send(ctx, m)
+		if err != nil {
 			o.Logger.Warn().Err(err).Str("project", m.Project).Msg("notice not delivered")
 			continue
 		}
-		m.Settle()
+		m.Settle(kept)
 	}
 }
 
@@ -173,11 +175,13 @@ type inboxSink struct {
 	now    func() time.Time
 }
 
-// Send queues m for its boss and logs it. A project with no boss is only
-// logged, and settled: told again, it would still have nowhere to go,
-// since the daemon reads its teams once. A failed write is logged too, and
-// returned, so m is not settled.
-func (s inboxSink) Send(ctx context.Context, m notice.Message) error {
+// Send queues m for its boss and logs it, and keeps the lines the committed
+// body holds: AppendTo cuts from the front, its header included. A project
+// with no boss goes only to daemon.log (at info; above that level, nowhere),
+// and is kept whole, so settled: told again, it would still have nowhere to
+// go, since the daemon reads its teams once. A failed write is logged too,
+// and returned, so m is not settled.
+func (s inboxSink) Send(ctx context.Context, m notice.Message) (int, error) {
 	_, bosses := s.in.view()
 	e := s.log.Info().Str("project", m.Project).Strs("notices", m.Lines)
 	if m.Dropped > 0 {
@@ -186,18 +190,18 @@ func (s inboxSink) Send(ctx context.Context, m notice.Message) error {
 	boss, ok := bosses[m.Project]
 	if !ok {
 		e.Str("boss", "").Msg(noticeMsg)
-		return nil
+		return len(m.Lines), nil
 	}
 	to := store.Address{Kind: store.KindBoss, ID: boss}
 	queued, appended, err := s.st.Notify(ctx, to, s.now(), m.AppendTo)
 	e = e.Str("boss", boss)
 	if err != nil {
 		e.Msg(noticeMsg)
-		return fmt.Errorf("queue the notice for %s: %w", boss, err)
+		return 0, fmt.Errorf("queue the notice for %s: %w", boss, err)
 	}
 	e.Str("inbox", queued.ID).Bool("appended", appended).Msg(noticeMsg)
 	if !appended {
 		s.events.MessageQueued(ctx, telemetry.Message{ID: queued.ID, FromKind: store.Daemon.Kind, From: store.Daemon.ID, ToKind: to.Kind, To: to.ID, At: queued.CreatedAt})
 	}
-	return nil
+	return m.Kept(queued.Body), nil
 }
