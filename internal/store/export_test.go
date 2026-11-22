@@ -36,11 +36,15 @@ func NoticeQuotasOf(s *Store) NoticeQuotas { return s.quotas }
 // NoticeRateWindow is Q8's window.
 const NoticeRateWindow = noticeRateWindow
 
+// NoticeKindCeiling is the daemon's context ceiling kind, which Q8 never
+// refuses: C2 pins it to notice.CtxCeiling.
+const NoticeKindCeiling = noticeKindCeiling
+
 // NoticeQuotaQueries are the quotas' queries, by quota.
 var NoticeQuotaQueries = map[string]string{
 	"Q1": selectPendingPerProject, "Q2": selectPendingInStore, "Q3": selectPendingPerPR,
 	"Q4": selectBytesPerProject, "Q5": selectBytesInStore,
-	"Q6": selectProjectIdentities, "Q7": selectStoreIdentities, "Q8": selectAdmissionsInWindow,
+	"Q6": selectProjectIdentities, "Q7": selectStoreIdentities, "Q8": selectSourceAdmissionsInWindow,
 }
 
 // SetNoticeEntropy sets the reader s draws its daemon notices' IDs' random

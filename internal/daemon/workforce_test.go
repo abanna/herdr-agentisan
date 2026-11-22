@@ -838,9 +838,29 @@ func TestWorkforceCodes(t *testing.T) {
 		workforce.ErrHerdr:                                                       "herdr_failed",
 		store.ErrStore:                                                           "store_failed",
 		errors.New("anything else"):                                              "failed",
+		// A73: the retry keys' codes.
+		workforce.ErrRetryKeyReused:                                                                     "retry_key_mismatch",
+		workforce.ErrSpawnUnsettled:                                                                     "spawn_unsettled",
+		fmt.Errorf("finish a spawn: %w", store.ErrSpawnKeyChanged):                                      "spawn_unsettled",
+		fmt.Errorf("begin a spawn: %w", store.ErrSpawnKeyExists):                                        "store_failed",
+		fmt.Errorf("replay: %w", workforce.ErrStoredAnswerUnreadable):                                   "store_failed",
+		fmt.Errorf("bind a spawned worker: %w", store.ErrNoSpawnKey):                                    "failed",
+		&workforce.RefusalError{Code: "slot_cap", Err: store.ErrStore}:                                  "slot_cap",
+		fmt.Errorf("spawn: %w", &workforce.RefusalError{Code: "pane_changed", Err: workforce.ErrHerdr}): "pane_changed",
 	} {
 		assert.Equal(t, code, daemon.WorkforceCode(err), err.Error())
 	}
+	// retry_key_mismatch comes from one sentinel alone, and spawn_unsettled
+	// from the workforce's and the store's changed record: a hand-edited
+	// store never answers a mismatch.
+	from := map[string][]error{}
+	for _, row := range daemon.WorkforceCodeRows() {
+		from[row.Code] = append(from[row.Code], row.Err)
+	}
+	assert.Equal(t, []error{workforce.ErrRetryKeyReused}, from["retry_key_mismatch"])
+	assert.ElementsMatch(t, []error{workforce.ErrSpawnUnsettled, store.ErrSpawnKeyChanged}, from["spawn_unsettled"])
+	assert.Contains(t, from["store_failed"], store.ErrSpawnKeyExists)
+	assert.Contains(t, from["store_failed"], workforce.ErrStoredAnswerUnreadable)
 }
 
 // TestOpBudgets: team status, retire, send and handoff ready get 10 s, spawn
