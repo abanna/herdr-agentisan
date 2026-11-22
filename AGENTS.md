@@ -349,7 +349,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   inbox, one record per project and boss that a later one replaces
   (`boardack.go`, migration 0012, A74), dormant until PR 3c: nothing writes
   either table, and `ReadBoard` and `LatestPosts` read one primary-key
-  lookup per post they return, which `board.read` does not serve; every
+  lookup per post they return, which `board.read` does not serve. On a
+  write to a boss's inbox, the queue writers read `board_held_acks` to stamp
+  the row past that boss's latest held cutoff across projects. Every
   post wakes each `board wait`; `BoardPending` counts what a boss has left
   unread and waiting, for the alert (A74). Tests open a fresh database in a
   temp dir; the store is never mocked.
