@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 
@@ -56,6 +58,33 @@ func TestRunOnATerminal(t *testing.T) {
 	require.Eventually(t, func() bool { return strings.Contains(out.String(), "stale pane id resolver") }, 5*time.Second, 10*time.Millisecond)
 	require.Contains(t, out.String(), "\x1b[?1049h", "the alternate screen")
 	require.Contains(t, out.String(), "\x1b[?1002h", "mouse cell motion")
+
+	_, err := master.Write([]byte("q"))
+	require.NoError(t, err)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("q did not quit")
+	}
+}
+
+func TestRunDetectsNoColorSelection(t *testing.T) {
+	t.Parallel()
+
+	master, slave := openPTY(t, 120, 40)
+	var out syncBuffer
+	go func() { _, _ = io.Copy(&out, master) }()
+	src := &script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "full"))}}
+	cfg := config(src, &recorder{})
+	cfg.Options = dashboard.Options{}
+	env := tea.WithEnvironment([]string{"TERM=xterm-256color", "COLORTERM=truecolor", "NO_COLOR=1"})
+
+	done := make(chan error, 1)
+	go func() { done <- dashboard.Run(t.Context(), cfg, slave, slave, env) }()
+	require.Eventually(t, func() bool {
+		return strings.Contains(ansi.Strip(out.String()), "│▸◐ pee01")
+	}, 5*time.Second, 10*time.Millisecond, "NO_COLOR should select a pointer with default program options")
 
 	_, err := master.Write([]byte("q"))
 	require.NoError(t, err)
