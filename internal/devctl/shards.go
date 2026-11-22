@@ -11,11 +11,10 @@ import (
 	"time"
 )
 
-// CI's unit suite is to run as five test jobs (NERD-5676): one for each
+// CI and Task run the unit suite in five shards (NERD-5676): one for each
 // package below, whose tests take longest, and RestShard for every other
 // package, each job's packages from `devctl test-packages <shard>`, so a
-// package added later needs no edit. Nothing calls it yet: ci.yml's one test
-// job still tests ./... whole.
+// package added later needs no edit.
 
 // heavyShards each test one package, ./internal/<name>, and nothing below it.
 var heavyShards = []string{"dashboard", "store", "daemon", "workforce"}

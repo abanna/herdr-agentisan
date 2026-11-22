@@ -35,7 +35,7 @@ everything.
 | Run the workforce race test shard | `go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${AGENTISAN_SHARD_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-workforce"` |
 | Run the rest race test shard | `go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${AGENTISAN_SHARD_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-rest"` |
 | Merge the test jobs' coverage data | `go tool covdata textfmt -i=bin/covdata/covdata-dashboard,bin/covdata/covdata-store,bin/covdata/covdata-daemon,bin/covdata/covdata-workforce,bin/covdata/covdata-rest -o coverage.out` |
-| Enforce the coverage floor | `go run ./cmd/devctl coverage --profile coverage.out --min 75` |
+| Enforce the coverage floor | `go run ./cmd/devctl coverage --profile coverage.out --min 75 --complete-unlinked` |
 | Static security scan | `go tool gosec -quiet ./...` |
 | Secret scan (git history) | `go run github.com/zricethezav/gitleaks/v8@v8.30.1 git . --config .gitleaks.toml --no-banner --redact` |
 | Dependency vulnerability check | `go tool govulncheck ./...` |
@@ -66,6 +66,9 @@ byte-identical to `.github/workflows/ci.yml`, and the tasks invoke those same
 strings. Change a gate and you change all three together.
 Run `task test:unit` to select packages and collect fresh race coverage for
 all five shards, then `task cover` to merge it and enforce the floor.
+The merged profile includes Go's zero-count blocks for packages outside
+every test binary, including packages only used through a subprocess.
+A package linked by a test binary must contribute blocks from the shards.
 
 `go run ./cmd/devctl docs-parity` enforces exactly that, in every direction: a
 gate CI runs must appear here *and* in a task, and a command documented here

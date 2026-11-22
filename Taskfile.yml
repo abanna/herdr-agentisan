@@ -284,14 +284,16 @@ tasks:
     cmds:
       - cmd: |
           for shard in dashboard store daemon workforce rest; do
-            set -- bin/covdata/covdata-"$shard"/covcounters.*
-            if [ ! -s "$1" ]; then
-              echo "missing coverage counters for $shard" >&2
-              exit 1
-            fi
+            for kind in covcounters covmeta; do
+              set -- bin/covdata/covdata-"$shard"/"$kind".*
+              if [ ! -s "$1" ]; then
+                echo "missing or empty $kind for $shard" >&2
+                exit 1
+              fi
+            done
           done
       - go tool covdata textfmt -i=bin/covdata/covdata-dashboard,bin/covdata/covdata-store,bin/covdata/covdata-daemon,bin/covdata/covdata-workforce,bin/covdata/covdata-rest -o coverage.out
-      - go run ./cmd/devctl coverage --profile coverage.out --min 75
+      - go run ./cmd/devctl coverage --profile coverage.out --min 75 --complete-unlinked
 
   cover:html:
     desc: Open the coverage profile as HTML
