@@ -3,9 +3,13 @@ package daemon
 import (
 	"context"
 	"fmt"
+	"time"
+
+	"github.com/rs/zerolog"
 
 	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/store"
+	"github.com/abanna/herdr-agentisan/internal/telemetry"
 )
 
 // A board-mode boss (ADR-001 A74): a tabs team whose notices.delivery is
@@ -113,6 +117,19 @@ func bossProject(bosses map[string]string, boss string) (string, bool) {
 	return found, n == 1
 }
 
+// boardWriter posts queued messages and reports committed rows. The
+// dispatcher owns the warning state and wakes itself when more rows remain.
+type boardWriter struct {
+	st     *store.Store
+	log    zerolog.Logger
+	events *telemetry.Events
+	now    func() time.Time
+}
+
+func (o Options) boardWriter(st *store.Store) boardWriter {
+	return boardWriter{st: st, log: o.Logger, events: o.Team.Events, now: o.Now}
+}
+
 // postQueued posts the oldest MaxQueuePost rows of to's queue on project's
 // board instead of typing them (A74), in one transaction that marks each
 // row delivered, or failed where the board refuses it. Like claim, a stop
@@ -123,10 +140,10 @@ func bossProject(bosses map[string]string, boss string) (string, bool) {
 // started, and the commit, run to their end. untyped runs it under route,
 // so a poll can wait behind one post as long as it takes, which delays
 // that poll's remember, its flush and its model hand-off (polled).
-func (d *dispatcher) postQueued(ctx context.Context, to store.Address, project string) (store.PostedQueue, error) {
+func (w boardWriter) postQueued(ctx context.Context, to store.Address, project string) (store.PostedQueue, error) {
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), settleTimeout)
 	defer cancel()
-	out, err := d.st.PostQueued(sctx, to, project, d.now())
+	out, err := w.st.PostQueued(sctx, to, project, w.now())
 	if err != nil {
 		return store.PostedQueue{}, fmt.Errorf("post the queue: %w", err)
 	}
@@ -138,7 +155,6 @@ func (d *dispatcher) postQueued(ctx context.Context, to store.Address, project s
 // emits each row posted. A post that failed leaves every row queued for
 // the next pass, never typed, and is warned of once while it lasts.
 func (d *dispatcher) posted(ctx context.Context, to store.Address, project string, out store.PostedQueue, err error) {
-	ctx = context.WithoutCancel(ctx)
 	if err != nil {
 		d.note(to, "board", "messages wait: posting them to the board failed", err)
 		return
@@ -147,22 +163,27 @@ func (d *dispatcher) posted(ctx context.Context, to store.Address, project strin
 	if out.More {
 		d.in.Wake()
 	}
+	d.reportQueue(ctx, to, project, out)
+}
+
+func (w boardWriter) reportQueue(ctx context.Context, to store.Address, project string, out store.PostedQueue) {
+	ctx = context.WithoutCancel(ctx)
 	if len(out.Posts) == 0 {
 		return
 	}
 	ids := make([]string, 0, len(out.Delivered)+len(out.Failed))
 	for _, m := range out.Delivered {
 		ids = append(ids, m.ID)
-		d.events.MessageDelivered(ctx, messageEvent(m, ""))
+		w.events.MessageDelivered(ctx, messageEvent(m, ""))
 	}
 	for _, m := range out.Failed {
 		ids = append(ids, m.ID)
-		d.events.MessageFailed(ctx, messageEvent(m, m.Reason))
+		w.events.MessageFailed(ctx, messageEvent(m, m.Reason))
 	}
 	seqs := make([]int64, 0, len(out.Posts))
 	for _, p := range out.Posts {
 		seqs = append(seqs, p.Seq)
 	}
-	d.log.Info().Str("recipient", to.ID).Str("project", project).Strs("messages", ids).Ints64("posts", seqs).
+	w.log.Info().Str("recipient", to.ID).Str("project", project).Strs("messages", ids).Ints64("posts", seqs).
 		Bool("more", out.More).Msg("messages: posted to the board")
 }
