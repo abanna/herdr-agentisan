@@ -44,7 +44,7 @@ func TestStatusChangedEmitsTheSchema(t *testing.T) {
 				"agentisan.status.from": "working", "agentisan.status.to": "idle",
 			},
 		},
-		"the boss's pane appears, unbound, in the unnamed project": {
+		"a historical event has an unbound boss and no project": {
 			in: telemetry.StatusChange{
 				WorkerID: "wJ:p1", Role: telemetry.RoleBoss, Agent: "claude", PaneID: "wJ:p1", From: "absent", To: "working",
 			},
@@ -57,12 +57,12 @@ func TestStatusChangedEmitsTheSchema(t *testing.T) {
 		},
 		"a group labelled in Unicode, with a NUL, a CR and spaces, passes verbatim": {
 			in: telemetry.StatusChange{
-				WorkerID: "wN:p2", Project: "agentisan", Group: "cödërs \x00\r\n ◆", Role: telemetry.RoleWorker,
+				WorkerID: "wN:p2", Project: "agentisan", Group: "cödërs \x00\r\n ★", Role: telemetry.RoleWorker,
 				Agent: "claude", PaneID: "wN:p2", From: "idle", To: "done",
 			},
 			want: map[string]any{
 				"agentisan.worker.id": "wN:p2", "agentisan.worker.bound": false,
-				"agentisan.project": "agentisan", "agentisan.group": "cödërs \x00\r\n ◆", "agentisan.role": "worker",
+				"agentisan.project": "agentisan", "agentisan.group": "cödërs \x00\r\n ★", "agentisan.role": "worker",
 				"agentisan.agent": "claude", "herdr.pane.id": "wN:p2",
 				"agentisan.status.from": "idle", "agentisan.status.to": "done",
 			},
@@ -274,7 +274,7 @@ func TestCtxLevelEmitsTheSchema(t *testing.T) {
 	t.Parallel()
 	events, rec := telemetrytest.NewEvents()
 	events.CtxLevelCrossed(t.Context(), telemetry.CtxLevel{
-		WorkerID: "ha-coder-1", Bound: true, Project: "ha", Group: "cödërs \x00\r\n ◆", Role: telemetry.RoleWorker,
+		WorkerID: "ha-coder-1", Bound: true, Project: "ha", Group: "cödërs \x00\r\n ★", Role: telemetry.RoleWorker,
 		Agent: "claude", PaneID: "w1:p1", Level: "ceiling", Ctx: 78, Threshold: 75, Alerted: true, Shown: false,
 	})
 
@@ -283,7 +283,7 @@ func TestCtxLevelEmitsTheSchema(t *testing.T) {
 	assert.Equal(t, "agentisan.worker.ctx_level", got[0].Name)
 	assert.Equal(t, map[string]any{
 		"agentisan.worker.id": "ha-coder-1", "agentisan.worker.bound": true,
-		"agentisan.project": "ha", "agentisan.group": "cödërs \x00\r\n ◆", "agentisan.role": "worker",
+		"agentisan.project": "ha", "agentisan.group": "cödërs \x00\r\n ★", "agentisan.role": "worker",
 		"agentisan.agent": "claude", "herdr.pane.id": "w1:p1",
 		"agentisan.ctx.level": "ceiling", "agentisan.ctx.percent": int64(78), "agentisan.ctx.threshold": int64(75),
 		"agentisan.ctx.alerted": true, "agentisan.ctx.shown": false,

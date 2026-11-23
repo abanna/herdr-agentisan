@@ -12,12 +12,6 @@ import (
 
 // The agent view's limits and names (ADR-001 A28 addendum).
 const (
-	// SpacesLabel labels the spaces' view when [spaces] project names no
-	// project.
-	SpacesLabel = "◆ spaces"
-	// SpacesOrderKey is the spaces' order key. Its dash is in no short
-	// code, so it is never a tabs team's.
-	SpacesOrderKey = "order-spaces"
 	// orderKeyPrefix starts a tabs team's order key, before its short code.
 	orderKeyPrefix = "order_"
 	// viewLabelMax is the most characters herdr takes in a view's label
@@ -37,7 +31,7 @@ const (
 // has no Source: the writer gives it its own.
 //
 // A project's name is [a-z0-9-] (settings), so herdr's trim and control
-// strip change nothing; the unnamed spaces are SpacesLabel, and a name past
+// strip change nothing. A name past
 // 32 characters is cut to 31 and an ellipsis. herdr takes a filter of 64
 // nodes at most, so a team past 1,984 workspaces gets a view herdr refuses.
 func View(m Model, workspace string) (herdr.AgentView, bool) {
@@ -65,9 +59,6 @@ func View(m Model, workspace string) (herdr.AgentView, bool) {
 
 // viewLabel is the view's label for the project name.
 func viewLabel(name string) string {
-	if name == "" {
-		return SpacesLabel
-	}
 	if r := []rune(name); len(r) > viewLabelMax {
 		return string(r[:viewLabelMax-1]) + "…"
 	}
@@ -75,11 +66,8 @@ func viewLabel(name string) string {
 }
 
 // OrderKey is the token a team's agent panes carry their place in it under:
-// order_ and the short code for a tabs team, SpacesOrderKey for the spaces.
+// order_ followed by the team's short code.
 func OrderKey(pr Project) string {
-	if pr.Short == "" {
-		return SpacesOrderKey
-	}
 	return orderKeyPrefix + pr.Short
 }
 

@@ -347,6 +347,22 @@ func TestStatusPicksTheTeam(t *testing.T) {
 	require.ErrorIs(t, err, workforce.ErrConfig)
 }
 
+func TestACallerInAFormerSpaceIsInNoTeam(t *testing.T) {
+	t.Parallel()
+	for _, extra := range []string{"", "\n[projects.assay]\nrepo = \"REPO\"\nshort = \"as\"\n"} {
+		f := newFixture(t, teamConfig+extra)
+		pane := f.h.addTab(f.h.addWorkspace("◆ coders"), "1", "", "")
+		got, err := f.svc.Status(t.Context(), workforce.StatusRequest{Selector: workforce.Selector{CallerPane: pane}})
+		if extra == "" {
+			assert.NoError(t, err)
+			assert.Equal(t, "herdr-agentisan", got.Project)
+		} else {
+			assert.ErrorIs(t, err, workforce.ErrBadRequest)
+			assert.ErrorContains(t, err, "--project")
+		}
+	}
+}
+
 // TestStatusRefusesAUserOnlyKeyFromTheRepoFile: team status reads the
 // project's committed repo file, so one that sets a key only the user's own
 // layers may set is refused (ADR-001 A46): ErrConfig with settings' own

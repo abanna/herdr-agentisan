@@ -24,9 +24,9 @@ import (
 
 // The dispatcher (ADR-001 D8, A2, A30) types each queued message into its
 // recipient with agent.prompt, by the name herdr knows the recipient's agent
-// by: a worker's logical id, a boss's <short>-boss, or boss for the ◆ spaces
-// (A35, UQ2). herdr resolves the name to a pane and types in one step, so a
-// pane id herdr reissued is never typed into. The team poll's last model is
+// by: a worker's logical id or a boss's <short>-boss (A35, UQ2). herdr
+// resolves the name to a pane and types in one step, so a reissued pane id
+// cannot redirect a message. The team poll's last model is
 // what proves the name is where it should be (B2); the store's claim holds
 // what must wait: a handoff, a lost or starting worker, an ended binding.
 
@@ -97,8 +97,6 @@ type inbox struct {
 	// cfgs are every team's notices settings, its delivery key among them,
 	// set once by newNotices.
 	cfgs notice.Configs
-	// tabs are the tabs teams' projects; the ◆ spaces are always typed.
-	tabs map[string]bool
 	// last is, by project, the agent last seen on its boss's pane: in
 	// memory only, so a restart starts with none (A74).
 	last map[string]string
@@ -116,19 +114,15 @@ func newInbox() *inbox {
 	return &inbox{wake: make(chan struct{}, 1), last: map[string]string{}, typedBoss: new(atomic.Pointer[store.Address])}
 }
 
-// configure records each team's boss: <short>-boss for a tabs team, boss for
-// the ◆ spaces (UQ2).
-func (in *inbox) configure(c teamConfig) {
-	bosses := map[string]string{c.spaces.Project: team.SpacesBoss}
-	tabs := map[string]bool{}
-	for _, t := range c.tabs {
+// configure records each team's boss by its <short>-boss name.
+func (in *inbox) configure(teams team.Resolvers) {
+	bosses := make(map[string]string, len(teams))
+	for _, t := range teams {
 		bosses[t.Project] = t.BossTab()
-		tabs[t.Project] = true
 	}
 	in.mu.Lock()
 	defer in.mu.Unlock()
 	in.bosses = bosses
-	in.tabs = tabs
 }
 
 // setConfigs records every team's notices settings, read once at start.
@@ -149,34 +143,30 @@ func (in *inbox) remember(m *team.Model) {
 	defer in.route.Unlock()
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	for project := range in.tabs {
-		if a := notice.BossAgent(m, project, in.bosses[project]); a != "" {
+	for project, boss := range in.bosses {
+		if a := notice.BossAgent(m, project, boss); a != "" {
 			in.last[project] = a
 		}
 	}
 }
 
-// delivery is how project's boss is delivered to now (A74): typed for the
-// ◆ spaces and any project that is not a tabs team, else by its key and the
-// agent last seen on its boss's pane.
+// delivery follows the team's delivery setting and the agent last seen
+// on its boss's pane (A74).
 func (in *inbox) delivery(project string) notice.Delivery {
 	if in.deliveryProbe != nil {
 		in.deliveryProbe()
 	}
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	if !in.tabs[project] {
-		return notice.DeliverTyped
-	}
 	return notice.DeliveryOf(in.cfgs.For(project).Board, in.last[project])
 }
 
-// boardKey reports whether project is a tabs team whose key is board
-// (A74): only its boss's claims and posts take route.
+// boardKey reports whether the team's delivery setting is board (A74).
+// Only those bosses' claims and posts take route.
 func (in *inbox) boardKey(project string) bool {
 	in.mu.Lock()
 	defer in.mu.Unlock()
-	return in.tabs[project] && in.cfgs.For(project).Board
+	return in.cfgs.For(project).Board
 }
 
 // polled replaces the model with a poll's, nil when the poll built none, and

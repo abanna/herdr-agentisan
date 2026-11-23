@@ -26,21 +26,21 @@ func TestListWorkspacesSendsTheSchemaShape(t *testing.T) {
 		"several workspaces with the fields herdr sends": {
 			workspaces: []map[string]any{
 				{
-					"workspace_id": "wN", "number": 2, "label": "◆ coders", "focused": true, "pane_count": 9,
+					"workspace_id": "wN", "number": 2, "label": "★ coders", "focused": true, "pane_count": 9,
 					"tab_count": 1, "active_tab_id": "wN:t1", "agent_status": "working", "tokens": map[string]any{"team": "9 · ◐3 ●2"},
 				},
-				{"workspace_id": "w12", "number": 7, "label": "◆ herdr", "focused": false, "pane_count": 1, "tab_count": 1, "active_tab_id": "w12:t1", "agent_status": "unknown"},
+				{"workspace_id": "w12", "number": 7, "label": "★ herdr", "focused": false, "pane_count": 1, "tab_count": 1, "active_tab_id": "w12:t1", "agent_status": "unknown"},
 			},
-			want: []herdr.WorkspaceInfo{{WorkspaceID: "wN", Label: "◆ coders"}, {WorkspaceID: "w12", Label: "◆ herdr"}},
+			want: []herdr.WorkspaceInfo{{WorkspaceID: "wN", Label: "★ coders"}, {WorkspaceID: "w12", Label: "★ herdr"}},
 		},
 		"no workspaces": {workspaces: []map[string]any{}, want: []herdr.WorkspaceInfo{}},
 		"labels are kept byte for byte": {
 			workspaces: []map[string]any{
-				{"workspace_id": "w1", "label": "◆  coders "},
+				{"workspace_id": "w1", "label": "★  coders "},
 				{"workspace_id": "w2", "label": ""},
 				{"workspace_id": "w3", "label": "agentisan · qa"},
 			},
-			want: []herdr.WorkspaceInfo{{WorkspaceID: "w1", Label: "◆  coders "}, {WorkspaceID: "w2"}, {WorkspaceID: "w3", Label: "agentisan · qa"}},
+			want: []herdr.WorkspaceInfo{{WorkspaceID: "w1", Label: "★  coders "}, {WorkspaceID: "w2"}, {WorkspaceID: "w3", Label: "agentisan · qa"}},
 		},
 	}
 	for name, tc := range tests {
@@ -179,7 +179,7 @@ func TestWorkspaceCallFailureClasses(t *testing.T) {
 		"list: wrong result type":             {handler: reply(map[string]any{"type": "pane_list", "panes": []any{}}), call: list, want: herdr.ErrProtocol},
 		"list: workspaces missing":            {handler: reply(map[string]any{"type": "workspace_list"}), call: list, want: herdr.ErrProtocol},
 		"list: workspaces is not an array":    {handler: reply(map[string]any{"type": "workspace_list", "workspaces": "w1"}), call: list, want: herdr.ErrProtocol},
-		"list: a workspace without an id":     {handler: reply(map[string]any{"type": "workspace_list", "workspaces": []map[string]any{{"label": "◆ qa"}}}), call: list, want: herdr.ErrProtocol},
+		"list: a workspace without an id":     {handler: reply(map[string]any{"type": "workspace_list", "workspaces": []map[string]any{{"label": "★ qa"}}}), call: list, want: herdr.ErrProtocol},
 		"list: a label that is not a string":  {handler: reply(map[string]any{"type": "workspace_list", "workspaces": []map[string]any{{"workspace_id": "w1", "label": 7}}}), call: list, want: herdr.ErrProtocol},
 		"list: closed without a reply":        {handler: silent, call: list, want: herdr.ErrUnavailable},
 		"tabs: wrong result type":             {handler: reply(map[string]any{"type": "workspace_list", "workspaces": []any{}}), call: tabs, want: herdr.ErrProtocol},

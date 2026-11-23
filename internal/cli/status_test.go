@@ -2,7 +2,9 @@ package cli_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"net"
 	"os"
@@ -21,6 +23,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/dashboard"
 	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
 	"github.com/abanna/herdr-agentisan/internal/plugin"
+	"github.com/abanna/herdr-agentisan/internal/store"
 )
 
 // statusSnapshot is a team whose line is "PRs #886✓ · slots 1/2 · issues 4".
@@ -30,7 +33,7 @@ const statusSnapshot = `{"ok":true,"data":{"v":1,"at":"2026-10-21T06:00:00Z","te
 // server in HERDR_SOCKET_PATH for one team's snapshot and prints its line,
 // one line, exit 0 (A41). The team is --project's or --workspace's, else
 // the focused workspace's, which herdr gives a tab-bar command as
-// HERDR_ACTIVE_WORKSPACE_ID, else the ◆ spaces'. It never calls herdr.
+// HERDR_ACTIVE_WORKSPACE_ID. It never calls herdr.
 func TestStatusLineAsksForTheTeam(t *testing.T) {
 	t.Parallel()
 	tests := map[string]struct {
@@ -101,6 +104,63 @@ func TestStatusLineAsksForTheTeam(t *testing.T) {
 			assert.JSONEq(t, tc.asked, string(req.Args))
 			assert.Zero(t, herdrCalls.Load(), "the line comes from the daemon's cache, never from herdr")
 		})
+	}
+}
+
+func TestStatusLineOutsideEveryTeamIsEmpty(t *testing.T) {
+	t.Parallel()
+	e := newDaemonEnvWith(t, func(r herdrtest.Request) herdrtest.Reply {
+		var result map[string]any
+		switch r.Method {
+		case "workspace.list":
+			result = map[string]any{"type": "workspace_list", "workspaces": []map[string]string{
+				{"workspace_id": "w1", "label": "◆ coders"},
+			}}
+		case "pane.list":
+			result = map[string]any{"type": "pane_list", "panes": []map[string]string{}}
+		case "agent.list":
+			result = map[string]any{"type": "agent_list", "agents": []map[string]string{}}
+		default:
+			result = map[string]any{"type": "pong", "version": "0.9.3", "protocol": 22}
+		}
+		return herdrtest.Reply{Result: result}
+	})
+	paths, err := daemon.PathsFor(e.stateDir, e.herdrSock)
+	require.NoError(t, err)
+	require.NoError(t, os.MkdirAll(paths.Dir, 0o700))
+	st, err := store.Open(t.Context(), paths.DB)
+	require.NoError(t, err)
+	// An unread post makes a snapshot for the old workspace visible.
+	_, err = st.Post(t.Context(), store.BoardPost{
+		Channel: store.ChannelTeam, Author: store.Address{Kind: store.KindPane, ID: "term"},
+		Kind: "post", Body: "old post", At: time.Now(),
+	})
+	require.NoError(t, st.Close())
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- daemon.Run(ctx, daemon.Options{StateDir: e.stateDir, HerdrSocket: e.herdrSock, Team: &daemon.TeamOptions{}})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case err := <-done:
+			assert.NoError(t, err)
+		case <-time.After(ready):
+			t.Error("daemon did not stop")
+		}
+	})
+	require.Eventually(t, func() bool {
+		_, err := daemon.SnapshotOf(t.Context(), paths.Socket, daemon.Selector{Project: "unknown"})
+		return errors.Is(err, daemon.ErrNoTeam)
+	}, ready, 10*time.Millisecond)
+
+	for _, focus := range []string{"", "w1"} {
+		stdout, stderr, err := runOut(t, e.lookup(map[string]string{"HERDR_ACTIVE_WORKSPACE_ID": focus}), "status", "line")
+		require.NoError(t, err, stderr)
+		assert.Equal(t, "\n", stdout, "workspace %q", focus)
 	}
 }
 

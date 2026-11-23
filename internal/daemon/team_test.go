@@ -66,13 +66,6 @@ func newTeamHerdr(t *testing.T) *teamHerdr {
 	return startTeamHerdr(t, workspaces, tabs, panes)
 }
 
-// newSpacesHerdr serves liveSpaces, for the tests of the ◆ spaces alone.
-func newSpacesHerdr(t *testing.T) *teamHerdr {
-	t.Helper()
-	workspaces, panes := liveSpaces()
-	return startTeamHerdr(t, workspaces, []map[string]any{}, panes)
-}
-
 func startTeamHerdr(t *testing.T, workspaces []herdr.WorkspaceInfo, tabs, panes []map[string]any) *teamHerdr {
 	t.Helper()
 	th := &teamHerdr{
@@ -311,11 +304,8 @@ func liveConfig(t *testing.T, extra string) string {
 	return configDir(t, liveTOML+extra)
 }
 
-// liveTabs is liveSpaces as a tabs team (A19): the live project's workspace
-// with the boss's tab, a tab for each of four coders, the fourth a shell, a
-// qa's, and a tab outside the model, and a plain workspace. The pane ids
-// are liveSpaces', which ids are opaque to the daemon: only their
-// workspace and tab moved.
+// liveTabs lays out the team's workspace, its boss, worker and notes tabs,
+// and a plain workspace outside the team.
 func liveTabs() ([]herdr.WorkspaceInfo, []map[string]any, []map[string]any) {
 	ws := []herdr.WorkspaceInfo{
 		{WorkspaceID: liveWorkspace, Label: liveProject},
@@ -356,40 +346,6 @@ func liveTabs() ([]herdr.WorkspaceInfo, []map[string]any, []map[string]any) {
 	return ws, tabs, panes
 }
 
-// liveSpaces is the live layout of 2026-10-10, trimmed: the boss space, three
-// group spaces (one empty), the ignored edit shell, and a plain workspace.
-func liveSpaces() ([]herdr.WorkspaceInfo, []map[string]any) {
-	ws := []herdr.WorkspaceInfo{
-		{WorkspaceID: "wJ", Label: "◆ boss"},
-		{WorkspaceID: "wN", Label: "◆ coders"},
-		{WorkspaceID: "wY", Label: "◆ qa"},
-		{WorkspaceID: "w0", Label: "◆ research"},
-		{WorkspaceID: "w12", Label: "◆ herdr"},
-		{WorkspaceID: "w2", Label: "notes"},
-	}
-	pane := func(id, ws, agent, status string, tokens map[string]string) map[string]any {
-		p := map[string]any{"pane_id": id, "terminal_id": "term_" + id, "workspace_id": ws, "agent": agent, "agent_status": status, "focused": false}
-		if agent == "" {
-			p["agent"] = nil
-		}
-		if tokens != nil {
-			p["tokens"] = tokens
-		}
-		return p
-	}
-	panes := []map[string]any{
-		pane("wJ:p1", "wJ", "claude", "working", nil),
-		pane("wN:p1", "wN", "claude", "working", map[string]string{"ctx": "40"}),
-		pane("wN:p2", "wN", "claude", "done", map[string]string{"handoff": "⟳ READY TO RESTART"}),
-		pane("wN:p3", "wN", "claude", "blocked", nil),
-		pane("wN:p4", "wN", "", "unknown", nil),
-		pane("wY:p1", "wY", "codex", "idle", nil),
-		pane("w12:p1", "w12", "", "unknown", nil),
-		pane("w2:p1", "w2", "claude", "working", nil),
-	}
-	return ws, panes
-}
-
 // wantPushes are the exact params liveTabs' team workspace receives, every
 // poll: the $team of its worker tabs, the boss's and the tab outside the
 // model left out, source agentisan, TTL 9000 ms, and no other token. Written
@@ -398,35 +354,6 @@ func liveSpaces() ([]herdr.WorkspaceInfo, []map[string]any) {
 // the code.
 var wantPushes = map[string]string{
 	liveWorkspace: `{"workspace_id":"wT","source":"agentisan","tokens":{"team":"5 agents \u00b7 1 working \u00b7 1 ready \u00b7 1 blocked"},"ttl_ms":9000}`,
-}
-
-// wantSpacesPushes are the exact params each group space of liveSpaces
-// receives, every poll, as wantPushes are.
-var wantSpacesPushes = map[string]string{
-	"wN": `{"workspace_id":"wN","source":"agentisan","tokens":{"team":"4 agents \u00b7 1 working \u00b7 1 ready \u00b7 1 blocked"},"ttl_ms":9000}`,
-	"wY": `{"workspace_id":"wY","source":"agentisan","tokens":{"team":"1 agent \u00b7 0 working \u00b7 0 ready"},"ttl_ms":9000}`,
-	"w0": `{"workspace_id":"w0","source":"agentisan","tokens":{"team":"0 agents \u00b7 0 working \u00b7 0 ready"},"ttl_ms":9000}`,
-}
-
-// TestRunPushesTeamToEachGroupSpace is D4's $team on the spaces layout: on
-// every poll, each ◆ group space receives its exact string as a workspace
-// token, source agentisan, TTL 9000 ms. ◆ boss, ◆ herdr and workspaces
-// without the prefix receive nothing.
-func TestRunPushesTeamToEachGroupSpace(t *testing.T) {
-	t.Parallel()
-	th := newSpacesHerdr(t)
-	dir := shortDir(t)
-	serving(t, teamOpts(t, dir, th, ""), th.fakeHerdr)
-
-	polled(t, th.srv, 2)
-	got := pushes(t, th.srv)
-	assert.ElementsMatch(t, []string{"wN", "wY", "w0"}, slices.Collect(maps.Keys(got)), "only the group spaces receive $team")
-	for ws, params := range got {
-		assert.GreaterOrEqual(t, len(params), 2, "%s is pushed on every poll, renewing its TTL", ws)
-		for _, p := range params {
-			assert.JSONEq(t, wantSpacesPushes[ws], p)
-		}
-	}
 }
 
 // ctxPush is the exact params of the ctx display push to pane: value in the
@@ -714,7 +641,7 @@ func TestTeamPushIgnoresAServerReplacedMidPoll(t *testing.T) {
 			replacement.Settle(t)
 			assert.Empty(t, replacement.Requests(), "the replacement is never asked anything, above all no push")
 			if tc.models {
-				_, err := daemon.Snapshot(t.Context(), socketPath(t, dir, th.path))
+				_, err := daemon.SnapshotOf(t.Context(), socketPath(t, dir, th.path), daemon.Selector{Project: liveProject})
 				require.ErrorIs(t, err, daemon.ErrNotReady, "no snapshot is cached from a poll the swap ended")
 			}
 			assert.True(t, r.alive(), "the poll stops; Run's own check ends the daemon")
@@ -798,38 +725,14 @@ func TestTeamPushSurvivesAFailingPush(t *testing.T) {
 	assert.True(t, r.alive())
 }
 
-// TestTeamPushFollowsARelabel: the model is rebuilt every poll, so a space
-// renamed away from ◆ stops receiving $team (the TTL clears what it has),
-// and a workspace renamed to a group space starts.
-func TestTeamPushFollowsARelabel(t *testing.T) {
-	t.Parallel()
-	th := newSpacesHerdr(t)
-	serving(t, teamOpts(t, shortDir(t), th, ""), th.fakeHerdr)
-	polled(t, th.srv, 1)
-
-	th.relabel("wN", "coders")
-	th.relabel("w2", "◆ docs")
-	polled(t, th.srv, 1) // a poll in flight may have listed the old labels
-	before := pushes(t, th.srv)
-	polled(t, th.srv, 2)
-	after := pushes(t, th.srv)
-
-	assert.Equal(t, before["wN"], after["wN"], "a space renamed away from ◆ is no longer pushed")
-	assert.Greater(t, len(after["w2"]), len(before["w2"]), "a workspace renamed into a group space is pushed")
-	for _, p := range after["w2"] {
-		assert.JSONEq(t, `{"workspace_id":"w2","source":"agentisan","tokens":{"team":"1 agent · 1 working · 0 ready"},"ttl_ms":9000}`, p)
-	}
-}
-
 // TestTeamPollLogsAConfigThatDoesNotResolve checks that a startup config
-// error explains why the configured teams are absent and the unnamed spaces
-// still get their pushes.
+// error explains why no teams are served.
 func TestTeamPollLogsAConfigThatDoesNotResolve(t *testing.T) {
 	t.Parallel()
 
 	const schema = "schema_version = 1\n"
 	const tabs = "[projects.app]\nrepo = \"/x\"\nshort = \"ap\"\n"
-	const retired = "the ◆ spaces are retired (NERD-5670). Remove this entry. Every team is a tabs team"
+	const retired = "the spaces layout is retired (NERD-5670). Remove this entry. Every team is a tabs team"
 	for name, tc := range map[string]struct {
 		file   string
 		reason string
@@ -851,7 +754,7 @@ func TestTeamPollLogsAConfigThatDoesNotResolve(t *testing.T) {
 			reason: retired,
 		},
 		"non-ASCII project": {
-			file:   schema + "[projects.\"ä\"]\nrepo = \"/x\"\nshort = \"ap\"\n",
+			file:   schema + tabs + "[projects.\"ä\"]\nrepo = \"/x\"\nshort = \"xx\"\n",
 			reason: "a project name must match",
 		},
 	} {
@@ -860,21 +763,24 @@ func TestTeamPollLogsAConfigThatDoesNotResolve(t *testing.T) {
 
 			config := t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(config, settings.FileName), []byte(tc.file), 0o600))
-			th := newSpacesHerdr(t)
+			th := newTeamHerdr(t)
+			th.relabel(liveWorkspace, "app")
 			var logs lockedLog
 			opts := teamOpts(t, shortDir(t), th, config)
 			opts.Logger = zerolog.New(&logs)
 			serving(t, opts, th.fakeHerdr)
 
 			polled(t, th.srv, 1)
-			assert.Len(t, pushes(t, th.srv), 3, "the unnamed spaces still receive their pushes")
+			assert.Empty(t, pushes(t, th.srv))
+			_, code := snapshotOp(t, socketPath(t, opts.StateDir, th.path), `{"workspace_id":"wT"}`)
+			assert.Equal(t, "no_team", code)
 
 			var entry struct {
 				Level string `json:"level"`
 				Error string `json:"error"`
 			}
 			for line := range strings.SplitSeq(logs.String(), "\n") {
-				if strings.Contains(line, "herdr-agentisan.toml does not resolve; the ◆ spaces belong to the unnamed project") {
+				if strings.Contains(line, "team poll: herdr-agentisan.toml does not resolve") {
 					require.NoError(t, json.Unmarshal([]byte(line), &entry))
 					break
 				}
@@ -993,12 +899,11 @@ func TestTeamPollCostsAFailedTabList(t *testing.T) {
 	assert.True(t, r.alive())
 }
 
-// TestTeamPollListsNoTabsWithoutATabsTeam: with no tabs team configured the
-// poll never sends tab.list, so a herdr whose tab.list fails cannot cost the
-// spaces' poll.
+// TestTeamPollListsNoTabsWithoutATabsTeam: with no configured teams the
+// poll skips tab.list even when herdr has tabs.
 func TestTeamPollListsNoTabsWithoutATabsTeam(t *testing.T) {
 	t.Parallel()
-	th := newSpacesHerdr(t)
+	th := newTeamHerdr(t)
 	serving(t, teamOpts(t, shortDir(t), th, ""), th.fakeHerdr)
 	polled(t, th.srv, 2)
 	for _, r := range th.srv.Requests() {

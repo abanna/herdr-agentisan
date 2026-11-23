@@ -212,22 +212,6 @@ func TestCtxThresholdsFromTheRepoFile(t *testing.T) {
 	}
 }
 
-// TestCtxThresholdsWhenTheFileDoesNotResolve: a configuration that does
-// not resolve is logged, and every team gets the default thresholds.
-func TestCtxThresholdsWhenTheFileDoesNotResolve(t *testing.T) {
-	t.Parallel()
-	cfg := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(cfg, settings.FileName), []byte("schema_version = 1\n[rotation]\nthresholds = [1, 2]\n"), 0o600))
-	th := newSpacesHerdr(t)
-	th.setAgents(named("wN:p1", "pee01"))
-	th.setToken("wN:p1", "ctx", "56")
-	var logs lockedLog
-	ctxRun(t, teamOpts(t, shortDir(t), th, cfg), &logs)
-
-	waitLine(t, &logs, "pee01 is at 56% context (soft: 55%)")
-	assert.Contains(t, logs.String(), "every team gets the default rotation thresholds")
-}
-
 // TestCtxLevelsAfterARestart: a restarted daemon remembers no level, so it
 // tells the boss once more about a worker past one.
 func TestCtxLevelsAfterARestart(t *testing.T) {

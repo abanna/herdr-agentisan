@@ -62,7 +62,7 @@ Each event has these fields:
 | `attributes.agentisan.status.to` | The same set, `absent` for a pane that left |
 | `attributes.agentisan.group` | The group, such as `coder`; empty for the boss |
 | `attributes.agentisan.role` | `boss` or `worker` |
-| `attributes.agentisan.project` | The project; empty is the unnamed project |
+| `attributes.agentisan.project` | The project. Older events can carry an empty value |
 | `attributes.agentisan.agent` | `claude`, `codex`, or empty for a shell |
 | `resource.attributes.service.version` | The daemon's version |
 | `resource.attributes.service.commit` | The daemon's commit |

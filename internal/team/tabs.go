@@ -22,6 +22,9 @@ var typePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 // ordinalPattern is a worker's number: from 1, without a leading zero.
 var ordinalPattern = regexp.MustCompile(`^[1-9][0-9]*$`)
 
+// BossGroup identifies the boss tab, whose panes are the boss's.
+const BossGroup = "boss"
+
 // Tabs is the resolver for one team in the team model (ADR-001 A19): the
 // workspace labelled exactly with the project's name, holding one tab per
 // worker, labelled <short>-<type>-<n>, and the boss's tab, <short>-boss. A

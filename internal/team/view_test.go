@@ -48,30 +48,6 @@ func viewLayout() (team.Layout, team.Resolvers) {
 	return l, team.Resolvers{team.Tabs{Project: "herdr-agentisan", Short: "ha"}, team.Tabs{Project: "assay", Short: "as"}}
 }
 
-// spacesViewLayout is viewLayout beside the ◆ spaces, for the tests of the
-// ◆ spaces alone: a group the spaces' order does not name (zeta) and the ◆
-// herdr edit shell among them.
-func spacesViewLayout() (team.Layout, team.Resolvers) {
-	l, r := viewLayout()
-	pane := func(id, ws, agent, status string) herdr.PaneInfo {
-		return herdr.PaneInfo{PaneID: id, WorkspaceID: ws, Agent: agent, AgentStatus: status}
-	}
-	l.Workspaces = append([]herdr.WorkspaceInfo{
-		{WorkspaceID: "wJ", Label: "◆ boss"},
-		{WorkspaceID: "wN", Label: "◆ coders"},
-		{WorkspaceID: "wY", Label: "◆ qa"},
-		{WorkspaceID: "wZ", Label: "◆ zeta"},
-		{WorkspaceID: "w12", Label: "◆ herdr"},
-	}, l.Workspaces...)
-	l.Panes = append([]herdr.PaneInfo{
-		pane("wJ:p1", "wJ", "claude", "working"),
-		pane("wN:p1", "wN", "claude", "working"), pane("wN:p2", "wN", "", "unknown"), pane("wN:p3", "wN", "claude", "blocked"),
-		pane("wY:p1", "wY", "codex", "idle"), pane("wZ:p1", "wZ", "claude", "idle"),
-		pane("w12:p1", "w12", "claude", "idle"),
-	}, l.Panes...)
-	return l, append(team.Resolvers{team.Spaces{Project: "agentisan"}}, r...)
-}
-
 // blockedOr is the filter of a team holding workspaces: those workspaces,
 // or any pane that is blocked.
 func blockedOr(workspaces ...[]string) *herdr.ViewFilter {
@@ -124,42 +100,13 @@ func TestView(t *testing.T) {
 	assert.False(t, ok, "no team, no view")
 }
 
-// TestSpacesView is TestView on the ◆ spaces: every space the team holds,
-// ◆ boss and the ◆ herdr edit shell included, one whose group the order
-// leaves out too, has the spaces' view, under order-spaces.
-func TestSpacesView(t *testing.T) {
-	t.Parallel()
-	l, r := spacesViewLayout()
-	m := team.Build(l, r, nil)
-
-	spaces := herdr.AgentView{
-		Label:  "agentisan",
-		Filter: blockedOr([]string{"w12", "wJ", "wN", "wY", "wZ"}),
-		Sort:   []herdr.ViewSort{herdr.ByToken("order-spaces")},
-	}
-	for name, workspace := range map[string]string{
-		"a group space":                "wN",
-		"the boss space":               "wJ",
-		"the edit shell is the team's": "w12",
-		"a group the order leaves out": "wZ",
-	} {
-		got, ok := team.View(m, workspace)
-		assert.True(t, ok, name)
-		assert.Equal(t, spaces, got, name)
-	}
-}
-
-// TestViewLabel: the spaces of a configuration that names no [spaces]
-// project are labelled ◆ spaces, and a project's name longer than herdr's
-// 32 characters is cut to 31 and an ellipsis, since herdr refuses a longer
-// label and keeps the view it had (src/app/agent_view.rs:193-205).
+// TestViewLabel checks truncation to herdr's 32-character limit.
 func TestViewLabel(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
 		name, want string
 	}{
-		"the unnamed spaces":    {name: "", want: "◆ spaces"},
 		"a short name":          {name: "assay", want: "assay"},
 		"exactly 32 characters": {name: strings.Repeat("a", 32), want: strings.Repeat("a", 32)},
 		"33 characters":         {name: strings.Repeat("b", 33), want: strings.Repeat("b", 31) + "…"},
@@ -211,10 +158,8 @@ func TestViewSplitsWorkspacesByHerdrsLimit(t *testing.T) {
 	}
 }
 
-// TestOrderKey: a tabs team's key carries its short code, the spaces' a
-// dash no short code can, so the two never collide, and every key is a
-// token name herdr takes (src/app/agent_view.rs:18, at most 32 of
-// [A-Za-z0-9_-]).
+// TestOrderKey checks that the team's short code produces a valid
+// herdr token name.
 func TestOrderKey(t *testing.T) {
 	t.Parallel()
 	tokenName := regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
@@ -225,8 +170,6 @@ func TestOrderKey(t *testing.T) {
 	}{
 		"a tabs team":                       {project: team.Project{Name: "herdr-agentisan", Short: "ha"}, want: "order_ha"},
 		"the longest short code":            {project: team.Project{Name: "x", Short: "abcdefgh"}, want: "order_abcdefgh"},
-		"the spaces":                        {project: team.Project{Name: "agentisan"}, want: "order-spaces"},
-		"the unnamed spaces":                {project: team.Project{}, want: "order-spaces"},
 		"a tabs team whose short is spaces": {project: team.Project{Name: "s", Short: "spaces"}, want: "order_spaces"},
 	}
 	for name, tc := range tests {
@@ -261,40 +204,6 @@ func TestSidebarTokens(t *testing.T) {
 		return out
 	}
 	assert.Equal(t, map[string]map[string]string{
-		"w14:p1": with("order_ha", "000"),
-		"w14:p2": with("order_ha", "001"),
-		"w14:p4": with("order_ha", "002"),
-		"w14:p3": with("order_ha", "003"),
-		"w2:p1":  ctx,
-	}, got)
-}
-
-// TestSpacesSidebarTokens is TestSidebarTokens beside the ◆ spaces: the spaces' boss first, then
-// their groups in v12's order, a group it leaves out (zeta) last, under
-// order-spaces; a shell and the ◆ herdr edit shell's agent get no key; the
-// tabs teams' places are unchanged.
-func TestSpacesSidebarTokens(t *testing.T) {
-	t.Parallel()
-	l, r := spacesViewLayout()
-	m := team.Build(l, r, nil)
-
-	got := map[string]map[string]string{}
-	for _, pt := range team.SidebarTokens(m, l, nil, time.Time{}) {
-		got[pt.PaneID] = pt.Tokens
-	}
-	ctx := map[string]string{"ctx_ok": "ctx  --", "ctx_warn": "", "ctx_hot": "", "stage_now": "", "stage_old": ""}
-	with := func(key, value string) map[string]string {
-		out := map[string]string{key: value}
-		maps.Copy(out, ctx)
-		return out
-	}
-	assert.Equal(t, map[string]map[string]string{
-		"wJ:p1":  with("order-spaces", "000"),
-		"wN:p1":  with("order-spaces", "001"),
-		"wN:p3":  with("order-spaces", "002"),
-		"wY:p1":  with("order-spaces", "003"),
-		"wZ:p1":  with("order-spaces", "004"),
-		"w12:p1": ctx,
 		"w14:p1": with("order_ha", "000"),
 		"w14:p2": with("order_ha", "001"),
 		"w14:p4": with("order_ha", "002"),

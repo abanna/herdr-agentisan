@@ -96,39 +96,33 @@ func TestSendFindsTheSenderAndTheRecipient(t *testing.T) {
 	}
 }
 
-// TestSendOnTheSpaces is TestSendFindsTheSenderAndTheRecipient on the ◆
-// spaces: ◆ boss sends as the spaces' boss, boss, and boss from it or from
-// a ◆ space reaches it; ◆ boss reaches a tabs team's boss by name.
-func TestSendOnTheSpaces(t *testing.T) {
+func TestAPaneInAFormerBossSpaceSendsAsAPane(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, teamConfig)
-	spacesBoss := f.h.addTab(f.h.addWorkspace("◆ boss"), "1", "claude", "working")
-	spacesCoder := f.h.addTab(f.h.addWorkspace("◆ coders"), "1", "claude", "idle")
-	haBoss := workforce.Party{Kind: store.KindBoss, ID: "ha-boss"}
-	spaces := workforce.Party{Kind: store.KindBoss, ID: "boss"}
-	tests := map[string]struct {
-		req      workforce.SendRequest
-		from, to workforce.Party
-	}{
-		"◆ boss, to boss":                {workforce.SendRequest{To: "boss", CallerPane: spacesBoss}, spaces, spaces},
-		"a ◆ space's pane, to boss":      {workforce.SendRequest{To: "boss", CallerPane: spacesCoder}, workforce.Party{Kind: store.KindPane, ID: f.terminal(t, spacesCoder)}, spaces},
-		"◆ boss, to another team's boss": {workforce.SendRequest{To: "ha-boss", CallerPane: spacesBoss}, spaces, haBoss},
+	pane := f.h.addTab(f.h.addWorkspace("◆ boss"), "1", "claude", "working")
+	got, err := f.svc.Send(t.Context(), workforce.SendRequest{To: "ha-boss", Body: "hi", CallerPane: pane})
+	require.NoError(t, err)
+	from := workforce.Party{Kind: store.KindPane, ID: f.terminal(t, pane)}
+	assert.Equal(t, from, got.From)
+	assert.Equal(t, workforce.Party{Kind: store.KindBoss, ID: "ha-boss"}, got.To)
+	msg, err := f.st.Message(t.Context(), got.ID)
+	require.NoError(t, err)
+	assert.Equal(t, store.Address(from), msg.From)
+}
+
+func TestSendBossFromAFormerSpaceIsRefused(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	f.h.addTab(f.h.addWorkspace("◆ boss"), "1", "claude", "working")
+	coder := f.h.addTab(f.h.addWorkspace("◆ coders"), "1", "", "")
+	outside := f.h.addTab(f.h.addWorkspace("notes"), "1", "", "")
+	for _, pane := range []string{coder, outside} {
+		_, err := f.svc.Send(t.Context(), workforce.SendRequest{To: "boss", Body: "hi", CallerPane: pane})
+		assert.ErrorIs(t, err, workforce.ErrUnknownRecipient, "caller %s", pane)
 	}
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			tc.req.Body = "hello"
-			got, err := f.svc.Send(t.Context(), tc.req)
-			require.NoError(t, err)
-			assert.Equal(t, tc.from, got.From)
-			assert.Equal(t, tc.to, got.To)
-			assert.Equal(t, store.MessageQueued, got.State)
-			m, err := f.st.Message(t.Context(), got.ID)
-			require.NoError(t, err)
-			assert.Equal(t, store.Address(tc.from), m.From)
-			assert.Equal(t, store.Address(tc.to), m.To)
-			assert.Equal(t, "hello", m.Body)
-		})
-	}
+	ids, err := f.st.QueuedRecipients(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, ids)
 }
 
 // TestSendFromTheDashboardIsAPane is the cutover's F2 in send: the team's
@@ -161,25 +155,6 @@ func TestSendKnowsAWorkerByItsTerminal(t *testing.T) {
 	got, err := f.svc.Send(t.Context(), workforce.SendRequest{To: "boss", Body: "hi", CallerPane: "w10:p77"})
 	require.NoError(t, err)
 	assert.Equal(t, workforce.Party{Kind: store.KindWorker, ID: "ha-coder-1"}, got.From)
-}
-
-// TestSendFindsTheSpacesWithNoSpacesProject: with no [spaces] project, the
-// ◆ spaces still are the unnamed project's, as the team poll resolves them,
-// so ◆ boss sends as the boss the dispatcher types to, boss, and boss from a
-// ◆ space reaches it.
-func TestSendFindsTheSpacesWithNoSpacesProject(t *testing.T) {
-	t.Parallel()
-	f := newFixture(t, teamConfig)
-	spacesBoss := f.h.addTab(f.h.addWorkspace("◆ boss"), "1", "claude", "working")
-	spacesCoder := f.h.addTab(f.h.addWorkspace("◆ coders"), "1", "claude", "idle")
-	boss := workforce.Party{Kind: store.KindBoss, ID: "boss"}
-
-	got, err := f.svc.Send(t.Context(), workforce.SendRequest{To: "ha-boss", Body: "hi", CallerPane: spacesBoss})
-	require.NoError(t, err)
-	assert.Equal(t, boss, got.From)
-	got, err = f.svc.Send(t.Context(), workforce.SendRequest{To: "boss", Body: "hi", CallerPane: spacesCoder})
-	require.NoError(t, err)
-	assert.Equal(t, boss, got.To)
 }
 
 // TestSendNeverMatchesAnEmptyTerminal: a pane herdr lists with no terminal

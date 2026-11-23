@@ -79,7 +79,7 @@ func TestBoardPostAndRead(t *testing.T) {
 	assert.Equal(t, 1, web.Unread, "another project's board is untouched")
 	empty, err := s.BoardStatus(t.Context(), "", store.ReaderUser)
 	require.NoError(t, err)
-	assert.Equal(t, store.BoardState{}, empty, "the unnamed project's board, empty")
+	assert.Equal(t, store.BoardState{}, empty, "an empty project with no posts")
 }
 
 // TestBoardLatest (A60): the panel's read is the newest posts, newest

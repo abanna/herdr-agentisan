@@ -2,12 +2,8 @@
 // project → group → logical worker → current pane, rebuilt from herdr and
 // state.db on every poll, and the `$team` token derived from it (D4).
 //
-// The tree does not depend on the layout. A Resolver maps herdr's layout onto
-// it: which panes belong to which project and group, which are the boss's,
-// and where each group's derived tokens go. Spaces resolves the ◆ group
-// spaces (A17); Tabs resolves the team model's one workspace per team and one
-// tab per worker (A19). The daemon runs one of each layout's resolvers per
-// configured project, joined with Resolvers.
+// Tabs maps herdr workspaces and tabs onto the model, one workspace per
+// project and one tab per worker (A19). Resolvers joins the configured teams.
 //
 // The model holds nothing between polls. Build is a function of herdr's
 // answers and the workers rows alone, so a restarted daemon rebuilds the same
@@ -57,30 +53,21 @@ type Model struct {
 	Projects []Project
 }
 
-// Project is one project's team. Name is the configured project's name; ""
-// is the unnamed project, which the spaces belong to when the configuration
-// names none.
+// Project is one configured project's team.
 type Project struct {
 	Name string
-	// Short is a tabs team's short code, which starts its tab labels; ""
-	// for the spaces.
+	// Short is the team's short code, which starts its tab labels.
 	Short string
 	// Color is the project's configured colour as #rrggbb; "" when unset.
 	Color string
-	// Workspaces are the ids of the workspaces the team occupies, sorted,
-	// whether or not any worker is there yet: a tabs team's workspace, or
-	// every ◆ space, ◆ boss and ◆ herdr included.
+	// Workspaces holds the team's workspace id, even before workers join.
 	Workspaces []string
 	// Order is the order the project's groups are shown in. Groups it does
 	// not name follow by name.
 	Order []string
-	// Target is where the team's `$team` goes when the layout gives the
-	// whole team one place, a tabs team's workspace, so a team with no
-	// worker yet still has a count there; zero for the spaces, whose
-	// groups each have their own.
+	// Target is where the team publishes its `$team`, even without workers.
 	Target Target
-	// Boss holds the panes in the boss's place: the ◆ boss space, or a tabs
-	// team's <short>-boss tab.
+	// Boss holds the boss's panes in the team's <short>-boss tab.
 	Boss   []Worker
 	Groups []Group
 }
@@ -89,17 +76,13 @@ type Project struct {
 // project.
 type Group struct {
 	Name string
-	// Targets are where the group's derived tokens go, sorted. A group has
-	// one, or more when the layout puts it in several places, such as two
-	// spaces with the same label.
+	// Targets holds the group's workspace targets in order.
 	Targets []Target
 	// Workers are sorted by target, then pane id.
 	Workers []Worker
 }
 
-// Target is where a group's derived tokens go. The spaces resolver targets a
-// workspace; a resolver that targets something else adds a field here, and
-// the daemon learns to report to it.
+// Target identifies the workspace that receives derived tokens.
 type Target struct {
 	WorkspaceID string
 }
@@ -210,10 +193,8 @@ type Resolver interface {
 	Resolve(l Layout) Resolution
 }
 
-// Resolvers resolves with each resolver in turn. The daemon runs one per
-// configured team; their layouts never claim the same workspace, since a
-// tabs team's label is a project name and a space's starts with ◆.
-type Resolvers []Resolver
+// Resolvers resolves each configured team by its project name.
+type Resolvers []Tabs
 
 // Resolve joins every resolver's sites and places.
 func (rs Resolvers) Resolve(l Layout) Resolution {
@@ -232,7 +213,7 @@ func (rs Resolvers) Resolve(l Layout) Resolution {
 // binds the pane herdr lists with its terminal, never the pane at its pane
 // id, which herdr can reissue (A35); a lost row, or one with no terminal,
 // binds none. The join gives ids only; where a worker sits is the
-// resolver's, so a bound pane moved into another group's space is counted
+// resolver's, so a bound pane moved into another group's tab is counted
 // where it is. A row whose terminal herdr no longer lists has no current
 // pane and is not in the model. When two rows bind one terminal, the lowest
 // logical id takes it.

@@ -236,7 +236,7 @@ func TestRequestLines(t *testing.T) {
 		"a CRLF line":                     {send: ping + "\r\n", want: []string{"1 ping"}},
 		"two lines, the first read":       {send: ping + "\n" + `{"id":"2","method":"pane.list"}` + "\n", want: []string{"1 ping"}},
 		"a 1 MiB line":                    {send: `{"id":"1","method":"ping","params":{"pad":"` + strings.Repeat("x", 1<<20) + `"}}` + "\n", want: []string{"1 ping"}},
-		"a non-ASCII method":              {send: `{"id":"1","method":"◆ ping"}` + "\n", want: []string{"1 ◆ ping"}},
+		"a non-ASCII method":              {send: `{"id":"1","method":"★ ping"}` + "\n", want: []string{"1 ★ ping"}},
 		"params at the depth limit":       {send: nested(9999) + "\n", want: []string{"1 ping"}},
 		"params one past the depth limit": {send: nested(10000) + "\n"},
 		"invalid UTF-8 in a string":       {send: "{\"id\":\"1\",\"method\":\"p\xffing\"}\n", want: []string{"1 p\ufffding"}},

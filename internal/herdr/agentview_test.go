@@ -44,8 +44,8 @@ func TestSetAgentViewSendsTheSchemaShape(t *testing.T) {
 			want: `{"source":"plugin:nerdsrun.agentisan"}`,
 		},
 		"a label herdr counts as one character a glyph": {
-			view: herdr.AgentView{Source: "s", Label: "◆ spaces"},
-			want: `{"source":"s","label":"◆ spaces"}`,
+			view: herdr.AgentView{Source: "s", Label: "★ ops"},
+			want: `{"source":"s","label":"★ ops"}`,
 		},
 	}
 	for name, tc := range tests {

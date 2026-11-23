@@ -37,7 +37,7 @@ var (
 	ErrNotReady = errors.New("the daemon is not ready yet")
 	// ErrNoTeam means the team model holds no team the snapshot op was
 	// asked for: no project of that name, no team that workspace belongs
-	// to, or, asked for neither, no ◆ space (A24). A daemon refusal with
+	// to, or a request with neither selector (NERD-5670). A refusal with
 	// code no_team matches it.
 	ErrNoTeam = errors.New("no such team")
 	// ErrSnapshotTooLarge means a snapshot would not fit one answer line, so
@@ -47,8 +47,7 @@ var (
 
 // Selector picks the team the snapshot op answers with (ADR-001 A24): the
 // project Project names, else the team whose workspaces include
-// WorkspaceID, else the ◆ spaces' project. The daemon does the mapping, so
-// a dashboard holds no team logic of its own.
+// WorkspaceID. An empty selector matches no team (NERD-5670).
 type Selector struct {
 	Project     string `json:"project,omitempty"`
 	WorkspaceID string `json:"workspace_id,omitempty"`
@@ -63,8 +62,6 @@ type teams struct {
 	snaps map[string]json.RawMessage
 	// teamOf is the project each team workspace belongs to.
 	teamOf map[string]string
-	// spaces is the ◆ spaces' project, which an op selecting nothing gets.
-	spaces string
 }
 
 // snapshotCache is the snapshot op's state: the last poll's teams, each
@@ -76,15 +73,14 @@ type snapshotCache struct {
 
 // store serves every team in m from now on, each snapshot built at at with
 // clock and idle (A37) and then given to fill, when set, with its project
-// (the GitHub header, A29), and spaces to an op that selects nothing. A team
-// whose snapshot would not fit one answer line keeps its last one, and the
-// others are unaffected: the error is ErrSnapshotTooLarge, naming each such
-// team. A team gone from m is gone from the op.
-func (c *snapshotCache) store(m team.Model, spaces string, at time.Time, clock *team.StageClock, idle *team.IdleClock, fill func(project string, s *snapshot.Snapshot)) error {
+// (the GitHub header, A29). A team whose snapshot would not fit one answer
+// line keeps its last one. ErrSnapshotTooLarge names each such team. A team
+// gone from m is gone from the op.
+func (c *snapshotCache) store(m team.Model, at time.Time, clock *team.StageClock, idle *team.IdleClock, fill func(project string, s *snapshot.Snapshot)) error {
 	c.mu.Lock()
 	prev := c.cur
 	c.mu.Unlock()
-	next := &teams{snaps: make(map[string]json.RawMessage, len(m.Projects)), teamOf: map[string]string{}, spaces: spaces}
+	next := &teams{snaps: make(map[string]json.RawMessage, len(m.Projects)), teamOf: map[string]string{}}
 	var errs []error
 	for _, p := range m.Projects {
 		snap := team.Snapshot(m, p.Name, at, clock, idle)
@@ -132,11 +128,11 @@ func (c *snapshotCache) load(sel Selector) (json.RawMessage, error) {
 	if t == nil {
 		return nil, fmt.Errorf("%w: the team poll has not built one", ErrNotReady)
 	}
-	project := t.spaces
-	switch {
-	case sel.Project != "":
-		project = sel.Project
-	case sel.WorkspaceID != "":
+	project := sel.Project
+	if project == "" {
+		if sel.WorkspaceID == "" {
+			return nil, fmt.Errorf("%w: pass a project or workspace id", ErrNoTeam)
+		}
 		p, ok := t.teamOf[sel.WorkspaceID]
 		if !ok {
 			return nil, fmt.Errorf("%w: workspace %s is no team's", ErrNoTeam, sel.WorkspaceID)
@@ -159,12 +155,6 @@ func snapshotCode(err error) string {
 		return codeNoTeam
 	}
 	return codeNotReady
-}
-
-// Snapshot asks the daemon at socket for the ◆ spaces' team's snapshot:
-// SnapshotOf, selecting nothing.
-func Snapshot(ctx context.Context, socket string) (snapshot.Snapshot, error) {
-	return SnapshotOf(ctx, socket, Selector{})
 }
 
 // SnapshotOf asks the daemon at socket for the snapshot of the team sel
@@ -191,7 +181,7 @@ func SnapshotOf(ctx context.Context, socket string, sel Selector) (snapshot.Snap
 type SnapshotSource struct {
 	// Socket is the daemon's socket, Paths.Socket.
 	Socket string
-	// Selector picks the team; zero is the ◆ spaces' team.
+	// Selector picks the team.
 	Selector Selector
 }
 

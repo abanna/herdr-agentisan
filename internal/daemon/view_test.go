@@ -89,6 +89,26 @@ func assertClear(t *testing.T, c viewCall) {
 	assert.JSONEq(t, viewClear, c.params)
 }
 
+func TestAGroupSpaceIsInNoTeam(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	th.relabel("w2", "◆ coders")
+	dir := shortDir(t)
+	serving(t, teamOpts(t, dir, th, liveConfig(t, "")), th.fakeHerdr)
+	sock := socketPath(t, dir, th.path)
+	served(t, sock, anySnapshot)
+	polled(t, th.srv, 2)
+	pushed := pushes(t, th.srv)
+	assert.Contains(t, pushed, liveWorkspace)
+	assert.NotContains(t, pushed, "w2")
+	_, code := snapshotOp(t, sock, `{"workspace_id":"w2"}`)
+	assert.Equal(t, "no_team", code)
+
+	s := th.nextStream(t)
+	s.lines <- herdrtest.PaneFocused("w2:p1", "w2")
+	assertClear(t, awaitViews(t, th.srv, 1)[0])
+}
+
 // TestRunSetsTheFocusedTeamsView is the A28 addendum's view: focusing a pane
 // of a team sets the agent view to that team, every workspace it holds or a
 // blocked agent anywhere, labelled with its project and sorted by its order

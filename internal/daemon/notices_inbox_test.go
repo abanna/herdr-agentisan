@@ -110,10 +110,10 @@ func TestInboxNoticeLine(t *testing.T) {
 	events, rec := telemetrytest.NewEvents()
 	o := daemon.Options{Logger: logger, Now: time.Now, Team: &daemon.TeamOptions{Events: events}}
 	st := scratchStore(t)
-	bosses := map[string]string{"ha": "ha-boss", "": "boss"}
+	bosses := map[string]string{"ha": "ha-boss", "hb": "hb-boss"}
 	require.NoError(t, daemon.InboxNotice(o, st, bosses, notice.Message{Project: "ha", Lines: []string{"a"}}))
 	require.NoError(t, daemon.InboxNotice(o, st, bosses, notice.Message{Project: "ha", Lines: []string{"b"}}))
-	require.NoError(t, daemon.InboxNotice(o, st, bosses, notice.Message{Project: "", Lines: []string{"c"}}))
+	require.NoError(t, daemon.InboxNotice(o, st, bosses, notice.Message{Project: "hb", Lines: []string{"c"}}))
 
 	es := noticeLog(t, &logs)
 	require.Len(t, es, 3)
@@ -123,7 +123,7 @@ func TestInboxNoticeLine(t *testing.T) {
 		map[string]any{"boss": es[0]["boss"], "inbox": es[0]["inbox"], "appended": es[0]["appended"], "project": es[0]["project"], "notices": es[0]["notices"]})
 	assert.Equal(t, first, es[1]["inbox"])
 	assert.Equal(t, true, es[1]["appended"])
-	assert.Equal(t, "boss", es[2]["boss"], "the ◆ spaces' boss, for the unnamed project")
+	assert.Equal(t, "hb-boss", es[2]["boss"])
 	assert.NotEqual(t, first, es[2]["inbox"])
 
 	m, err := st.Message(t.Context(), first)
@@ -157,6 +157,27 @@ func subset(m map[string]any, keys ...string) map[string]any {
 		out[k] = m[k]
 	}
 	return out
+}
+
+func TestANoticeForNoTeamIsOnlyLogged(t *testing.T) {
+	t.Parallel()
+	var logs lockedLog
+	st := scratchStore(t)
+	now := time.Now()
+	b := notice.NewBatcher(notice.Configs{})
+	b.Add(now, []notice.Notice{{Kind: notice.Merged, Text: "#50 merged"}})
+	o := daemon.Options{Logger: zerolog.New(&logs), Now: func() time.Time { return now }}
+	daemon.NewPoller(o, st, []settings.Team{haTabs}, notice.Configs{}, b, nil).EndPoll(nil)
+
+	es := noticeLog(t, &logs)
+	require.Len(t, es, 1)
+	assert.Equal(t, []any{"#50 merged"}, es[0]["notices"])
+	assert.Equal(t, "", es[0]["project"])
+	assert.Equal(t, "", es[0]["boss"])
+	assert.NotContains(t, es[0], "inbox")
+	ids, err := st.QueuedRecipients(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, ids)
 }
 
 // TestInboxNoticeWithNoBoss (Q8): a message for a project no team's boss is

@@ -207,7 +207,7 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   sender's by the pane showing its terminal, posts a board-mode boss's
   queue on its board instead, oldest first, 100 rows a call, passes back to
   back while more remain, and holds it, never typed, while that
-  boss's agent has not been seen since the start; the ◆ spaces stay typed
+  boss's agent has not been seen since the start
   (`boarddelivery.go`, A74), returns an ended binding's
   queue to its boss, and fails, never retrying, whatever a timeout or a
   crash may have typed (`messages.go`, A2, A30). The `send` op queues them
@@ -222,9 +222,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
 - `internal/team/` — the team domain model (ADR-001 D5, A17): project → group
   → logical worker → current pane, built from `pane.list`, `workspace.list`,
   `tab.list`, `agent.list` and `state.db`'s `workers` rows, joined by
-  terminal, with the poll's reconcile plan (`bind.go`, A35). A `Resolver`
-  maps the layout onto it: `Spaces` for the ◆ spaces, with v12's group
-  order, and `Tabs` for a team's one workspace and one tab per worker (A19).
+  terminal, with the poll's reconcile plan (`bind.go`, A35). `Tabs`
+  resolves each team's one workspace and one tab per worker (A19).
   Also the `$team` format and the ctx display's band tokens (A28), with the
   sidebar rows that show them, `docs/config/herdr-sidebar.example.toml`, for
   herdr's own config (`TestSidebarSnippet`), and the model as a snapshot v1
@@ -258,9 +257,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   until the daemon poll wires the alerts in 3b-ii.
 - `internal/workforce/` — the boss's team commands (ADR-001 D11, A23),
   `team status`, `team up`, `worker spawn` and `worker retire`, and `send`'s
-  sender and recipient (A30): each group's counts and members on a tabs team
-  or the ◆ spaces, with idle times from the daemon's clock and the rows no
-  pane is bound to (A35); opening a tab per worker and waiting for its agent,
+  sender and recipient (A30): each group's counts and members, with idle
+  times from the daemon's clock and the rows no pane is bound to (A35);
+  opening a tab per worker and waiting for its agent,
   of the provider `--provider` or the packet's preference asks for, else the
   type's default (`provider.go`, A66), a Claude one launched with A42's turn
   hooks as `--settings` and, in its tab's environment, Claude Code's agents

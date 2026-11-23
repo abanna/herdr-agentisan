@@ -9,7 +9,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/settings"
 )
 
-const retiredLayoutHelp = "the ◆ spaces are retired (NERD-5670). Remove this entry. Every team is a tabs team"
+const retiredLayoutHelp = "the spaces layout is retired (NERD-5670). Remove this entry. Every team is a tabs team"
 
 func TestSpacesTableIsRetired(t *testing.T) {
 	t.Parallel()

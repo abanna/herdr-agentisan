@@ -666,59 +666,35 @@ func TestBoardModeDecisionsReadTheClockUnderRoute(t *testing.T) {
 	}
 }
 
-// TestTypedClaimsTakeNoRoute: only the boss of a tabs team whose key is
-// board takes the route lock, for its board decision (untyped) and its
-// claim (claimTyped). With the key unset, and for the ◆ spaces under the
-// shared key board, a pass types its boss while another holds route, so
-// the typed path waits on nothing it did not wait on before the lock
-// (NERD-5533 cbf65a5e, 7c30e8aa).
+// TestTypedClaimsTakeNoRoute checks that a boss without board delivery
+// receives its typed message while another operation holds the route lock.
 func TestTypedClaimsTakeNoRoute(t *testing.T) {
 	t.Parallel()
-	spaces := settings.Team{Project: "spaces", Layout: settings.LayoutSpaces}
-	spacesBoss := store.Address{Kind: store.KindBoss, ID: team.SpacesBoss}
-	for name, c := range map[string]struct {
-		teams []settings.Team
-		cfgs  notice.Configs
-		to    store.Address
-		model *team.Model
-	}{
-		"the key unset": {[]settings.Team{haTabs}, notice.Configs{}, haBoss, haModel(bossPane("ha-boss", "claude"))},
-		"the spaces, the shared key board": {
-			[]settings.Team{spaces},
-			notice.Configs{Default: notice.Config{Board: true}},
-			spacesBoss,
-			&team.Model{Projects: []team.Project{{Name: "spaces", Boss: []team.Worker{{ID: "wJ:p1", Pane: team.Pane{ID: "wJ:p1", TerminalID: "term_wJ:p1", Name: team.SpacesBoss, Agent: "claude"}}}}}},
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			r := newBoardRig(t, c.teams, c.cfgs, nil)
-			r.th.setAgents(named("w14:p1", "ha-boss"), named("w14:p2", "ha-coder-1"), named("wJ:p1", team.SpacesBoss))
-			m := sent(t, r.st, c.to, coder, "done")
-			r.p.EndPoll(c.model)
-			release := r.p.HoldRoute()
-			t.Cleanup(release)
-			done := make(chan struct{})
-			go func() {
-				defer close(done)
-				r.p.Pass()
-			}()
-			select {
-			case <-done:
-			case <-time.After(ready):
-				release()
-				<-done
-				t.Fatal("the typed pass waited on route")
-			}
-			assert.Equal(t, []string{"[msg " + m.ID + " from ha-coder-1] done"}, func() []string {
-				var out []string
-				for _, p := range r.pr.all() {
-					out = append(out, p.Text)
-				}
-				return out
-			}(), "typed while route is held")
-		})
+	r := newBoardRig(t, []settings.Team{haTabs}, notice.Configs{}, nil)
+	r.th.setAgents(named("w14:p1", "ha-boss"), named("w14:p2", "ha-coder-1"))
+	m := sent(t, r.st, haBoss, coder, "done")
+	r.p.EndPoll(haModel(bossPane("ha-boss", "claude")))
+	release := r.p.HoldRoute()
+	t.Cleanup(release)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.p.Pass()
+	}()
+	select {
+	case <-done:
+	case <-time.After(ready):
+		release()
+		<-done
+		t.Fatal("the typed pass waited on route")
 	}
+	assert.Equal(t, []string{"[msg " + m.ID + " from ha-coder-1] done"}, func() []string {
+		var out []string
+		for _, p := range r.pr.all() {
+			out = append(out, p.Text)
+		}
+		return out
+	}(), "typed while route is held")
 }
 
 // TestBossNotSeenSinceStartIsHeld: until a poll sees the boss's agent
@@ -918,25 +894,6 @@ func TestNoKeyIsStillTyped(t *testing.T) {
 			assert.Zero(t, boardCount(t, paths(t, dir, th.fakeHerdr).DB))
 		})
 	}
-}
-
-// TestSpacesStayTyped: the ◆ spaces are always typed, even with the shared
-// key board and their boss showing Claude (A74).
-func TestSpacesStayTyped(t *testing.T) {
-	t.Parallel()
-	th := newSpacesHerdr(t)
-	th.setAgents(named("wJ:p1", "boss"))
-	th.setPane("wJ:p1", "agent", "claude")
-	p := newPrompter(th)
-	dir := shortDir(t)
-	st := stateStore(t, dir, th)
-	m := sent(t, st, store.Address{Kind: store.KindBoss, ID: "boss"}, aPane, "hello")
-	serving(t, teamOpts(t, dir, th, configDir(t, quietNotices+"delivery = \"board\"\n")), th.fakeHerdr)
-
-	assert.Equal(t, typed{Target: "boss", Pane: "wJ:p1", Text: "[msg " + m.ID + " from term_gone] hello"}, p.next(t))
-	eventuallyState(t, st, m.ID, store.MessageDelivered)
-	polled(t, th.srv, 2)
-	assert.Zero(t, boardCount(t, paths(t, dir, th.fakeHerdr).DB))
 }
 
 // TestBoardPostIgnoresACancel: a post runs on its own budget, not on the

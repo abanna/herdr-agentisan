@@ -1,8 +1,7 @@
 # herdr sidebar rows for Agentisan (ADR-001 A28). herdr plugins cannot ship
 # config: put these in herdr's own config (~/.config/herdr/config.toml) in
 # place of the [ui.sidebar.agents] and [ui.sidebar.spaces] rows you have, and
-# reload herdr's config. Keep your own workspace colour rules: the one here
-# only colours the ◆ spaces.
+# reload herdr's config. Keep your own workspace colour rules.
 #
 # Agents, line 1: the state icon, the agent's context use, then its name. The
 # daemon writes the context use every poll, seven characters wide ("ctx  9%",
@@ -22,7 +21,7 @@
 # that team, then any blocked agent from elsewhere. Outside every team it
 # clears the view, and the panel lists every agent in herdr's own order.
 #
-# Spaces, line 2: $team, the daemon's count of the space's team,
+# Spaces, line 2: $team, the daemon's count of the workspace's team,
 # "4 agents · 0 working · 1 ready", with " · 2 blocked" when any are. ready
 # counts the agents waiting for a handoff. The rules match in order: red when
 # any agent is blocked, else pink when any is ready (" 0 ready", with its
@@ -41,6 +40,6 @@ rows = [
 
 [ui.sidebar.spaces]
 rows = [
-  ["state_icon", { token = "workspace", bold = true, rules = [{ starts_with = "◆", fg = "#89dceb", bold = true }] }],
+  ["state_icon", { token = "workspace", bold = true }],
   [{ token = "$team", fg = "#94e2d5", rules = [{ contains = "blocked", fg = "#f38ba8", bold = true }, { contains = " 0 ready" }, { contains = "ready", fg = "#f5c2e7", bold = true }] }],
 ]

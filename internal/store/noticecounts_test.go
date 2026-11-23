@@ -177,7 +177,7 @@ func TestReplaceWithoutRecursiveTriggersOverCounts(t *testing.T) {
 }
 
 // daemonIdentity is a daemon-source identity in the empty project, as B0a.4
-// may admit the ◆ spaces' notices: no receipt and no payload.
+// may admit notices with an empty project, no receipt and no payload.
 var daemonIdentity = map[string]any{
 	"capture_id": "daemon:1", "project": "", "source": "daemon", "kind": "turn_ended",
 	"state": "pending", "admitted_at": 1, "attempts": 0,

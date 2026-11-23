@@ -1,7 +1,6 @@
 package team_test
 
 import (
-	"strings"
 	"testing"
 	"time"
 
@@ -122,5 +121,4 @@ func TestTokenContract(t *testing.T) {
 	t.Parallel()
 	assert.Equal(t, "team", team.Key)
 	assert.Equal(t, 9*time.Second, team.TTL)
-	assert.True(t, strings.HasPrefix(team.SpacePrefix, "◆ "), "the space prefix is ◆ and a space")
 }

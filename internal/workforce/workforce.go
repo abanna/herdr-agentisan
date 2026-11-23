@@ -62,8 +62,6 @@ var (
 	// pane's own Codex, so its HERDR_PANE_ID and HERDR_AGENTISAN_WORKER may
 	// be another session's (A64).
 	ErrCallerUnverified = errors.New("the caller runs under Codex but not in its pane's own codex")
-	// ErrNoTarget means no tabs team to spawn into: the ◆ spaces are hand-run.
-	ErrNoTarget = errors.New("no team to spawn into")
 	// ErrUnknownGroup means the type is no worker group of the project.
 	ErrUnknownGroup = errors.New("no such group")
 	// ErrSlotCap means the spawn would take a group past its slots.
@@ -301,7 +299,7 @@ func SelectorFor(ctx context.Context, h report.PaneFinder, project string, pane 
 
 // layout is herdr's answers one op works from, with the title herdr gives
 // the plugin's dashboard pane when prefix+d opens it, which a tabs team
-// leaves out (resolverOf).
+// leaves out (layout.resolver).
 type layout struct {
 	team.Layout
 	dashboardTitle string
@@ -365,14 +363,8 @@ func configFailed(err error) error {
 	return fmt.Errorf("%w: %w", ErrConfig, err)
 }
 
-// selectTeam picks the team sel names among teams: an explicit project,
-// else the caller's. A caller in a tabs team's workspace is that team's, and
-// one in a ◆ space is the spaces project's, which status reports and the ops
-// that change a team refuse (resolve), never the only tabs team's. With no
-// [spaces] project configured the spaces are the unnamed project's, as the
-// team poll and send read them, which has no configuration to report or
-// staff, so it is refused (QA #39). A caller in neither, or no caller, gets
-// the only tabs team.
+// selectTeam picks an explicit project, the caller's team by workspace,
+// or the sole configured team.
 func selectTeam(sel Selector, teams []settings.Team, l layout) (settings.Team, error) {
 	if sel.Project != "" {
 		i := slices.IndexFunc(teams, func(t settings.Team) bool { return t.Project == sel.Project })
@@ -381,37 +373,17 @@ func selectTeam(sel Selector, teams []settings.Team, l layout) (settings.Team, e
 		}
 		return teams[i], nil
 	}
-	var tabs []settings.Team
-	for _, t := range teams {
-		if t.Layout == settings.LayoutTabs {
-			tabs = append(tabs, t)
-		}
-	}
 	if p, ok := l.pane(sel.CallerPane); ok {
-		for _, t := range tabs {
+		for _, t := range teams {
 			if id, _ := tabsOf(t).Workspace(l.Workspaces); id == p.WorkspaceID {
 				return t, nil
 			}
 		}
-		if inSpaces(l, p.WorkspaceID) {
-			i := slices.IndexFunc(teams, func(t settings.Team) bool { return t.Layout == settings.LayoutSpaces })
-			if i < 0 {
-				return settings.Team{}, fmt.Errorf("%w: the caller's pane is in a ◆ space, which no [spaces] project configures, so it is the unnamed project's; pass --project to name a team", ErrNoTarget)
-			}
-			return teams[i], nil
-		}
 	}
-	if len(tabs) == 1 {
-		return tabs[0], nil
+	if len(teams) == 1 {
+		return teams[0], nil
 	}
-	return settings.Team{}, fmt.Errorf("%w: pass --project: the caller's pane is in no team's workspace, and the tabs teams are %s", ErrBadRequest, names(tabs))
-}
-
-// inSpaces reports whether workspace is one of the ◆ spaces, as the spaces
-// resolver reads them, ◆ boss and ◆ herdr included.
-func inSpaces(l layout, workspace string) bool {
-	r := team.Spaces{}.Resolve(l.Layout)
-	return slices.ContainsFunc(r.Sites, func(s team.Site) bool { return slices.Contains(s.Workspaces, workspace) })
+	return settings.Team{}, fmt.Errorf("%w: pass --project: the caller's pane is in no team's workspace, and the tabs teams are %s", ErrBadRequest, names(teams))
 }
 
 func names(teams []settings.Team) string {
@@ -427,6 +399,13 @@ func names(teams []settings.Team) string {
 
 func tabsOf(t settings.Team) team.Tabs {
 	return team.Tabs{Project: t.Project, Short: t.Short, Color: t.Color}
+}
+
+// resolver finds the team in the layout and excludes its dashboard pane.
+func (l layout) resolver(t settings.Team) team.Tabs {
+	r := tabsOf(t)
+	r.DashboardTitle = l.dashboardTitle
+	return r
 }
 
 // profile resolves the project's profile, repo and D12 checks included.
@@ -467,9 +446,6 @@ func (s *Service) resolve(ctx context.Context, sel Selector) (settings.Team, *se
 	t, err := selectTeam(sel, teams, l)
 	if err != nil {
 		return settings.Team{}, nil, layout{}, err
-	}
-	if t.Layout != settings.LayoutTabs {
-		return settings.Team{}, nil, layout{}, fmt.Errorf("%w: %s is the ◆ spaces project, which is staffed by hand; the workforce runs tabs teams (A19)", ErrNoTarget, t.Project)
 	}
 	p, err := s.profile(t.Project)
 	if err != nil {

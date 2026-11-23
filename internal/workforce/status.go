@@ -6,7 +6,6 @@ import (
 	"slices"
 	"time"
 
-	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
 )
@@ -102,8 +101,7 @@ type StatusResult struct {
 }
 
 // Status reports a team: every group, configured or found, with its counts
-// and members, and the boss's panes. Unlike the ops that change a team, it
-// reports the ◆ spaces project too, when --project names it.
+// and members, and the boss's panes.
 func (s *Service) Status(ctx context.Context, req StatusRequest) (StatusResult, error) {
 	teams, err := s.teams()
 	if err != nil {
@@ -125,7 +123,7 @@ func (s *Service) Status(ctx context.Context, req StatusRequest) (StatusResult, 
 	if err != nil {
 		return StatusResult{}, fmt.Errorf("read workers: %w", err)
 	}
-	m := team.Build(l.Layout, resolverOf(t, l.dashboardTitle), rows)
+	m := team.Build(l.Layout, l.resolver(t), rows)
 	var pr team.Project
 	if i := slices.IndexFunc(m.Projects, func(p team.Project) bool { return p.Name == t.Project }); i >= 0 {
 		pr = m.Projects[i]
@@ -137,11 +135,6 @@ func (s *Service) Status(ctx context.Context, req StatusRequest) (StatusResult, 
 	for _, w := range pr.Boss {
 		out.Boss = append(out.Boss, s.member(w, layout{}, nil))
 	}
-	// A tabs team's worker is named by its tab's label when no row binds it.
-	labels := l
-	if t.Layout != settings.LayoutTabs {
-		labels = layout{}
-	}
 	found := map[string]team.Group{}
 	for _, g := range pr.Groups {
 		found[g.Name] = g
@@ -152,8 +145,8 @@ func (s *Service) Status(ctx context.Context, req StatusRequest) (StatusResult, 
 			all = append(all, name)
 		}
 	}
-	// The team model's own order, the spaces' v12 one included; a team
-	// herdr shows no workspace of has none, and is by name.
+	// Follow the team model's group order, or sort by name before the
+	// team's workspace exists.
 	for _, name := range groupOrder(all, pr.Order) {
 		cfg, ok := p.Groups[name]
 		g := GroupStatus{Name: name, Workers: cfg.Workers, Slots: cfg.Slots, Configured: ok && !cfg.DescribesOnly, Occupied: occupied(pr, name), Targets: []string{}, Members: []Member{}}
@@ -162,7 +155,7 @@ func (s *Service) Status(ctx context.Context, req StatusRequest) (StatusResult, 
 			g.Targets = append(g.Targets, tg.WorkspaceID)
 		}
 		for _, w := range found[name].Workers {
-			g.Members = append(g.Members, s.member(w, labels, rows))
+			g.Members = append(g.Members, s.member(w, l, rows))
 		}
 		out.Groups = append(out.Groups, g)
 	}

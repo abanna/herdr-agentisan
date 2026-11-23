@@ -387,24 +387,21 @@ This takes prefix+b from herdr's default `toggle_sidebar`; see
 
 ## `$team`, the ctx display and the focused team in the sidebar
 
-The daemon pushes each `◆ <group>` workspace, and each team's workspace, its
-`$team` token every 3 s: `4 agents · 0 working · 1 ready`, with
-` · 2 blocked` when any are, where `ready` counts the agents waiting for a
-handoff. It pushes every agent pane its context use as well, seven
+The daemon pushes each team's workspace its `$team` token every 3 s.
+A count like `4 agents · 0 working · 1 ready` reports one agent waiting for
+a handoff. If two agents are blocked, the token adds ` · 2 blocked`.
+The daemon pushes every agent pane its context use as well, seven
 characters wide (`ctx  9%`, `ctx 56%`; `ctx  --` when the agent reports
 none), in one of three tokens by band: `$ctx_ok` up to 55%, `$ctx_warn` above
 55% and `$ctx_hot` above 65%, and its stage, in `$stage_now` while it is
 current and in `$stage_old`, with its age, once it is
 [old](#an-old-stage-ages). They go with source `agentisan` and a 9 s TTL,
-so they clear themselves within 9 s of the daemon stopping. `◆ boss` and
-`◆ herdr` get no `$team`. `[spaces] project` in `herdr-agentisan.toml` names
-the project the spaces belong to; with no config file they belong to one
-unnamed project. See ADR-001 A17 and A28.
+so they clear themselves within 9 s of the daemon stopping. See ADR-001 A28.
 
 The agents panel shows the team you are in: the daemon sets herdr's agent
-view to its workspaces and any blocked agent, labelled with the project
-(`◆ spaces` when `[spaces] project` names none), in the team's order. Outside
-every team, and when it stops cleanly, it clears the view (A28 addendum).
+view to its workspace and any blocked agent, labelled with the project and
+sorted in the team's order. It clears the view outside every team and on a
+clean stop (A28 addendum).
 
 herdr plugins cannot ship config: to show them, put the rows in
 [`docs/config/herdr-sidebar.example.toml`](docs/config/herdr-sidebar.example.toml)
@@ -421,15 +418,6 @@ setting it. `task otelcol:up` runs that collector in Docker, writing to the
 `logs-agentisan.otel-default` data stream with an API key you give it. The
 schema and the setup are [`docs/telemetry.md`](docs/telemetry.md); see
 ADR-001 A21.
-
-### Cutover from v12's `$team` push
-
-Each key has one writer (ADR-001 D4). Once a daemon with this push is
-running, delete the `report_team_tokens(...)` call at line 231 of
-`herdr-dashboard-v12.py` and restart v12. Until then both write `$team` and
-the last write wins; after, the daemon's next push, within 3 s, replaces the
-value v12 left on each group space. The daemon never writes `◆ herdr`, so
-v12's last value there clears itself when its 30 s TTL runs out.
 
 ## Boss notices
 
@@ -544,7 +532,7 @@ activation build. Board B remains incomplete.
 Each team has a board in `state.db`: its workers' posts and the daemon's
 notices. Only the team's boss and the user read it; workers only post. The
 daemon tells who asks from the kernel, by the process that connected, never
-from the request: a command run in the boss's tab (or ◆ boss) reads as the
+from the request: a command run in the boss's tab reads as the
 boss, the plugin's dashboard there as the user, and anything else is refused
 with `not_allowed`. That is a policy, not a security boundary: workers run as
 your user (ADR-001 A60).
@@ -614,13 +602,16 @@ GitHub.
 
 ## Teams: one workspace, one tab per worker
 
-Every configured project but the `[spaces] project` is a team: one herdr
-workspace labelled with the project's name, the boss's tab `<short>-boss`,
-and one tab per worker, `<short>-<type>-<n>`, such as `ha-coder-2`. Give each
-such project a `short` code in `herdr-agentisan.toml`. The daemon pushes the
-team's workspace one `$team` for the whole team, the boss left out, and reads
-the teams when it starts: run the `daemon-restart` action after adding one.
-See ADR-001 A19.
+Each configured project has one herdr workspace labelled with the project's
+name. The boss's tab is `<short>-boss`, and each worker gets a tab like
+`ha-coder-2` using `<short>-<type>-<n>`. Give each project a `short` code in
+`herdr-agentisan.toml`. The workspace's `$team` counts workers. The daemon
+reads the teams at startup, so run the `daemon-restart` action after adding
+one. See ADR-001 A19.
+
+The old `◆ <group>` workspaces are ordinary workspaces outside every team
+(NERD-5670). They get no `$team` token, team snapshot, or focused team
+view. Agentisan leaves them in place without a warning.
 
 ## The workforce commands
 
@@ -638,10 +629,9 @@ drives them.
 | `handoff ack [<pane>]` | Completes a rotation from its replacement, by pane id or this pane with none: once the replacement reports the old pane's item and stage, the worker's herdr name and inbox move to it. Refused with `stage_mismatch`, naming both pairs, until they match, and with `no_handoff` on a pane that is no replacement (ADR-001 A33) |
 
 Each prints one JSON object and exits 1 when refused. Without `--project`
-status, up and spawn read the team whose workspace the command runs in, else
-the only tabs team.
-A tabs team's worker is named by its logical id, `<short>-<type>-<n>`, its
-tab's label; a pane of the ◆ spaces by its pane id. Idle times start when
+status, up and spawn use the caller's team or the only configured team.
+When there is no unambiguous team, pass `--project`. A worker's logical id,
+`<short>-<type>-<n>`, is also its tab label. Idle times start when
 the daemon does, and a team added to the configuration since gets them
 after a `daemon-restart`. A worker whose row no pane is bound to, such as one
 lost after a herdr live handoff, is listed under `unbound` (ADR-001 A35).
@@ -839,9 +829,8 @@ on a terminal that draws neither.
 
 A group's box can carry a one-line purpose under its title, as v12's
 `dashboard-desc.json` gave it (ADR-001 A36). Set it in `herdr-agentisan.toml`
-under the group's name as the dashboard shows it: a tabs team's worker type,
-or a ◆ space's name. A group table may set only a description, and then it
-starts no worker:
+under the worker type shown in the dashboard. A group whose resolved
+settings contain only a description starts no workers.
 
 ```toml
 [groups.coder]                      # every project's coder group
@@ -849,7 +838,7 @@ workers = 3
 slots = 5
 description = "writes fixes and new code"
 
-[projects.agentisan.groups.coders]  # the ◆ coders space
+[projects.agentisan.groups.coder]  # override for the agentisan team
 description = "write fixes + new code · run their own review loop"
 ```
 

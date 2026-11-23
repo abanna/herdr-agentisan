@@ -148,8 +148,8 @@ the pane appeared in or left the team model. The body reads
 | --- | --- | --- |
 | `agentisan.worker.id` | string | The logical worker id `state.db` binds to the pane, or the pane id while no row binds it |
 | `agentisan.worker.bound` | bool | Whether a `workers` row binds the pane |
-| `agentisan.project` | string | The project the pane's space belongs to (`[spaces] project`); `""` is the unnamed project |
-| `agentisan.group` | string | The group, such as `coders`; `""` for the boss |
+| `agentisan.project` | string | The pane's project. Older events can carry `""` |
+| `agentisan.group` | string | The group, such as `coder`; `""` for the boss |
 | `agentisan.role` | string | `boss` or `worker` |
 | `agentisan.agent` | string | The agent herdr detected, such as `claude` or `codex`; `""` for a shell |
 | `herdr.pane.id` | string | The pane, such as `wN:p1` |
@@ -169,7 +169,7 @@ How to read them:
   `agentisan.worker.id`. A poll that could not read `state.db` reports any
   change under the pane id, with `agentisan.worker.bound` false.
 - **A pane that moves to another group, keeping its status,** gives no event.
-  A pane moved out of every ◆ space leaves (`to` is `absent`).
+  A pane moved outside every team leaves (`to` is `absent`).
 
 A query for one worker's last hour, in ES|QL, against the stream the
 collector above writes:
@@ -276,7 +276,7 @@ crossed. The body reads `<worker id> at <n>% crossed <level> (<threshold>%)`.
 | --- | --- | --- |
 | `agentisan.worker.id` | string | As for `status_changed`: the logical worker id, or the pane id while no row binds it |
 | `agentisan.worker.bound` | bool | Whether a `workers` row binds the pane |
-| `agentisan.project` | string | The pane's project; `""` is the unnamed project |
+| `agentisan.project` | string | The pane's project. Older events can carry `""` |
 | `agentisan.group` | string | The group; `""` for the boss |
 | `agentisan.role` | string | `boss` or `worker` |
 | `agentisan.agent` | string | The agent herdr detected, such as `claude` or `codex` |
@@ -300,7 +300,7 @@ id> handoff <step>`.
 | --- | --- | --- |
 | `agentisan.worker.id` | string | As for `status_changed`: the logical worker id, or the pane id while no row binds it |
 | `agentisan.worker.bound` | bool | Whether a `workers` row binds the pane |
-| `agentisan.project` | string | The worker's project; `""` is the unnamed project |
+| `agentisan.project` | string | The worker's project. Older events can carry `""` |
 | `agentisan.group` | string | The worker's group |
 | `herdr.pane.id` | string | The pane the token is on; for `completed` and `failed`, the replacement |
 | `agentisan.handoff.step` | string | `ready`, `cleared`, `completed` or `failed` |

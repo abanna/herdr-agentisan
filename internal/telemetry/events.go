@@ -30,7 +30,7 @@ const (
 	// row binds the pane (AttrWorkerBound false).
 	AttrWorkerID    = "agentisan.worker.id"
 	AttrWorkerBound = "agentisan.worker.bound"
-	// AttrProject is the configured project; "" is the unnamed project.
+	// AttrProject is the configured project. Older events can carry an empty value.
 	AttrProject = "agentisan.project"
 	// AttrGroup is the group's name; "" for the boss.
 	AttrGroup = "agentisan.group"

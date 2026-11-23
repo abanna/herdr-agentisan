@@ -74,8 +74,8 @@ func TestWorkersReadsTheActiveBindings(t *testing.T) {
 			},
 		},
 		"non-ASCII ids and names are read back byte for byte": {
-			rows: []string{"('cödér 1', 'prøject', '◆ grp', 'w1:p1', 0, 'active', 1, NULL, 'térm', NULL, NULL)"},
-			want: []store.Worker{{LogicalID: "cödér 1", Project: "prøject", Group: "◆ grp", PaneID: "w1:p1", TerminalID: "térm", Status: "active"}},
+			rows: []string{"('cödér 1', 'prøject', '★ grp', 'w1:p1', 0, 'active', 1, NULL, 'térm', NULL, NULL)"},
+			want: []store.Worker{{LogicalID: "cödér 1", Project: "prøject", Group: "★ grp", PaneID: "w1:p1", TerminalID: "térm", Status: "active"}},
 		},
 	}
 	for name, tc := range tests {

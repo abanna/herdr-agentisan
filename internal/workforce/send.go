@@ -79,7 +79,6 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendResult, error)
 	if err != nil {
 		return SendResult{}, err
 	}
-	teams = withSpaces(teams)
 	l, err := s.readLayout(ctx)
 	if err != nil {
 		return SendResult{}, err
@@ -106,16 +105,6 @@ func (s *Service) Send(ctx context.Context, req SendRequest) (SendResult, error)
 	return SendResult{ID: m.ID, State: m.State, To: Party(m.To), From: Party(m.From), Queued: m.CreatedAt}, nil
 }
 
-// withSpaces is teams with the ◆ spaces, which belong to the unnamed project
-// when the configuration names none, as the team poll resolves them: so a
-// pane in ◆ boss sends as the boss the dispatcher types to.
-func withSpaces(teams []settings.Team) []settings.Team {
-	if slices.ContainsFunc(teams, func(t settings.Team) bool { return t.Layout == settings.LayoutSpaces }) {
-		return teams
-	}
-	return append(slices.Clone(teams), settings.Team{Layout: settings.LayoutSpaces})
-}
-
 // placed is a configured team and its project in the model one read builds.
 type placed struct {
 	settings.Team
@@ -127,7 +116,7 @@ func teamsIn(teams []settings.Team, l layout, rows []store.Worker) []placed {
 	out := make([]placed, 0, len(teams))
 	for _, t := range teams {
 		p := placed{Team: t}
-		m := team.Build(l.Layout, resolverOf(t, l.dashboardTitle), rows)
+		m := team.Build(l.Layout, l.resolver(t), rows)
 		if i := slices.IndexFunc(m.Projects, func(pr team.Project) bool { return pr.Name == t.Project }); i >= 0 {
 			p.pr = m.Projects[i]
 		}
@@ -151,7 +140,7 @@ func sender(req SendRequest, teams []placed, l layout, rows []store.Worker) (sto
 	}
 	for i, t := range teams {
 		if slices.ContainsFunc(t.pr.Boss, func(w team.Worker) bool { return w.Pane.ID == pane.PaneID }) {
-			return store.Address{Kind: store.KindBoss, ID: BossOf(t.Team)}, &teams[i].Team, nil
+			return store.Address{Kind: store.KindBoss, ID: tabsOf(t.Team).BossTab()}, &teams[i].Team, nil
 		}
 	}
 	return store.Address{Kind: store.KindPane, ID: pane.TerminalID}, teamOfPane(teams, pane), nil
@@ -185,34 +174,13 @@ func recipient(to string, home *settings.Team, teams []settings.Team, rows []sto
 		if home == nil {
 			return store.Address{}, fmt.Errorf("%w: %s is the sender's own team's boss, and the sender is in no team; name the boss, such as <short>-boss", ErrUnknownRecipient, BossAlias)
 		}
-		return store.Address{Kind: store.KindBoss, ID: BossOf(*home)}, nil
+		return store.Address{Kind: store.KindBoss, ID: tabsOf(*home).BossTab()}, nil
 	}
-	if slices.ContainsFunc(teams, func(t settings.Team) bool { return BossOf(t) == to }) {
+	if slices.ContainsFunc(teams, func(t settings.Team) bool { return tabsOf(t).BossTab() == to }) {
 		return store.Address{Kind: store.KindBoss, ID: to}, nil
 	}
 	if !slices.ContainsFunc(rows, func(r store.Worker) bool { return r.LogicalID == to }) {
 		return store.Address{}, fmt.Errorf("%w: no live worker has the id %q, and no team's boss is named so; a worker not spawned with worker spawn has none, so use herdr agent prompt", ErrUnknownRecipient, to)
 	}
 	return store.Address{Kind: store.KindWorker, ID: to}, nil
-}
-
-// BossOf is the name herdr knows t's boss by, which messages to it are
-// typed to (A30): <short>-boss for a tabs team, boss for the ◆ spaces (A7).
-func BossOf(t settings.Team) string {
-	if t.Layout == settings.LayoutSpaces {
-		return team.SpacesBoss
-	}
-	return tabsOf(t).BossTab()
-}
-
-// resolverOf is the resolver that finds t in herdr's layout. A tabs team's
-// leaves out its dashboard pane, whose label is team.DashboardLabel or, when
-// prefix+d opened it, title (team.Tabs.Dashboard).
-func resolverOf(t settings.Team, title string) team.Resolver {
-	if t.Layout == settings.LayoutSpaces {
-		return team.Spaces{Project: t.Project, Color: t.Color}
-	}
-	r := tabsOf(t)
-	r.DashboardTitle = title
-	return r
 }
