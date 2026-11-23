@@ -453,9 +453,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   `tab_bar_right` entry `docs/config/herdr-tab-bar.example.toml`, for herdr's
   own config (`TestTabBarSnippet` in `internal/cli` runs it). Goldens in
   `testdata/` (`go test ./internal/dashboard/ -update`, then read every one).
-- `internal/devctl/` — the `devctl` cobra tree: the coverage floor, the
-  docs-parity check and the large-file ceiling, none of which the Go toolchain
-  provides.
+- `internal/devctl/` — the `devctl` cobra tree. It enforces the coverage
+  floor, checks that packages with instrumentable statements have profile
+  blocks, checks docs parity and enforces the large-file ceiling.
 - `internal/preflight/` — the D12 spawn precondition (ADR-001 I8, A10, A34):
   in a repo with a `go.mod`, `tdaddy` must run from the daemon's PATH and the
   Taskfile must have `tdaddy:index` and `tdaddy:impact`; each failure is a
@@ -569,10 +569,12 @@ Three traps, all encoded as comments in `Taskfile.yml`:
    than fall back. `.env` is gitignored; `.env.example` holds no secret values
    — the OTLP endpoint is left blank, everything else is a safe local default.
 2. **New code needs tests.** The floor is 75% total statements over
-   `./internal/...`, enforced by `devctl coverage`. The `cmd/` packages are
-   outside the denominator on purpose: they are process wiring with no logic
-   (rule 3 keeps them that way), and counting them would let real gaps in the
-   domain hide behind untestable `main` bodies. Do not lower it, and do not write assertion-free tests to
+   `./internal/...`, enforced by `devctl coverage`. The command also
+   requires a profile block for each internal package with instrumentable
+   statements. The `cmd/` packages are outside the denominator on purpose:
+   they are process wiring with no logic (rule 3 keeps them that way), and
+   counting them would let real gaps in the domain hide behind untestable
+   `main` bodies. Do not lower it, and do not write assertion-free tests to
    clear it — a test that cannot fail is worse than no test.
 3. **Business logic goes in a domain package under `internal/`, never in a
    command.** A rule implemented in a cobra command is a rule no other caller
