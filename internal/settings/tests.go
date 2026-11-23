@@ -72,8 +72,7 @@ func locksIn(values map[string]any) []string {
 
 // TestLocks is the lock files behind each team's test slots (A31, A40).
 type TestLocks struct {
-	// Shared is [tests] locks: the slots of the unnamed project and of any
-	// project the file does not configure.
+	// Shared is [tests] locks: the slots of any project the file does not configure.
 	Shared []string
 	// Projects holds every configured project's lock files: its own
 	// [projects.<p>.tests] locks when its table sets them, an empty list

@@ -104,12 +104,11 @@ func MissingPackages(profile io.Reader, pkgs []Package) ([]string, error) {
 	}
 	seen := make(map[string]bool)
 	for sc.Scan() {
-		line := sc.Text()
-		colon := strings.LastIndexByte(line, ':')
-		if colon <= 0 {
-			return nil, errors.New("coverage profile block has no file and position separator")
+		pkg, err := coverageBlockPackage(sc.Text())
+		if err != nil {
+			return nil, err
 		}
-		seen[path.Dir(line[:colon])] = true
+		seen[pkg] = true
 	}
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("read coverage profile: %w", err)
@@ -121,6 +120,14 @@ func MissingPackages(profile io.Reader, pkgs []Package) ([]string, error) {
 		}
 	}
 	return missing, nil
+}
+
+func coverageBlockPackage(line string) (string, error) {
+	colon := strings.LastIndexByte(line, ':')
+	if colon <= 0 {
+		return "", errors.New("coverage profile block has no file and position separator")
+	}
+	return path.Dir(line[:colon]), nil
 }
 
 // ErrMissingCoveragePackages reports that the profile omitted a package with statements.
@@ -141,8 +148,12 @@ func checkCoveragePackages(ctx context.Context, root, profile string, race bool)
 	if err != nil {
 		return err
 	}
-	if len(missing) > 0 {
-		return fmt.Errorf("%w for %d package(s):\n  - %s", ErrMissingCoveragePackages, len(missing), strings.Join(missing, "\n  - "))
+	return missingCoverageError(missing)
+}
+
+func missingCoverageError(missing []string) error {
+	if len(missing) == 0 {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("%w for %d package(s):\n  - %s", ErrMissingCoveragePackages, len(missing), strings.Join(missing, "\n  - "))
 }

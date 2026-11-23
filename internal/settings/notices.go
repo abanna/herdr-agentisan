@@ -122,8 +122,7 @@ type NoticeConfig struct {
 }
 
 // NoticeSettings are every project's notices settings, and the settings of
-// a team whose project the file does not name, such as the ◆ spaces with no
-// [spaces] project.
+// a team whose project the file does not name.
 type NoticeSettings struct {
 	Default  NoticeConfig
 	Projects map[string]NoticeConfig

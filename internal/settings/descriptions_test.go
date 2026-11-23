@@ -17,7 +17,7 @@ import (
 func TestGroupDescriptions(t *testing.T) {
 	t.Parallel()
 
-	const app = "[projects.app]\nrepo = \"REPO\"\n"
+	const app = "[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n"
 	const coder = "[groups.coder]\nworkers = 1\nslots = 2\n"
 	tests := map[string]struct {
 		file     string // the shared file after schema_version
@@ -154,7 +154,7 @@ func TestGroupDescriptions(t *testing.T) {
 func TestGroupDescriptionErrors(t *testing.T) {
 	t.Parallel()
 
-	const app = "[projects.app]\nrepo = \"REPO\"\n"
+	const app = "[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n"
 	described := func(value string) string {
 		return app + "[projects.app.groups.qa]\ndescription = \"" + value + "\"\n"
 	}
@@ -246,7 +246,7 @@ func TestGroupDescriptionErrors(t *testing.T) {
 			wantIn: []string{"groups.qa.description (flag", "81 characters"}, value: strings.Repeat("b", 81),
 		},
 		"in another project": {
-			file:   "[spaces]\nproject = \"app\"\n" + app + "[projects.other]\nrepo = \"/x\"\nshort = \"ot\"\n[projects.other.groups.qa]\ndescription = \"a\\u0007b\"\n",
+			file:   app + "[projects.other]\nrepo = \"/x\"\nshort = \"ot\"\n[projects.other.groups.qa]\ndescription = \"a\\u0007b\"\n",
 			wantIn: []string{"projects.other.groups.qa.description", "U+0007"}, noProject: true,
 		},
 		"in a repo file": {

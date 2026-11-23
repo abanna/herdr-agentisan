@@ -25,7 +25,7 @@ type fsFixture struct {
 	fifos []string
 }
 
-const fsShared = "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n"
+const fsShared = "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n"
 
 // bundleAt installs the Agentisan bundle marker in repo.
 func bundleAt(t *testing.T, repo string) {

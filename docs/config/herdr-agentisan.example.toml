@@ -94,10 +94,9 @@ repeat = 300
 # typed (default) or board (ADR-001 A74): board posts this team's notices
 # and its boss's messages on its board instead of typing them, while its
 # boss runs Claude. Set it in [projects.<p>.notices]: here it would switch
-# every tabs team without a table of its own. The ◆ spaces are always
-# typed: config resolve shows the shared value for them too, and the daemon
-# ignores it there. Read once at start. Do not set board before every PR of
-# the quick board path is installed: its alert lands last.
+# every team without a table of its own. Read once at start.
+# Do not set board until the quick board path is fully installed. Its alert
+# lands last.
 delivery = "typed"
 
 # When the user is alerted that a board-mode boss (delivery = "board") has
@@ -130,9 +129,8 @@ sound = "request"
 #
 # description is the group's one-line purpose, drawn under its title on the
 # dashboard (ADR-001 A36): at most 80 printable characters. It goes with the
-# group's name as the dashboard shows it, a tabs team's worker type or a ◆
-# space's name, and a group table may set it alone (see agentisan's coders
-# below). The daemon reads descriptions again whenever this file changes, so
+# worker type's group. A group table may set a description by itself.
+# The daemon reads descriptions again whenever this file changes, so
 # an edit needs no restart; a repo's .herdr-agentisan.toml cannot set one.
 #
 # A group's own agent (ADR-001 A23, A62), which `worker spawn` launches.
@@ -237,16 +235,6 @@ token = { env = "GITHUB_TOKEN" }
 [spawn]
 shell_prompt = '❯\s*$'
 
-# The project today's ◆ group spaces belong to (ADR-001 A17): the daemon
-# pushes $team to each "◆ <group>" workspace and files its panes under this
-# project. It must name a project below. Only this file and --set may set
-# it. Left out, the one project configured is used, unless it sets
-# layout = "tabs"; with none or several, the spaces belong to one unnamed
-# project. The daemon reads it when it starts: run the daemon-restart action
-# after changing it.
-[spaces]
-project = "agentisan"
-
 # Where the daemon sends its workflow events (docs/telemetry.md): an OTLP/HTTP
 # collector as host:port, plaintext, on localhost. Shared file and --set
 # only; HERDR_AGENTISAN_OTLP_ENDPOINT overrides it. Leave it out, or set "",
@@ -311,18 +299,19 @@ env_file = "~/.config/herdr-agentisan/typesafe.env"
 # Projects. The key is the project's name: lower case, digits and dashes,
 # at most 256 bytes, the most a GitHub notice to the boss can carry.
 #
-# Every project but the [spaces] project is a tabs team (ADR-001 A19): one
-# herdr workspace labelled with the project's name, holding the boss's tab,
+# Every project is a tabs team (ADR-001 A19). Its herdr workspace is
+# labelled with the project's name and holds the boss's tab,
 # <short>-boss, and one full-size tab per worker, <short>-<type>-<n>, which
-# is also the worker's herdr agent name. short is required there: a
+# is also the worker's herdr agent name. short is required: a
 # lower-case letter, then up to 7 more lower-case letters or digits, unique
 # across projects.
-# layout is "tabs" by default, and "spaces" only for the [spaces] project.
+# layout defaults to "tabs".
 # The daemon reads the teams when it starts: after adding a team, run the
 # daemon-restart action.
 # ---------------------------------------------------------------------------
 
 [projects.agentisan]
+short = "ag"
 repo = "~/Development/nerdsrun/agentisan-skills"
 color = "#7c3aed"
 # The repo as owner/name, at most 245 bytes, so a GitHub notice's subject,
@@ -340,16 +329,12 @@ locks = ["/tmp/agentisan-suite-1000.lock", "/tmp/agentisan-suite-1000.slot2.lock
 [projects.agentisan.groups.coder]
 workers = 3
 slots = 5
+description = "write fixes + new code · run their own review loop"
 
 [projects.agentisan.groups.qa]
 workers = 1
 slots = 2
 description = "runs the pre-PR test gates and owns the test-slot queue"
-
-# agentisan's team is the ◆ spaces, so its groups are the spaces' names: this
-# describes ◆ coders and starts no worker (the workers are the coder type's).
-[projects.agentisan.groups.coders]
-description = "write fixes + new code · run their own review loop"
 
 # review is the Codex reviewer (ADR-001 A55): read-only, it takes
 # roles/review.md and one PR's inputs from the boss for each review.

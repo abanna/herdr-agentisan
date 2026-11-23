@@ -75,7 +75,7 @@ func Load(opts LoadOptions) (Resolved, error) {
 			return Resolved{}, err
 		}
 		views := projectViews(shared, projects, flags)
-		teams, err := m.teams(names, views)
+		teams, err := teams(names, views)
 		if err != nil {
 			return Resolved{}, err
 		}
@@ -116,7 +116,7 @@ func Load(opts LoadOptions) (Resolved, error) {
 	if err := m.checkFields(); err != nil {
 		return Resolved{}, err
 	}
-	teams, err := m.teams(names, projectViews(shared, projects, flags))
+	teams, err := teams(names, projectViews(shared, projects, flags))
 	if err != nil {
 		return Resolved{}, err
 	}
