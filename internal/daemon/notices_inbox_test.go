@@ -29,10 +29,11 @@ import (
 // prompts and events they count; the notices tests use configs of their own.
 var quietNotices = "[notices]\nskip = [\"" + strings.Join(slices.DeleteFunc(slices.Clone(settings.NoticeKinds), func(k string) bool { return k == "ctx_ceiling" }), "\", \"") + "\"]\n"
 
-// quietConfig is a config dir whose shared file holds only quietNotices.
+// quietConfig is a config dir naming the live team (liveConfig), with
+// quietNotices.
 func quietConfig(t *testing.T) string {
 	t.Helper()
-	return configDir(t, quietNotices)
+	return liveConfig(t, quietNotices)
 }
 
 // scratchStore is a fresh state.db in a temp dir.

@@ -20,7 +20,7 @@ import (
 func TestSnapshotPrefersTheReportedModel(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	ws, panes, agents := fullTeam()
+	ws, tabs, panes, agents := fullTeam()
 	// Each process starts at its pid in ticks since boot: 1002 at boot+10.02 s.
 	after, before := boot.Add(time.Minute), boot.Add(time.Second)
 	stamp := func(id, model string, at time.Time) {
@@ -40,7 +40,7 @@ func TestSnapshotPrefersTheReportedModel(t *testing.T) {
 	stamp("wN:p2", "claude-haiku-5-5", after)    // launched with no --model
 	stamp("wN:p3", "gpt-5", before)              // left by an agent before this one
 	stamp("wN:p5", "gpt-5.5", after)             // a shell: no agent in the pane
-	th.layout(ws, panes, agents)
+	th.layout(ws, tabs, panes, agents)
 	th.mu.Lock()
 	th.procs = map[string][]map[string]any{
 		"wJ:p1": {agentProc(1001, "claude", "--model", "opus", "--name", "boss")},
