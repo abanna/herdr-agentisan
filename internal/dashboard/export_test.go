@@ -81,6 +81,11 @@ func PaletteForBackground(light bool) []color.Color {
 	return text
 }
 
+// LightTextHasHigherContrast compares the two text luminances on the given background luminance.
+func LightTextHasHigherContrast(background, darkText, lightText float64) bool {
+	return lightTextHasHigherContrast(background, darkText, lightText)
+}
+
 // SelectionColours returns the bar fill and button colours used by the renderer.
 func SelectionColours(light bool) (bar, buttonInk, buttonFill color.Color) {
 	if light {

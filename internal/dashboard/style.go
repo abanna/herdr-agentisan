@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"image/color"
+	"math"
 	"slices"
 	"strings"
 	"unicode"
@@ -46,6 +47,35 @@ var palette = [...]themedColor{
 	colAccent: themeColor("#c8b5ff", "#513b81"),
 }
 
+// prefersLightPalette chooses the higher WCAG contrast for ordinary text,
+// keeping the startup palette when the colour is unknown or the ratios tie.
+func prefersLightPalette(background color.Color) bool {
+	if background == nil {
+		return false
+	}
+	text := palette[colText]
+	return lightTextHasHigherContrast(relativeLuminance(background), relativeLuminance(text.Color), relativeLuminance(text.light))
+}
+
+func lightTextHasHigherContrast(background, darkText, lightText float64) bool {
+	contrast := func(foreground float64) float64 {
+		return (max(foreground, background) + 0.05) / (min(foreground, background) + 0.05)
+	}
+	return contrast(lightText) > contrast(darkText)
+}
+
+func relativeLuminance(c color.Color) float64 {
+	r, g, b, _ := c.RGBA()
+	linear := func(channel uint32) float64 {
+		srgb := float64(channel) / 65535
+		if srgb <= 0.04045 {
+			return srgb / 12.92
+		}
+		return math.Pow((srgb+0.055)/1.055, 2.4)
+	}
+	return 0.2126*linear(r) + 0.7152*linear(g) + 0.0722*linear(b)
+}
+
 const selectionPointer = "▸"
 
 var (
@@ -54,15 +84,16 @@ var (
 )
 
 func lightStyle(st lipgloss.Style, profile colorprofile.Profile) lipgloss.Style {
+	bg, themedBackground := st.GetBackground().(themedColor)
+	if themedBackground && bg == selectionBackground && profile == colorprofile.ANSI {
+		// Reverse the terminal's default pair so the selection stays legible
+		// when the theme assigns its own colours to the ANSI slots.
+		return st.UnsetForeground().UnsetBackground().Reverse(true)
+	}
 	if fg, ok := st.GetForeground().(themedColor); ok {
 		st = st.Foreground(fg.light)
 	}
-	if bg, ok := st.GetBackground().(themedColor); ok {
-		if bg == selectionBackground && profile == colorprofile.ANSI {
-			// The 16-colour palette has no pale blue. Use its light grey
-			// so the dark foregrounds stay legible on the bar.
-			return st.Background(ansi.White)
-		}
+	if themedBackground {
 		st = st.Background(bg.light)
 	}
 	return st

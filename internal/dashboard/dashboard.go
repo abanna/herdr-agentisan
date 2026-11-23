@@ -266,7 +266,7 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.BackgroundColorMsg:
-		m.lightBackground = msg.Color != nil && !msg.IsDark()
+		m.lightBackground = prefersLightPalette(msg.Color)
 		return m, nil
 	case tea.ColorProfileMsg:
 		m.profile = msg.Profile

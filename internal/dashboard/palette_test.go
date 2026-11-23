@@ -20,9 +20,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 )
 
-func TestDashboardPaletteContrast(t *testing.T) {
-	t.Parallel()
-
+func contrastRatio(fg, bg color.Color) float64 {
 	luminance := func(c color.Color) float64 {
 		r, g, b, _ := c.RGBA()
 		linear := func(channel uint32) float64 {
@@ -34,11 +32,17 @@ func TestDashboardPaletteContrast(t *testing.T) {
 		}
 		return 0.2126*linear(r) + 0.7152*linear(g) + 0.0722*linear(b)
 	}
+	a, b := luminance(fg), luminance(bg)
+	return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+}
+
+func TestDashboardPaletteContrast(t *testing.T) {
+	t.Parallel()
+
 	check := func(fg, bg color.Color) {
 		t.Helper()
 		_, _, _, alpha := fg.RGBA()
-		a, b := luminance(fg), luminance(bg)
-		ratio := (max(a, b) + 0.05) / (min(a, b) + 0.05)
+		ratio := contrastRatio(fg, bg)
 		if alpha != 65535 || ratio < 4.5 {
 			t.Errorf("foreground %v on %v has contrast %.2f:1, want opaque with at least 4.5:1", fg, bg, ratio)
 		}
@@ -109,10 +113,72 @@ func TestModelUsesTerminalBackground(t *testing.T) {
 	require.Contains(t, m.View().Content, "38;2;190;203;227", "dark after a dark report")
 }
 
+func TestTerminalBackgroundPalette(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		background string
+		light      bool
+		reason     string
+	}{
+		{background: "#0000ff"},
+		{background: "#ff0000", light: true, reason: "pure red gives 3.92:1 with the light palette and 3.58:1 with the dark palette"},
+		{background: "#ffffff", light: true},
+		{background: "#eaeaea", light: true},
+		{background: "#fbf1c7", light: true},
+		{background: "#1e1e2e"},
+	} {
+		t.Run(tc.background, func(t *testing.T) {
+			m := dashboard.New(t.Context(), dashboard.Config{})
+			m, _ = update(t, m, tea.BackgroundColorMsg{Color: lipgloss.Color(tc.background)})
+			opts := fullColour
+			opts.LightBackground = tc.light
+			require.Equal(t, dashboard.Render(m.Frame(), m.Width(), m.Height(), opts), m.View().Content, tc.reason)
+		})
+	}
+}
+
+func TestTerminalBackgroundChoosesHigherContrast(t *testing.T) {
+	t.Parallel()
+
+	m := dashboard.New(t.Context(), dashboard.Config{Options: fullColour})
+	m, _ = update(t, m, tea.WindowSizeMsg{Width: 40, Height: 4})
+	darkFrame := m.View().Content
+	lightFrame := dashboard.Render(m.Frame(), m.Width(), m.Height(), lightColour())
+	require.NotEqual(t, darkFrame, lightFrame)
+	darkText := dashboard.PaletteForBackground(false)[dashboard.PaletteText]
+	lightText := dashboard.PaletteForBackground(true)[dashboard.PaletteText]
+	channels := [...]uint8{0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238, 255}
+	for _, r := range channels {
+		for _, g := range channels {
+			for _, b := range channels {
+				background := color.RGBA{R: r, G: g, B: b, A: 255}
+				m, _ = update(t, m, tea.BackgroundColorMsg{Color: background})
+				chosen, other := contrastRatio(darkText, background), contrastRatio(lightText, background)
+				switch got := m.View().Content; got {
+				case lightFrame:
+					chosen, other = other, chosen
+				case darkFrame:
+				default:
+					t.Fatalf("unexpected palette on #%02x%02x%02x: %q", r, g, b, got)
+				}
+				require.GreaterOrEqualf(t, chosen, other, "ordinary text on #%02x%02x%02x", r, g, b)
+			}
+		}
+	}
+}
+
+func TestTerminalBackgroundContrastTieKeepsDark(t *testing.T) {
+	t.Parallel()
+
+	// Adding 0.05 gives 0.25, 0.5 and 0.125, so both ratios are exactly 2:1.
+	require.False(t, dashboard.LightTextHasHigherContrast(0.20, 0.45, 0.075))
+}
+
 func TestLightPaletteColourProfiles(t *testing.T) {
 	t.Parallel()
 
-	frame := dashboard.Frame{Snapshot: fixture(t, "full"), Now: at}
+	frame := dashboard.Frame{Snapshot: fixture(t, "full"), Now: at, Btop: true}
 	opts := lightColour()
 	want := ansi.Strip(dashboard.Render(frame, 120, 40, opts))
 	for _, profile := range []colorprofile.Profile{colorprofile.ANSI, colorprofile.ANSI256} {
@@ -134,12 +200,26 @@ func TestLightPaletteKeepsStatusAndSelectionAtReducedDepth(t *testing.T) {
 	opts.Profile = colorprofile.ANSI256
 	indexed := dashboard.Render(frame, 120, 40, opts)
 	require.Regexp(t, `\x1b\[38;5;88m⚠`, indexed, "blocked is dark red")
+	require.Regexp(t, `\x1b\[1;38;5;17;48;5;153mpee01`, indexed, "selected name keeps the indexed bar")
 	opts.Profile = colorprofile.ANSI
 	basic := dashboard.Render(frame, 120, 40, opts)
 	require.Regexp(t, `\x1b\[31m⚠`, basic, "blocked is red")
 	require.Regexp(t, `\x1b\[32mworking`, basic, "working is green")
 	require.Regexp(t, `\x1b\[33midle`, basic, "idle is amber")
-	require.Regexp(t, `\x1b\[1;34;47mpee01`, basic, "selected name is dark blue on light grey")
+}
+
+func TestLightANSISelectionUsesTerminalColours(t *testing.T) {
+	t.Parallel()
+
+	frame := dashboard.Frame{Snapshot: fixture(t, "full"), Now: at}
+	opts := dashboard.Options{Profile: colorprofile.ANSI, LightBackground: true}
+	out := dashboard.Render(frame, 120, 40, opts)
+	require.Contains(t, out, "\x1b[1;7mpee01")
+	for row := range strings.SplitSeq(out, "\n") {
+		if strings.Contains(row, "pee01") {
+			require.NotRegexp(t, `\x1b\[(?:[0-9;]*;)?(?:4[0-9]|10[0-7])(?:[;m])`, row)
+		}
+	}
 }
 
 func TestSelectionWithoutColour(t *testing.T) {
