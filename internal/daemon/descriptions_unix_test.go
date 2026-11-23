@@ -42,7 +42,7 @@ func TestGroupDescriptionsRefreshClasses(t *testing.T) {
 	count := func(msg string) int { return strings.Count(logs.String(), msg) }
 	stamp := time.Unix(1_700_000_000, 0)
 	config := func(d string) []byte {
-		return []byte("schema_version = 1\n[projects.app]\nrepo = \"/x\"\n[projects.app.groups.qa]\ndescription = \"" + d + "\"\n")
+		return []byte("schema_version = 1\n[projects.app]\nrepo = \"/x\"\nshort = \"ap\"\nlayout = \"tabs\"\n[projects.app.groups.qa]\ndescription = \"" + d + "\"\n")
 	}
 	// write puts content at name, stamped at the next second, or at the
 	// same one when keep is set.

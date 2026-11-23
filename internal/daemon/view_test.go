@@ -21,16 +21,16 @@ import (
 )
 
 // The exact params of the daemon's view calls, written out by hand: the
-// set for the spaces and for the herdr-agentisan tabs team of viewTeams, and
+// set for the live team and for the herdr-agentisan tabs team of viewTeams, and
 // the clear.
 const (
-	viewSpaces = `{"source":"plugin:nerdsrun.agentisan","label":"agentisan","filter":{"op":"any","filters":[{"op":"in","field":"workspace_id","values":["w0","w12","wJ","wN","wY"]},{"op":"in","field":"status","values":["blocked"]}]},"sort":[{"field":{"token":"order-spaces"},"order":"asc"}]}`
-	viewTabs   = `{"source":"plugin:nerdsrun.agentisan","label":"herdr-agentisan","filter":{"op":"any","filters":[{"op":"in","field":"workspace_id","values":["w14"]},{"op":"in","field":"status","values":["blocked"]}]},"sort":[{"field":{"token":"order_ha"},"order":"asc"}]}`
-	viewClear  = `{"source":"plugin:nerdsrun.agentisan"}`
+	viewLive  = `{"source":"plugin:nerdsrun.agentisan","label":"agentisan","filter":{"op":"any","filters":[{"op":"in","field":"workspace_id","values":["wT"]},{"op":"in","field":"status","values":["blocked"]}]},"sort":[{"field":{"token":"order_ag"},"order":"asc"}]}`
+	viewTabs  = `{"source":"plugin:nerdsrun.agentisan","label":"herdr-agentisan","filter":{"op":"any","filters":[{"op":"in","field":"workspace_id","values":["w14"]},{"op":"in","field":"status","values":["blocked"]}]},"sort":[{"field":{"token":"order_ha"},"order":"asc"}]}`
+	viewClear = `{"source":"plugin:nerdsrun.agentisan"}`
 )
 
-// viewTeams is liveSpaces, which the agentisan project owns, beside the
-// herdr-agentisan tabs team, and the configuration that names both.
+// viewTeams is liveTabs' team beside the herdr-agentisan tabs team, and the
+// configuration that names both.
 func viewTeams(t *testing.T) (*teamHerdr, string) {
 	t.Helper()
 	th := newTeamHerdr(t)
@@ -45,11 +45,7 @@ func viewTeams(t *testing.T) (*teamHerdr, string) {
 	th.tabs = []map[string]any{tab("w14:t1", "ha-boss"), tab("w14:t2", "ha-coder-1")}
 	th.panes = append(th.panes, pane("w14:p1", "w14:t1"), pane("w14:p2", "w14:t2"))
 	th.mu.Unlock()
-	return th, configDir(t, `[spaces]
-project = "agentisan"
-[projects.agentisan]
-repo = "/x"
-[projects.herdr-agentisan]
+	return th, liveConfig(t, `[projects.herdr-agentisan]
 repo = "/y"
 short = "ha"
 `)
@@ -105,13 +101,13 @@ func TestRunSetsTheFocusedTeamsView(t *testing.T) {
 	serving(t, teamOpts(t, shortDir(t), th, cfg), th.fakeHerdr)
 	s := th.nextStream(t)
 
-	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
-	assertSet(t, awaitViews(t, th.srv, 1)[0], viewSpaces)
+	s.lines <- herdrtest.PaneFocused("wN:p1", liveWorkspace)
+	assertSet(t, awaitViews(t, th.srv, 1)[0], viewLive)
 	s.lines <- herdrtest.PaneFocused("w14:p2", "w14")
 	assertSet(t, awaitViews(t, th.srv, 2)[1], viewTabs)
-	s.lines <- herdrtest.PaneFocused("wJ:p1", "wJ")
-	assertSet(t, awaitViews(t, th.srv, 3)[2], viewSpaces)
-	assert.Contains(t, viewSpaces, `{"source":"plugin:`+plugin.ID+`"`, "the plugin's own source")
+	s.lines <- herdrtest.PaneFocused("wJ:p1", liveWorkspace)
+	assertSet(t, awaitViews(t, th.srv, 3)[2], viewLive)
+	assert.Contains(t, viewLive, `{"source":"plugin:`+plugin.ID+`"`, "the plugin's own source")
 }
 
 // TestRunClearsTheViewOutsideEveryTeam: focus in a workspace no team holds
@@ -126,14 +122,14 @@ func TestRunClearsTheViewOutsideEveryTeam(t *testing.T) {
 
 	s.lines <- herdrtest.PaneFocused("w2:p1", "w2")
 	assertClear(t, awaitViews(t, th.srv, 1)[0])
-	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
-	assertSet(t, awaitViews(t, th.srv, 2)[1], viewSpaces)
+	s.lines <- herdrtest.PaneFocused("wN:p1", liveWorkspace)
+	assertSet(t, awaitViews(t, th.srv, 2)[1], viewLive)
 	s.lines <- herdrtest.PaneFocused("w2:p1", "w2")
 	assertClear(t, awaitViews(t, th.srv, 3)[2])
 }
 
-// TestRunSendsAnIdenticalViewOnce: focus moving within a team, ◆ herdr
-// included, and polls that change nothing send nothing more; nor does focus
+// TestRunSendsAnIdenticalViewOnce: focus moving within a team, its tab
+// outside the model included, and polls that change nothing send nothing more; nor does focus
 // moving from one place outside every team to another. Each change after
 // them, which the daemon reads in order, shows nothing was sent between.
 func TestRunSendsAnIdenticalViewOnce(t *testing.T) {
@@ -145,9 +141,9 @@ func TestRunSendsAnIdenticalViewOnce(t *testing.T) {
 	serving(t, teamOpts(t, shortDir(t), th, cfg), th.fakeHerdr)
 	s := th.nextStream(t)
 
-	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
+	s.lines <- herdrtest.PaneFocused("wN:p1", liveWorkspace)
 	awaitViews(t, th.srv, 1)
-	for _, f := range [][2]string{{"wN:p2", "wN"}, {"wJ:p1", "wJ"}, {"w12:p1", "w12"}, {"wY:p1", "wY"}, {"wN:p1", "wN"}} {
+	for _, f := range [][2]string{{"wN:p2", liveWorkspace}, {"wJ:p1", liveWorkspace}, {"w12:p1", liveWorkspace}, {"wY:p1", liveWorkspace}, {"wN:p1", liveWorkspace}} {
 		s.lines <- herdrtest.PaneFocused(f[0], f[1])
 	}
 	polled(t, th.srv, 3)
@@ -174,13 +170,13 @@ func TestRunSendsTheViewAgainAfterAResync(t *testing.T) {
 	serving(t, teamOpts(t, shortDir(t), th, cfg), th.fakeHerdr)
 	s := th.nextStream(t)
 
-	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
+	s.lines <- herdrtest.PaneFocused("wN:p1", liveWorkspace)
 	awaitViews(t, th.srv, 1)
 	s.lines <- herdrtest.EventsLost(s.id)
 	th.nextStream(t)
 	calls := awaitViews(t, th.srv, 2)
-	assertSet(t, calls[0], viewSpaces)
-	assertSet(t, calls[1], viewSpaces)
+	assertSet(t, calls[0], viewLive)
+	assertSet(t, calls[1], viewLive)
 }
 
 // TestRunSendsTheViewAgainAfterAResyncThatCannotList: a resync whose
@@ -193,7 +189,7 @@ func TestRunSendsTheViewAgainAfterAResyncThatCannotList(t *testing.T) {
 	serving(t, teamOpts(t, shortDir(t), th, cfg), th.fakeHerdr)
 	s := th.nextStream(t)
 
-	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
+	s.lines <- herdrtest.PaneFocused("wN:p1", liveWorkspace)
 	awaitViews(t, th.srv, 1)
 	th.mu.Lock()
 	th.panesErr = true // the polls' lists fail too, so none sends the view
@@ -201,8 +197,8 @@ func TestRunSendsTheViewAgainAfterAResyncThatCannotList(t *testing.T) {
 	s.lines <- herdrtest.EventsLost(s.id)
 	th.nextStream(t)
 	calls := awaitViews(t, th.srv, 2)
-	assertSet(t, calls[0], viewSpaces)
-	assertSet(t, calls[1], viewSpaces)
+	assertSet(t, calls[0], viewLive)
+	assertSet(t, calls[1], viewLive)
 }
 
 // TestRunMovesTheViewOnAResyncWithoutWaitingForAPoll: the focus a resync
@@ -216,8 +212,8 @@ func TestRunMovesTheViewOnAResyncWithoutWaitingForAPoll(t *testing.T) {
 	serving(t, o, th.fakeHerdr)
 	s := th.nextStream(t)
 
-	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
-	assertSet(t, awaitViews(t, th.srv, 1)[0], viewSpaces)
+	s.lines <- herdrtest.PaneFocused("wN:p1", liveWorkspace)
+	assertSet(t, awaitViews(t, th.srv, 1)[0], viewLive)
 	th.listFocused("w14:p2")
 	s.lines <- herdrtest.EventsLost(s.id)
 	th.nextStream(t)
@@ -239,7 +235,7 @@ func TestRunSetsTheViewOfTheFocusAtStart(t *testing.T) {
 	th.mu.Unlock()
 	serving(t, teamOpts(t, shortDir(t), th, cfg), th.fakeHerdr)
 	th.nextStream(t)
-	assertSet(t, awaitViews(t, th.srv, 1)[0], viewSpaces)
+	assertSet(t, awaitViews(t, th.srv, 1)[0], viewLive)
 }
 
 // TestRunFollowsAFocusOnlyThePollSees is A49: herdr can move focus without a
@@ -252,8 +248,8 @@ func TestRunFollowsAFocusOnlyThePollSees(t *testing.T) {
 	serving(t, teamOpts(t, shortDir(t), th, cfg), th.fakeHerdr)
 	s := th.nextStream(t)
 
-	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
-	assertSet(t, awaitViews(t, th.srv, 1)[0], viewSpaces)
+	s.lines <- herdrtest.PaneFocused("wN:p1", liveWorkspace)
+	assertSet(t, awaitViews(t, th.srv, 1)[0], viewLive)
 	th.listFocused("w14:p2")
 	assertSet(t, awaitViews(t, th.srv, 2)[1], viewTabs)
 	th.listFocused("w2:p1")
@@ -286,7 +282,7 @@ func TestRunTriesTheViewAgainAfterAFailure(t *testing.T) {
 	serving(t, o, th.fakeHerdr)
 	s := th.nextStream(t)
 
-	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
+	s.lines <- herdrtest.PaneFocused("wN:p1", liveWorkspace)
 	awaitViews(t, th.srv, 3)
 	th.mu.Lock()
 	th.viewErr = "plugin_disabled"
@@ -295,7 +291,7 @@ func TestRunTriesTheViewAgainAfterAFailure(t *testing.T) {
 	awaitViews(t, th.srv, n+3)
 
 	for _, c := range viewCalls(th.srv) {
-		assertSet(t, c, viewSpaces)
+		assertSet(t, c, viewLive)
 	}
 	assert.Equal(t, 1, strings.Count(logs.String(), "refused: plugin_not_found"), "logged once: %s", logs.String())
 	assert.Equal(t, 1, strings.Count(logs.String(), "refused: plugin_disabled"), "logged once: %s", logs.String())
@@ -328,13 +324,13 @@ func TestRunLogsARefusalAgainAfterASuccess(t *testing.T) {
 	serving(t, o, th.fakeHerdr)
 	s := th.nextStream(t)
 
-	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
+	s.lines <- herdrtest.PaneFocused("wN:p1", liveWorkspace)
 	awaitViews(t, th.srv, 2)
 	s.lines <- herdrtest.PaneFocused("w14:p2", "w14")
 	// The fourth is the next poll's try, so the third's failure is logged.
 	calls := awaitViews(t, th.srv, 4)
-	assertSet(t, calls[0], viewSpaces)
-	assertSet(t, calls[1], viewSpaces)
+	assertSet(t, calls[0], viewLive)
+	assertSet(t, calls[1], viewLive)
 	assertSet(t, calls[2], viewTabs)
 	assert.Equal(t, 2, strings.Count(logs.String(), "refused: plugin_not_found"), "logged again after the success: %s", logs.String())
 }
@@ -349,19 +345,19 @@ func TestRunSendsTheViewAgainAfterAFailedCall(t *testing.T) {
 	serving(t, teamOpts(t, shortDir(t), th, cfg), th.fakeHerdr)
 	s := th.nextStream(t)
 
-	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
+	s.lines <- herdrtest.PaneFocused("wN:p1", liveWorkspace)
 	awaitViews(t, th.srv, 1)
 	th.mu.Lock()
 	th.viewErr = "server_unavailable"
 	th.mu.Unlock()
 	s.lines <- herdrtest.PaneFocused("w14:p2", "w14")
 	assertSet(t, awaitViews(t, th.srv, 2)[1], viewTabs)
-	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
+	s.lines <- herdrtest.PaneFocused("wN:p1", liveWorkspace)
 	require.Eventually(t, func() bool {
 		calls := viewCalls(th.srv)
 		last := calls[len(calls)-1]
 		return last.method == "agent.view.set" && strings.Contains(last.params, `"label":"agentisan"`)
-	}, ready, 5*time.Millisecond, "the spaces' view is sent again: %v", viewCalls(th.srv))
+	}, ready, 5*time.Millisecond, "the team's view is sent again: %v", viewCalls(th.srv))
 }
 
 // TestCleanStopClearsTheView: a daemon stopped cleanly clears its view, so
@@ -371,7 +367,7 @@ func TestCleanStopClearsTheView(t *testing.T) {
 	th, cfg := viewTeams(t)
 	r := serving(t, teamOpts(t, shortDir(t), th, cfg), th.fakeHerdr)
 	s := th.nextStream(t)
-	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
+	s.lines <- herdrtest.PaneFocused("wN:p1", liveWorkspace)
 	awaitViews(t, th.srv, 1)
 
 	r.cancel()
@@ -414,7 +410,7 @@ func TestNoViewClearOnAServerThatIsGone(t *testing.T) {
 			r := serving(t, o, th.fakeHerdr)
 			original := th.srv
 			s := th.nextStream(t)
-			s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
+			s.lines <- herdrtest.PaneFocused("wN:p1", liveWorkspace)
 			awaitViews(t, original, 1)
 
 			tc.stop(th, r)
@@ -425,7 +421,7 @@ func TestNoViewClearOnAServerThatIsGone(t *testing.T) {
 			original.Settle(t)
 			calls := viewCalls(original)
 			require.Len(t, calls, 1, "the set alone: %v", calls)
-			assertSet(t, calls[0], viewSpaces)
+			assertSet(t, calls[0], viewLive)
 			if th.srv != original {
 				th.srv.Settle(t)
 				assert.Empty(t, viewCalls(th.srv), "the replacement gets no view call")
@@ -449,7 +445,7 @@ func TestViewNeverReachesAReplacement(t *testing.T) {
 	o.Logger = zerolog.New(&logs)
 	r := serving(t, o, th.fakeHerdr)
 	s := th.nextStream(t)
-	s.lines <- herdrtest.PaneFocused("wN:p1", "wN")
+	s.lines <- herdrtest.PaneFocused("wN:p1", liveWorkspace)
 	awaitViews(t, th.srv, 1)
 
 	require.NoError(t, os.Remove(th.path)) // the original serves on, unlinked
@@ -462,13 +458,13 @@ func TestViewNeverReachesAReplacement(t *testing.T) {
 	assert.True(t, r.alive())
 }
 
-// syncModel is a model of the ◆ spaces, which hold wN, beside w2, which no
+// syncModel is a model of the live team, which holds wN, beside w2, which no
 // team holds: the view is a set in wN, a clear in w2.
 func syncModel() team.Model {
 	return team.Build(team.Layout{Workspaces: []herdr.WorkspaceInfo{
-		{WorkspaceID: "wN", Label: "◆ coders"},
+		{WorkspaceID: "wN", Label: liveProject},
 		{WorkspaceID: "w2", Label: "notes"},
-	}}, team.Spaces{}, nil)
+	}}, team.Tabs{Project: liveProject, Short: liveShort}, nil)
 }
 
 // TestViewSyncKeepsWhatItSentForgottenAfterARacingForget: a call that fails
@@ -509,7 +505,7 @@ func TestViewSyncTakesFocusFromThePoll(t *testing.T) {
 		v.Polled(m, "wN", v.Seen())
 		clear, sent, ok := v.Next()
 		require.True(t, ok)
-		assert.False(t, clear, "the poll's focus, wN, sets the spaces' view")
+		assert.False(t, clear, "the poll's focus, wN, sets the team's view")
 		sent()
 
 		v.Polled(m, "w2", v.Seen())

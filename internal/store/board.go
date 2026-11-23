@@ -423,12 +423,12 @@ func (s *Store) PruneBoard(ctx context.Context, now time.Time) (int64, error) {
 	return n, nil
 }
 
-// BoardPending is what a board-mode boss has left waiting (ADR-001 A74).
+// BoardPendingSnapshot is what a board-mode boss has left waiting (ADR-001 A74).
 // NewestCeiling can fall when a held notice drains to the board: held, the
 // row is timed by its last append (updated_at); posted, by its creation (the
 // post takes the row's created_at). A caller that bounds an alert by it keeps
 // the newest it has seen (NERD-5533 bc2157dd).
-type BoardPending struct {
+type BoardPendingSnapshot struct {
 	Pending               int       // posts after the boss's mark
 	Oldest, OldestCeiling time.Time // zero: none
 	BossMark              int64
@@ -469,24 +469,24 @@ WHERE recipient_kind = 'boss' AND recipient = ?1 AND state = 'queued'`
 // notice.CeilingMark. The user's read mark is never read: the dashboard's
 // panel moves it. An empty ceilingMark is refused (ErrInvalid): it would be
 // in every body, and every daemon notice would read as a ceiling.
-func (s *Store) BoardPending(ctx context.Context, project, boss, ceilingMark string) (BoardPending, error) {
+func (s *Store) BoardPending(ctx context.Context, project, boss, ceilingMark string) (BoardPendingSnapshot, error) {
 	if ceilingMark == "" {
-		return BoardPending{}, fmt.Errorf("%w: an empty ceiling mark matches every notice", ErrInvalid)
+		return BoardPendingSnapshot{}, fmt.Errorf("%w: an empty ceiling mark matches every notice", ErrInvalid)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return BoardPending{}, fmt.Errorf("%w: read what %q has pending: %w", ErrStore, boss, err)
+		return BoardPendingSnapshot{}, fmt.Errorf("%w: read what %q has pending: %w", ErrStore, boss, err)
 	}
 	defer tx.Rollback() //nolint:errcheck // a read: nothing to commit
-	var p BoardPending
+	var p BoardPendingSnapshot
 	var oldest, oldestCeiling, newestCeiling, oldestHeld, oldestHeldCeiling, newestHeldCeiling sql.NullInt64
 	err = tx.QueryRowContext(ctx, pendingPosts, project, ceilingMark).Scan(&p.Pending, &oldest, &oldestCeiling, &newestCeiling, &p.BossMark)
 	if err != nil {
-		return BoardPending{}, fmt.Errorf("%w: read %q's pending posts: %w", ErrStore, project, err)
+		return BoardPendingSnapshot{}, fmt.Errorf("%w: read %q's pending posts: %w", ErrStore, project, err)
 	}
 	err = tx.QueryRowContext(ctx, pendingHeld, boss, ceilingMark).Scan(&p.Held, &oldestHeld, &oldestHeldCeiling, &newestHeldCeiling)
 	if err != nil {
-		return BoardPending{}, fmt.Errorf("%w: read %q's held messages: %w", ErrStore, boss, err)
+		return BoardPendingSnapshot{}, fmt.Errorf("%w: read %q's held messages: %w", ErrStore, boss, err)
 	}
 	p.Oldest, p.OldestCeiling, p.OldestHeld, p.OldestHeldCeiling = pendingTime(oldest), pendingTime(oldestCeiling), pendingTime(oldestHeld), pendingTime(oldestHeldCeiling)
 	p.NewestCeiling = pendingTime(newestCeiling)

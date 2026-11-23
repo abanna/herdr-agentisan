@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"maps"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/notice"
@@ -126,7 +127,8 @@ func (p *Poller) Pass() {
 
 // Post posts to's queue on project's board as a pass does, on ctx.
 func (p *Poller) Post(ctx context.Context, to store.Address, project string) {
-	p.d.post(ctx, to, project)
+	out, err := p.d.postQueued(ctx, to, project)
+	p.d.posted(ctx, to, project, out, err)
 }
 
 // TakeWake empties the inbox's wake, as the dispatcher's loop takes it
@@ -139,6 +141,42 @@ func (p *Poller) TakeWake() bool {
 		return false
 	}
 }
+
+// HoldRoute takes the inbox's route, the lock a board-mode boss's typed
+// claim and a poll's remember take, until release is called.
+func (p *Poller) HoldRoute() (release func()) {
+	p.in.route.Lock()
+	var once sync.Once
+	return func() { once.Do(p.in.route.Unlock) }
+}
+
+// HoldMu takes the inbox's mu until release is called.
+func (p *Poller) HoldMu() (release func()) {
+	p.in.mu.Lock()
+	var once sync.Once
+	return func() { once.Do(p.in.mu.Unlock) }
+}
+
+// RouteHeld reports whether someone holds the inbox's route now: it fails
+// to take it, else it takes it and gives it back at once.
+func (p *Poller) RouteHeld() bool { return p.in.route.Held() }
+
+// MuHeld reports whether someone holds the inbox's mu now, as RouteHeld
+// does for route.
+func (p *Poller) MuHeld() bool {
+	if p.in.mu.TryLock() {
+		p.in.mu.Unlock()
+		return false
+	}
+	return true
+}
+
+// RouteHolds is how many times route has been taken.
+func (p *Poller) RouteHolds() uint64 { return p.in.route.Holds() }
+
+// SetDeliveryProbe makes f the inbox's delivery probe, called at each
+// delivery read; nil removes it.
+func (p *Poller) SetDeliveryProbe(f func()) { p.in.deliveryProbe = f }
 
 // Delivery is how the inbox delivers to project's boss now (A74).
 func (p *Poller) Delivery(project string) notice.Delivery {

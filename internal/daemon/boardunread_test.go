@@ -2,15 +2,12 @@ package daemon_test
 
 import (
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/store"
 )
@@ -79,12 +76,10 @@ func TestSnapshotCarriesTheBoardUnread(t *testing.T) {
 	}
 }
 
-// bareProjectConfig writes a config dir naming project agentisan with no
-// colour, so its snapshot reports no project state of its own.
+// bareProjectConfig writes a config dir naming project agentisan, the tabs
+// team ag, with no colour, so its snapshot reports no project state of its
+// own.
 func bareProjectConfig(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	body := "schema_version = 1\n[projects.agentisan]\nrepo = \"~/Development/agentisan\"\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte(body), 0o600))
-	return dir
+	return liveConfig(t, "")
 }

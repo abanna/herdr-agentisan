@@ -330,21 +330,20 @@ func TestStageAge(t *testing.T) {
 	}
 }
 
-// stageLayout is a ◆ coders space holding an agent pane, wN:p1, and a pane
-// agent.list still names whose agent herdr no longer detects, wN:p3, with a
-// pane outside every team, w2:p1: the agents at status, each with stage and
-// stage_at tokens.
+// stageLayout is the live team with a coder's tab holding an agent pane,
+// wN:p1, and another's a pane agent.list still names whose agent herdr no
+// longer detects, wN:p3, with a pane outside every team, w2:p1: the agents
+// at status, each with stage and stage_at tokens.
 func stageLayout(status string, stage string, at time.Time) team.Layout {
 	tokens := map[string]string{report.StageKey: stage, report.StageAtKey: report.FormatStageAt(at)}
-	return team.Layout{
-		Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wN", Label: "◆ coders"}, {WorkspaceID: "w2", Label: "notes"}},
-		Panes: []herdr.PaneInfo{
-			{PaneID: "wN:p1", WorkspaceID: "wN", Agent: "claude", AgentStatus: status, Tokens: tokens},
-			{PaneID: "wN:p3", WorkspaceID: "wN", AgentStatus: "unknown", Tokens: tokens},
-			{PaneID: "w2:p1", WorkspaceID: "w2", Agent: "claude", AgentStatus: status, Tokens: tokens},
-		},
-		Agents: []herdr.AgentInfo{{Name: "ha-coder-9", PaneID: "wN:p3"}},
-	}
+	l := teamOf([]herdr.PaneInfo{
+		inTeam(herdr.PaneInfo{PaneID: "wN:p1", Agent: "claude", AgentStatus: status, Tokens: tokens}, "coder-1"),
+		inTeam(herdr.PaneInfo{PaneID: "wN:p3", AgentStatus: "unknown", Tokens: tokens}, "coder-3"),
+		{PaneID: "w2:p1", WorkspaceID: "w2", Agent: "claude", AgentStatus: status, Tokens: tokens},
+	})
+	l.Workspaces = append(l.Workspaces, herdr.WorkspaceInfo{WorkspaceID: "w2", Label: "notes"})
+	l.Agents = []herdr.AgentInfo{{Name: "ha-coder-9", PaneID: "wN:p3"}}
+	return l
 }
 
 // TestSidebarTokensShowTheStage: every agent pane carries its stage display
@@ -355,7 +354,7 @@ func stageLayout(status string, stage string, at time.Time) team.Layout {
 // again moves the stage back.
 func TestSidebarTokensShowTheStage(t *testing.T) {
 	t.Parallel()
-	r := team.Resolvers{team.Spaces{Project: "agentisan"}}
+	r := team.Resolvers{liveTeam}
 	var c team.IdleClock
 	reported := secs(poll(0)).Add(-time.Hour)
 	var l team.Layout
@@ -400,14 +399,11 @@ func TestSidebarTokensShowTheStage(t *testing.T) {
 // report.ParseStageAt reads it; anything else is no time.
 func TestBuildReadsStageAt(t *testing.T) {
 	t.Parallel()
-	r := team.Resolvers{team.Spaces{Project: "agentisan"}}
+	r := team.Resolvers{liveTeam}
 	for v, want := range map[string]time.Time{
 		"1761069600": time.Unix(1_761_069_600, 0), "": {}, "soon": {}, "-1": {}, "01761069600": {}, strconv.Itoa(0): {},
 	} {
-		l := team.Layout{
-			Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wN", Label: "◆ coders"}},
-			Panes:      []herdr.PaneInfo{{PaneID: "wN:p1", WorkspaceID: "wN", Agent: "claude", Tokens: map[string]string{report.StageAtKey: v}}},
-		}
+		l := teamOf([]herdr.PaneInfo{inTeam(herdr.PaneInfo{PaneID: "wN:p1", Agent: "claude", Tokens: map[string]string{report.StageAtKey: v}}, "coder-1")})
 		m := team.Build(l, r, nil)
 		require.Len(t, m.Projects, 1)
 		require.Len(t, m.Projects[0].Groups, 1)

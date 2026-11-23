@@ -20,29 +20,28 @@ import (
 // at is the instant every snapshot test builds at.
 var at = time.Date(2026, 10, 10, 9, 30, 0, 0, time.UTC)
 
-// spacesOrder is the ◆ spaces resolver's group order, as Build puts it on
-// the spaces team.
-var spacesOrder = team.Spaces{}.GroupOrder()
-
 // pane is a pane in ws carrying tokens: an agent of kind agent ("" for a
 // plain shell) at status.
 func pane(id, ws, agent, status string, tokens map[string]string) herdr.PaneInfo {
 	return herdr.PaneInfo{PaneID: id, WorkspaceID: ws, Agent: agent, AgentStatus: status, Tokens: tokens}
 }
 
-// oneRow builds the model of one pane in ◆ coders, named name by agent.list
-// when name is not "", and returns the row the snapshot gives it.
+// oneRow builds the model of one pane in the live team's first coder's tab,
+// named name by agent.list when name is not "", and returns the row the
+// snapshot gives it, less its tab, which it checks is the pane's.
 func oneRow(t *testing.T, p herdr.PaneInfo, name string) snapshot.Agent {
 	t.Helper()
-	p.WorkspaceID = "wN"
-	l := team.Layout{Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wN", Label: "◆ coders"}}, Panes: []herdr.PaneInfo{p}}
+	l := teamOf([]herdr.PaneInfo{inTeam(p, "coder-1")})
 	if name != "" {
 		l.Agents = []herdr.AgentInfo{{PaneID: p.PaneID, Name: name}}
 	}
-	s := team.Snapshot(team.Build(l, team.Spaces{}, nil), "", at, nil, nil)
+	s := team.Snapshot(team.Build(l, liveTeam, nil), liveProject, at, nil, nil)
 	require.Len(t, s.Groups, 1)
 	require.Len(t, s.Groups[0].Agents, 1)
-	return s.Groups[0].Agents[0]
+	row := s.Groups[0].Agents[0]
+	assert.Equal(t, liveWS+":coder-1", row.TabID, "the row carries its pane's tab")
+	row.TabID = ""
+	return row
 }
 
 //go:fix inline
@@ -272,12 +271,9 @@ func TestSnapshotRowKind(t *testing.T) {
 	}
 	t.Run("the boss", func(t *testing.T) {
 		t.Parallel()
-		l := team.Layout{
-			Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wJ", Label: "◆ boss"}},
-			Panes:      []herdr.PaneInfo{pane("wJ:p1", "wJ", "codex", "working", nil)},
-			Agents:     []herdr.AgentInfo{{PaneID: "wJ:p1", Name: "boss"}},
-		}
-		s := team.Snapshot(team.Build(l, team.Spaces{}, nil), "", at, nil, nil)
+		l := teamOf([]herdr.PaneInfo{inTeam(pane("wJ:p1", "", "codex", "working", nil), "boss")})
+		l.Agents = []herdr.AgentInfo{{PaneID: "wJ:p1", Name: "boss"}}
+		s := team.Snapshot(team.Build(l, liveTeam, nil), liveProject, at, nil, nil)
 		require.NotNil(t, s.Boss)
 		assert.Equal(t, "codex", s.Boss.Kind)
 	})
@@ -363,33 +359,29 @@ func TestSnapshotRowItemAndStage(t *testing.T) {
 	}
 }
 
-// TestSnapshotRowTabAndIdle: a row carries pane.list's tab, and, for an
-// agent at rest, when the idle clock first saw it resting, in UTC (ADR-001
+// TestSnapshotRowTabAndIdle: a row carries pane.list's tab, the boss's and
+// each worker's own, and, for an agent at rest, when the idle clock first saw it resting, in UTC (ADR-001
 // A37). Working, blocked and unknown agents carry no rest, and neither does
 // a plain shell, whatever status herdr gives it; with no clock nothing does.
 func TestSnapshotRowTabAndIdle(t *testing.T) {
 	t.Parallel()
 
-	inTab := func(p herdr.PaneInfo, tab string) herdr.PaneInfo { p.TabID = tab; return p }
-	layout := team.Layout{
-		Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wJ", Label: "◆ boss"}, {WorkspaceID: "wN", Label: "◆ coders"}},
-		Panes: []herdr.PaneInfo{
-			inTab(pane("wJ:p1", "wJ", "claude", "idle", nil), "wJ:t1"),
-			inTab(pane("wN:p1", "wN", "claude", "idle", nil), "wN:t1"),
-			inTab(pane("wN:p2", "wN", "claude", "done", map[string]string{"handoff": "⟳ READY"}), "wN:t2"),
-			inTab(pane("wN:p3", "wN", "claude", "working", nil), "wN:t3"),
-			inTab(pane("wN:p4", "wN", "claude", "blocked", nil), "wN:t4"),
-			inTab(pane("wN:p5", "wN", "", "idle", nil), "wN:t5"),
-			pane("wN:p6", "wN", "codex", "unknown", nil),
-		},
-	}
-	m := team.Build(layout, team.Spaces{}, nil)
+	layout := teamOf([]herdr.PaneInfo{
+		inTeam(pane("wJ:p1", "", "claude", "idle", nil), "boss"),
+		inTeam(pane("wN:p1", "", "claude", "idle", nil), "coder-1"),
+		inTeam(pane("wN:p2", "", "claude", "done", map[string]string{"handoff": "⟳ READY"}), "coder-2"),
+		inTeam(pane("wN:p3", "", "claude", "working", nil), "coder-3"),
+		inTeam(pane("wN:p4", "", "claude", "blocked", nil), "coder-4"),
+		inTeam(pane("wN:p5", "", "", "idle", nil), "coder-5"),
+		inTeam(pane("wN:p6", "", "codex", "unknown", nil), "coder-6"),
+	})
+	m := team.Build(layout, liveTeam, nil)
 	rested := at.In(time.FixedZone("x", -7*3600))
 	clock := &team.IdleClock{}
 	clock.Observe(m, rested)
 	clock.Observe(m, at.Add(time.Minute))
 
-	s := team.Snapshot(m, "", at.Add(time.Minute), nil, clock)
+	s := team.Snapshot(m, liveProject, at.Add(time.Minute), nil, clock)
 	require.NotNil(t, s.Boss)
 	require.Len(t, s.Groups, 1)
 	rows := append([]snapshot.Agent{s.Boss.Agent}, s.Groups[0].Agents...)
@@ -397,8 +389,8 @@ func TestSnapshotRowTabAndIdle(t *testing.T) {
 		tab     string
 		resting bool
 	}{
-		"wJ:p1": {"wJ:t1", true}, "wN:p1": {"wN:t1", true}, "wN:p2": {"wN:t2", true},
-		"wN:p3": {"wN:t3", false}, "wN:p4": {"wN:t4", false}, "wN:p5": {"wN:t5", false}, "wN:p6": {"", false},
+		"wJ:p1": {"wT:boss", true}, "wN:p1": {"wT:coder-1", true}, "wN:p2": {"wT:coder-2", true},
+		"wN:p3": {"wT:coder-3", false}, "wN:p4": {"wT:coder-4", false}, "wN:p5": {"wT:coder-5", false}, "wN:p6": {"wT:coder-6", false},
 	}
 	require.Len(t, rows, len(want))
 	for _, r := range rows {
@@ -413,7 +405,7 @@ func TestSnapshotRowTabAndIdle(t *testing.T) {
 		assert.Equal(t, time.UTC, r.IdleSince.Location(), r.PaneID)
 	}
 
-	for _, r := range team.Snapshot(m, "", at, nil, nil).Groups[0].Agents {
+	for _, r := range team.Snapshot(m, liveProject, at, nil, nil).Groups[0].Agents {
 		assert.Nil(t, r.IdleSince, "no clock: no rest, %s", r.PaneID)
 	}
 }
@@ -435,22 +427,20 @@ func TestSnapshotRowStage(t *testing.T) {
 			}
 			return out
 		}
-		return team.Layout{
-			Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wJ", Label: "◆ boss"}, {WorkspaceID: "wN", Label: "◆ coders"}},
-			Panes: []herdr.PaneInfo{
-				pane("wJ:p1", "wJ", "claude", status, tokens(before)),
-				pane("wN:p1", "wN", "claude", status, tokens(before)),
-				pane("wN:p2", "wN", "claude", status, tokens(after)),
-				pane("wN:p3", "wN", "", "unknown", tokens(before)),
-				pane("wN:p4", "wN", "claude", status, tokens(time.Time{})),
-			},
-			Agents: []herdr.AgentInfo{{Name: "gone", PaneID: "wN:p3"}},
-		}
+		l := teamOf([]herdr.PaneInfo{
+			inTeam(pane("wJ:p1", "", "claude", status, tokens(before)), "boss"),
+			inTeam(pane("wN:p1", "", "claude", status, tokens(before)), "coder-1"),
+			inTeam(pane("wN:p2", "", "claude", status, tokens(after)), "coder-2"),
+			inTeam(pane("wN:p3", "", "", "unknown", tokens(before)), "coder-3"),
+			inTeam(pane("wN:p4", "", "claude", status, tokens(time.Time{})), "coder-4"),
+		})
+		l.Agents = []herdr.AgentInfo{{Name: "gone", PaneID: "wN:p3"}}
+		return l
 	}
 	clock := &team.IdleClock{}
 	var m team.Model
 	for i, status := range []string{"idle", "working", "idle", "idle"} {
-		m = team.Build(layout(status), team.Spaces{}, nil)
+		m = team.Build(layout(status), liveTeam, nil)
 		clock.Observe(m, at.Add(time.Duration(i)*3*time.Second))
 	}
 	now := at.Add(time.Minute)
@@ -475,15 +465,15 @@ func TestSnapshotRowStage(t *testing.T) {
 	assert.Equal(t, map[string]state{
 		"wJ:p1": {utc(before), true}, "wN:p1": {utc(before), true}, "wN:p2": {utc(after), false},
 		"wN:p3": {utc(before), true}, "wN:p4": {nil, false},
-	}, rowsOf(team.Snapshot(m, "", now, nil, clock)))
+	}, rowsOf(team.Snapshot(m, liveProject, now, nil, clock)))
 	assert.Equal(t, map[string]state{
 		"wJ:p1": {utc(before), false}, "wN:p1": {utc(before), false}, "wN:p2": {utc(after), false},
 		"wN:p3": {utc(before), true}, "wN:p4": {nil, false},
-	}, rowsOf(team.Snapshot(m, "", now, nil, nil)))
+	}, rowsOf(team.Snapshot(m, liveProject, now, nil, nil)))
 }
 
 // groupsLayout is one ◆ space per name, each with one agent, listed in the
-// order given.
+// order given, for the tests of the ◆ spaces alone.
 func groupsLayout(names ...string) team.Layout {
 	var l team.Layout
 	for i, n := range names {
@@ -492,6 +482,16 @@ func groupsLayout(names ...string) team.Layout {
 		l.Panes = append(l.Panes, pane(ws+":p1", ws, "claude", "idle", nil))
 	}
 	return l
+}
+
+// typesLayout is the live team with one worker's tab per type,
+// <short>-<type>-1, each with one agent, listed in the order given.
+func typesLayout(types ...string) team.Layout {
+	var panes []herdr.PaneInfo
+	for i, typ := range types {
+		panes = append(panes, inTeam(pane("w"+string(rune('a'+i))+":p1", "", "claude", "idle", nil), typ+"-1"))
+	}
+	return teamOf(panes)
 }
 
 func groupNames(s snapshot.Snapshot) []string {
@@ -503,38 +503,88 @@ func groupNames(s snapshot.Snapshot) []string {
 }
 
 // TestSnapshotGroupOrder: one group per resolver group, in the order the
-// resolver gives, then the rest by name. The ◆ spaces resolver gives v12's
-// working order (herdr-dashboard-v12.py:21, without ◆ herdr, which is not in
-// the model), then debugger; another resolver, such as one whose groups are the user's
-// worker types, gives its own, and the builder hard-codes none. Names match
-// exactly, as the resolver matches them (A17): "Coders" is not coders.
+// resolver gives, then the rest by name. A tabs team's resolver gives the
+// team model's working order (team.TypeOrder); another resolver gives its
+// own, and the builder hard-codes none. Names match exactly, as the
+// resolver matches them.
 func TestSnapshotGroupOrder(t *testing.T) {
 	t.Parallel()
 
 	types := []string{"coder", "qa", "precheck", "review", "research", "librarian", "debugger"}
+	model := team.TypeOrder()
 	tests := map[string]struct {
 		groups []string
 		order  []string
 		want   []string
 	}{
-		"v12's order":                 {groups: []string{"clerk", "research", "codex", "qa", "precheck", "coders"}, order: spacesOrder, want: []string{"coders", "precheck", "qa", "codex", "research", "clerk"}},
-		"debugger after clerk":        {groups: []string{"debugger", "alpha", "clerk", "coders"}, order: spacesOrder, want: []string{"coders", "clerk", "debugger", "alpha"}},
-		"the rest follow by name":     {groups: []string{"zeta", "beta", "qa", "alpha"}, order: spacesOrder, want: []string{"qa", "alpha", "beta", "zeta"}},
-		"another case is another one": {groups: []string{"Coders", "coders", "QA"}, order: spacesOrder, want: []string{"coders", "Coders", "QA"}},
-		"non-ASCII names":             {groups: []string{"ü", "a", "coders"}, order: spacesOrder, want: []string{"coders", "a", "ü"}},
-		"a single group":              {groups: []string{"research"}, order: spacesOrder, want: []string{"research"}},
-		"no group spaces":             {groups: nil, order: spacesOrder, want: nil},
+		"the team model's order":      {groups: []string{"librarian", "research", "review", "qa", "precheck", "coder"}, order: model, want: []string{"coder", "precheck", "qa", "review", "research", "librarian"}},
+		"debugger after librarian":    {groups: []string{"debugger", "alpha", "librarian", "coder"}, order: model, want: []string{"coder", "librarian", "debugger", "alpha"}},
+		"the rest follow by name":     {groups: []string{"zeta", "beta", "qa", "alpha"}, order: model, want: []string{"qa", "alpha", "beta", "zeta"}},
+		"a single group":              {groups: []string{"research"}, order: model, want: []string{"research"}},
+		"no worker tabs":              {groups: nil, order: model, want: nil},
 		"a resolver's own order":      {groups: []string{"debugger", "coder", "librarian", "qa", "review", "research", "precheck"}, order: types, want: types},
-		"no order: by name":           {groups: []string{"qa", "coders", "clerk"}, order: nil, want: []string{"clerk", "coders", "qa"}},
+		"no order: by name":           {groups: []string{"qa", "coder", "clerk"}, order: nil, want: []string{"clerk", "coder", "qa"}},
 		"an order naming absent ones": {groups: []string{"research"}, order: types, want: []string{"research"}},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			m := team.Build(groupsLayout(tc.groups...), team.Spaces{}, nil)
+			m := team.Build(typesLayout(tc.groups...), liveTeam, nil)
 			for i := range m.Projects {
 				m.Projects[i].Order = tc.order
 			}
+			s := team.Snapshot(m, liveProject, at, nil, nil)
+			assert.Equal(t, tc.want, groupNames(s))
+			assert.NotNil(t, s.Groups, "groups is a list, never null")
+		})
+	}
+	// A tab's type is lower case ASCII, so the exact match is shown on a
+	// model built by hand: "Coder" is not coder.
+	for name, tc := range map[string]struct{ groups, want []string }{
+		"another case is another one": {groups: []string{"Coder", "coder", "QA"}, want: []string{"coder", "Coder", "QA"}},
+		"non-ASCII names":             {groups: []string{"ü", "a", "coder"}, want: []string{"coder", "a", "ü"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			pr := team.Project{Name: liveProject, Order: model}
+			for _, g := range tc.groups {
+				pr.Groups = append(pr.Groups, team.Group{Name: g})
+			}
+			assert.Equal(t, tc.want, groupNames(team.Snapshot(team.Model{Projects: []team.Project{pr}}, liveProject, at, nil, nil)))
+		})
+	}
+	t.Run("a tabs team's own order is the team model's", func(t *testing.T) {
+		t.Parallel()
+		m := team.Build(typesLayout("debugger", "zeta", "librarian", "qa", "review", "coder", "research", "precheck"), liveTeam, nil)
+		s := team.Snapshot(m, liveProject, at, nil, nil)
+		assert.Equal(t, append(team.TypeOrder(), "zeta"), groupNames(s))
+	})
+}
+
+// TestSpacesSnapshotGroupOrder is TestSnapshotGroupOrder on the ◆ spaces,
+// whose resolver gives v12's working order (herdr-dashboard-v12.py:21,
+// without ◆ herdr, which is not in the model), then debugger. A space's
+// label may name any group, so names match exactly: "Coders" is not
+// coders.
+func TestSpacesSnapshotGroupOrder(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		groups []string
+		want   []string
+	}{
+		"v12's order":                 {groups: []string{"clerk", "research", "codex", "qa", "precheck", "coders"}, want: []string{"coders", "precheck", "qa", "codex", "research", "clerk"}},
+		"debugger after clerk":        {groups: []string{"debugger", "alpha", "clerk", "coders"}, want: []string{"coders", "clerk", "debugger", "alpha"}},
+		"the rest follow by name":     {groups: []string{"zeta", "beta", "qa", "alpha"}, want: []string{"qa", "alpha", "beta", "zeta"}},
+		"another case is another one": {groups: []string{"Coders", "coders", "QA"}, want: []string{"coders", "Coders", "QA"}},
+		"non-ASCII names":             {groups: []string{"ü", "a", "coders"}, want: []string{"coders", "a", "ü"}},
+		"a single group":              {groups: []string{"research"}, want: []string{"research"}},
+		"no group spaces":             {groups: nil, want: nil},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			m := team.Build(groupsLayout(tc.groups...), team.Spaces{}, nil)
 			s := team.Snapshot(m, "", at, nil, nil)
 			assert.Equal(t, tc.want, groupNames(s))
 			assert.NotNil(t, s.Groups, "groups is a list, never null")
@@ -549,89 +599,91 @@ func TestSnapshotGroupOrder(t *testing.T) {
 	})
 }
 
-// TestSnapshotBoss: the boss is an agent pane in ◆ boss. The contract has
-// one, so with several the first by pane id is it, and a shell there (this
-// dashboard's own pane, say) never is. No agent in ◆ boss, or no ◆ boss,
-// leaves the boss out: nothing the daemon does not know is invented.
+// TestSnapshotBoss: the boss is an agent pane in the boss's tab. The
+// contract has one, so with several the first by pane id is it, and a shell
+// there (this dashboard's own pane, say) never is. No agent in the boss's
+// tab, or no boss's tab, leaves the boss out: nothing the daemon does not
+// know is invented.
 func TestSnapshotBoss(t *testing.T) {
 	t.Parallel()
 
-	space := []herdr.WorkspaceInfo{{WorkspaceID: "wJ", Label: "◆ boss"}}
+	boss := []herdr.TabInfo{liveTab("boss")}
 	tests := map[string]struct {
-		workspaces []herdr.WorkspaceInfo
-		panes      []herdr.PaneInfo
-		agents     []herdr.AgentInfo
-		want       *snapshot.Boss
+		tabs   []herdr.TabInfo
+		panes  []herdr.PaneInfo
+		agents []herdr.AgentInfo
+		want   *snapshot.Boss
 	}{
 		"one boss": {
-			workspaces: space, panes: []herdr.PaneInfo{pane("wJ:p1", "wJ", "claude", "working", map[string]string{"ctx": "23", "item": "#867", "stage": "review"})},
+			tabs: boss, panes: []herdr.PaneInfo{inTeam(pane("wJ:p1", "", "claude", "working", map[string]string{"ctx": "23", "item": "#867", "stage": "review"}), "boss")},
 			agents: []herdr.AgentInfo{{PaneID: "wJ:p1", Name: "boss"}},
-			want:   &snapshot.Boss{Agent: snapshot.Agent{Name: "boss", PaneID: "wJ:p1", Status: snapshot.StatusWorking, Kind: "claude", Ctx: new(23), Item: "#867", Stage: "review"}},
+			want:   &snapshot.Boss{Agent: snapshot.Agent{Name: "boss", PaneID: "wJ:p1", TabID: "wT:boss", Status: snapshot.StatusWorking, Kind: "claude", Ctx: new(23), Item: "#867", Stage: "review"}},
 		},
 		"the first agent pane by pane id, past a shell": {
-			workspaces: space,
-			panes:      []herdr.PaneInfo{pane("wJ:p3", "wJ", "claude", "idle", nil), pane("wJ:p1", "wJ", "", "unknown", nil), pane("wJ:p2", "wJ", "claude", "working", nil)},
-			agents:     []herdr.AgentInfo{{PaneID: "wJ:p2", Name: "boss"}, {PaneID: "wJ:p3", Name: "boss-next"}},
-			want:       &snapshot.Boss{Agent: snapshot.Agent{Name: "boss", PaneID: "wJ:p2", Status: snapshot.StatusWorking, Kind: "claude"}},
+			tabs:   boss,
+			panes:  []herdr.PaneInfo{inTeam(pane("wJ:p3", "", "claude", "idle", nil), "boss"), inTeam(pane("wJ:p1", "", "", "unknown", nil), "boss"), inTeam(pane("wJ:p2", "", "claude", "working", nil), "boss")},
+			agents: []herdr.AgentInfo{{PaneID: "wJ:p2", Name: "boss"}, {PaneID: "wJ:p3", Name: "boss-next"}},
+			want:   &snapshot.Boss{Agent: snapshot.Agent{Name: "boss", PaneID: "wJ:p2", TabID: "wT:boss", Status: snapshot.StatusWorking, Kind: "claude"}},
 		},
 		"an unnamed boss": {
-			workspaces: space, panes: []herdr.PaneInfo{pane("wJ:p1", "wJ", "claude", "idle", nil)},
-			want: &snapshot.Boss{Agent: snapshot.Agent{Name: "wJ:p1", Unnamed: true, PaneID: "wJ:p1", Status: snapshot.StatusIdle, Kind: "claude"}},
+			tabs: boss, panes: []herdr.PaneInfo{inTeam(pane("wJ:p1", "", "claude", "idle", nil), "boss")},
+			want: &snapshot.Boss{Agent: snapshot.Agent{Name: "wJ:p1", Unnamed: true, PaneID: "wJ:p1", TabID: "wT:boss", Status: snapshot.StatusIdle, Kind: "claude"}},
 		},
-		"only shells in ◆ boss":   {workspaces: space, panes: []herdr.PaneInfo{pane("wJ:p1", "wJ", "", "unknown", nil)}},
-		"an empty ◆ boss":         {workspaces: space},
-		"no ◆ boss":               {workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wN", Label: "◆ coders"}}, panes: []herdr.PaneInfo{pane("wN:p1", "wN", "claude", "idle", nil)}},
-		"the boss is in no group": {workspaces: append(slices.Clone(space), herdr.WorkspaceInfo{WorkspaceID: "wN", Label: "◆ coders"}), panes: []herdr.PaneInfo{pane("wJ:p1", "wJ", "claude", "idle", nil)}, want: &snapshot.Boss{Agent: snapshot.Agent{Name: "wJ:p1", Unnamed: true, PaneID: "wJ:p1", Status: snapshot.StatusIdle, Kind: "claude"}}},
-		"two ◆ boss spaces, one boss": {
-			workspaces: append(slices.Clone(space), herdr.WorkspaceInfo{WorkspaceID: "wK", Label: "◆ boss"}),
-			panes:      []herdr.PaneInfo{pane("wK:p1", "wK", "claude", "idle", nil), pane("wJ:p1", "wJ", "claude", "working", nil)},
-			agents:     []herdr.AgentInfo{{PaneID: "wJ:p1", Name: "boss"}, {PaneID: "wK:p1", Name: "boss2"}},
-			want:       &snapshot.Boss{Agent: snapshot.Agent{Name: "boss", PaneID: "wJ:p1", Status: snapshot.StatusWorking, Kind: "claude"}},
+		"only shells in the boss's tab": {tabs: boss, panes: []herdr.PaneInfo{inTeam(pane("wJ:p1", "", "", "unknown", nil), "boss")}},
+		"an empty boss's tab":           {tabs: boss},
+		"no boss's tab":                 {tabs: []herdr.TabInfo{liveTab("coder-1")}, panes: []herdr.PaneInfo{inTeam(pane("wN:p1", "", "claude", "idle", nil), "coder-1")}},
+		"the boss is in no group": {
+			tabs: append(slices.Clone(boss), liveTab("coder-1")), panes: []herdr.PaneInfo{inTeam(pane("wJ:p1", "", "claude", "idle", nil), "boss")},
+			want: &snapshot.Boss{Agent: snapshot.Agent{Name: "wJ:p1", Unnamed: true, PaneID: "wJ:p1", TabID: "wT:boss", Status: snapshot.StatusIdle, Kind: "claude"}},
+		},
+		"two boss's tabs, one boss": {
+			tabs:   append(slices.Clone(boss), herdr.TabInfo{TabID: "wT:tK", WorkspaceID: liveWS, Label: liveShort + "-boss"}),
+			panes:  []herdr.PaneInfo{inTeam(pane("wK:p1", "", "claude", "idle", nil), "tK"), inTeam(pane("wJ:p1", "", "claude", "working", nil), "boss")},
+			agents: []herdr.AgentInfo{{PaneID: "wJ:p1", Name: "boss"}, {PaneID: "wK:p1", Name: "boss2"}},
+			want:   &snapshot.Boss{Agent: snapshot.Agent{Name: "boss", PaneID: "wJ:p1", TabID: "wT:boss", Status: snapshot.StatusWorking, Kind: "claude"}},
 		},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			l := team.Layout{Workspaces: tc.workspaces, Panes: tc.panes, Agents: tc.agents}
-			s := team.Snapshot(team.Build(l, team.Spaces{}, nil), "", at, nil, nil)
+			l := team.Layout{Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: liveWS, Label: liveProject}}, Tabs: tc.tabs, Panes: tc.panes, Agents: tc.agents}
+			s := team.Snapshot(team.Build(l, liveTeam, nil), liveProject, at, nil, nil)
 			assert.Equal(t, tc.want, s.Boss)
 			for _, g := range s.Groups {
 				for _, a := range g.Agents {
-					assert.NotEqual(t, "wJ", a.PaneID[:2], "a boss-space pane is never a group's row")
+					assert.NotEqual(t, "wJ", a.PaneID[:2], "a pane in the boss's tab is never a group's row")
 				}
 			}
 		})
 	}
 }
 
-// TestSnapshotProject: the team is the project the spaces belong to, by
-// name, and its colour, when configured, is the project's only reported
-// state: PRs, issues and slots stay unreported (NERD-5257 collects them).
-// The unnamed project has no name and no colour.
+// TestSnapshotProject: the team is the project, by name, and its colour,
+// when configured, is the project's only reported state: PRs, issues and
+// slots stay unreported (NERD-5257 collects them).
 func TestSnapshotProject(t *testing.T) {
 	t.Parallel()
 
 	tests := map[string]struct {
-		project, color string
-		want           *snapshot.Project
+		color string
+		want  *snapshot.Project
 	}{
-		"a project with a colour":    {project: "agentisan", color: "#7c3aed", want: &snapshot.Project{Color: "#7c3aed"}},
-		"a project without a colour": {project: "agentisan"},
-		"the unnamed project":        {},
+		"a project with a colour":    {color: "#7c3aed", want: &snapshot.Project{Color: "#7c3aed"}},
+		"a project without a colour": {},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			m := team.Build(groupsLayout("coders"), team.Spaces{Project: tc.project, Color: tc.color}, nil)
-			s := team.Snapshot(m, tc.project, at, nil, nil)
-			assert.Equal(t, tc.project, s.Team)
+			m := team.Build(typesLayout("coder"), team.Tabs{Project: liveProject, Short: liveShort, Color: tc.color}, nil)
+			s := team.Snapshot(m, liveProject, at, nil, nil)
+			assert.Equal(t, liveProject, s.Team)
 			assert.Equal(t, tc.want, s.Project)
-			assert.Equal(t, []string{"coders"}, groupNames(s))
+			assert.Equal(t, []string{"coder"}, groupNames(s))
 		})
 	}
 	t.Run("another project's panes are not the team's", func(t *testing.T) {
 		t.Parallel()
-		m := team.Build(groupsLayout("coders"), team.Spaces{Project: "a", Color: "#7c3aed"}, nil)
+		m := team.Build(typesLayout("coder"), team.Tabs{Project: liveProject, Short: liveShort, Color: "#7c3aed"}, nil)
 		s := team.Snapshot(m, "b", at, nil, nil)
 		assert.Equal(t, "b", s.Team)
 		assert.Empty(t, s.Groups)
@@ -640,36 +692,41 @@ func TestSnapshotProject(t *testing.T) {
 	})
 }
 
+// TestSpacesSnapshotUnnamedProject: the ◆ spaces of a configuration that
+// names no [spaces] project are the unnamed project's, which has no name
+// and no colour.
+func TestSpacesSnapshotUnnamedProject(t *testing.T) {
+	t.Parallel()
+	m := team.Build(groupsLayout("coders"), team.Spaces{}, nil)
+	s := team.Snapshot(m, "", at, nil, nil)
+	assert.Empty(t, s.Team)
+	assert.Nil(t, s.Project)
+	assert.Equal(t, []string{"coders"}, groupNames(s))
+}
+
 // TestSnapshotDecodesStrictly: whatever the model holds, the snapshot it
 // gives encodes to a document snapshot.Decode accepts byte for byte: a
-// group space with no panes is a group with an empty agent list, never
-// null, and no group spaces is an empty group list.
+// worker's tab with no panes is a group with an empty agent list, never
+// null, and no team is an empty group list.
 func TestSnapshotDecodesStrictly(t *testing.T) {
 	t.Parallel()
 
-	full := team.Layout{
-		Workspaces: []herdr.WorkspaceInfo{
-			{WorkspaceID: "wJ", Label: "◆ boss"},
-			{WorkspaceID: "wN", Label: "◆ coders"},
-			{WorkspaceID: "w0", Label: "◆ research"},
-			{WorkspaceID: "w2", Label: "notes"},
-		},
-		Panes: []herdr.PaneInfo{
-			pane("wJ:p1", "wJ", "claude", "working", map[string]string{"ctx": "23", "stage": "review"}),
-			pane("wN:p1", "wN", "claude", "working", map[string]string{"ctx": "40", "item": "NERD-1", "stage": "build"}),
-			pane("wN:p2", "wN", "", "unknown", map[string]string{"ctx": "nope"}),
-			{PaneID: "wN:p3", WorkspaceID: "wN", AgentStatus: "unknown", Label: "no\xfftes", Tokens: map[string]string{"item": "a\x00b", "stage": "c\xe2\x82"}},
-			pane("w2:p1", "w2", "claude", "working", nil),
-		},
-		Agents: []herdr.AgentInfo{{PaneID: "wJ:p1", Name: "boss"}, {PaneID: "wN:p1", Name: "pee01"}},
-	}
+	full := teamOf([]herdr.PaneInfo{
+		inTeam(pane("wJ:p1", "", "claude", "working", map[string]string{"ctx": "23", "stage": "review"}), "boss"),
+		inTeam(pane("wN:p1", "", "claude", "working", map[string]string{"ctx": "40", "item": "NERD-1", "stage": "build"}), "coder-1"),
+		inTeam(pane("wN:p2", "", "", "unknown", map[string]string{"ctx": "nope"}), "coder-2"),
+		inTeam(herdr.PaneInfo{PaneID: "wN:p3", AgentStatus: "unknown", Label: "no\xfftes", Tokens: map[string]string{"item": "a\x00b", "stage": "c\xe2\x82"}}, "coder-3"),
+		pane("w2:p1", "w2", "claude", "working", nil),
+	}, "research-1")
+	full.Workspaces = append(full.Workspaces, herdr.WorkspaceInfo{WorkspaceID: "w2", Label: "notes"})
+	full.Agents = []herdr.AgentInfo{{PaneID: "wJ:p1", Name: "boss"}, {PaneID: "wN:p1", Name: "pee01"}}
 	clock := &team.StageClock{}
-	m := team.Build(full, team.Spaces{Project: "agentisan", Color: "#7c3aed"}, nil)
+	m := team.Build(full, team.Tabs{Project: "agentisan", Short: liveShort, Color: "#7c3aed"}, nil)
 	clock.Observe(m, at)
 
 	tests := map[string]snapshot.Snapshot{
 		"a full team":      team.Snapshot(m, "agentisan", at, clock, nil),
-		"no group spaces":  team.Snapshot(team.Model{}, "", at, clock, nil),
+		"no team":          team.Snapshot(team.Model{}, "", at, clock, nil),
 		"a nil clock":      team.Snapshot(m, "agentisan", at, nil, nil),
 		"a local-time now": team.Snapshot(m, "agentisan", at.In(time.FixedZone("x", -7*3600)), clock, nil),
 	}
@@ -689,7 +746,7 @@ func TestSnapshotDecodesStrictly(t *testing.T) {
 
 	raw, err := json.Marshal(tests["a full team"])
 	require.NoError(t, err)
-	assert.Contains(t, string(raw), `{"name":"research","agents":[]}`, "an empty group space is an empty list")
+	assert.Contains(t, string(raw), `{"name":"research","agents":[]}`, "an empty worker's tab is an empty list")
 	assert.Contains(t, string(raw), `"at":"2026-10-10T09:30:00Z"`, "times are UTC")
 }
 
@@ -703,15 +760,19 @@ func TestStageClock(t *testing.T) {
 	t.Parallel()
 
 	l := func(stages map[string]string) team.Model {
-		layout := team.Layout{Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wJ", Label: "◆ boss"}, {WorkspaceID: "wN", Label: "◆ coders"}}}
+		var panes []herdr.PaneInfo
 		for _, id := range slices.Sorted(maps.Keys(stages)) {
 			var tokens map[string]string
 			if v := stages[id]; v != "-" {
 				tokens = map[string]string{"stage": v}
 			}
-			layout.Panes = append(layout.Panes, pane(id, id[:2], "claude", "working", tokens))
+			tab := "coder-1" // wN's panes are a coder's, wJ's the boss's
+			if id[:2] == "wJ" {
+				tab = "boss"
+			}
+			panes = append(panes, inTeam(pane(id, "", "claude", "working", tokens), tab))
 		}
-		return team.Build(layout, team.Spaces{}, nil)
+		return team.Build(teamOf(panes), liveTeam, nil)
 	}
 	t0, t1, t2, t3 := at, at.Add(3*time.Second), at.Add(6*time.Second), at.Add(9*time.Second)
 	since := func(c *team.StageClock, id, stage string) time.Time {
@@ -796,7 +857,7 @@ func TestStageClock(t *testing.T) {
 		m := l(map[string]string{"wN:p1": "build", "wJ:p1": "plan"})
 		c.Observe(m, local)
 		c.Observe(m, t2)
-		s := team.Snapshot(m, "", t2, c, nil)
+		s := team.Snapshot(m, liveProject, t2, c, nil)
 		require.NotNil(t, s.Boss)
 		require.NotNil(t, s.Boss.StageStartedAt)
 		assert.Equal(t, t0, *s.Boss.StageStartedAt)
@@ -819,14 +880,13 @@ func TestStageClock(t *testing.T) {
 // daemon restart cannot start it again.
 func TestSnapshotLeavesTheBossRuntimeOut(t *testing.T) {
 	t.Parallel()
-	m := team.Build(team.Layout{
-		Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wJ", Label: "◆ boss"}},
-		Panes:      []herdr.PaneInfo{pane("wJ:p1", "wJ", "claude", "working", map[string]string{"stage": "plan"})},
-	}, team.Spaces{}, nil)
+	m := team.Build(teamOf([]herdr.PaneInfo{
+		inTeam(pane("wJ:p1", "", "claude", "working", map[string]string{"stage": "plan"}), "boss"),
+	}), liveTeam, nil)
 	c := &team.StageClock{}
 	c.Observe(m, at)
 	c.Observe(m, at.Add(time.Hour))
-	s := team.Snapshot(m, "", at.Add(time.Hour), c, nil)
+	s := team.Snapshot(m, liveProject, at.Add(time.Hour), c, nil)
 	require.NotNil(t, s.Boss)
 	assert.Equal(t, "wJ:p1", s.Boss.PaneID)
 	require.NotNil(t, s.Boss.StageStartedAt, "the stage clock still times its stage")

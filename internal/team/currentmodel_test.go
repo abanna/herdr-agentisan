@@ -19,14 +19,10 @@ func reported(model string, at time.Time) map[string]string {
 	return map[string]string{report.ModelKey: model, report.ModelAtKey: report.FormatModelAt(at)}
 }
 
-// modelPanes builds a ◆ boss space and a ◆ coders space from panes, each
-// already placed in wJ or wN, and returns the model's panes by id.
+// modelPanes builds the live team from panes, each already placed in its
+// tab, and returns the model's panes by id.
 func modelPanes(panes ...herdr.PaneInfo) (team.Model, map[string]team.Pane) {
-	l := team.Layout{
-		Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wJ", Label: "◆ boss"}, {WorkspaceID: "wN", Label: "◆ coders"}},
-		Panes:      panes,
-	}
-	m := team.Build(l, team.Spaces{}, nil)
+	m := team.Build(teamOf(panes), liveTeam, nil)
 	byID := map[string]team.Pane{}
 	for _, pr := range m.Projects {
 		for _, w := range pr.Boss {
@@ -47,13 +43,13 @@ func modelPanes(panes ...herdr.PaneInfo) (team.Model, map[string]team.Pane) {
 func TestPaneReadsTheReportedModel(t *testing.T) {
 	t.Parallel()
 	_, got := modelPanes(
-		pane("wN:p1", "wN", "claude", "working", reported("claude-sonnet-5-5", modelAt)),
-		pane("wN:p2", "wN", "", "unknown", reported("gpt-5.5", modelAt)),
-		pane("wN:p3", "wN", "codex", "idle", map[string]string{report.ModelKey: "gpt-5.5"}),
-		pane("wN:p4", "wN", "codex", "idle", map[string]string{report.ModelKey: "gpt-5.5", report.ModelAtKey: "1761066000.5"}),
-		pane("wN:p5", "wN", "claude", "idle", reported("--model", modelAt)),
-		pane("wN:p6", "wN", "claude", "idle", map[string]string{report.ModelAtKey: report.FormatModelAt(modelAt)}),
-		pane("wJ:p1", "wJ", "claude", "working", reported("claude-opus-5-5[1m]", modelAt)),
+		inTeam(pane("wN:p1", "", "claude", "working", reported("claude-sonnet-5-5", modelAt)), "coder-1"),
+		inTeam(pane("wN:p2", "", "", "unknown", reported("gpt-5.5", modelAt)), "coder-1"),
+		inTeam(pane("wN:p3", "", "codex", "idle", map[string]string{report.ModelKey: "gpt-5.5"}), "coder-1"),
+		inTeam(pane("wN:p4", "", "codex", "idle", map[string]string{report.ModelKey: "gpt-5.5", report.ModelAtKey: "1761066000.5"}), "coder-1"),
+		inTeam(pane("wN:p5", "", "claude", "idle", reported("--model", modelAt)), "coder-1"),
+		inTeam(pane("wN:p6", "", "claude", "idle", map[string]string{report.ModelAtKey: report.FormatModelAt(modelAt)}), "coder-1"),
+		inTeam(pane("wJ:p1", "", "claude", "working", reported("claude-opus-5-5[1m]", modelAt)), "boss"),
 	)
 
 	assert.Equal(t, "claude-sonnet-5-5", got["wN:p1"].Model)
@@ -102,7 +98,7 @@ func TestCurrentModels(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			m, _ := modelPanes(pane("wN:p1", "wN", "claude", "working", tc.tokens))
+			m, _ := modelPanes(inTeam(pane("wN:p1", "", "claude", "working", tc.tokens), "coder-1"))
 			launch := map[string]string{}
 			if tc.launch != "" {
 				launch["wN:p1"] = tc.launch
@@ -129,10 +125,10 @@ func TestCurrentModelsCoversEveryTeamPane(t *testing.T) {
 	t.Parallel()
 	start := modelAt.Add(-time.Minute)
 	m, _ := modelPanes(
-		pane("wJ:p1", "wJ", "claude", "working", reported("claude-opus-5-5", modelAt)),
-		pane("wN:p1", "wN", "claude", "idle", nil),
-		pane("wN:p2", "wN", "codex", "working", reported("gpt-5.5", modelAt)),
-		pane("wN:p3", "wN", "", "unknown", reported("gpt-5", modelAt)),
+		inTeam(pane("wJ:p1", "", "claude", "working", reported("claude-opus-5-5", modelAt)), "boss"),
+		inTeam(pane("wN:p1", "", "claude", "idle", nil), "coder-1"),
+		inTeam(pane("wN:p2", "", "codex", "working", reported("gpt-5.5", modelAt)), "coder-1"),
+		inTeam(pane("wN:p3", "", "", "unknown", reported("gpt-5", modelAt)), "coder-1"),
 	)
 	launch := map[string]string{"wJ:p1": "opus", "wN:p1": "sonnet", "wN:p2": "gpt-5", "w9:p9": "elsewhere"}
 	started := map[string]time.Time{"wJ:p1": start, "wN:p2": start, "w9:p9": start}

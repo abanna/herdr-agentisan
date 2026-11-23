@@ -189,8 +189,8 @@ func TestTabsTeamWorkspace(t *testing.T) {
 	assert.Empty(t, team.Build(team.Layout{Workspaces: []herdr.WorkspaceInfo{ws("w1", "x")}}, team.Tabs{Project: "x"}, nil).Projects, "no short code, no team")
 }
 
-// TestTabsTeamsResolveExactly is NERD-5282's layout: two tabs teams beside
-// the ◆ spaces. herdr-agentisan has the boss's tab (the boss and a dashboard
+// TestTabsTeamsResolveExactly is NERD-5282's layout: two tabs teams.
+// herdr-agentisan has the boss's tab (the boss and a dashboard
 // split, both the boss's), workers of four types, an unconfigured type, tabs
 // that do not parse and a duplicate team workspace; assay has only its
 // boss's tab. Each team carries its workspaces, the team-model order and its
@@ -203,7 +203,6 @@ func TestTabsTeamsResolveExactly(t *testing.T) {
 			{WorkspaceID: "w14", Label: "herdr-agentisan"},
 			{WorkspaceID: "w15", Label: "herdr-agentisan"},
 			{WorkspaceID: "w20", Label: "assay"},
-			{WorkspaceID: "wN", Label: "◆ coders"},
 			{WorkspaceID: "w2", Label: "notes"},
 		},
 		Tabs: []herdr.TabInfo{
@@ -229,11 +228,10 @@ func TestTabsTeamsResolveExactly(t *testing.T) {
 			// A tab tab.list does not have yet: placed nowhere.
 			inTab("w14:p9", "w14", "w14:t9", "working"),
 			inTab("w15:p1", "w15", "w15:t1", "working"), inTab("w20:p1", "w20", "w20:t1", "idle"),
-			inTab("wN:p1", "wN", "wN:t1", "working"), inTab("w2:p1", "w2", "w2:t1", "working"),
+			inTab("w2:p1", "w2", "w2:t1", "working"),
 		},
 	}
 	r := team.Resolvers{
-		team.Spaces{Project: "agentisan", Color: "#0ea5e9"},
 		ha,
 		team.Tabs{Project: "assay", Short: "as"},
 	}
@@ -251,13 +249,9 @@ func TestTabsTeamsResolveExactly(t *testing.T) {
 		w.Pane.Ctx = ctx
 		return w
 	}
-	w14, wN := team.Target{WorkspaceID: "w14"}, team.Target{WorkspaceID: "wN"}
+	w14 := team.Target{WorkspaceID: "w14"}
 	order := []string{"coder", "precheck", "qa", "review", "research", "librarian", "debugger"}
 	assert.Equal(t, team.Model{Projects: []team.Project{
-		{
-			Name: "agentisan", Color: "#0ea5e9", Workspaces: []string{"wN"}, Order: team.Spaces{}.GroupOrder(),
-			Groups: []team.Group{{Name: "coders", Targets: []team.Target{wN}, Workers: []team.Worker{worker("wN:p1", "wN", "wN:t1", team.StatusWorking, "claude", false)}}},
-		},
 		{
 			Name: "assay", Short: "as", Workspaces: []string{"w20"}, Order: order, Target: team.Target{WorkspaceID: "w20"},
 			Boss: []team.Worker{{ID: "w20:p1", Pane: team.Pane{ID: "w20:p1", TerminalID: "term_w20:p1", TabID: "w20:t1", Agent: "claude", Status: team.StatusIdle}}},
@@ -281,7 +275,6 @@ func TestTabsTeamsResolveExactly(t *testing.T) {
 	assert.Equal(t, []team.Token{
 		{Target: w14, Value: "5 agents · 1 working · 1 ready · 1 blocked"},
 		{Target: team.Target{WorkspaceID: "w20"}, Value: "0 agents · 0 working · 0 ready"},
-		{Target: wN, Value: "1 agent · 1 working · 0 ready"},
 	}, team.Tokens(got))
 
 	shuffled := l
@@ -289,6 +282,46 @@ func TestTabsTeamsResolveExactly(t *testing.T) {
 	slices.Reverse(shuffled.Tabs)
 	slices.Reverse(shuffled.Panes)
 	assert.Equal(t, got, team.Build(shuffled, r, nil), "a rebuild from the same tabs and panes in another order is equal")
+}
+
+// TestTabsTeamsResolveBesideTheSpaces: the ◆ spaces resolve beside a tabs
+// team, each claiming only its own workspaces: the spaces' ◆ coders, with
+// v12's order and their colour, and the tabs team's workspace, with the
+// team model's; each gets its own $team.
+func TestTabsTeamsResolveBesideTheSpaces(t *testing.T) {
+	t.Parallel()
+	l := team.Layout{
+		Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "w14", Label: "herdr-agentisan"}, {WorkspaceID: "wN", Label: "◆ coders"}},
+		Tabs:       []herdr.TabInfo{{TabID: "w14:t2", WorkspaceID: "w14", Label: "ha-coder-1"}},
+		Panes:      []herdr.PaneInfo{inTab("w14:p2", "w14", "w14:t2", "working"), inTab("wN:p1", "wN", "wN:t1", "working")},
+	}
+	r := team.Resolvers{team.Spaces{Project: "agentisan", Color: "#0ea5e9"}, ha}
+	got := team.Build(l, r, nil)
+
+	wN, w14 := team.Target{WorkspaceID: "wN"}, team.Target{WorkspaceID: "w14"}
+	assert.Equal(t, team.Model{Projects: []team.Project{
+		{
+			Name: "agentisan", Color: "#0ea5e9", Workspaces: []string{"wN"}, Order: team.Spaces{}.GroupOrder(),
+			Groups: []team.Group{{Name: "coders", Targets: []team.Target{wN}, Workers: []team.Worker{
+				{ID: "wN:p1", Target: wN, Pane: team.Pane{ID: "wN:p1", TabID: "wN:t1", TerminalID: "term_wN:p1", Agent: "claude", Status: team.StatusWorking}},
+			}}},
+		},
+		{
+			Name: "herdr-agentisan", Short: "ha", Color: "#7c3aed", Workspaces: []string{"w14"}, Order: team.TypeOrder(), Target: w14,
+			Groups: []team.Group{{Name: "coder", Targets: []team.Target{w14}, Workers: []team.Worker{
+				{ID: "w14:p2", Target: w14, Pane: team.Pane{ID: "w14:p2", TabID: "w14:t2", TerminalID: "term_w14:p2", Agent: "claude", Status: team.StatusWorking}},
+			}}},
+		},
+	}}, got)
+	shuffled := l
+	shuffled.Workspaces, shuffled.Panes = slices.Clone(l.Workspaces), slices.Clone(l.Panes)
+	slices.Reverse(shuffled.Workspaces)
+	slices.Reverse(shuffled.Panes)
+	assert.Equal(t, got, team.Build(shuffled, r, nil), "a rebuild from the same layout in another order is equal")
+	assert.Equal(t, []team.Token{
+		{Target: w14, Value: "1 agent · 1 working · 0 ready"},
+		{Target: wN, Value: "1 agent · 1 working · 0 ready"},
+	}, team.Tokens(got))
 }
 
 // TestTabsPlacesOnlyItsOwnTabsOnce: a tab in another workspace adds no group
