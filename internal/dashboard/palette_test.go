@@ -99,6 +99,8 @@ func TestModelUsesTerminalBackground(t *testing.T) {
 	m := dashboard.New(t.Context(), dashboard.Config{})
 	m, _ = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	require.Contains(t, m.View().Content, "38;2;190;203;227", "dark before a report")
+	m, _ = update(t, m, tea.BackgroundColorMsg{})
+	require.Contains(t, m.View().Content, "38;2;190;203;227", "dark after a nil colour report")
 	m, _ = update(t, m, tea.BackgroundColorMsg{Color: lipgloss.Color("#eaeaea")})
 	require.Contains(t, m.View().Content, "38;2;60;76;105", "light after a light report")
 	m, _ = update(t, m, tea.ColorProfileMsg{Profile: colorprofile.ANSI})
