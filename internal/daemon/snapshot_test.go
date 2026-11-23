@@ -24,6 +24,7 @@ import (
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/plugin"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/team"
@@ -32,12 +33,12 @@ import (
 // t0 is the instant the snapshot tests' clock starts at.
 var t0 = time.Date(2026, 10, 10, 9, 30, 0, 0, time.UTC)
 
-// layout replaces what th answers pane.list, workspace.list and agent.list
-// with.
-func (th *teamHerdr) layout(ws []herdr.WorkspaceInfo, panes, agents []map[string]any) {
+// layout replaces what th answers workspace.list, tab.list, pane.list and
+// agent.list with.
+func (th *teamHerdr) layout(ws []herdr.WorkspaceInfo, tabs, panes, agents []map[string]any) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
-	th.workspaces, th.panes, th.agents = ws, panes, agents
+	th.workspaces, th.tabs, th.panes, th.agents = ws, tabs, panes, agents
 }
 
 // teamPane is a pane as pane.list answers it: an agent of kind agent (""
@@ -65,96 +66,112 @@ func named(paneID, name string) map[string]any {
 	return a
 }
 
-// fullTeam is a team in several ◆ spaces: the boss, with this dashboard's
-// own shell beside it; working, ready, blocked and idle agents, named and
-// unnamed, labelled and not; plain shells; a group v12's order does not
-// name; an empty group; and the spaces that are not the team's.
-func fullTeam() ([]herdr.WorkspaceInfo, []map[string]any, []map[string]any) {
-	ws := []herdr.WorkspaceInfo{
-		{WorkspaceID: "wJ", Label: "◆ boss"},
-		{WorkspaceID: "wR", Label: "◆ research"},
-		{WorkspaceID: "wN", Label: "◆ coders"},
-		{WorkspaceID: "wQ", Label: "◆ qa"},
-		{WorkspaceID: "wZ", Label: "◆ zeta"},
-		{WorkspaceID: "wP", Label: "agentisan · precheck"},
-		{WorkspaceID: "w12", Label: "◆ herdr"},
+// fullWorkspace is fullTeam's workspace, and fullTabOf the tab each of its
+// panes is in, by pane id: the boss's tab holds two.
+const fullWorkspace = "wA"
+
+var fullTabOf = map[string]string{
+	"wJ:p1": "wA:tB", "wJ:p2": "wA:tB",
+	"wN:p1": "wA:t1", "wN:p2": "wA:t2", "wN:p3": "wA:t3", "wN:p4": "wA:t4", "wN:p5": "wA:t5",
+	"wP:p1": "wA:tP", "wQ:p1": "wA:tQ", "wZ:p1": "wA:tZ", "w12:p1": "wA:tH",
+}
+
+// fullPane is teamPane in fullTeam's workspace, in the tab fullTabOf gives
+// id.
+func fullPane(id, agent, status, label string, tokens map[string]string) map[string]any {
+	p := teamPane(id, fullWorkspace, agent, status, label, tokens)
+	p["tab_id"] = fullTabOf[id]
+	return p
+}
+
+// fullTeam is the agentisan tabs team (A19) in wA: the boss, with this
+// dashboard's own pane beside it in its tab; working, ready, blocked and
+// idle agents, named and unnamed, labelled and not; plain shells; a type
+// the working order does not name; a tab outside the model; and a
+// workspace that is not the team's.
+func fullTeam() (ws []herdr.WorkspaceInfo, tabs, panes, agents []map[string]any) {
+	ws = []herdr.WorkspaceInfo{
+		{WorkspaceID: fullWorkspace, Label: "agentisan"},
 		{WorkspaceID: "w2", Label: "notes"},
 	}
-	panes := []map[string]any{
-		teamPane("wJ:p1", "wJ", "claude", "working", "", map[string]string{"ctx": "23", "item": "#867", "stage": "review"}),
-		teamPane("wJ:p2", "wJ", "", "unknown", "Agentisan dashboard", nil),
-		teamPane("wN:p1", "wN", "claude", "working", "", map[string]string{"ctx": "40", "item": "NERD-5255", "stage": "build_test"}),
-		teamPane("wN:p2", "wN", "claude", "done", "", map[string]string{"ctx": "61", "handoff": "⟳ READY TO RESTART"}),
-		teamPane("wN:p3", "wN", "claude", "blocked", "", map[string]string{"ctx": "78", "item": "NERD-5247", "stage": "waiting on boss"}),
-		teamPane("wN:p4", "wN", "codex", "idle", "scratch", nil),
-		teamPane("wN:p5", "wN", "", "unknown", "", nil),
-		teamPane("wQ:p1", "wQ", "claude", "idle", "", map[string]string{"ctx": "abc"}),
-		teamPane("wZ:p1", "wZ", "", "unknown", "notes", nil),
-		teamPane("wP:p1", "wP", "claude", "working", "", map[string]string{"ctx": "100", "stage": "running"}),
-		teamPane("w12:p1", "w12", "", "unknown", "", nil),
+	tabs = []map[string]any{
+		tabOf("wA:tB", fullWorkspace, "ag-boss"),
+		tabOf("wA:t1", fullWorkspace, "ag-coder-1"), tabOf("wA:t2", fullWorkspace, "ag-coder-2"), tabOf("wA:t3", fullWorkspace, "ag-coder-3"),
+		tabOf("wA:t4", fullWorkspace, "ag-coder-4"), tabOf("wA:t5", fullWorkspace, "ag-coder-5"),
+		tabOf("wA:tP", fullWorkspace, "ag-precheck-1"), tabOf("wA:tQ", fullWorkspace, "ag-qa-1"), tabOf("wA:tZ", fullWorkspace, "ag-zeta-1"),
+		tabOf("wA:tH", fullWorkspace, "notes"),
+	}
+	panes = []map[string]any{
+		fullPane("wJ:p1", "claude", "working", "", map[string]string{"ctx": "23", "item": "#867", "stage": "review"}),
+		fullPane("wJ:p2", "", "unknown", plugin.DashboardTitle, nil),
+		fullPane("wN:p1", "claude", "working", "", map[string]string{"ctx": "40", "item": "NERD-5255", "stage": "build_test"}),
+		fullPane("wN:p2", "claude", "done", "", map[string]string{"ctx": "61", "handoff": "⟳ READY TO RESTART"}),
+		fullPane("wN:p3", "claude", "blocked", "", map[string]string{"ctx": "78", "item": "NERD-5247", "stage": "waiting on boss"}),
+		fullPane("wN:p4", "codex", "idle", "scratch", nil),
+		fullPane("wN:p5", "", "unknown", "", nil),
+		fullPane("wQ:p1", "claude", "idle", "", map[string]string{"ctx": "abc"}),
+		fullPane("wZ:p1", "", "unknown", "notes", nil),
+		fullPane("wP:p1", "claude", "working", "", map[string]string{"ctx": "100", "stage": "running"}),
+		fullPane("w12:p1", "", "unknown", "", nil),
 		teamPane("w2:p1", "w2", "claude", "working", "", nil),
 	}
-	agents := []map[string]any{
-		named("wJ:p1", "boss"), named("wN:p1", "pee01"), named("wN:p2", "pee02"), named("wN:p3", "pee03"),
+	agents = []map[string]any{
+		named("wJ:p1", "ag-boss"), named("wN:p1", "pee01"), named("wN:p2", "pee02"), named("wN:p3", "pee03"),
 		named("wN:p4", ""), named("wQ:p1", "qa"), named("wP:p1", ""), named("w2:p1", "elsewhere"),
 	}
-	return ws, panes, agents
+	return ws, tabs, panes, agents
 }
 
 //go:fix inline
 
-// wantFullTeam is fullTeam's snapshot at t0, by hand: the groups in v12's
-// order, then the rest by name; the rows by pane id; every stage first seen
-// at t0, and every agent at rest first seen resting at t0 (A37). The boss
-// has no runtime: herdr lists no agent process in its pane (A47).
+// wantFullTeam is fullTeam's snapshot at t0, by hand: the groups in the
+// working order, then the rest by name; every stage first seen at t0, and
+// every agent at rest first seen resting at t0 (A37). The boss has no
+// runtime: herdr lists no agent process in its pane (A47).
 func wantFullTeam() snapshot.Snapshot {
 	return snapshot.Snapshot{
 		V: 1, At: t0, Team: "agentisan", Project: &snapshot.Project{Color: "#7c3aed"},
 		Boss: &snapshot.Boss{Agent: snapshot.Agent{
-			Name: "boss", PaneID: "wJ:p1", Status: "working", Kind: "claude", Ctx: new(23), Item: "#867", Stage: "review", StageStartedAt: new(t0),
+			Name: "ag-boss", PaneID: "wJ:p1", TabID: "wA:tB", Status: "working", Kind: "claude", Ctx: new(23), Item: "#867", Stage: "review", StageStartedAt: new(t0),
 		}},
 		Groups: []snapshot.Group{
-			{Name: "coders", Agents: []snapshot.Agent{
-				{Name: "pee01", PaneID: "wN:p1", Status: "working", Kind: "claude", Ctx: new(40), Item: "NERD-5255", Stage: "build_test", StageStartedAt: new(t0)},
-				{Name: "pee02", PaneID: "wN:p2", Status: "ready", Kind: "claude", Ctx: new(61), IdleSince: new(t0)},
-				{Name: "pee03", PaneID: "wN:p3", Status: "blocked", Kind: "claude", Ctx: new(78), Item: "NERD-5247", Stage: "waiting on boss", StageStartedAt: new(t0)},
-				{Name: "scratch", Unnamed: true, PaneID: "wN:p4", Status: "idle", Kind: "codex", IdleSince: new(t0)},
-				{Name: "wN:p5", Unnamed: true, Shell: true, PaneID: "wN:p5", Status: "unknown"},
+			{Name: "coder", Agents: []snapshot.Agent{
+				{Name: "pee01", PaneID: "wN:p1", TabID: "wA:t1", Status: "working", Kind: "claude", Ctx: new(40), Item: "NERD-5255", Stage: "build_test", StageStartedAt: new(t0)},
+				{Name: "pee02", PaneID: "wN:p2", TabID: "wA:t2", Status: "ready", Kind: "claude", Ctx: new(61), IdleSince: new(t0)},
+				{Name: "pee03", PaneID: "wN:p3", TabID: "wA:t3", Status: "blocked", Kind: "claude", Ctx: new(78), Item: "NERD-5247", Stage: "waiting on boss", StageStartedAt: new(t0)},
+				{Name: "scratch", Unnamed: true, PaneID: "wN:p4", TabID: "wA:t4", Status: "idle", Kind: "codex", IdleSince: new(t0)},
+				{Name: "wN:p5", Unnamed: true, Shell: true, PaneID: "wN:p5", TabID: "wA:t5", Status: "unknown"},
 			}},
 			{Name: "precheck", Agents: []snapshot.Agent{
-				{Name: "wP:p1", Unnamed: true, PaneID: "wP:p1", Status: "working", Kind: "claude", Ctx: new(100), Stage: "running", StageStartedAt: new(t0)},
+				{Name: "wP:p1", Unnamed: true, PaneID: "wP:p1", TabID: "wA:tP", Status: "working", Kind: "claude", Ctx: new(100), Stage: "running", StageStartedAt: new(t0)},
 			}},
-			{Name: "qa", Agents: []snapshot.Agent{{Name: "qa", PaneID: "wQ:p1", Status: "idle", Kind: "claude", IdleSince: new(t0)}}},
-			{Name: "research", Agents: []snapshot.Agent{}},
-			{Name: "zeta", Agents: []snapshot.Agent{{Name: "notes", Unnamed: true, Shell: true, PaneID: "wZ:p1", Status: "unknown"}}},
+			{Name: "qa", Agents: []snapshot.Agent{{Name: "qa", PaneID: "wQ:p1", TabID: "wA:tQ", Status: "idle", Kind: "claude", IdleSince: new(t0)}}},
+			{Name: "zeta", Agents: []snapshot.Agent{{Name: "notes", Unnamed: true, Shell: true, PaneID: "wZ:p1", TabID: "wA:tZ", Status: "unknown"}}},
 		},
 	}
 }
 
-// projectConfig writes a config dir naming project agentisan, coloured, with
-// a repo the daemon cannot (and need not) resolve.
+// projectConfig writes a config dir naming project agentisan, the tabs team
+// ag, coloured, with a repo the daemon cannot (and need not) resolve.
 func projectConfig(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	body := "schema_version = 1\n[projects.agentisan]\nrepo = \"~/Development/agentisan\"\ncolor = \"#7c3aed\"\n"
-	require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte(body), 0o600))
-	return dir
+	return configDir(t, "[projects.agentisan]\nrepo = \"~/Development/agentisan\"\nshort = \"ag\"\nlayout = \"tabs\"\ncolor = \"#7c3aed\"\n")
 }
 
-// rawSnapshot asks the daemon socket for the snapshot and returns the
-// answer's data, as sent.
+// rawSnapshot asks the daemon socket for the agentisan team's snapshot and
+// returns the answer's data, as sent.
 func rawSnapshot(t *testing.T, sock string) map[string]any {
 	t.Helper()
-	return request(t, sock, []byte(`{"v":1,"op":"snapshot"}`+"\n"))
+	return request(t, sock, []byte(`{"v":1,"op":"snapshot","args":{"project":"`+liveProject+`"}}`+"\n"))
 }
 
-// served waits until the daemon at sock serves a snapshot that satisfies
-// ok, and returns it. A wait that runs out reports the last answer read.
+// served waits until the daemon at sock serves the agentisan team a
+// snapshot that satisfies ok, and returns it. A wait that runs out reports the last answer read.
 func served(t *testing.T, sock string, ok func(snapshot.Snapshot) bool) snapshot.Snapshot {
 	t.Helper()
 	var got snapshot.Snapshot
 	require.EventuallyWithT(t, func(c *assert.CollectT) {
-		s, err := daemon.Snapshot(t.Context(), sock)
+		s, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{Project: liveProject})
 		if !assert.NoError(c, err) {
 			return
 		}
@@ -190,9 +207,9 @@ func TestSnapshotOpServesTheTeam(t *testing.T) {
 	strict, err := snapshot.Decode(bytes.NewReader(data))
 	require.NoError(t, err, "the op's data is one strict snapshot v1 document")
 	assert.Equal(t, wantFullTeam(), strict)
-	assert.NotContains(t, string(data), `"elsewhere"`, "a pane outside the ◆ spaces is not the team's")
-	assert.NotContains(t, string(data), `"w12:p1"`, "◆ herdr is not the team's")
-	assert.NotContains(t, string(data), `"Agentisan dashboard"`, "a shell in ◆ boss is not the boss")
+	assert.NotContains(t, string(data), `"elsewhere"`, "a pane outside the team's workspace is not the team's")
+	assert.NotContains(t, string(data), `"w12:p1"`, "a tab outside the model is not the team's")
+	assert.NotContains(t, string(data), `"wJ:p2"`, "the dashboard's own pane beside the boss is not the boss")
 }
 
 // TestNoCtxWithoutADetectedAgent is A27's rule on a herdrtest team: a pane
@@ -202,10 +219,10 @@ func TestSnapshotOpServesTheTeam(t *testing.T) {
 func TestNoCtxWithoutADetectedAgent(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	ws, _, _ := fullTeam()
-	th.layout(ws, []map[string]any{
-		teamPane("wN:p1", "wN", "codex", "idle", "", map[string]string{"ctx": "45"}),
-		teamPane("wN:p2", "wN", "", "unknown", "", map[string]string{"ctx": "45"}),
+	ws, tabs, _, _ := fullTeam()
+	th.layout(ws, tabs, []map[string]any{
+		fullPane("wN:p1", "codex", "idle", "", map[string]string{"ctx": "45"}),
+		fullPane("wN:p2", "", "unknown", "", map[string]string{"ctx": "45"}),
 	}, []map[string]any{named("wN:p1", "pee01"), named("wN:p2", "pee02")})
 	dir := shortDir(t)
 	o := teamOpts(t, dir, th, projectConfig(t))
@@ -213,11 +230,11 @@ func TestNoCtxWithoutADetectedAgent(t *testing.T) {
 	serving(t, o, th.fakeHerdr)
 
 	got := served(t, socketPath(t, dir, th.path), anySnapshot)
-	i := slices.IndexFunc(got.Groups, func(g snapshot.Group) bool { return g.Name == "coders" })
+	i := slices.IndexFunc(got.Groups, func(g snapshot.Group) bool { return g.Name == "coder" })
 	require.GreaterOrEqual(t, i, 0)
 	assert.Equal(t, []snapshot.Agent{
-		{Name: "pee01", PaneID: "wN:p1", Status: "idle", Kind: "codex", Ctx: new(45), IdleSince: new(t0)},
-		{Name: "pee02", PaneID: "wN:p2", Status: "unknown"},
+		{Name: "pee01", PaneID: "wN:p1", TabID: "wA:t1", Status: "idle", Kind: "codex", Ctx: new(45), IdleSince: new(t0)},
+		{Name: "pee02", PaneID: "wN:p2", TabID: "wA:t2", Status: "unknown"},
 	}, got.Groups[i].Agents)
 
 	polled(t, th.srv, 1)
@@ -242,14 +259,14 @@ func TestNoCtxWithoutADetectedAgent(t *testing.T) {
 func TestSnapshotCarriesTheProvider(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	ws, _, _ := fullTeam()
-	th.layout(ws, []map[string]any{
-		teamPane("wJ:p1", "wJ", "codex", "working", "", nil),
-		teamPane("wN:p1", "wN", "claude", "working", "", nil),
-		teamPane("wN:p2", "wN", "codex", "unknown", "", nil),
-		teamPane("wN:p3", "wN", "gemini", "idle", "", nil),
-		teamPane("wN:p4", "wN", "", "unknown", "notes", nil),
-	}, []map[string]any{named("wJ:p1", "boss"), named("wN:p1", "pee01"), named("wN:p2", "pee02")})
+	ws, tabs, _, _ := fullTeam()
+	th.layout(ws, tabs, []map[string]any{
+		fullPane("wJ:p1", "codex", "working", "", nil),
+		fullPane("wN:p1", "claude", "working", "", nil),
+		fullPane("wN:p2", "codex", "unknown", "", nil),
+		fullPane("wN:p3", "gemini", "idle", "", nil),
+		fullPane("wN:p4", "", "unknown", "notes", nil),
+	}, []map[string]any{named("wJ:p1", "ag-boss"), named("wN:p1", "pee01"), named("wN:p2", "pee02")})
 	dir := shortDir(t)
 	o := teamOpts(t, dir, th, projectConfig(t))
 	o.Now = func() time.Time { return t0 }
@@ -259,7 +276,7 @@ func TestSnapshotCarriesTheProvider(t *testing.T) {
 	got := served(t, sock, anySnapshot)
 	require.NotNil(t, got.Boss)
 	assert.Equal(t, "codex", got.Boss.Kind, "the boss carries its agent")
-	i := slices.IndexFunc(got.Groups, func(g snapshot.Group) bool { return g.Name == "coders" })
+	i := slices.IndexFunc(got.Groups, func(g snapshot.Group) bool { return g.Name == "coder" })
 	require.GreaterOrEqual(t, i, 0)
 	kinds := map[string]string{}
 	for _, a := range got.Groups[i].Agents {
@@ -286,7 +303,7 @@ func TestSnapshotCarriesTheProvider(t *testing.T) {
 
 // stagedPane is fullTeam's wN:p1 at status, its stage reported at reported.
 func stagedPane(status string, reported time.Time) []map[string]any {
-	return []map[string]any{teamPane("wN:p1", "wN", "claude", status, "", map[string]string{
+	return []map[string]any{fullPane("wN:p1", "claude", status, "", map[string]string{
 		"item": "NERD-5334", "stage": "qa: reading", "stage_at": strconv.FormatInt(reported.Unix(), 10),
 	})}
 }
@@ -323,10 +340,10 @@ func stagedRow(s snapshot.Snapshot) snapshot.Agent {
 func TestRunAgesAStaleStage(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	ws, _, _ := fullTeam()
+	ws, tabs, _, _ := fullTeam()
 	agents := []map[string]any{named("wN:p1", "pee01")}
 	reported := t0.Add(-2 * time.Hour)
-	th.layout(ws, stagedPane("idle", reported), agents)
+	th.layout(ws, tabs, stagedPane("idle", reported), agents)
 	dir := shortDir(t)
 	o := teamOpts(t, dir, th, projectConfig(t))
 	o.Now = func() time.Time { return t0 }
@@ -335,17 +352,17 @@ func TestRunAgesAStaleStage(t *testing.T) {
 
 	polled(t, th.srv, 2)
 	assert.Equal(t, [2]string{"qa: reading", ""}, stagePushed(t, th), "no turn seen yet")
-	th.layout(ws, stagedPane("working", reported), agents)
+	th.layout(ws, tabs, stagedPane("working", reported), agents)
 	polled(t, th.srv, 2)
 	assert.Equal(t, [2]string{"qa: reading", ""}, stagePushed(t, th), "a turn running")
-	th.layout(ws, stagedPane("idle", reported), agents)
+	th.layout(ws, tabs, stagedPane("idle", reported), agents)
 	polled(t, th.srv, 3)
 	assert.Equal(t, [2]string{"", "qa: reading · 2h"}, stagePushed(t, th), "the turn ended with no report")
 	got := stagedRow(served(t, sock, func(s snapshot.Snapshot) bool { return stagedRow(s).StageStale }))
 	require.NotNil(t, got.StageAt)
 	assert.Equal(t, reported, *got.StageAt)
 
-	th.layout(ws, stagedPane("idle", t0), agents)
+	th.layout(ws, tabs, stagedPane("idle", t0), agents)
 	polled(t, th.srv, 2)
 	assert.Equal(t, [2]string{"qa: reading", ""}, stagePushed(t, th), "reported again")
 	got = stagedRow(served(t, sock, func(s snapshot.Snapshot) bool { return !stagedRow(s).StageStale }))
@@ -361,7 +378,7 @@ func TestRunAgesAStaleStage(t *testing.T) {
 func TestRunGivesTheStopHookAPoll(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	ws, _, _ := fullTeam()
+	ws, tabs, _, _ := fullTeam()
 	agents := []map[string]any{named("wN:p1", "pee01")}
 	reported := t0.Add(-2 * time.Hour)
 	pane := func(status, ctx string) []map[string]any {
@@ -369,14 +386,14 @@ func TestRunGivesTheStopHookAPoll(t *testing.T) {
 		p[0]["tokens"].(map[string]string)["ctx"] = ctx
 		return p
 	}
-	th.layout(ws, pane("idle", "40"), agents)
+	th.layout(ws, tabs, pane("idle", "40"), agents)
 	o := teamOpts(t, shortDir(t), th, projectConfig(t))
 	o.Now = func() time.Time { return t0 }
 	serving(t, o, th.fakeHerdr)
 	polled(t, th.srv, 2)
-	th.layout(ws, pane("working", "41"), agents)
+	th.layout(ws, tabs, pane("working", "41"), agents)
 	polled(t, th.srv, 2)
-	th.layout(ws, pane("idle", "42"), agents)
+	th.layout(ws, tabs, pane("idle", "42"), agents)
 	polled(t, th.srv, 3)
 
 	var ended [][2]string
@@ -402,7 +419,7 @@ func TestRunGivesTheStopHookAPoll(t *testing.T) {
 func TestRunRestartRaisesNoFalseAlarm(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	ws, _, _ := fullTeam()
+	ws, tabs, _, _ := fullTeam()
 	agents := []map[string]any{named("wN:p1", "pee01")}
 	clk := &clock{now: t0}
 	dir := shortDir(t)
@@ -413,14 +430,14 @@ func TestRunRestartRaisesNoFalseAlarm(t *testing.T) {
 	// agent reports its stage; it stops before the turn ends.
 	o := teamOpts(t, dir, th, cfg)
 	o.Now = clk.Now
-	th.layout(ws, stagedPane("idle", t0.Add(-2*time.Hour)), agents)
+	th.layout(ws, tabs, stagedPane("idle", t0.Add(-2*time.Hour)), agents)
 	first := serving(t, o, th.fakeHerdr)
 	polled(t, th.srv, 2)
-	th.layout(ws, stagedPane("working", t0.Add(-2*time.Hour)), agents)
+	th.layout(ws, tabs, stagedPane("working", t0.Add(-2*time.Hour)), agents)
 	polled(t, th.srv, 2)
 	clk.advance(10 * time.Second)
 	reported := clk.Now()
-	th.layout(ws, stagedPane("working", reported), agents)
+	th.layout(ws, tabs, stagedPane("working", reported), agents)
 	polled(t, th.srv, 2)
 	require.Equal(t, current, stagePushed(t, th))
 	clk.advance(10 * time.Second)
@@ -434,7 +451,7 @@ func TestRunRestartRaisesNoFalseAlarm(t *testing.T) {
 	sock := socketPath(t, dir, th.path)
 	polled(t, th.srv, 2)
 	assert.Equal(t, current, stagePushed(t, th), "a turn running")
-	th.layout(ws, stagedPane("idle", reported), agents)
+	th.layout(ws, tabs, stagedPane("idle", reported), agents)
 	polled(t, th.srv, 3)
 	assert.Equal(t, current, stagePushed(t, th), "reported in the turn that just ended")
 	got := stagedRow(served(t, sock, func(s snapshot.Snapshot) bool { return stagedRow(s).Status == snapshot.StatusIdle }))
@@ -443,10 +460,10 @@ func TestRunRestartRaisesNoFalseAlarm(t *testing.T) {
 	// The next whole turn reports nothing: the stage is old.
 	clk.advance(10 * time.Second)
 	polled(t, th.srv, 2)
-	th.layout(ws, stagedPane("working", reported), agents)
+	th.layout(ws, tabs, stagedPane("working", reported), agents)
 	polled(t, th.srv, 2)
 	clk.advance(10 * time.Second)
-	th.layout(ws, stagedPane("idle", reported), agents)
+	th.layout(ws, tabs, stagedPane("idle", reported), agents)
 	polled(t, th.srv, 3)
 	assert.Equal(t, [2]string{"", "qa: reading · 0m"}, stagePushed(t, th), "a whole turn with no report")
 	got = stagedRow(served(t, sock, func(s snapshot.Snapshot) bool { return stagedRow(s).StageStale }))
@@ -473,7 +490,7 @@ func TestSnapshotOpBeforeTheFirstPoll(t *testing.T) {
 		}
 		t.Cleanup(func() { release.Do(func() { close(hold) }) })
 		dir := shortDir(t)
-		serving(t, teamOpts(t, dir, th, ""), th.fakeHerdr)
+		serving(t, teamOpts(t, dir, th, liveConfig(t, "")), th.fakeHerdr)
 		select {
 		case <-entered:
 		case <-time.After(ready):
@@ -512,15 +529,15 @@ func TestSnapshotOpBeforeTheFirstPoll(t *testing.T) {
 func TestSnapshotStageTimer(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	ws := []herdr.WorkspaceInfo{{WorkspaceID: "wN", Label: "◆ coders"}}
+	ws, tabs, _, _ := fullTeam()
 	withStage := func(stage string) []map[string]any {
-		return []map[string]any{teamPane("wN:p1", "wN", "claude", "working", "", map[string]string{"stage": stage})}
+		return []map[string]any{fullPane("wN:p1", "claude", "working", "", map[string]string{"stage": stage})}
 	}
 	agents := []map[string]any{named("wN:p1", "pee01")}
-	th.layout(ws, withStage("build"), agents)
+	th.layout(ws, tabs, withStage("build"), agents)
 	c := &clock{now: t0}
 	dir := shortDir(t)
-	o := teamOpts(t, dir, th, "")
+	o := teamOpts(t, dir, th, projectConfig(t))
 	o.Now = c.Now
 	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
@@ -539,7 +556,7 @@ func TestSnapshotStageTimer(t *testing.T) {
 
 	t2 := t0.Add(6 * time.Second)
 	c.advance(3 * time.Second)
-	th.layout(ws, withStage("review"), agents)
+	th.layout(ws, tabs, withStage("review"), agents)
 	changed := served(t, sock, func(s snapshot.Snapshot) bool { return row(s).Stage == "review" })
 	require.NotNil(t, row(changed).StageStartedAt)
 	assert.Equal(t, t2, *row(changed).StageStartedAt, "a new value starts at the poll that first sees it")
@@ -562,9 +579,11 @@ func TestSnapshotNamesTheConfiguredProject(t *testing.T) {
 		wantTeam    string
 		wantProject *snapshot.Project
 	}{
-		"a configured project and its colour": {config: projectConfig, wantTeam: "agentisan", wantProject: &snapshot.Project{Color: "#7c3aed"}},
-		"no configuration":                    {config: func(*testing.T) string { return "" }},
-		"no config file":                      {config: func(t *testing.T) string { return t.TempDir() }},
+		"a configured project and its colour": {config: func(t *testing.T) string {
+			return configDir(t, "[projects.agentisan]\nrepo = \"/x\"\ncolor = \"#7c3aed\"\n")
+		}, wantTeam: "agentisan", wantProject: &snapshot.Project{Color: "#7c3aed"}},
+		"no configuration": {config: func(*testing.T) string { return "" }},
+		"no config file":   {config: func(t *testing.T) string { return t.TempDir() }},
 		"a project without a colour": {config: func(t *testing.T) string {
 			dir := t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte("schema_version = 1\n[projects.app]\nrepo = \"/x\"\n"), 0o600))
@@ -579,11 +598,11 @@ func TestSnapshotNamesTheConfiguredProject(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			th := newTeamHerdr(t)
+			th := newSpacesHerdr(t)
 			dir := shortDir(t)
 			serving(t, teamOpts(t, dir, th, tc.config(t)), th.fakeHerdr)
 
-			got := served(t, socketPath(t, dir, th.path), anySnapshot)
+			got := servedTeam(t, socketPath(t, dir, th.path), "", anySnapshot)
 			assert.Equal(t, tc.wantTeam, got.Team)
 			assert.Equal(t, tc.wantProject, got.Project)
 			assert.NotEmpty(t, got.Groups, "the layout is served either way")
@@ -601,13 +620,13 @@ func TestSnapshotKeepsTheLastGoodTeam(t *testing.T) {
 	th.agentsErr = true
 	c := &clock{now: t0}
 	dir := shortDir(t)
-	o := teamOpts(t, dir, th, "")
+	o := teamOpts(t, dir, th, liveConfig(t, ""))
 	o.Now = c.Now
 	serving(t, o, th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
 
 	polled(t, th.srv, 2)
-	assert.GreaterOrEqual(t, len(pushes(t, th.srv)["wN"]), 2, "$team is pushed without names")
+	assert.GreaterOrEqual(t, len(pushes(t, th.srv)[liveWorkspace]), 2, "$team is pushed without names")
 	_, err := daemon.Snapshot(t.Context(), sock)
 	require.ErrorIs(t, err, daemon.ErrNotReady)
 
@@ -621,10 +640,10 @@ func TestSnapshotKeepsTheLastGoodTeam(t *testing.T) {
 	th.mu.Unlock()
 	polled(t, th.srv, 1) // a poll in flight may still have had names
 	c.advance(time.Minute)
-	before := len(pushes(t, th.srv)["wN"])
+	before := len(pushes(t, th.srv)[liveWorkspace])
 	polled(t, th.srv, 2)
-	assert.Greater(t, len(pushes(t, th.srv)["wN"]), before)
-	got, err := daemon.Snapshot(t.Context(), sock)
+	assert.Greater(t, len(pushes(t, th.srv)[liveWorkspace]), before)
+	got, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{Project: liveProject})
 	require.NoError(t, err)
 	assert.True(t, got.At.Equal(t0), "the last good snapshot stays, at %v", got.At)
 }
@@ -947,8 +966,8 @@ func TestSnapshotOpServesConcurrentReaders(t *testing.T) {
 	for range 8 {
 		wg.Go(func() {
 			for range 5 {
-				s, err := daemon.Snapshot(t.Context(), sock)
-				if err == nil && (s.Team != "agentisan" || len(s.Groups) != 5) {
+				s, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{Project: liveProject})
+				if err == nil && (s.Team != "agentisan" || len(s.Groups) != 4) {
 					err = fmt.Errorf("a torn snapshot: %+v", s)
 				}
 				errs <- err
@@ -962,12 +981,11 @@ func TestSnapshotOpServesConcurrentReaders(t *testing.T) {
 	}
 }
 
-// everyTeamConfig is the ◆ spaces' project, coloured, and two tabs teams,
-// one coloured and one not.
-const everyTeamConfig = `[spaces]
-project = "agentisan"
-[projects.agentisan]
+// everyTeamConfig is three tabs teams: fullTeam's agentisan and alpha,
+// coloured, and beta, not.
+const everyTeamConfig = `[projects.agentisan]
 repo = "/x"
+short = "ag"
 color = "#7c3aed"
 [projects.alpha]
 repo = "/y"
@@ -990,12 +1008,12 @@ func tabOf(id, ws, label string) map[string]any {
 	return map[string]any{"tab_id": id, "workspace_id": ws, "number": 1, "label": label, "focused": false, "pane_count": 1, "agent_status": "idle"}
 }
 
-// everyTeam serves fullTeam's ◆ spaces beside two tabs teams: alpha in w14,
+// everyTeam serves fullTeam beside two more tabs teams: alpha in w14,
 // with its boss, a reviewer, a coder and a tab outside the model; beta in
 // w20, with a librarian and a researcher and no boss. Each team's types are
 // listed out of their working order, and out of name order too.
 func everyTeam(th *teamHerdr) {
-	ws, panes, agents := fullTeam()
+	ws, tabs, panes, agents := fullTeam()
 	ws = append(ws, herdr.WorkspaceInfo{WorkspaceID: "w14", Label: "alpha"}, herdr.WorkspaceInfo{WorkspaceID: "w20", Label: "beta"})
 	panes = append(panes,
 		tabPane("w14:p1", "w14", "w14:t1", "claude", "working", nil),
@@ -1009,11 +1027,11 @@ func everyTeam(th *teamHerdr) {
 	th.mu.Lock()
 	defer th.mu.Unlock()
 	th.workspaces, th.panes, th.agents = ws, panes, agents
-	th.tabs = []map[string]any{
+	th.tabs = append(tabs,
 		tabOf("w14:t1", "w14", "al-boss"), tabOf("w14:t2", "w14", "al-review-1"),
 		tabOf("w14:t3", "w14", "al-coder-1"), tabOf("w14:t4", "w14", "notes"),
 		tabOf("w20:t1", "w20", "be-librarian-1"), tabOf("w20:t2", "w20", "be-research-1"),
-	}
+	)
 }
 
 // wantTeams is everyTeam's snapshot of each team at t0, by hand: each team in
@@ -1092,7 +1110,7 @@ func snapshotOp(t *testing.T, sock, args string) (json.RawMessage, string) {
 }
 
 // TestSnapshotOpServesEveryTeam is A24's daemon: one poll builds a snapshot
-// of every team, the ◆ spaces' and each tabs team's, and the op serves each
+// of every team, and the op serves each
 // byte for byte as the snapshot v1 encoding of that team, in its own group
 // order and colour, with only its own panes.
 func TestSnapshotOpServesEveryTeam(t *testing.T) {
@@ -1111,11 +1129,51 @@ func TestSnapshotOpServesEveryTeam(t *testing.T) {
 	}
 }
 
+// TestSnapshotOpSelectsTheSpaces is A24's selection on the ◆ spaces: every
+// space is the spaces project's workspace, ◆ boss and ◆ herdr included, and
+// neither a project nor a workspace selects the spaces.
+func TestSnapshotOpSelectsTheSpaces(t *testing.T) {
+	t.Parallel()
+	th := newSpacesHerdr(t)
+	dir := shortDir(t)
+	serving(t, teamOpts(t, dir, th, configDir(t, "[projects.agentisan]\nrepo = \"/x\"\n")), th.fakeHerdr)
+	sock := socketPath(t, dir, th.path)
+	servedTeam(t, sock, "agentisan", anySnapshot)
+
+	for name, tc := range map[string]struct {
+		args, team, code string
+	}{
+		"by project":              {args: `{"project":"agentisan"}`, team: "agentisan"},
+		"a group space":           {args: `{"workspace_id":"wN"}`, team: "agentisan"},
+		"an empty group space":    {args: `{"workspace_id":"w0"}`, team: "agentisan"},
+		"◆ boss":                  {args: `{"workspace_id":"wJ"}`, team: "agentisan"},
+		"◆ herdr, the edit shell": {args: `{"workspace_id":"w12"}`, team: "agentisan"},
+		"neither":                 {team: "agentisan"},
+		"empty args":              {args: `{}`, team: "agentisan"},
+		"null args":               {args: `null`, team: "agentisan"},
+		"empty strings":           {args: `{"project":"","workspace_id":""}`, team: "agentisan"},
+		"args it does not know":   {args: `{"team":"alpha"}`, team: "agentisan"},
+		"a workspace no team's":   {args: `{"workspace_id":"w2"}`, code: "no_team"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			data, code := snapshotOp(t, sock, tc.args)
+			assert.Equal(t, tc.code, code)
+			if tc.code != "" {
+				return
+			}
+			got, err := snapshot.Decode(bytes.NewReader(data))
+			require.NoError(t, err)
+			assert.Equal(t, tc.team, got.Team)
+		})
+	}
+}
+
 // TestSnapshotOpSelectsTheTeam walks the op's args (A24): a project, which
 // wins over a workspace; a workspace, through the index of every team's
-// workspaces, ◆ boss and ◆ herdr included; neither, which is the ◆ spaces'
-// project as before; and what selects no team, which is no_team, matched by
-// ErrNoTeam, never another team's snapshot.
+// workspaces; and what selects no team, which is no_team, matched by
+// ErrNoTeam, never another team's snapshot: neither, with no ◆ space, is
+// one.
 func TestSnapshotOpSelectsTheTeam(t *testing.T) {
 	t.Parallel()
 	_, sock := everyTeamDaemon(t)
@@ -1123,26 +1181,23 @@ func TestSnapshotOpSelectsTheTeam(t *testing.T) {
 	tests := map[string]struct {
 		args, team, code string
 	}{
-		"a tabs team by project":            {args: `{"project":"alpha"}`, team: "alpha"},
-		"the spaces by project":             {args: `{"project":"agentisan"}`, team: "agentisan"},
-		"a tabs team's workspace":           {args: `{"workspace_id":"w20"}`, team: "beta"},
-		"a group space":                     {args: `{"workspace_id":"wN"}`, team: "agentisan"},
-		"◆ boss":                            {args: `{"workspace_id":"wJ"}`, team: "agentisan"},
-		"◆ herdr, the edit shell":           {args: `{"workspace_id":"w12"}`, team: "agentisan"},
-		"a space no group's but the team's": {args: `{"workspace_id":"wZ"}`, team: "agentisan"},
-		"both: the project wins":            {args: `{"project":"beta","workspace_id":"w14"}`, team: "beta"},
-		"neither":                           {team: "agentisan"},
-		"empty args":                        {args: `{}`, team: "agentisan"},
-		"null args":                         {args: `null`, team: "agentisan"},
-		"empty strings select nothing":      {args: `{"project":"","workspace_id":""}`, team: "agentisan"},
-		"args it does not know":             {args: `{"team":"alpha"}`, team: "agentisan"},
-		"a workspace no team's":             {args: `{"workspace_id":"w2"}`, code: "no_team"},
-		"a workspace herdr does not show":   {args: `{"workspace_id":"w99"}`, code: "no_team"},
-		"an unknown project":                {args: `{"project":"gamma"}`, code: "no_team"},
-		"an unknown project wins too":       {args: `{"project":"gamma","workspace_id":"w14"}`, code: "no_team"},
-		"a project in another case":         {args: `{"project":"Alpha"}`, code: "no_team"},
-		"a workspace that is a label":       {args: `{"workspace_id":"alpha"}`, code: "no_team"},
-		"a project that is not a string":    {args: `{"project":["alpha"]}`, code: "bad_request"},
+		"a tabs team by project":           {args: `{"project":"alpha"}`, team: "alpha"},
+		"another tabs team by project":     {args: `{"project":"agentisan"}`, team: "agentisan"},
+		"a tabs team's workspace":          {args: `{"workspace_id":"w20"}`, team: "beta"},
+		"a workspace with its tab outside": {args: `{"workspace_id":"wA"}`, team: "agentisan"},
+		"both: the project wins":           {args: `{"project":"beta","workspace_id":"w14"}`, team: "beta"},
+		"neither":                          {code: "no_team"},
+		"empty args":                       {args: `{}`, code: "no_team"},
+		"null args":                        {args: `null`, code: "no_team"},
+		"empty strings select nothing":     {args: `{"project":"","workspace_id":""}`, code: "no_team"},
+		"args it does not know":            {args: `{"team":"alpha"}`, code: "no_team"},
+		"a workspace no team's":            {args: `{"workspace_id":"w2"}`, code: "no_team"},
+		"a workspace herdr does not show":  {args: `{"workspace_id":"w99"}`, code: "no_team"},
+		"an unknown project":               {args: `{"project":"gamma"}`, code: "no_team"},
+		"an unknown project wins too":      {args: `{"project":"gamma","workspace_id":"w14"}`, code: "no_team"},
+		"a project in another case":        {args: `{"project":"Alpha"}`, code: "no_team"},
+		"a workspace that is a label":      {args: `{"workspace_id":"alpha"}`, code: "no_team"},
+		"a project that is not a string":   {args: `{"project":["alpha"]}`, code: "bad_request"},
 		// Names are compared byte for byte: nothing is trimmed, folded or
 		// normalized, so a near miss is no team, never another one.
 		"a project with a space":        {args: `{"project":" alpha"}`, code: "no_team"},
@@ -1194,7 +1249,7 @@ func TestSnapshotOpBeforeAnyPollSelectsNothing(t *testing.T) {
 	serving(t, teamOpts(t, dir, th, configDir(t, everyTeamConfig)), th.fakeHerdr)
 	polled(t, th.srv, 1)
 	sock := socketPath(t, dir, th.path)
-	for _, sel := range []daemon.Selector{{}, {Project: "alpha"}, {Project: "gamma"}, {WorkspaceID: "wN"}, {WorkspaceID: "w99"}} {
+	for _, sel := range []daemon.Selector{{}, {Project: "alpha"}, {Project: "gamma"}, {WorkspaceID: liveWorkspace}, {WorkspaceID: "w99"}} {
 		_, err := daemon.SnapshotOf(t.Context(), sock, sel)
 		require.ErrorIs(t, err, daemon.ErrNotReady, "%+v", sel)
 		assert.NotErrorIs(t, err, daemon.ErrNoTeam)

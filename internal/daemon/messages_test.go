@@ -35,7 +35,7 @@ var (
 	// aPane is a sender with no other identity, by a terminal no pane
 	// shows (B3).
 	aPane = store.Address{Kind: store.KindPane, ID: "term_gone"}
-	// notes is the pane sender in liveSpaces' plain workspace, w2:p1, by its
+	// notes is the pane sender in liveTabs' plain workspace, w2:p1, by its
 	// terminal.
 	notes = store.Address{Kind: store.KindPane, ID: "term_w2:p1"}
 )
@@ -599,6 +599,8 @@ func TestDispatcherHoldsAnUnprovenTarget(t *testing.T) {
 	tests := map[string]struct {
 		to    store.Address
 		setup func(t *testing.T, th *teamHerdr, dir string)
+		// config, when set, replaces workforceConfig.
+		config func(t *testing.T) string
 	}{
 		"no agent list, to a worker": {to: coder, setup: func(_ *testing.T, th *teamHerdr, _ string) {
 			th.mu.Lock()
@@ -626,9 +628,11 @@ func TestDispatcherHoldsAnUnprovenTarget(t *testing.T) {
 		"the boss's name outside its boss place": {to: haBoss, setup: func(_ *testing.T, th *teamHerdr, _ string) {
 			th.setAgents(named("w14:p2", "ha-boss"))
 		}},
+		// wJ:p1 is in the live team's boss tab, which liveTOML configures
+		// beside ha.
 		"the boss's name in another team's boss place": {to: haBoss, setup: func(_ *testing.T, th *teamHerdr, _ string) {
 			th.setAgents(named("wJ:p1", "ha-boss"), named("w14:p2", "ha-coder-1"))
-		}},
+		}, config: func(t *testing.T) string { return haNotices(t, liveTOML+quietNotices) }},
 		"a boss no team has": {to: store.Address{Kind: store.KindBoss, ID: "zz-boss"}, setup: func(_ *testing.T, th *teamHerdr, _ string) {
 			th.setAgents(named("w14:p1", "ha-boss"), named("w14:p2", "ha-coder-1"), named("w2:p1", "zz-boss"))
 		}},
@@ -640,7 +644,11 @@ func TestDispatcherHoldsAnUnprovenTarget(t *testing.T) {
 			st := stateStore(t, dir, th)
 			tc.setup(t, th, dir)
 			m := sent(t, st, tc.to, aPane, "wait")
-			serving(t, teamOpts(t, dir, th, workforceConfig(t)), th.fakeHerdr)
+			config := workforceConfig
+			if tc.config != nil {
+				config = tc.config
+			}
+			serving(t, teamOpts(t, dir, th, config(t)), th.fakeHerdr)
 
 			polled(t, th.srv, 3)
 			assert.Empty(t, p.all(), "nothing typed")
@@ -706,7 +714,7 @@ func movePane(th *teamHerdr, terminal, pane string) {
 // daemon sent that fails sends no notice.
 func TestDispatcherFailsAPaneMessageItCannotType(t *testing.T) {
 	t.Parallel()
-	shell := store.Address{Kind: store.KindPane, ID: "term_w12:p1"} // ◆ herdr's shell
+	shell := store.Address{Kind: store.KindPane, ID: "term_w12:p1"} // the shell in the tab outside the model
 	tests := map[string]struct {
 		to     store.Address
 		age    time.Duration
@@ -831,7 +839,7 @@ func TestDispatcherHoldsAPaneNoticeWhenItsListFails(t *testing.T) {
 	t.Parallel()
 	th, p, dir := haTeam(t)
 	st := stateStore(t, dir, th)
-	shell := store.Address{Kind: store.KindPane, ID: "term_w12:p1"} // ◆ herdr's shell: refused, queued again
+	shell := store.Address{Kind: store.KindPane, ID: "term_w12:p1"} // the shell in the tab outside the model: refused, queued again
 	m := sent(t, st, shell, store.Daemon, "[agentisan] a notice")
 	o := teamOpts(t, dir, th, workforceConfig(t))
 	o.Poll = time.Hour // the poll at start only: the send's wake makes the next pass

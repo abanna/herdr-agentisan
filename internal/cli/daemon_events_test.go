@@ -24,10 +24,10 @@ import (
 )
 
 // TestDaemonRunExportsStatusEvents is the live check's path, end to end on
-// loopback: `daemon run` reads [telemetry] endpoint from
-// HERDR_PLUGIN_CONFIG_DIR, takes its first poll as the baseline, and a pane's
-// status changing after it reaches the OTLP collector as a status event,
-// flushed on exit at the latest.
+// loopback: `daemon run` reads [telemetry] endpoint and a tabs team from
+// HERDR_PLUGIN_CONFIG_DIR, takes its first poll as the baseline, and a
+// worker pane's status changing after it reaches the OTLP collector as a
+// status event, flushed on exit at the latest.
 func TestDaemonRunExportsStatusEvents(t *testing.T) {
 	t.Parallel()
 	var mu sync.Mutex
@@ -58,13 +58,17 @@ func TestDaemonRunExportsStatusEvents(t *testing.T) {
 				status = "idle"
 			}
 			return herdrtest.Reply{Result: map[string]any{"type": "pane_list", "panes": []map[string]any{
-				{"pane_id": "wN:p1", "workspace_id": "wN", "agent": "claude", "agent_status": status},
+				{"pane_id": "wN:p1", "workspace_id": "wT", "tab_id": "wT:t1", "agent": "claude", "agent_status": status},
 			}}}
 		case "workspace.list":
 			baselined.Store(true)
 			polls.Add(1)
 			return herdrtest.Reply{Result: map[string]any{"type": "workspace_list", "workspaces": []map[string]any{
-				{"workspace_id": "wN", "label": "◆ coders"},
+				{"workspace_id": "wT", "label": "agentisan"},
+			}}}
+		case "tab.list":
+			return herdrtest.Reply{Result: map[string]any{"type": "tab_list", "tabs": []map[string]any{
+				{"tab_id": "wT:t1", "workspace_id": "wT", "label": "ag-coder-1"},
 			}}}
 		case "workspace.report_metadata":
 			return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
@@ -73,7 +77,8 @@ func TestDaemonRunExportsStatusEvents(t *testing.T) {
 	})
 	configDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, settings.FileName),
-		[]byte("schema_version = 1\n[telemetry]\nendpoint = \""+strings.TrimPrefix(collector.URL, "http://")+"\"\n"), 0o600))
+		[]byte("schema_version = 1\n[projects.agentisan]\nrepo = \"/nonexistent\"\nshort = \"ag\"\nlayout = \"tabs\"\n"+
+			"[telemetry]\nendpoint = \""+strings.TrimPrefix(collector.URL, "http://")+"\"\n"), 0o600))
 	var logs bytes.Buffer
 	ctx, cancel := context.WithCancel(cli.WithLookupEnv(daemonCtx(t, e, nil, &logs),
 		e.lookup(map[string]string{"HERDR_PLUGIN_CONFIG_DIR": configDir})))

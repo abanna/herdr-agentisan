@@ -417,8 +417,9 @@ func TestDaemonRunRefusesAnUnverifiedProtocol(t *testing.T) {
 }
 
 // TestDaemonRunPushesTeam: `daemon run` turns the team poll on, reading the
-// spaces' project from HERDR_PLUGIN_CONFIG_DIR, and pushes $team to the ◆
-// group spaces of its herdr.
+// tabs team's project from HERDR_PLUGIN_CONFIG_DIR, and pushes $team to the
+// team's workspace in its herdr, counting its worker's tab and not its
+// boss's.
 func TestDaemonRunPushesTeam(t *testing.T) {
 	t.Parallel()
 	dir, err := os.MkdirTemp("", "dc")
@@ -429,11 +430,16 @@ func TestDaemonRunPushesTeam(t *testing.T) {
 		switch r.Method {
 		case "pane.list":
 			return herdrtest.Reply{Result: map[string]any{"type": "pane_list", "panes": []map[string]any{
-				{"pane_id": "wN:p1", "workspace_id": "wN", "agent": "claude", "agent_status": "working"},
+				{"pane_id": "wN:p1", "workspace_id": "wT", "tab_id": "wT:t1", "agent": "claude", "agent_status": "working"},
+				{"pane_id": "wJ:p1", "workspace_id": "wT", "tab_id": "wT:t0", "agent": "claude", "agent_status": "working"},
 			}}}
 		case "workspace.list":
 			return herdrtest.Reply{Result: map[string]any{"type": "workspace_list", "workspaces": []map[string]any{
-				{"workspace_id": "wN", "label": "◆ coders"}, {"workspace_id": "wJ", "label": "◆ boss"},
+				{"workspace_id": "wT", "label": "agentisan"},
+			}}}
+		case "tab.list":
+			return herdrtest.Reply{Result: map[string]any{"type": "tab_list", "tabs": []map[string]any{
+				{"tab_id": "wT:t0", "workspace_id": "wT", "label": "ag-boss"}, {"tab_id": "wT:t1", "workspace_id": "wT", "label": "ag-coder-1"},
 			}}}
 		case "workspace.report_metadata":
 			return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
@@ -442,7 +448,7 @@ func TestDaemonRunPushesTeam(t *testing.T) {
 	})
 	configDir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(configDir, settings.FileName),
-		[]byte("schema_version = 1\n[projects.agentisan]\nrepo = \"/nonexistent\"\n"), 0o600))
+		[]byte("schema_version = 1\n[projects.agentisan]\nrepo = \"/nonexistent\"\nshort = \"ag\"\nlayout = \"tabs\"\n"), 0o600))
 	var logs bytes.Buffer
 	ctx, cancel := context.WithCancel(cli.WithLookupEnv(daemonCtx(t, e, nil, &logs),
 		e.lookup(map[string]string{"HERDR_PLUGIN_CONFIG_DIR": configDir})))
@@ -468,7 +474,7 @@ func TestDaemonRunPushesTeam(t *testing.T) {
 		}
 		return false
 	}, ready, 10*time.Millisecond, "daemon run pushed no $team")
-	assert.JSONEq(t, `{"workspace_id":"wN","source":"agentisan","tokens":{"team":"1 agent · 1 working · 0 ready"},"ttl_ms":9000}`, push)
+	assert.JSONEq(t, `{"workspace_id":"wT","source":"agentisan","tokens":{"team":"1 agent · 1 working · 0 ready"},"ttl_ms":9000}`, push)
 
 	cancel()
 	select {

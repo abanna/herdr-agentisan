@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -62,17 +63,17 @@ func bindWorker(t *testing.T, stateDir string, th *teamHerdr, logicalID, pane st
 	require.NoError(t, err)
 	defer raw.Close() //nolint:errcheck // test cleanup
 	_, err = raw.ExecContext(t.Context(),
-		"INSERT INTO workers (logical_id, project, grp, pane_id, generation, status, created_at, terminal_id) VALUES (?, 'agentisan', 'coders', ?, 1, 'active', 0, ?)",
-		logicalID, pane, "term_"+pane)
+		"INSERT INTO workers (logical_id, project, grp, pane_id, generation, status, created_at, terminal_id) VALUES (?, ?, 'coder', ?, 1, 'active', 0, ?)",
+		logicalID, liveProject, pane, "term_"+pane)
 	require.NoError(t, err)
 }
 
-// statusEvent is the event a liveSpaces pane in ◆ coders gives, unbound
-// unless id is not its pane.
+// statusEvent is the event a liveTabs coder's pane gives, unbound unless id
+// is not its pane.
 func statusEvent(id, pane, agent, from, to string) telemetrytest.Event {
 	return telemetrytest.Event{Name: telemetry.EventStatusChanged, Attrs: map[string]any{
 		"agentisan.worker.id": id, "agentisan.worker.bound": id != pane,
-		"agentisan.project": "", "agentisan.group": "coders", "agentisan.role": "worker",
+		"agentisan.project": liveProject, "agentisan.group": "coder", "agentisan.role": "worker",
 		"agentisan.agent": agent, "herdr.pane.id": pane,
 		"agentisan.status.from": from, "agentisan.status.to": to,
 	}}
@@ -87,7 +88,7 @@ func TestTeamPollEmitsStatusTransitions(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
 	dir := shortDir(t)
-	bindWorker(t, dir, th, "coders-1", "wN:p1")
+	bindWorker(t, dir, th, liveShort+"-coder-1", "wN:p1")
 	events, rec := telemetrytest.NewEvents()
 	o := teamOpts(t, dir, th, quietConfig(t))
 	o.Team.Events = events
@@ -108,14 +109,17 @@ func TestTeamPollEmitsStatusTransitions(t *testing.T) {
 		}
 		next = append(next, p)
 	}
-	next = append(next, map[string]any{"pane_id": "wN:p9", "workspace_id": "wN", "agent": "codex", "agent_status": "idle", "focused": false})
-	th.setPanes(next) // one swap, so one poll sees every change
+	next = append(next, map[string]any{"pane_id": "wN:p9", "workspace_id": liveWorkspace, "tab_id": liveWorkspace + ":t9", "agent": "codex", "agent_status": "idle", "focused": false})
+	th.mu.Lock()
+	th.tabs = append(slices.Clone(th.tabs), tabOf(liveWorkspace+":t9", liveWorkspace, liveShort+"-coder-9"))
+	th.panes = next // one swap, so one poll sees every change
+	th.mu.Unlock()
 
 	boss := statusEvent("wJ:p1", "wJ:p1", "claude", "working", "done")
 	boss.Attrs["agentisan.group"], boss.Attrs["agentisan.role"] = "", "boss"
 	want := []telemetrytest.Event{
 		boss,
-		statusEvent("coders-1", "wN:p1", "claude", "working", "idle"),
+		statusEvent(liveShort+"-coder-1", "wN:p1", "claude", "working", "idle"),
 		statusEvent("wN:p9", "wN:p9", "codex", "absent", "idle"),
 		statusEvent("wN:p3", "wN:p3", "claude", "blocked", "absent"),
 	}
@@ -311,9 +315,9 @@ func TestTeamPollIsNotHeldUpByAHungCollector(t *testing.T) {
 
 	require.Eventually(t, func() bool { return exports.Load() > 0 }, ready, 5*time.Millisecond,
 		"no export reached the collector")
-	before := len(pushes(t, th.srv)["wN"])
+	before := len(pushes(t, th.srv)[liveWorkspace])
 	polled(t, th.srv, 10) // ten polls, each with an event to send, while the export hangs
-	assert.GreaterOrEqual(t, len(pushes(t, th.srv)["wN"]), before+10, "$team was pushed every poll")
+	assert.GreaterOrEqual(t, len(pushes(t, th.srv)[liveWorkspace]), before+10, "$team was pushed every poll")
 	for _, status := range []string{"idle", "working"} {
 		served(t, sock, func(s snapshot.Snapshot) bool { return s.Boss != nil && string(s.Boss.Status) == status })
 	}
@@ -378,7 +382,7 @@ func TestSetupEventsReadsTheEndpoint(t *testing.T) {
 		wantUnsaid []string
 	}{
 		"no config dir, no environment": {file: "-"},
-		"no key":                        {file: "[spaces]\n"},
+		"no key":                        {file: "[telemetry]\n"},
 		"the key":                       {file: "[telemetry]\nendpoint = \"ENDPOINT\"\n", wantSent: true, wantLogs: []string{"workflow events export over OTLP"}},
 		"the environment":               {file: "-", env: "ENDPOINT", wantSent: true},
 		"the environment beats the key": {file: "[telemetry]\nendpoint = \"localhost:1\"\n", env: "ENDPOINT", wantSent: true},
