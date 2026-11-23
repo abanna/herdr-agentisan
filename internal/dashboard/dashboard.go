@@ -438,7 +438,7 @@ func (m Model) click(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 func (m Model) View() tea.View {
 	opts := m.cfg.Options
 	opts.LightBackground = m.lightBackground
-	if opts.Profile == colorprofile.Unknown && (m.profile == colorprofile.ASCII || m.profile == colorprofile.NoTTY) {
+	if opts.Profile == colorprofile.Unknown && (m.lightBackground || m.profile == colorprofile.ASCII || m.profile == colorprofile.NoTTY) {
 		opts.Profile = m.profile
 	}
 	v := tea.NewView(Render(m.Frame(), m.Width(), m.Height(), opts))

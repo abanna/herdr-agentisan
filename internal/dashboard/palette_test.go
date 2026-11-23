@@ -96,11 +96,13 @@ func TestLightSelectionForeground(t *testing.T) {
 func TestModelUsesTerminalBackground(t *testing.T) {
 	t.Parallel()
 
-	m := dashboard.New(t.Context(), dashboard.Config{Options: fullColour})
+	m := dashboard.New(t.Context(), dashboard.Config{})
 	m, _ = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	require.Contains(t, m.View().Content, "38;2;190;203;227", "dark before a report")
 	m, _ = update(t, m, tea.BackgroundColorMsg{Color: lipgloss.Color("#eaeaea")})
 	require.Contains(t, m.View().Content, "38;2;60;76;105", "light after a light report")
+	m, _ = update(t, m, tea.ColorProfileMsg{Profile: colorprofile.ANSI})
+	require.Contains(t, m.View().Content, "\x1b[90m", "light uses the detected 16-colour profile")
 	m, _ = update(t, m, tea.BackgroundColorMsg{Color: lipgloss.Color("#1e1e2e")})
 	require.Contains(t, m.View().Content, "38;2;190;203;227", "dark after a dark report")
 }
@@ -120,6 +122,22 @@ func TestLightPaletteColourProfiles(t *testing.T) {
 	}
 	opts.Profile = colorprofile.ASCII
 	require.Equal(t, dashboard.Render(frame, 120, 40, attrs), dashboard.Render(frame, 120, 40, opts))
+}
+
+func TestLightPaletteKeepsStatusAndSelectionAtReducedDepth(t *testing.T) {
+	t.Parallel()
+
+	frame := dashboard.Frame{Snapshot: fixture(t, "full"), Now: at}
+	opts := lightColour()
+	opts.Profile = colorprofile.ANSI256
+	indexed := dashboard.Render(frame, 120, 40, opts)
+	require.Regexp(t, `\x1b\[38;5;88m⚠`, indexed, "blocked is dark red")
+	opts.Profile = colorprofile.ANSI
+	basic := dashboard.Render(frame, 120, 40, opts)
+	require.Regexp(t, `\x1b\[31m⚠`, basic, "blocked is red")
+	require.Regexp(t, `\x1b\[32mworking`, basic, "working is green")
+	require.Regexp(t, `\x1b\[33midle`, basic, "idle is amber")
+	require.Regexp(t, `\x1b\[1;34;47mpee01`, basic, "selected name is dark blue on light grey")
 }
 
 func TestSelectionWithoutColour(t *testing.T) {

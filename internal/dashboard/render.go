@@ -207,7 +207,7 @@ func Render(f Frame, w, h int, opts Options) string {
 		if ln.width() > w {
 			ln = ln.cut(0, w)
 		}
-		b.WriteString(ln.trimRight().render(light))
+		b.WriteString(ln.trimRight().render(light, opts.Profile))
 	}
 	return downsample(b.String(), opts.Profile)
 }
@@ -1325,13 +1325,13 @@ func (l line) width() int {
 	return n
 }
 
-func (l line) render(light bool) string {
+func (l line) render(light bool, profile colorprofile.Profile) string {
 	var b strings.Builder
 	for _, s := range l {
 		if s.text != "" {
 			st := s.style
 			if light {
-				st = lightStyle(st)
+				st = lightStyle(st, profile)
 			}
 			b.WriteString(st.Render(s.text))
 		}

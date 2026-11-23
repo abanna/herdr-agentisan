@@ -7,6 +7,7 @@ import (
 	"unicode"
 
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
@@ -40,7 +41,7 @@ var palette = [...]themedColor{
 	colGreen:  themeColor("#8ae99f", "#14532d"),
 	colYellow: themeColor("#f3de82", "#644600"),
 	colOrange: themeColor("#ffba83", "#783713"),
-	colRed:    themeColor("#ff989f", "#891e31"),
+	colRed:    themeColor("#ff989f", "#870000"),
 	colCyan:   themeColor("#9ee6fa", "#125363"),
 	colAccent: themeColor("#c8b5ff", "#513b81"),
 }
@@ -52,11 +53,16 @@ var (
 	buttonForeground    = themeColor("#282a36", "#ffffff")
 )
 
-func lightStyle(st lipgloss.Style) lipgloss.Style {
+func lightStyle(st lipgloss.Style, profile colorprofile.Profile) lipgloss.Style {
 	if fg, ok := st.GetForeground().(themedColor); ok {
 		st = st.Foreground(fg.light)
 	}
 	if bg, ok := st.GetBackground().(themedColor); ok {
+		if bg == selectionBackground && profile == colorprofile.ANSI {
+			// The 16-colour palette has no pale blue. Use its light grey
+			// so the dark foregrounds stay legible on the bar.
+			return st.Background(ansi.White)
+		}
 		st = st.Background(bg.light)
 	}
 	return st
