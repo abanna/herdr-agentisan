@@ -67,10 +67,10 @@ func TestMessageEntriesIncludeTheCut(t *testing.T) {
 	}
 }
 
-// TestSettleAllAcksTheCutNotices: Settle acknowledges the notices a
-// message's lines carry, as before; SettleAll every notice it holds, the
-// cut ones included, once each.
-func TestSettleAllAcksTheCutNotices(t *testing.T) {
+// TestSettleEntriesAcksTheCutNotices: Settle acknowledges the notices a
+// message's lines carry, as before; SettleEntries acknowledges the committed prefix,
+// including cut lines.
+func TestSettleEntriesAcksTheCutNotices(t *testing.T) {
 	t.Parallel()
 	kept := map[string]int{}
 	m := flushOne(t, longNotices(20, kept))
@@ -81,8 +81,8 @@ func TestSettleAllAcksTheCutNotices(t *testing.T) {
 	all := map[string]int{}
 	ns := longNotices(20, all)
 	ns[1].Ack = nil
-	flushOne(t, ns).SettleAll()
-	assert.Len(t, all, 19, "SettleAll acknowledges every notice with a callback")
+	flushOne(t, ns).SettleEntries(len(ns))
+	assert.Len(t, all, 19, "SettleEntries acknowledges every notice with a callback")
 	for subject, n := range all {
 		assert.Equal(t, 1, n, "%s acknowledged once", subject)
 	}

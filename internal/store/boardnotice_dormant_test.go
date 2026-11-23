@@ -9,12 +9,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// The batch APIs have no production caller until the wiring slice. Only the
-// declarations, PostAll's call to postAll and AppendTo's read of Tail may mention their names.
-func TestBoardNoticeBatchHasNoProductionCaller(t *testing.T) {
+// The poll owns batch notice delivery. Store.Post stays independent, and
+// every dispatcher claim goes through claimTyped, which publishes the
+// in-flight boss before it unlocks the route.
+func TestBoardNoticeDeliveryCallers(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join("..", "..")
-	names := []string{"PostAll", "postAll", "FitID", "Entries", "SettleAll", "Tail"}
+	names := []string{"Claim", "claim", "claimTyped", "PostAll", "postAll", "FitID", "Entries", "SettleEntries", "Tail"}
 	got := map[string][]string{}
 	for _, dir := range []string{"cmd", "internal"} {
 		uses, _, _, _ := productionUses(t, root, dir, names, nil)
@@ -26,8 +27,12 @@ func TestBoardNoticeBatchHasNoProductionCaller(t *testing.T) {
 		}
 	}
 	assert.Equal(t, map[string][]string{
-		"internal/store/board.go":  {"FitID", "PostAll", "postAll", "postAll"},
-		"internal/notice/batch.go": {"Entries", "SettleAll", "Tail"},
-		"internal/notice/inbox.go": {"Tail"},
+		"internal/daemon/messages.go":      {"Claim", "claim", "claimTyped"},
+		"internal/daemon/boarddelivery.go": {"claim", "claim", "claimTyped"},
+		"internal/daemon/notices.go":       {"Entries", "FitID", "FitID", "PostAll", "SettleEntries", "Tail"},
+		"internal/store/messages.go":       {"Claim"},
+		"internal/store/board.go":          {"FitID", "PostAll", "postAll", "postAll"},
+		"internal/notice/batch.go":         {"Entries", "SettleEntries", "Tail"},
+		"internal/notice/inbox.go":         {"Tail"},
 	}, got)
 }

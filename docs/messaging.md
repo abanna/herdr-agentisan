@@ -105,16 +105,19 @@ too.
   come first on that line.
 
 **On the board (A74).** If your team's `notices.delivery` is `board` and
-you run Claude, nothing is typed into you: the daemon's notices and the
+Claude is remembered, the daemon's notices and new
 messages sent to you are posts on your board. A worker's, a pane's or
 another boss's are on the `team` channel, kind `post`, the post's id the
 message's; a `returned` one has, as its subject, the worker it was for. The
 daemon's are on the `daemon` channel: `undelivered`, its subject the failed
-message's id, a body over 8 KiB in parts. Its notices are one `notices`
-post per delivery. `send` still answers `queued` with the message's id; the
+message's id, a body over 8 KiB in parts. `send` returns a queued ID. The
 post follows in the next pass, within a few seconds; a backlog goes in
 batches of 100, in passes back to back. Run `herdr-agentisan
 board wait` in the background, and `board read` when it ends.
+
+Direct notices post in batches of 100, with long bodies split and one
+`undelivered` post per refusal. A typed claim or undrained queue sends
+the flush to a fresh inbox row for dispatch under A74.
 
 ## A recipient that is working
 

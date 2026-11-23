@@ -84,11 +84,14 @@ func inboxSize(dropped int, lines []string) int {
 // character a space, so no line breaks early and no NUL, which the inbox
 // refuses, is kept, and at most MaxLine bytes.
 func inboxLine(l string) string {
-	l = strings.Map(func(r rune) rune {
+	return cut(cleanLine(l), MaxLine)
+}
+
+func cleanLine(l string) string {
+	return strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) {
 			return ' '
 		}
 		return r
 	}, strings.ToValidUTF8(l, "�"))
-	return cut(l, MaxLine)
 }

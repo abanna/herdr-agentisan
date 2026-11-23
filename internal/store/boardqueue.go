@@ -35,6 +35,7 @@ type PostedQueue struct {
 }
 
 const (
+	undeliveredKind = "undelivered"
 	// selectBossQueue is a boss's oldest ?2 queued messages, oldest first;
 	// one dispatching is the dispatcher's, never selected. messages_inbox
 	// (migration 0002) serves it.
@@ -172,7 +173,7 @@ func rowPosts(ctx context.Context, tx *sql.Tx, m Message, project string) ([]Boa
 		p.Kind, p.Subject = "returned", m.ReturnedFrom
 	case !daemon:
 	case m.NoticeOf != "":
-		p.Kind, p.Subject = "undelivered", m.NoticeOf
+		p.Kind, p.Subject = undeliveredKind, m.NoticeOf
 	default:
 		p.Kind = "notices"
 		if rest, ok := strings.CutPrefix(m.Body, noticesHeader+"\n"); ok && rest != "" {
@@ -254,7 +255,7 @@ func refuseRow(ctx context.Context, tx *sql.Tx, m Message, project string, why e
 		return err
 	}
 	p := BoardPost{
-		ID: id, Project: project, Channel: ChannelDaemon, Author: Daemon, Kind: "undelivered", Subject: m.ID,
+		ID: id, Project: project, Channel: ChannelDaemon, Author: Daemon, Kind: undeliveredKind, Subject: m.ID,
 		Body: fmt.Sprintf(refusedFormat, m.ID, strconv.Quote(m.From.ID), reason), At: m.CreatedAt,
 	}
 	if err := insertBoardPost(ctx, tx, &p); err != nil {

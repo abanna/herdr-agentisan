@@ -243,11 +243,11 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   review with its P-badge counts, each with its seen-set key), the
   per-boss pacing (`Batcher`: coalesced, at most
   one message per gap, repeats and muted workers dropped, 8 KiB a message),
-  the boss's mutes (`Mutes`) and the `Sink` that delivers it: the daemon's
-  appends each message to the boss's notice still queued in the inbox
-  (`AppendTo`, `store.Notify`), and logs it to daemon.log; and the
-  delivery a board-mode team's boss gets from the agent last seen on its
-  pane (`delivery.go`, A74). Pure: tests build models by hand.
+  the boss's mutes (`Mutes`) and the inbox `Sink` (`AppendTo`, `store.Notify`).
+  A direct board flush acknowledges each committed batch of `Entries`.
+  Inbox acknowledgements cover incoming lines kept in the committed body.
+  The agent last seen on the boss pane determines delivery for a board-mode
+  team (`delivery.go`, A74). Pure: tests build models by hand.
 - `internal/attention/` — the alert that tells the user a board-mode boss
   has left posts unread, or messages waiting, too long (ADR-001 A74): when
   an episode opens, its reminders, what resets, pauses or ends it. Pure:
@@ -382,9 +382,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   post wakes each `board wait`; `BoardPending` counts what a boss has left
   unread and waiting, for the alert (A74). Tests open a fresh database in a
   temp dir; the store is never mocked.
-  The board batch (`PostAll`, `FitID`) and notice message operations
-  (`Entries`, `SettleAll`, `Tail`) are dormant until daemon wiring (A74),
-  guarded by `TestBoardNoticeBatchHasNoProductionCaller`.
+  The poll posts notices in batches of 100 after the boss's queue drains,
+  splitting long bodies and replacing refusals as on the queued path. While a typed claim is outstanding or the drain
+  leaves rows behind, the flush gets a fresh inbox row (A74).
   `boardnotice.go` also provides the pure version-1 GitHub capture-ID helper
   and its frozen envelope/receipt types (B0a.1), and `noticeledger.go` the
   dormant notice admission ledger (B0a.2, migration 0009, one-way):

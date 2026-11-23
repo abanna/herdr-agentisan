@@ -307,6 +307,19 @@ id> handoff <step>`.
 | `agentisan.handoff.old_pane` | string | The pane the worker was on; only on `completed` and `failed` |
 | `agentisan.handoff.old` | string | `matched` when the old pane's item and stage equal the replacement's, `unread` when the old pane is gone or reports only one or neither; only on `completed` |
 
+### `agentisan.board.posted`
+
+The event counts a board flush's committed posts (ADR-001 A74).
+The body is `<posts> posts on <project>'s board` and carries no post text.
+
+| Attribute | Type | Value |
+| --- | --- | --- |
+| `agentisan.board.project` | string | The team whose board it is |
+| `agentisan.board.channel` | string | The channel posted on: `daemon` for notices |
+| `agentisan.board.posts` | int | How many posts the flush made |
+| `agentisan.board.first_seq` | int | The first post's seq |
+| `agentisan.board.last_seq` | int | The last post's seq |
+
 ## Coming
 
 The same helper carries these when their items land: stage changes (fast
