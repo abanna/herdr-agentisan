@@ -325,11 +325,13 @@ func TestBossAgentSwitchMovesItsDelivery(t *testing.T) {
 // board team's Codex boss has three messages queued, so a pass types them.
 // While the first is being typed, a poll sees Claude on the boss's pane. The
 // first finishes typed; the two still queued are never typed into the
-// Claude boss, and the next pass posts them, in order, each once.
+// Claude boss, and the next pass posts them, in order, each once. The
+// first pass still serves the worker queued behind the boss.
 func TestBossThatTurnsClaudeMidDrainGetsTheRestPosted(t *testing.T) {
 	t.Parallel()
 	r := newBoardRig(t, []settings.Team{haTabs}, boardOn("ha"), nil)
 	a, b, c := sent(t, r.st, haBoss, coder, "a"), sent(t, r.st, haBoss, coder, "b"), sent(t, r.st, haBoss, coder, "c")
+	worker := sent(t, r.st, coder, haBoss, "build it")
 	r.p.EndPoll(haModel(bossPane("ha-boss", "codex")))
 	release := r.pr.hold(t, "ha-boss")
 	done := make(chan struct{})
@@ -346,8 +348,12 @@ func TestBossThatTurnsClaudeMidDrainGetsTheRestPosted(t *testing.T) {
 		t.Fatal("the pass did not end")
 	}
 
-	assert.Equal(t, []typed{{Target: "ha-boss", Pane: "w14:p1", Text: "[msg " + a.ID + " from ha-coder-1] a"}}, r.pr.all(),
-		"only the message already being typed is typed")
+	want := []typed{
+		{Target: "ha-boss", Pane: "w14:p1", Text: "[msg " + a.ID + " from ha-coder-1] a"},
+		{Target: "ha-coder-1", Pane: "w14:p2", Text: "[msg " + worker.ID + " from ha-boss] build it"},
+	}
+	assert.Equal(t, want, r.pr.all(), "the same pass serves the worker after the boss changes mode")
+	assert.Equal(t, store.MessageDelivered, stateOf(t, r.st, worker.ID).State)
 	assert.Equal(t, store.MessageDelivered, stateOf(t, r.st, a.ID).State)
 	for _, m := range []store.Message{b, c} {
 		assert.Equal(t, store.MessageQueued, stateOf(t, r.st, m.ID).State, "left queued for the board")
@@ -358,7 +364,7 @@ func TestBossThatTurnsClaudeMidDrainGetsTheRestPosted(t *testing.T) {
 		ids = append(ids, p.ID)
 	}
 	assert.Equal(t, []string{b.ID, c.ID}, ids, "the rest posted, in order, each once")
-	assert.Len(t, r.pr.all(), 1, "nothing more typed")
+	assert.Equal(t, want, r.pr.all(), "nothing more typed")
 }
 
 // noticeRig is a board rig for the ha team, its key board, whose notices
@@ -1019,24 +1025,36 @@ VALUES (?1, 'boss', 'ha-boss', '', 'pane', ?2, 'hello', ?3, ?3)`, id, strings.Re
 func TestPostedLogLineAndWarnReset(t *testing.T) {
 	t.Parallel()
 	r := newBoardRig(t, []settings.Team{haTabs}, boardOn("ha"), nil)
-	drop := daemon.FailBoardInserts(t, r.db, "")
+	drop := daemon.FailBoardInserts(t, r.db, "NEW.kind = 'undelivered'")
 	first := sent(t, r.st, haBoss, coder, "one")
+	second := sent(t, r.st, haBoss, coder, "two")
+	// The oversized sender makes the board refuse this row. The trigger
+	// rolls back the first pass when it tries to post the failure notice.
+	rawExec(t, r.db, "UPDATE messages SET sender = ? WHERE id = ?", strings.Repeat("w", 300), second.ID)
 	r.poll(haModel(bossPane("ha-boss", "claude")))
 	assert.Equal(t, 1, warnings(r.logs.String(), postFailedMsg))
 
 	drop()
 	r.p.Pass()
 	posts := r.posts(t, "ha")
-	require.Len(t, posts, 1)
+	require.Len(t, posts, 2)
 	lines := postedLines(t, r.logs)
 	require.Len(t, lines, 1)
 	assert.Equal(t, "ha-boss", lines[0]["recipient"])
 	assert.Equal(t, "ha", lines[0]["project"])
-	assert.Equal(t, []any{first.ID}, lines[0]["messages"])
-	assert.Equal(t, []any{float64(posts[0].Seq)}, lines[0]["posts"])
+	assert.Equal(t, []any{first.ID, second.ID}, lines[0]["messages"])
+	assert.Equal(t, []any{float64(posts[0].Seq), float64(posts[1].Seq)}, lines[0]["posts"])
+
+	events := map[string][]any{}
+	for _, e := range r.rec.Events() {
+		if e.Name == telemetry.EventMessageDelivered || e.Name == telemetry.EventMessageFailed {
+			events[e.Name] = append(events[e.Name], e.Attrs["agentisan.message.id"])
+		}
+	}
+	assert.Equal(t, map[string][]any{telemetry.EventMessageDelivered: {first.ID}, telemetry.EventMessageFailed: {second.ID}}, events)
 
 	daemon.FailBoardInserts(t, r.db, "")
-	sent(t, r.st, haBoss, coder, "two")
+	sent(t, r.st, haBoss, coder, "three")
 	r.p.Pass()
 	assert.Equal(t, 2, warnings(r.logs.String(), postFailedMsg), "the next failure warns again")
 }
