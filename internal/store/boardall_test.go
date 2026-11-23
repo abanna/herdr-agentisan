@@ -43,8 +43,9 @@ func TestPostAllPostsInOrder(t *testing.T) {
 	ps := daemonPosts("first", "second", "third")
 	ps[0].ID = "01J00000000000000000000000"
 	want := slices.Clone(ps)
-	got, err := s.PostAll(t.Context(), ps)
+	out, err := s.PostAll(t.Context(), ps)
 	require.NoError(t, err)
+	got := out.Posts
 	require.Len(t, got, 3)
 	assert.Equal(t, want, ps, "PostAll leaves the caller's posts untouched")
 	assert.NotEqual(t, want[0].ID, got[0].ID, "the store assigns the ID")
@@ -64,52 +65,36 @@ func TestPostAllPostsInOrder(t *testing.T) {
 	assert.Equal(t, want, read.Posts, "every caller-supplied field except ID and Seq is stored")
 }
 
-// TestPostAllIsAllOrNone: a post the store refuses rolls the whole flush
-// back, and wakes no one.
+// TestPostAllIsAllOrNone exercises a transaction-wide failure: a deferred
+// foreign key refuses the commit even though both inserts succeeded.
 func TestPostAllIsAllOrNone(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
-	failBoardInserts(t, s, "NEW.body = 'third'")
 	changed := s.BoardChanged()
-
-	_, err := s.PostAll(t.Context(), daemonPosts("first", "second", "third"))
-	require.ErrorIs(t, err, store.ErrStore)
-	assert.Zero(t, postCount(t, s), "no post is left")
-	assertOpen(t, changed, "a rolled-back flush woke the board's waiters")
-
-	// Unlike the insert trigger above, this foreign key is checked at COMMIT.
-	_, err = store.DB(s).ExecContext(t.Context(), `
+	_, err := store.DB(s).ExecContext(t.Context(), `
 		CREATE TABLE parent_post (id INTEGER PRIMARY KEY);
 		CREATE TABLE child_post (parent INTEGER REFERENCES parent_post DEFERRABLE INITIALLY DEFERRED);
 		CREATE TRIGGER check_commit AFTER INSERT ON board_posts
 		BEGIN INSERT INTO child_post VALUES (1); END;`)
 	require.NoError(t, err)
-	_, err = s.PostAll(t.Context(), daemonPosts("first", "second"))
+	out, err := s.PostAll(t.Context(), daemonPosts("first", "second"))
 	require.ErrorIs(t, err, store.ErrStore)
+	assert.Empty(t, out)
 	assert.Zero(t, postCount(t, s))
 	assertOpen(t, changed, "a failed commit woke the board's waiters")
 }
 
-// TestPostAllChecksBeforeWriting: every post is checked as Post checks one
-// before any is written; one refused refuses them all.
-func TestPostAllChecksBeforeWriting(t *testing.T) {
+func TestPostAllReplacesAnInvalidPost(t *testing.T) {
 	t.Parallel()
 	s := open(t, dbPath(t))
-	ps := daemonPosts("first", "second", "third")
-	failBoardInserts(t, s, "NEW.body = 'first'")
-	changed := s.BoardChanged()
-
-	badSubject := ps[2]
-	badSubject.Subject = "w1\np2"
-	badTime := ps[2]
-	badTime.At = time.Date(2300, time.January, 1, 0, 0, 0, 0, time.UTC)
-	for _, invalid := range []store.BoardPost{badSubject, badTime} {
-		ps[2] = invalid
-		_, err := s.PostAll(t.Context(), ps)
-		require.ErrorIs(t, err, store.ErrInvalid)
-		assert.Zero(t, postCount(t, s), "nothing is posted")
-		assertOpen(t, changed, "a refused flush woke the board's waiters")
-	}
+	ps := daemonPosts("first", "second")
+	ps[0].Subject = "w1\np2"
+	out, err := s.PostAll(t.Context(), ps)
+	require.NoError(t, err)
+	require.Len(t, out.Posts, 2)
+	assert.Equal(t, 1, out.Refused)
+	assert.Equal(t, "undelivered", out.Posts[0].Kind)
+	assert.Equal(t, "second", out.Posts[1].Body)
 }
 
 // TestPostAllWakesOnceAfterCommit: the waiters are woken once the flush is
@@ -120,9 +105,9 @@ func TestPostAllWakesOnceAfterCommit(t *testing.T) {
 	signals := store.CountBoardSignals(s)
 	changed := s.BoardChanged()
 
-	got, err := s.PostAll(t.Context(), daemonPosts("one", "two"))
+	out, err := s.PostAll(t.Context(), daemonPosts("one", "two"))
 	require.NoError(t, err)
-	require.Len(t, got, 2)
+	require.Len(t, out.Posts, 2)
 	assert.EqualValues(t, 1, signals(), "one signal per committed flush")
 	select {
 	case <-changed:
@@ -131,7 +116,7 @@ func TestPostAllWakesOnceAfterCommit(t *testing.T) {
 	}
 	st, err := s.BoardStatus(t.Context(), "ha", store.ReaderBoss)
 	require.NoError(t, err)
-	assert.Equal(t, got[1].Seq, st.Newest)
+	assert.Equal(t, out.Posts[1].Seq, st.Newest)
 	assertOpen(t, s.BoardChanged(), "the channel after the wake is already closed")
 }
 
@@ -143,14 +128,14 @@ func TestPostAllOfNothing(t *testing.T) {
 	for _, ps := range [][]store.BoardPost{nil, {}} {
 		got, err := s.PostAll(t.Context(), ps)
 		require.NoError(t, err)
-		assert.Nil(t, got)
+		assert.Empty(t, got)
 	}
 	assertOpen(t, changed, "an empty flush woke the board's waiters")
 	assert.Zero(t, postCount(t, s))
 	require.NoError(t, s.Close())
 	got, err := s.PostAll(t.Context(), nil)
 	require.NoError(t, err, "an empty flush needs no connection")
-	assert.Nil(t, got)
+	assert.Empty(t, got)
 }
 
 // TestFitID: a subject or worker the board would take is kept; one it

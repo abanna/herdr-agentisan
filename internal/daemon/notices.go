@@ -36,6 +36,7 @@ type notices struct {
 	batch   *notice.Batcher
 	configs notice.Configs
 	sink    notice.Sink
+	board   boardWriter
 	// github carries the GitHub collector's notices to the poll (A45).
 	github noticeQueue
 }
@@ -59,7 +60,7 @@ func (o Options) newNotices(st *store.Store, in *inbox, mutes *notice.Mutes) *no
 	batch := notice.NewBatcher(cfgs)
 	batch.Mutes = mutes
 	sink := inboxSink{st: st, in: in, log: o.Logger, events: o.Team.Events, now: o.Now}
-	return &notices{watch: notice.NewWatch(), ctx: o.newCtxWatch(), batch: batch, configs: cfgs, sink: sink}
+	return &notices{watch: notice.NewWatch(), ctx: o.newCtxWatch(), batch: batch, configs: cfgs, sink: sink, board: o.boardWriter(st)}
 }
 
 // newCtxWatch reads every team's rotation thresholds from the configuration
@@ -132,7 +133,7 @@ func (o Options) alert(ctx context.Context, c herdr.Client, cr notice.Crossing) 
 }
 
 // endPoll ends a poll: it remembers the agent on each tabs team's boss pane
-// (A74), queues the poll's notices, then gives the dispatcher the poll's
+// (A74), flushes the poll's notices, then gives the dispatcher the poll's
 // model, which wakes it. In that order, so the flush and the dispatcher read
 // one memory, already updated with this poll, and a boss in its place is
 // typed a notice in the pass the poll that queued it wakes (A44); the other
@@ -140,16 +141,22 @@ func (o Options) alert(ctx context.Context, c herdr.Client, cr notice.Crossing) 
 // the next poll's.
 func (o Options) endPoll(ctx context.Context, n *notices, in *inbox, built *team.Model) {
 	in.remember(built)
-	o.flushNotices(ctx, n)
+	o.flushNotices(ctx, n, in)
 	in.polled(built)
 }
 
 // flush sends every boss whose gap has passed its waiting notices. A
 // message the sink refuses is logged and dropped, unacknowledged; of one it
 // accepts, only the lines the message it committed kept are settled.
-func (o Options) flushNotices(ctx context.Context, n *notices) {
+func (o Options) flushNotices(ctx context.Context, n *notices, in *inbox) {
 	n.batch.Add(o.Now(), n.github.take())
+	_, bosses := in.view()
 	for _, m := range n.batch.Flush(o.Now()) {
+		handled, tail := n.board.postNotices(ctx, in, bosses, m)
+		if handled {
+			continue
+		}
+		m.Tail = tail
 		kept, err := n.sink.Send(ctx, m)
 		if err != nil {
 			o.Logger.Warn().Err(err).Str("project", m.Project).Msg("notice not delivered")
@@ -203,4 +210,92 @@ func (s inboxSink) Send(ctx context.Context, m notice.Message) (int, error) {
 		s.events.MessageQueued(ctx, telemetry.Message{ID: queued.ID, FromKind: store.Daemon.Kind, From: store.Daemon.ID, ToKind: to.Kind, To: to.ID, At: queued.CreatedAt})
 	}
 	return m.Kept(queued.Body), nil
+}
+
+// postNotices handles a board decision and its writes in one route hold.
+func (s boardWriter) postNotices(ctx context.Context, in *inbox, bosses map[string]string, m notice.Message) (handled, tail bool) {
+	boss, ok := bosses[m.Project]
+	if !ok || !in.boardKey(m.Project) {
+		return false, false
+	}
+	if _, one := bossProject(bosses, boss); !one {
+		return false, false
+	}
+	in.route.Lock()
+	if in.delivery(m.Project) != notice.DeliverBoard {
+		in.route.Unlock()
+		return false, false
+	}
+	to := store.Address{Kind: store.KindBoss, ID: boss}
+	if held := in.typedBoss.Load(); held != nil && *held == to {
+		in.route.Unlock()
+		return false, true
+	}
+	queue, err := s.postQueued(ctx, to, m.Project)
+	if err != nil {
+		in.route.Unlock()
+		s.log.Warn().Err(err).Str("project", m.Project).Msg("notice not posted; it goes to the inbox")
+		return false, true
+	}
+	var out store.PostedNotices
+	var bodies []string
+	committed := 0
+	if !queue.More {
+		out, bodies, committed, err = s.postBatch(ctx, m)
+	}
+	in.route.Unlock()
+	s.reportQueue(ctx, to, m.Project, queue)
+	if queue.More {
+		return false, true
+	}
+	s.reportNotices(ctx, boss, m.Project, out, bodies, committed, err)
+	m.SettleEntries(committed)
+	return true, false
+}
+
+func (s boardWriter) postBatch(ctx context.Context, m notice.Message) (store.PostedNotices, []string, int, error) {
+	entries := m.Entries()
+	at := s.now()
+	ps := make([]store.BoardPost, 0, len(entries))
+	bodies := make([]string, 0, len(entries))
+	for _, e := range entries {
+		ps = append(ps, store.BoardPost{
+			Project: m.Project, Channel: store.ChannelDaemon, Author: store.Daemon, Kind: string(e.Kind),
+			Subject: store.FitID(e.Subject), Worker: store.FitID(e.Worker), Body: e.Body, At: at,
+		})
+		bodies = append(bodies, e.Body)
+	}
+	var out store.PostedNotices
+	committed := 0
+	for chunk := range slices.Chunk(ps, store.MaxQueuePost) {
+		batch, err := s.st.PostAll(ctx, chunk)
+		if err != nil {
+			return out, bodies, committed, fmt.Errorf("post notice batch: %w", err)
+		}
+		out.Posts = append(out.Posts, batch.Posts...)
+		out.Refused += batch.Refused
+		committed += len(chunk)
+	}
+	return out, bodies, committed, nil
+}
+
+func (s boardWriter) reportNotices(ctx context.Context, boss, project string, out store.PostedNotices, bodies []string, committed int, err error) {
+	ev := s.log.Info().Str("project", project).Strs("notices", bodies).Str("boss", boss).Str("delivery", "board")
+	if out.Refused > 0 {
+		ev.Int("refused", out.Refused)
+	}
+	if err != nil {
+		dropped := len(bodies) - committed
+		ev.Int("dropped", dropped)
+		s.log.Warn().Err(err).Str("project", project).Int("dropped", dropped).Msg("notice not delivered")
+	}
+	seqs := make([]int64, 0, len(out.Posts))
+	for _, p := range out.Posts {
+		seqs = append(seqs, p.Seq)
+	}
+	if len(seqs) > 0 {
+		ev.Ints64("posts", seqs)
+		s.events.BoardPosted(ctx, telemetry.BoardPost{Project: project, Channel: store.ChannelDaemon, Posts: len(seqs), FirstSeq: seqs[0], LastSeq: seqs[len(seqs)-1]})
+	}
+	ev.Msg(noticeMsg)
 }

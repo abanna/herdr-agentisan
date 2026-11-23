@@ -3,11 +3,15 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 // The board's channels (ADR-001 A60): the team's posts, by its workers,
@@ -145,53 +149,110 @@ func (s *Store) Post(ctx context.Context, p BoardPost) (BoardPost, error) {
 	return p, nil
 }
 
-// PostAll adds ps to their boards, in order, in one transaction (A74), and
-// returns them with their Seqs and IDs. Every post is checked as Post
-// checks one before any is written, and one refused refuses them all
-// (ErrInvalid, ErrTooLarge). A statement that fails rolls them all back
-// (ErrStore). Every waiter on BoardChanged is woken once, after the commit;
-// an empty ps writes and wakes nothing.
-func (s *Store) PostAll(ctx context.Context, ps []BoardPost) ([]BoardPost, error) {
-	if len(ps) == 0 {
-		return nil, nil
+// PostedNotices reports the posts and permanent refusals in one committed batch.
+type PostedNotices struct {
+	Posts   []BoardPost
+	Refused int
+}
+
+// PostAll posts up to MaxQueuePost direct notices in order. Oversized bodies
+// use the queued path's parts. A permanent refusal puts an undelivered post
+// in its place. A transaction failure commits nothing and wakes no waiter.
+func (s *Store) PostAll(ctx context.Context, notices []BoardPost) (PostedNotices, error) {
+	if len(notices) == 0 {
+		return PostedNotices{}, nil
 	}
-	out := make([]BoardPost, len(ps))
-	for i, p := range ps {
-		if err := checkPost(p); err != nil {
-			return nil, err
-		}
-		if _, err := nanos(p.At); err != nil {
-			return nil, err
-		}
-		var err error
-		if p.ID, err = newULID(p.At, entropy); err != nil {
-			return nil, err
-		}
-		out[i] = p
+	if len(notices) > MaxQueuePost {
+		return PostedNotices{}, fmt.Errorf("%w: at most %d notices per transaction", ErrInvalid, MaxQueuePost)
 	}
-	if err := s.postAll(ctx, out); err != nil {
-		return nil, fmt.Errorf("%w: post to %q's board: %w", ErrStore, out[0].Project, err)
+	out, err := s.postAll(ctx, notices)
+	if err != nil {
+		return PostedNotices{}, fmt.Errorf("%w: post notices: %w", ErrStore, err)
 	}
 	s.wake.signal()
 	return out, nil
 }
 
-// postAll is PostAll's transaction: it inserts each of ps, setting its Seq.
-func (s *Store) postAll(ctx context.Context, ps []BoardPost) error {
+func (s *Store) postAll(ctx context.Context, notices []BoardPost) (PostedNotices, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin: %w", err)
+		return PostedNotices{}, fmt.Errorf("begin: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // a no-op once committed
-	for i := range ps {
-		if err := insertBoardPost(ctx, tx, &ps[i]); err != nil {
-			return err
+	var out PostedNotices
+	for _, p := range notices {
+		if err := checkLine("project", p.Project, true); err != nil {
+			return PostedNotices{}, err
+		}
+		if _, err := nanos(p.At); err != nil {
+			return PostedNotices{}, err
+		}
+		posts, refused, err := postNotice(ctx, tx, p)
+		if err != nil {
+			return PostedNotices{}, err
+		}
+		out.Posts = append(out.Posts, posts...)
+		if refused {
+			out.Refused++
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit: %w", err)
+		return PostedNotices{}, fmt.Errorf("commit: %w", err)
 	}
-	return nil
+	return out, nil
+}
+
+// postNotice isolates a notice's parts, including trigger effects, so a
+// permanent refusal can replace the entire notice in the same transaction.
+func postNotice(ctx context.Context, tx *sql.Tx, p BoardPost) ([]BoardPost, bool, error) {
+	if _, err := tx.ExecContext(ctx, "SAVEPOINT direct_notice"); err != nil {
+		return nil, false, fmt.Errorf("begin notice: %w", err)
+	}
+	var posts []BoardPost
+	var refused bool
+	for _, body := range splitBody(p.Body) {
+		part := p
+		part.Body = body
+		if err := checkPost(part); err != nil {
+			refused = true
+			break
+		}
+		if err := insertNoticePost(ctx, tx, &part); err != nil {
+			var sqliteErr *sqlite.Error
+			if !errors.As(err, &sqliteErr) || sqliteErr.Code()&0xff != sqlite3.SQLITE_CONSTRAINT {
+				return nil, false, err
+			}
+			refused = true
+			break
+		}
+		posts = append(posts, part)
+	}
+	if refused {
+		if _, err := tx.ExecContext(ctx, "ROLLBACK TO direct_notice"); err != nil {
+			return nil, false, fmt.Errorf("roll back notice: %w", err)
+		}
+		replacement := BoardPost{
+			Project: p.Project, Channel: ChannelDaemon, Author: Daemon, Kind: undeliveredKind, At: p.At,
+			Body: "[agentisan] notice could not be posted on the board: " + CleanReason(p.Body),
+		}
+		if err := insertNoticePost(ctx, tx, &replacement); err != nil {
+			return nil, false, err
+		}
+		posts = []BoardPost{replacement}
+	}
+	if _, err := tx.ExecContext(ctx, "RELEASE direct_notice"); err != nil {
+		return nil, false, fmt.Errorf("release notice: %w", err)
+	}
+	return posts, refused, nil
+}
+
+func insertNoticePost(ctx context.Context, tx *sql.Tx, p *BoardPost) error {
+	id, err := newULID(p.At, entropy)
+	if err != nil {
+		return err
+	}
+	p.ID = id
+	return insertBoardPost(ctx, tx, p)
 }
 
 // FitID is v when a post's subject or worker may be v, else "": a notice

@@ -29,7 +29,7 @@ func InboxNotice(o Options, st *store.Store, bosses map[string]string, m notice.
 func FlushToInbox(o Options, st *store.Store, bosses map[string]string, b *notice.Batcher) {
 	in := newInbox()
 	in.bosses = bosses
-	o.flushNotices(context.Background(), &notices{batch: b, sink: inboxSink{st: st, in: in, log: o.Logger, events: o.Team.Events, now: o.Now}})
+	o.flushNotices(context.Background(), &notices{batch: b, sink: inboxSink{st: st, in: in, log: o.Logger, events: o.Team.Events, now: o.Now}}, in)
 }
 
 // NoticeCycle is one daemon's notices on a store, with no loop of its own:
@@ -61,7 +61,7 @@ func (c *NoticeCycle) Add(now time.Time, ns []notice.Notice) { c.n.batch.Add(now
 
 // Flush ends a poll's notices as endPoll does: what has waited its gap goes
 // into the inbox, and what the inbox kept is settled.
-func (c *NoticeCycle) Flush(ctx context.Context) { c.o.flushNotices(ctx, c.n) }
+func (c *NoticeCycle) Flush(ctx context.Context) { c.o.flushNotices(ctx, c.n, c.d.in) }
 
 // Serve types boss's inbox into the agent named boss, as a dispatcher pass
 // does with the poll's bosses, until nothing is queued for it.
@@ -111,7 +111,7 @@ func NewPoller(o Options, st *store.Store, teams []settings.Team, cfgs notice.Co
 	if s == nil {
 		s = inboxSink{st: st, in: in, log: o.Logger, events: o.Team.Events, now: o.Now}
 	}
-	return &Poller{o: o, in: in, n: &notices{batch: b, configs: cfgs, sink: s}, d: o.newDispatcher(st, in)}
+	return &Poller{o: o, in: in, n: &notices{batch: b, configs: cfgs, sink: s, board: o.boardWriter(st)}, d: o.newDispatcher(st, in)}
 }
 
 // EndPoll ends a poll on m as pollTeam does: o.endPoll, which remembers
@@ -216,4 +216,35 @@ func NoticeOp(o Options, m *team.Model, mutes *notice.Mutes, name string, args j
 		return nil, op.code(err), err
 	}
 	return v, "", nil
+}
+
+// TypedTurn stops after a pass has selected a typed recipient. Its caller
+// finishes a poll, then resumes serve with the same target and boss map.
+func (p *Poller) TypedTurn(to store.Address) func() {
+	ctx := context.Background()
+	m, bosses := p.in.view()
+	if p.d.untyped(ctx, bosses, to) {
+		return nil
+	}
+	target, held := targetOf(*m, bosses, to)
+	if held != "" {
+		return nil
+	}
+	return func() { p.d.serve(ctx, bosses, to, target) }
+}
+
+// ObserveBossClaim observes the dispatcher's atomic store on its own
+// goroutine, immediately after it publishes or clears the address.
+func (p *Poller) ObserveBossClaim(f func(*store.Address)) {
+	p.in.typedBoss = observedClaim{p.in.typedBoss, f}
+}
+
+type observedClaim struct {
+	bossClaim
+	observe func(*store.Address)
+}
+
+func (c observedClaim) Store(to *store.Address) {
+	c.bossClaim.Store(to)
+	c.observe(to)
 }

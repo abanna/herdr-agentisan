@@ -274,7 +274,7 @@ func WorkforceOf(o Options, ident Identity) *workforce.Service {
 
 // FlushNotices flushes b into s as the poll does.
 func FlushNotices(o Options, b *notice.Batcher, s notice.Sink) {
-	o.flushNotices(context.Background(), &notices{batch: b, sink: s})
+	o.flushNotices(context.Background(), &notices{batch: b, sink: s}, newInbox())
 }
 
 // LaunchModels is the team poll's launch models (A39), driven one poll at a
