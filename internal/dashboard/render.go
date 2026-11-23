@@ -158,16 +158,28 @@ func Render(f Frame, w, h int, opts Options) string {
 		return ""
 	}
 	th := opts.thresholds()
-	l := plan(f, w, h)
-	bar := opts.Profile != colorprofile.ASCII && opts.Profile != colorprofile.NoTTY
-	light := opts.LightBackground && bar
+	selection := selectionBar
+	var style func(lipgloss.Style) lipgloss.Style
+	light := false
+	switch opts.Profile {
+	case colorprofile.ANSI:
+		selection, style = selectionReverse, ansiStyle
+	case colorprofile.ASCII, colorprofile.NoTTY:
+		selection = selectionMark
+	default:
+		light = opts.LightBackground
+		if light {
+			style = lightStyle
+		}
+	}
+	l := plan(f, w, h, selection == selectionReverse)
 
 	canvas := make([]line, h)
 	l.drawHeader(canvas, f, th, light)
 	switch {
 	case l.avail == 0:
 	case l.board != nil:
-		l.drawBoard(canvas, f.Board.Selected, bar)
+		l.drawBoard(canvas, f.Board.Selected, selection)
 	case f.Snapshot == nil && f.NoTeam != nil:
 		body := noTeamToShow
 		if errors.Is(f.NoTeam, ErrNotATeamsWorkspace) {
@@ -181,13 +193,13 @@ func Render(f Frame, w, h int, opts Options) string {
 	case len(l.groups) == 0:
 		canvas[l.top] = line{{" ", plainStyle}, {noTeam, dimStyle}}
 	case l.view != nil:
-		l.drawView(canvas, th, bar)
+		l.drawView(canvas, th, selection)
 	default:
 		for i := range l.avail {
 			if l.offset+i >= len(l.rows) {
 				break
 			}
-			canvas[l.top+i] = l.drawRow(l.rows[l.offset+i], th, bar)
+			canvas[l.top+i] = l.drawRow(l.rows[l.offset+i], th, selection)
 		}
 	}
 	if l.footer >= 0 {
@@ -207,7 +219,7 @@ func Render(f Frame, w, h int, opts Options) string {
 		if ln.width() > w {
 			ln = ln.cut(0, w)
 		}
-		b.WriteString(ln.trimRight().render(light, opts.Profile))
+		b.WriteString(ln.trimRight().render(style))
 	}
 	return downsample(b.String(), opts.Profile)
 }
@@ -280,7 +292,7 @@ type layout struct {
 // plan lays f out on a w x h terminal. The header gives way as h shrinks:
 // a box and a gap from boxedHeight lines, two bare lines from 4, one line at
 // 3 and 2 (with the footer), and the project line alone at 1.
-func plan(f Frame, w, h int) layout {
+func plan(f Frame, w, h int, reverseBoard bool) layout {
 	l := layout{w: w, h: h, line1: -1, line2: -1, footer: -1, now: f.Now}
 	if w <= 0 || h <= 0 {
 		return l
@@ -305,7 +317,7 @@ func plan(f Frame, w, h int) layout {
 		l.btop = l.btopSpan()
 	}
 	if f.Board.Open {
-		l.board = planBoard(l, f.Board)
+		l.board = planBoard(l, f.Board, reverseBoard)
 		return l
 	}
 	if f.Snapshot == nil {
@@ -806,7 +818,7 @@ func (l layout) borderStyle(g int) lipgloss.Style {
 }
 
 // drawRow draws one line of the groups, w cells wide.
-func (l layout) drawRow(r row, th Thresholds, bar bool) line {
+func (l layout) drawRow(r row, th Thresholds, selection selectionMode) line {
 	g := l.groups[r.group]
 	border := l.borderStyle(r.group)
 	inner := rowWidth(l.w)
@@ -825,11 +837,13 @@ func (l layout) drawRow(r row, th Thresholds, bar bool) line {
 		return boxed(line{{noAgents, dimStyle}}, inner, border)
 	default:
 		body := l.cols.row(g.Agents[r.agent], l.now, th).truncate(inner).pad(inner)
-		box := boxed(body, inner, border)
 		if l.selOK && l.sel == (Selection{Group: r.group, Agent: r.agent}) {
-			box = selectBox(box, bar, true)
+			if selection != selectionReverse {
+				return selectBox(boxed(body, inner, border), selection == selectionBar, true)
+			}
+			reverseLine(body)
 		}
-		return box
+		return boxed(body, inner, border)
 	}
 }
 
@@ -1325,13 +1339,13 @@ func (l line) width() int {
 	return n
 }
 
-func (l line) render(light bool, profile colorprofile.Profile) string {
+func (l line) render(style func(lipgloss.Style) lipgloss.Style) string {
 	var b strings.Builder
 	for _, s := range l {
 		if s.text != "" {
 			st := s.style
-			if light {
-				st = lightStyle(st, profile)
+			if style != nil {
+				st = style(st)
 			}
 			b.WriteString(st.Render(s.text))
 		}

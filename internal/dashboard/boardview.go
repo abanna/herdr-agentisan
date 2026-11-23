@@ -27,7 +27,7 @@ func (v *boardView) add(ln line, post int) {
 	v.posts = append(v.posts, post)
 }
 
-func planBoard(l layout, b BoardFrame) *boardView {
+func planBoard(l layout, b BoardFrame, reverse bool) *boardView {
 	v := &boardView{}
 	v.back = span{x0: 1, x1: 1 + ansi.StringWidth(backButton), y: l.top, ok: l.avail > 0 && l.w >= 7}
 	posts := b.posts()
@@ -78,6 +78,9 @@ func planBoard(l layout, b BoardFrame) *boardView {
 				lead = line{{strings.Repeat(" ", prefix.width()), plainStyle}}
 			}
 			ln := slices.Concat(lead, line{{text, plainStyle}}).truncate(rowWidth(l.w))
+			if selected && reverse {
+				reverseLine(ln)
+			}
 			v.add(boardBox(ln, l.w), i)
 		}
 		if selected {
@@ -171,7 +174,7 @@ func boardPrefix(p daemon.BoardPostView, mark int64, now time.Time, w int) (line
 	return out, max(1, w-out.width())
 }
 
-func (l layout) drawBoard(canvas []line, selected int, bar bool) {
+func (l layout) drawBoard(canvas []line, selected int, selection selectionMode) {
 	v := l.board
 	for i := range l.avail {
 		idx := i
@@ -185,9 +188,9 @@ func (l layout) drawBoard(canvas []line, selected int, bar bool) {
 			break
 		}
 		row := v.rows[idx]
-		if selected >= 0 && v.posts[idx] == selected {
+		if selection != selectionReverse && selected >= 0 && v.posts[idx] == selected {
 			first := i == 2 || v.posts[idx-1] != selected
-			row = selectBox(row, bar, first)
+			row = selectBox(row, selection == selectionBar, first)
 		}
 		canvas[l.top+i] = row
 	}

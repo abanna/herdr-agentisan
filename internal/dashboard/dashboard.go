@@ -399,7 +399,7 @@ func (m Model) click(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		m.help = false
 		return m, nil
 	}
-	l := plan(m.Frame(), m.Width(), m.Height())
+	l := plan(m.Frame(), m.Width(), m.Height(), false)
 	what, sel := l.hit(msg.X, msg.Y)
 	switch what {
 	case hitAgent:
@@ -438,7 +438,7 @@ func (m Model) click(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 func (m Model) View() tea.View {
 	opts := m.cfg.Options
 	opts.LightBackground = m.lightBackground
-	if opts.Profile == colorprofile.Unknown && (m.lightBackground || m.profile == colorprofile.ASCII || m.profile == colorprofile.NoTTY) {
+	if opts.Profile == colorprofile.Unknown && (m.lightBackground || m.profile <= colorprofile.ANSI) {
 		opts.Profile = m.profile
 	}
 	v := tea.NewView(Render(m.Frame(), m.Width(), m.Height(), opts))
@@ -549,7 +549,7 @@ func (m *Model) settle() {
 	if m.board.Open {
 		return
 	}
-	m.scroll = plan(m.Frame(), m.Width(), m.Height()).offset
+	m.scroll = plan(m.Frame(), m.Width(), m.Height(), false).offset
 }
 
 // rowKey is the identity the selection follows across refreshes: a named

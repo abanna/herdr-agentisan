@@ -162,7 +162,7 @@ func (v *groupView) outOfView() (above, below int) {
 }
 
 // drawView draws the open group's view into the body of canvas.
-func (l layout) drawView(canvas []line, th Thresholds, bar bool) {
+func (l layout) drawView(canvas []line, th Thresholds, selection selectionMode) {
 	v := l.view
 	if l.avail == 0 {
 		return
@@ -187,7 +187,7 @@ func (l layout) drawView(canvas []line, th Thresholds, bar bool) {
 		var out line
 		for c := range v.cols {
 			if a := ln/boxHeight*v.cols + c; a < len(v.agents) {
-				out = place(out, v.x0[c], l.boxLine(a, ln%boxHeight, v.width[c], th, bar))
+				out = place(out, v.x0[c], l.boxLine(a, ln%boxHeight, v.width[c], th, selection))
 			}
 		}
 		canvas[v.top+i] = out
@@ -195,7 +195,7 @@ func (l layout) drawView(canvas []line, th Thresholds, bar bool) {
 }
 
 // boxLine is line k of agent i's box, w cells wide.
-func (l layout) boxLine(i, k, w int, th Thresholds, bar bool) line {
+func (l layout) boxLine(i, k, w int, th Thresholds, selection selectionMode) line {
 	v := l.view
 	a := v.agents[i]
 	sel := i == v.sel
@@ -210,7 +210,7 @@ func (l layout) boxLine(i, k, w int, th Thresholds, bar bool) line {
 	var body line
 	switch k {
 	case 0:
-		return boxTitleLine(a, w, sel, bar, border)
+		return boxTitleLine(a, w, sel, selection, border)
 	case boxHeight - 1:
 		return line{{"╰" + strings.Repeat("─", max(0, w-2)) + "╯", border}}
 	case 1:
@@ -231,7 +231,7 @@ func (l layout) boxLine(i, k, w int, th Thresholds, bar bool) line {
 // ready badge at its right when the agent is ready to restart. A plain
 // shell is "▸ notes · shell", as its row draws it (A38). The badge gives way
 // first, then the title is cut.
-func boxTitleLine(a snapshot.Agent, w int, sel, bar bool, border lipgloss.Style) line {
+func boxTitleLine(a snapshot.Agent, w int, sel bool, selection selectionMode, border lipgloss.Style) line {
 	between := max(0, w-2)
 	title := line{
 		{rowIcon(a), statusStyle(a.Status)},
@@ -242,9 +242,12 @@ func boxTitleLine(a snapshot.Agent, w int, sel, bar bool, border lipgloss.Style)
 	}
 	lead := line{{"─ ", border}}
 	if sel {
-		if bar {
+		switch selection {
+		case selectionBar:
 			highlight(title)
-		} else {
+		case selectionReverse:
+			reverseLine(title)
+		case selectionMark:
 			lead = line{{selectionPointer, pointerStyle}, {" ", border}}
 		}
 	}

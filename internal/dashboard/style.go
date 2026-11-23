@@ -8,7 +8,6 @@ import (
 	"unicode"
 
 	"charm.land/lipgloss/v2"
-	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
@@ -25,26 +24,31 @@ const (
 	colAccent
 )
 
-// A themed colour renders as dark's RGB by default. The light renderer swaps
-// in its counterpart before downsampling, keeping attributes and row layout.
+// A themed colour renders as dark's RGB by default. The other styles supply
+// the light palette or main's foreground and background at 16 colours.
 type themedColor struct {
 	color.Color
-	light color.Color
+	light  color.Color
+	legacy color.Color
 }
 
-func themeColor(dark, light string) themedColor {
-	return themedColor{lipgloss.Color(dark), lipgloss.Color(light)}
+func themeColor(dark, light, legacy string) themedColor {
+	c := themedColor{Color: lipgloss.Color(dark), light: lipgloss.Color(light)}
+	if legacy != "" {
+		c.legacy = lipgloss.Color(legacy)
+	}
+	return c
 }
 
 var palette = [...]themedColor{
-	colText:   themeColor("#eef2ff", "#17233b"),
-	colDim:    themeColor("#becbe3", "#3c4c69"),
-	colGreen:  themeColor("#8ae99f", "#14532d"),
-	colYellow: themeColor("#f3de82", "#644600"),
-	colOrange: themeColor("#ffba83", "#783713"),
-	colRed:    themeColor("#ff989f", "#870000"),
-	colCyan:   themeColor("#9ee6fa", "#125363"),
-	colAccent: themeColor("#c8b5ff", "#513b81"),
+	colText:   themeColor("#eef2ff", "#17233b", ""),
+	colDim:    themeColor("#becbe3", "#3c4c69", "#6c7086"),
+	colGreen:  themeColor("#8ae99f", "#14532d", "#50fa7b"),
+	colYellow: themeColor("#f3de82", "#644600", "#f1fa8c"),
+	colOrange: themeColor("#ffba83", "#783713", "#ffb86c"),
+	colRed:    themeColor("#ff989f", "#870000", "#ff5555"),
+	colCyan:   themeColor("#9ee6fa", "#125363", "#8be9fd"),
+	colAccent: themeColor("#c8b5ff", "#513b81", "#bd93f9"),
 }
 
 // prefersLightPalette chooses the higher WCAG contrast for ordinary text.
@@ -78,23 +82,44 @@ func relativeLuminance(c color.Color) float64 {
 
 const selectionPointer = "▸"
 
-var (
-	selectionBackground = themeColor("#36476b", "#b6c7ec")
-	buttonForeground    = themeColor("#282a36", "#ffffff")
+type selectionMode uint8
+
+const (
+	selectionBar selectionMode = iota
+	selectionMark
+	selectionReverse
 )
 
-func lightStyle(st lipgloss.Style, profile colorprofile.Profile) lipgloss.Style {
-	bg, themedBackground := st.GetBackground().(themedColor)
-	if themedBackground && bg == selectionBackground && profile == colorprofile.ANSI {
-		// Reverse the terminal's default pair so the selection stays legible
-		// when the theme assigns its own colours to the ANSI slots.
-		return st.UnsetForeground().UnsetBackground().Reverse(true)
-	}
+var (
+	selectionBackground = themeColor("#36476b", "#b6c7ec", "")
+	buttonForeground    = themeColor("#282a36", "#ffffff", "#282a36")
+)
+
+func lightStyle(st lipgloss.Style) lipgloss.Style {
 	if fg, ok := st.GetForeground().(themedColor); ok {
 		st = st.Foreground(fg.light)
 	}
-	if themedBackground {
+	if bg, ok := st.GetBackground().(themedColor); ok {
 		st = st.Background(bg.light)
+	}
+	return st
+}
+
+// ansiStyle restores main's styles before downsampling to 16 colours.
+func ansiStyle(st lipgloss.Style) lipgloss.Style {
+	if fg, ok := st.GetForeground().(themedColor); ok {
+		if fg.legacy == nil {
+			st = st.UnsetForeground()
+		} else {
+			st = st.Foreground(fg.legacy)
+		}
+		// Main draws the italic secondary style for stale stages with faint.
+		if fg == palette[colDim] && st.GetItalic() {
+			st = st.Faint(true)
+		}
+	}
+	if bg, ok := st.GetBackground().(themedColor); ok && bg.legacy != nil {
+		st = st.Background(bg.legacy)
 	}
 	return st
 }
@@ -124,6 +149,12 @@ var (
 func highlight(body line) {
 	for i := range body {
 		body[i].style = body[i].style.Background(selectionBackground)
+	}
+}
+
+func reverseLine(body line) {
+	for i := range body {
+		body[i].style = body[i].style.Reverse(true)
 	}
 }
 

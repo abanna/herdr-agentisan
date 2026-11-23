@@ -107,8 +107,8 @@ func TestModelUsesTerminalBackground(t *testing.T) {
 	require.Contains(t, m.View().Content, "38;2;190;203;227", "dark after a nil colour report")
 	m, _ = update(t, m, tea.BackgroundColorMsg{Color: lipgloss.Color("#eaeaea")})
 	require.Contains(t, m.View().Content, "38;2;60;76;105", "light after a light report")
-	m, _ = update(t, m, tea.ColorProfileMsg{Profile: colorprofile.ANSI})
-	require.Contains(t, m.View().Content, "\x1b[90m", "light uses the detected 16-colour profile")
+	m, _ = update(t, m, tea.ColorProfileMsg{Profile: colorprofile.ANSI256})
+	require.Contains(t, m.View().Content, "38;5;239", "light uses the detected 256-colour profile")
 	m, _ = update(t, m, tea.BackgroundColorMsg{Color: lipgloss.Color("#1e1e2e")})
 	require.Contains(t, m.View().Content, "38;2;190;203;227", "dark after a dark report")
 }
@@ -181,13 +181,11 @@ func TestLightPaletteColourProfiles(t *testing.T) {
 	frame := dashboard.Frame{Snapshot: fixture(t, "full"), Now: at, Btop: true}
 	opts := lightColour()
 	want := ansi.Strip(dashboard.Render(frame, 120, 40, opts))
-	for _, profile := range []colorprofile.Profile{colorprofile.ANSI, colorprofile.ANSI256} {
-		opts.Profile = profile
-		out := dashboard.Render(frame, 120, 40, opts)
-		require.Equal(t, want, ansi.Strip(out))
-		require.NotContains(t, out, "48;2;")
-		require.Regexp(t, "\x1b"+`\[(?:[0-9;]*;)?(?:4[0-7]m|10[0-7]m|48;5;)`, out)
-	}
+	opts.Profile = colorprofile.ANSI256
+	out := dashboard.Render(frame, 120, 40, opts)
+	require.Equal(t, want, ansi.Strip(out))
+	require.NotContains(t, out, "48;2;")
+	require.Contains(t, out, "48;5;")
 	opts.Profile = colorprofile.ASCII
 	require.Equal(t, dashboard.Render(frame, 120, 40, attrs), dashboard.Render(frame, 120, 40, opts))
 }
@@ -201,48 +199,6 @@ func TestLightPaletteKeepsStatusAndSelectionAtReducedDepth(t *testing.T) {
 	indexed := dashboard.Render(frame, 120, 40, opts)
 	require.Regexp(t, `\x1b\[38;5;88m⚠`, indexed, "blocked is dark red")
 	require.Regexp(t, `\x1b\[1;38;5;17;48;5;153mpee01`, indexed, "selected name keeps the indexed bar")
-	opts.Profile = colorprofile.ANSI
-	basic := dashboard.Render(frame, 120, 40, opts)
-	require.Regexp(t, `\x1b\[31m⚠`, basic, "blocked is red")
-	require.Regexp(t, `\x1b\[32mworking`, basic, "working is green")
-	require.Regexp(t, `\x1b\[33midle`, basic, "idle is amber")
-}
-
-func TestLightANSISelectionUsesTerminalColours(t *testing.T) {
-	t.Parallel()
-
-	frame := dashboard.Frame{Snapshot: fixture(t, "full"), Now: at}
-	opts := dashboard.Options{Profile: colorprofile.ANSI, LightBackground: true}
-	out := dashboard.Render(frame, 120, 40, opts)
-	require.Contains(t, out, "\x1b[1;7mpee01")
-	for row := range strings.SplitSeq(out, "\n") {
-		if strings.Contains(row, "pee01") {
-			require.NotRegexp(t, `\x1b\[(?:[0-9;]*;)?(?:4[0-9]|10[0-7])(?:[;m])`, row)
-		}
-	}
-}
-
-func TestLightANSISelectionReversesWholeRow(t *testing.T) {
-	t.Parallel()
-
-	frame := dashboard.Frame{Snapshot: fixture(t, "full"), Now: at}
-	opts := dashboard.Options{Profile: colorprofile.ANSI, LightBackground: true}
-	out := dashboard.Render(frame, 120, 40, opts)
-	for row := range strings.SplitSeq(out, "\n") {
-		if !strings.Contains(row, "pee01") {
-			continue
-		}
-		const reset = "\x1b[m"
-		runs := strings.Split(strings.TrimSuffix(row, reset), reset)
-		require.GreaterOrEqual(t, len(runs), 3)
-		require.Equal(t, "│ ", ansi.Strip(runs[0]))
-		require.Equal(t, " │", ansi.Strip(runs[len(runs)-1]))
-		for _, run := range runs[1 : len(runs)-1] {
-			require.Regexp(t, `^\x1b\[(?:[0-9]+;)*7(?:;[0-9]+)*m`, run, "every selected cell between the borders uses reverse video")
-		}
-		return
-	}
-	t.Fatal("selected worker pee01 is missing")
 }
 
 func TestSelectionWithoutColour(t *testing.T) {
