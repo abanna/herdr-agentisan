@@ -47,8 +47,8 @@ var palette = [...]themedColor{
 	colAccent: themeColor("#c8b5ff", "#513b81"),
 }
 
-// prefersLightPalette chooses the higher WCAG contrast for ordinary text,
-// keeping the startup palette when the colour is unknown or the ratios tie.
+// prefersLightPalette chooses the higher WCAG contrast for ordinary text.
+// A nil background or a tie selects dark even after a light reply.
 func prefersLightPalette(background color.Color) bool {
 	if background == nil {
 		return false

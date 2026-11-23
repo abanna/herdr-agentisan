@@ -222,6 +222,29 @@ func TestLightANSISelectionUsesTerminalColours(t *testing.T) {
 	}
 }
 
+func TestLightANSISelectionReversesWholeRow(t *testing.T) {
+	t.Parallel()
+
+	frame := dashboard.Frame{Snapshot: fixture(t, "full"), Now: at}
+	opts := dashboard.Options{Profile: colorprofile.ANSI, LightBackground: true}
+	out := dashboard.Render(frame, 120, 40, opts)
+	for row := range strings.SplitSeq(out, "\n") {
+		if !strings.Contains(row, "pee01") {
+			continue
+		}
+		const reset = "\x1b[m"
+		runs := strings.Split(strings.TrimSuffix(row, reset), reset)
+		require.GreaterOrEqual(t, len(runs), 3)
+		require.Equal(t, "│ ", ansi.Strip(runs[0]))
+		require.Equal(t, " │", ansi.Strip(runs[len(runs)-1]))
+		for _, run := range runs[1 : len(runs)-1] {
+			require.Regexp(t, `^\x1b\[(?:[0-9]+;)*7(?:;[0-9]+)*m`, run, "every selected cell between the borders uses reverse video")
+		}
+		return
+	}
+	t.Fatal("selected worker pee01 is missing")
+}
+
 func TestSelectionWithoutColour(t *testing.T) {
 	t.Parallel()
 
