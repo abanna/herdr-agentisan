@@ -220,7 +220,7 @@ func TestAskerForgetsARefusedKey(t *testing.T) {
 		_, _ = io.WriteString(w, answer)
 	})
 	var reads atomic.Int32
-	asker := jev.Asker{Keys: &jev.Keys{Read: counted(&reads)}, Client: jev.Client{URL: srv.URL}}
+	asker := jev.Asker{Keys: &jev.Keys{Read: counted(&reads)}, Client: fixtureClient(srv, "")}
 	path := envFile(t, keyEq+testKey+"\n")
 
 	ans, err := asker.Ask(t.Context(), path, []byte(`{}`), time.Second)
