@@ -39,6 +39,9 @@ const (
 	DefaultFetchTimeout = 5 * time.Second
 )
 
+// backgroundPollInterval spaces out TrueColor background requests.
+const backgroundPollInterval = 3 * time.Second
+
 // fallbackWidth and fallbackHeight size the frame until the terminal reports
 // its size, and for good when it never does (output that is not a terminal).
 const (
@@ -181,14 +184,15 @@ type Model struct {
 	// that was drawn.
 	scroll int
 
-	clock           time.Time
-	width, height   int
-	profile         colorprofile.Profile
-	lightBackground bool
-	help            bool
-	sourceErr       error
-	focusErr        error
-	btopErr         error
+	clock                 time.Time
+	width, height         int
+	profile               colorprofile.Profile
+	lightBackground       bool
+	backgroundPollPending bool
+	help                  bool
+	sourceErr             error
+	focusErr              error
+	btopErr               error
 	// noTeam is set while the source says there is no team here
 	// (ErrNoTeamHere): no board is drawn then, not the last one.
 	noTeam error
@@ -227,8 +231,9 @@ type (
 		err  error
 		note string
 	}
-	tickMsg  struct{}
-	focusMsg struct {
+	tickMsg           struct{}
+	backgroundTickMsg struct{}
+	focusMsg          struct {
 		agent snapshot.Agent
 		err   error
 	}
@@ -254,12 +259,9 @@ func New(ctx context.Context, cfg Config) Model {
 	return Model{ctx: ctx, cfg: cfg, clock: cfg.Now()}
 }
 
-// Init fetches the first snapshot and asks the terminal for its background.
+// Init fetches the first snapshot.
 func (m Model) Init() tea.Cmd {
-	if m.cfg.Options.Profile == colorprofile.ASCII || m.cfg.Options.Profile == colorprofile.NoTTY {
-		return m.fetch()
-	}
-	return tea.Batch(m.fetch(), tea.RequestBackgroundColor)
+	return m.fetch()
 }
 
 // Update handles one message.
@@ -269,8 +271,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lightBackground = prefersLightPalette(msg.Color)
 		return m, nil
 	case tea.ColorProfileMsg:
+		if m.profile == msg.Profile {
+			return m, nil
+		}
 		m.profile = msg.Profile
-		return m, nil
+		return m.pollBackground()
+	case backgroundTickMsg:
+		m.backgroundPollPending = false
+		return m.pollBackground()
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.settle()
@@ -511,6 +519,21 @@ func (m Model) fetch() tea.Cmd {
 
 func (m Model) tick() tea.Cmd {
 	return tea.Tick(m.cfg.Interval, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
+// pollBackground queries the terminal and maintains one timer across profile
+// changes. A pending tick rechecks the profile when it arrives.
+func (m Model) pollBackground() (Model, tea.Cmd) {
+	profile := m.cfg.Options.Profile
+	if m.profile != colorprofile.TrueColor || (profile != colorprofile.Unknown && profile != colorprofile.TrueColor) {
+		return m, nil
+	}
+	if m.backgroundPollPending {
+		return m, tea.RequestBackgroundColor
+	}
+	m.backgroundPollPending = true
+	tick := tea.Tick(backgroundPollInterval, func(time.Time) tea.Msg { return backgroundTickMsg{} })
+	return m, tea.Batch(tea.RequestBackgroundColor, tick)
 }
 
 // focus returns the command focusing the selected agent, or nil when there
