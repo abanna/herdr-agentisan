@@ -101,14 +101,13 @@ func TestModelUsesTerminalBackground(t *testing.T) {
 	t.Parallel()
 
 	m := dashboard.New(t.Context(), dashboard.Config{})
+	m, _ = update(t, m, tea.ColorProfileMsg{Profile: colorprofile.TrueColor})
 	m, _ = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
 	require.Contains(t, m.View().Content, "38;2;190;203;227", "dark before a report")
 	m, _ = update(t, m, tea.BackgroundColorMsg{})
 	require.Contains(t, m.View().Content, "38;2;190;203;227", "dark after a nil colour report")
 	m, _ = update(t, m, tea.BackgroundColorMsg{Color: lipgloss.Color("#eaeaea")})
 	require.Contains(t, m.View().Content, "38;2;60;76;105", "light after a light report")
-	m, _ = update(t, m, tea.ColorProfileMsg{Profile: colorprofile.ANSI256})
-	require.Contains(t, m.View().Content, "38;5;239", "light uses the detected 256-colour profile")
 	m, _ = update(t, m, tea.BackgroundColorMsg{Color: lipgloss.Color("#1e1e2e")})
 	require.Contains(t, m.View().Content, "38;2;190;203;227", "dark after a dark report")
 }
@@ -175,30 +174,16 @@ func TestTerminalBackgroundContrastTieKeepsDark(t *testing.T) {
 	require.False(t, dashboard.LightTextHasHigherContrast(0.20, 0.45, 0.075))
 }
 
-func TestLightPaletteColourProfiles(t *testing.T) {
+func TestMonochromeIgnoresLightPalette(t *testing.T) {
 	t.Parallel()
 
 	frame := dashboard.Frame{Snapshot: fixture(t, "full"), Now: at, Btop: true}
-	opts := lightColour()
-	want := ansi.Strip(dashboard.Render(frame, 120, 40, opts))
-	opts.Profile = colorprofile.ANSI256
-	out := dashboard.Render(frame, 120, 40, opts)
-	require.Equal(t, want, ansi.Strip(out))
-	require.NotContains(t, out, "48;2;")
-	require.Contains(t, out, "48;5;")
-	opts.Profile = colorprofile.ASCII
-	require.Equal(t, dashboard.Render(frame, 120, 40, attrs), dashboard.Render(frame, 120, 40, opts))
-}
-
-func TestLightPaletteKeepsStatusAndSelectionAtReducedDepth(t *testing.T) {
-	t.Parallel()
-
-	frame := dashboard.Frame{Snapshot: fixture(t, "full"), Now: at}
-	opts := lightColour()
-	opts.Profile = colorprofile.ANSI256
-	indexed := dashboard.Render(frame, 120, 40, opts)
-	require.Regexp(t, `\x1b\[38;5;88m⚠`, indexed, "blocked is dark red")
-	require.Regexp(t, `\x1b\[1;38;5;17;48;5;153mpee01`, indexed, "selected name keeps the indexed bar")
+	for _, profile := range []colorprofile.Profile{colorprofile.ASCII, colorprofile.NoTTY} {
+		opts := dashboard.Options{Profile: profile}
+		want := dashboard.Render(frame, 120, 40, opts)
+		opts.LightBackground = true
+		require.Equal(t, want, dashboard.Render(frame, 120, 40, opts), "%s", profile)
+	}
 }
 
 func TestSelectionWithoutColour(t *testing.T) {

@@ -15,18 +15,29 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/abanna/herdr-agentisan/internal/dashboard"
+	"github.com/abanna/herdr-agentisan/internal/snapshot"
 )
-
-const ansiMainGolden = "testdata/ansi-main-f38351e.golden"
 
 func TestANSIMatchesMain(t *testing.T) {
 	t.Parallel()
+	checkCompatibilityFrames(t, colorprofile.ANSI, "testdata/ansi-main-f38351e.golden")
+}
 
-	want, err := os.ReadFile(ansiMainGolden)
+func TestANSI256MatchesMain(t *testing.T) {
+	t.Parallel()
+	checkCompatibilityFrames(t, colorprofile.ANSI256, "testdata/ansi256-main-f38351e.golden")
+}
+
+func checkCompatibilityFrames(t *testing.T, profile colorprofile.Profile, path string) {
+	t.Helper()
+
+	want, err := os.ReadFile(path)
 	require.NoError(t, err)
 	for _, light := range []bool{false, true} {
-		opts := dashboard.Options{Profile: colorprofile.ANSI, LightBackground: light}
-		require.Equal(t, string(want), captureCompatibilityFrames(t, opts), "light background: %v", light)
+		t.Run(fmt.Sprintf("light=%v", light), func(t *testing.T) {
+			opts := dashboard.Options{Profile: profile, LightBackground: light}
+			require.Equal(t, string(want), captureCompatibilityFrames(t, opts))
+		})
 	}
 }
 
@@ -135,5 +146,57 @@ func TestANSIModelIgnoresBackground(t *testing.T) {
 	for _, bg := range []string{"#002b36", "#fdf6e3"} {
 		m, _ = update(t, m, tea.BackgroundColorMsg{Color: lipgloss.Color(bg)})
 		require.Equal(t, want, m.View().Content, "after a reply of %s", bg)
+	}
+}
+
+func TestANSI256BlockedCueUsesMainRed(t *testing.T) {
+	t.Parallel()
+
+	snap := &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{{Name: "coders", Agents: []snapshot.Agent{
+		{Name: "pee01", Status: snapshot.StatusWorking, Stage: strings.Repeat("x", 80) + " blocked"},
+	}}}}
+	frame := dashboard.Frame{Snapshot: snap, Selection: dashboard.Selection{Group: -1}, Now: at}
+	out := dashboard.Render(frame, 80, 24, dashboard.Options{Profile: colorprofile.ANSI256})
+	require.NotContains(t, ansi.Strip(out), "blocked", "the warning word is clipped")
+	require.Contains(t, out, "\x1b[1;38;5;203mxxx", "main draws the clipped stage in bold red")
+}
+
+func TestANSI256SelectedRowUsesMainReverseVideo(t *testing.T) {
+	t.Parallel()
+
+	frame := dashboard.Frame{Snapshot: fixture(t, "full"), Now: at}
+	opts := dashboard.Options{Profile: colorprofile.ANSI256}
+	for row := range strings.SplitSeq(dashboard.Render(frame, 120, 40, opts), "\n") {
+		if strings.Contains(row, "pee01") {
+			require.Contains(t, row, "\x1b[1;7mpee01", "main selects the worker in the terminal's own colours")
+			require.NotContains(t, row, "48;5;", "main uses no indexed fill on the selected row")
+			return
+		}
+	}
+	t.Fatal("selected worker pee01 is missing")
+}
+
+func TestANSI256ModelIgnoresBackground(t *testing.T) {
+	t.Parallel()
+
+	profile := tea.ColorProfileMsg{Profile: colorprofile.ANSI256}
+	for _, bg := range []string{"#4e4e4e", "#afd7ff"} {
+		reply := tea.BackgroundColorMsg{Color: lipgloss.Color(bg)}
+		for _, profileFirst := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/profile_first=%v", bg, profileFirst), func(t *testing.T) {
+				m := dashboard.New(t.Context(), dashboard.Config{})
+				m, _ = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+				want := dashboard.Render(m.Frame(), m.Width(), m.Height(), dashboard.Options{Profile: colorprofile.ANSI256})
+				if profileFirst {
+					m, _ = update(t, m, profile)
+					require.Equal(t, want, m.View().Content, "before a background reply")
+					m, _ = update(t, m, reply)
+				} else {
+					m, _ = update(t, m, reply)
+					m, _ = update(t, m, profile)
+				}
+				require.Equal(t, want, m.View().Content, "after a background reply")
+			})
+		}
 	}
 }

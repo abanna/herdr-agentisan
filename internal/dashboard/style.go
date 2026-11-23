@@ -25,7 +25,7 @@ const (
 )
 
 // A themed colour renders as dark's RGB by default. The other styles supply
-// the light palette or main's foreground and background at 16 colours.
+// the light palette or main's styles at 16 and 256 colours.
 type themedColor struct {
 	color.Color
 	light  color.Color
@@ -105,7 +105,7 @@ func lightStyle(st lipgloss.Style) lipgloss.Style {
 	return st
 }
 
-// ansiStyle restores main's styles before downsampling to 16 colours.
+// ansiStyle restores main's styles before downsampling to indexed colours.
 func ansiStyle(st lipgloss.Style) lipgloss.Style {
 	if fg, ok := st.GetForeground().(themedColor); ok {
 		if fg.legacy == nil {

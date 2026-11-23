@@ -86,7 +86,7 @@ type Options struct {
 	// colour and attributes alike, which is what golden frames want; ASCII
 	// keeps attributes. Both use a selection pointer. Unknown means TrueColor.
 	Profile colorprofile.Profile
-	// LightBackground selects the palette for a light terminal background.
+	// LightBackground selects the TrueColor palette for a light terminal background.
 	LightBackground bool
 }
 
@@ -162,7 +162,7 @@ func Render(f Frame, w, h int, opts Options) string {
 	var style func(lipgloss.Style) lipgloss.Style
 	light := false
 	switch opts.Profile {
-	case colorprofile.ANSI:
+	case colorprofile.ANSI, colorprofile.ANSI256:
 		selection, style = selectionReverse, ansiStyle
 	case colorprofile.ASCII, colorprofile.NoTTY:
 		selection = selectionMark
