@@ -29,8 +29,13 @@ everything.
 | Lint | `go tool golangci-lint run --allow-serial-runners ./...` |
 | Format check | `go tool golangci-lint fmt --diff ./...` |
 | Vet | `go vet ./...` |
-| Run tests with a coverage profile | `go test -race -timeout 5m -coverpkg=./internal/... -coverprofile=coverage.out -covermode=atomic ./...` |
-| Enforce the coverage floor | `go run ./cmd/devctl coverage --profile coverage.out --min 75` |
+| Run the dashboard race test shard | `go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${AGENTISAN_SHARD_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-dashboard"` |
+| Run the store race test shard | `go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${AGENTISAN_SHARD_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-store"` |
+| Run the daemon race test shard | `go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${AGENTISAN_SHARD_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-daemon"` |
+| Run the workforce race test shard | `go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${AGENTISAN_SHARD_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-workforce"` |
+| Run the rest race test shard | `go test -race -timeout 5m -cover -covermode=atomic -coverpkg=./internal/... ${AGENTISAN_SHARD_PACKAGES:?empty test package list} -args -test.gocoverdir="$PWD/bin/covdata/covdata-rest"` |
+| Merge the test jobs' coverage data | `go tool covdata textfmt -i=bin/covdata/covdata-dashboard,bin/covdata/covdata-store,bin/covdata/covdata-daemon,bin/covdata/covdata-workforce,bin/covdata/covdata-rest -o coverage.out` |
+| Enforce the coverage floor | `go run ./cmd/devctl coverage --profile coverage.out --min 75 --complete-unlinked` |
 | Static security scan | `go tool gosec -quiet ./...` |
 | Secret scan (git history) | `go run github.com/zricethezav/gitleaks/v8@v8.30.1 git . --config .gitleaks.toml --no-banner --redact` |
 | Dependency vulnerability check | `go tool govulncheck ./...` |
@@ -59,6 +64,11 @@ check` would be surprising side effects for a read-mostly gate run). The
 tasks are shortcuts, not a second source of truth — this table stays
 byte-identical to `.github/workflows/ci.yml`, and the tasks invoke those same
 strings. Change a gate and you change all three together.
+Run `task test:unit` to select packages and collect fresh race coverage for
+all five shards, then `task cover` to merge it and enforce the floor.
+The merged profile includes Go's zero-count blocks for packages outside
+every test binary, including packages only used through a subprocess.
+A package linked by a test binary must contribute blocks from the shards.
 
 `go run ./cmd/devctl docs-parity` enforces exactly that, in every direction: a
 gate CI runs must appear here *and* in a task, and a command documented here
@@ -453,9 +463,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   `tab_bar_right` entry `docs/config/herdr-tab-bar.example.toml`, for herdr's
   own config (`TestTabBarSnippet` in `internal/cli` runs it). Goldens in
   `testdata/` (`go test ./internal/dashboard/ -update`, then read every one).
-- `internal/devctl/` — the `devctl` cobra tree. It enforces the coverage
-  floor, checks that packages with instrumentable statements have profile
-  blocks, checks docs parity and enforces the large-file ceiling.
+- `internal/devctl/` — the `devctl` cobra tree. It selects packages for
+  each race test shard, enforces the coverage floor, checks that packages
+  with instrumentable statements have profile blocks, checks docs parity
+  and enforces the large-file ceiling.
 - `internal/preflight/` — the D12 spawn precondition (ADR-001 I8, A10, A34):
   in a repo with a `go.mod`, `tdaddy` must run from the daemon's PATH and the
   Taskfile must have `tdaddy:index` and `tdaddy:impact`; each failure is a
