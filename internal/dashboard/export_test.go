@@ -69,8 +69,27 @@ const (
 	PaletteCyan      = colCyan
 )
 
-// PaletteForTest returns a copy of the full dashboard text palette.
-func PaletteForTest() []color.Color {
-	text := palette
-	return text[:]
+// PaletteForBackground returns the text colours drawn on the terminal and bar.
+func PaletteForBackground(light bool) []color.Color {
+	text := make([]color.Color, len(palette))
+	for i, fg := range palette {
+		text[i] = fg.Color
+		if light {
+			text[i] = fg.light
+		}
+	}
+	return text
+}
+
+// SelectionColours returns the bar fill and button colours used by the renderer.
+func SelectionColours(light bool) (bar, buttonInk, buttonFill color.Color) {
+	if light {
+		return selectionBackground.light, buttonForeground.light, palette[colAccent].light
+	}
+	return selectionBackground.Color, buttonForeground.Color, palette[colAccent].Color
+}
+
+// ProjectColour is the configured project accent drawn over the terminal.
+func ProjectColour(light bool, hex string) color.Color {
+	return projectColour(&snapshot.Project{Color: hex}, light)
 }

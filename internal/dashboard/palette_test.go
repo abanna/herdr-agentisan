@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"math"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/exp/golden"
 	"github.com/stretchr/testify/require"
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
@@ -32,16 +34,92 @@ func TestDashboardPaletteContrast(t *testing.T) {
 		}
 		return 0.2126*linear(r) + 0.7152*linear(g) + 0.0722*linear(b)
 	}
-	for i, fg := range dashboard.PaletteForTest() {
+	check := func(fg, bg color.Color) {
+		t.Helper()
 		_, _, _, alpha := fg.RGBA()
-		for _, bg := range []string{"#1e1e2e", "#000000"} {
-			light, dark := luminance(fg), luminance(lipgloss.Color(bg))
-			ratio := (max(light, dark) + 0.05) / (min(light, dark) + 0.05)
-			if alpha != 65535 || ratio < 4.5 {
-				t.Errorf("text colour %d (%v) on %s has contrast %.2f:1, want opaque with at least 4.5:1", i, fg, bg, ratio)
-			}
+		a, b := luminance(fg), luminance(bg)
+		ratio := (max(a, b) + 0.05) / (min(a, b) + 0.05)
+		if alpha != 65535 || ratio < 4.5 {
+			t.Errorf("foreground %v on %v has contrast %.2f:1, want opaque with at least 4.5:1", fg, bg, ratio)
 		}
 	}
+	for _, tc := range []struct {
+		name   string
+		light  bool
+		scenes []string
+	}{
+		{name: "dark", scenes: []string{"#1e1e2e", "#000000"}},
+		{name: "light", light: true, scenes: []string{"#ffffff", "#eaeaea"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bar, buttonInk, buttonFill := dashboard.SelectionColours(tc.light)
+			for _, fg := range dashboard.PaletteForBackground(tc.light) {
+				for _, bg := range tc.scenes {
+					check(fg, lipgloss.Color(bg))
+				}
+				check(fg, bar)
+			}
+			check(buttonInk, buttonFill)
+			if tc.light {
+				for _, bg := range tc.scenes {
+					check(dashboard.ProjectColour(true, "#ffffff"), lipgloss.Color(bg))
+					check(dashboard.ProjectColour(true, "#bd93f9"), lipgloss.Color(bg))
+				}
+			}
+		})
+	}
+}
+
+func checkFrameGolden(t *testing.T, frame dashboard.Frame, w, h int) {
+	t.Helper()
+	golden.RequireEqual(t, dashboard.Render(frame, w, h, plain)+"\n")
+	t.Run("light", func(t *testing.T) {
+		// Quote keeps the complete coloured frame, including escape codes
+		// and newlines, in a text file that Git can display and diff.
+		golden.RequireEqual(t, strconv.Quote(dashboard.Render(frame, w, h, lightColour()))+"\n")
+	})
+}
+
+func lightColour() dashboard.Options {
+	return dashboard.Options{Profile: colorprofile.TrueColor, LightBackground: true}
+}
+
+func TestLightSelectionForeground(t *testing.T) {
+	t.Parallel()
+
+	frame := dashboard.Frame{Snapshot: fixture(t, "full"), Now: at, Selection: dashboard.Selection{Agent: 1}}
+	out := dashboard.Render(frame, 120, 40, lightColour())
+	require.Regexp(t, "\x1b"+`\[[0-9;]*38;2;23;35;59;48;2;182;199;236mpee02`, out)
+	require.NotContains(t, out, "38;2;238;242;255")
+}
+
+func TestModelUsesTerminalBackground(t *testing.T) {
+	t.Parallel()
+
+	m := dashboard.New(t.Context(), dashboard.Config{Options: fullColour})
+	m, _ = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 24})
+	require.Contains(t, m.View().Content, "38;2;190;203;227", "dark before a report")
+	m, _ = update(t, m, tea.BackgroundColorMsg{Color: lipgloss.Color("#eaeaea")})
+	require.Contains(t, m.View().Content, "38;2;60;76;105", "light after a light report")
+	m, _ = update(t, m, tea.BackgroundColorMsg{Color: lipgloss.Color("#1e1e2e")})
+	require.Contains(t, m.View().Content, "38;2;190;203;227", "dark after a dark report")
+}
+
+func TestLightPaletteColourProfiles(t *testing.T) {
+	t.Parallel()
+
+	frame := dashboard.Frame{Snapshot: fixture(t, "full"), Now: at}
+	opts := lightColour()
+	want := ansi.Strip(dashboard.Render(frame, 120, 40, opts))
+	for _, profile := range []colorprofile.Profile{colorprofile.ANSI, colorprofile.ANSI256} {
+		opts.Profile = profile
+		out := dashboard.Render(frame, 120, 40, opts)
+		require.Equal(t, want, ansi.Strip(out))
+		require.NotContains(t, out, "48;2;")
+		require.Regexp(t, "\x1b"+`\[(?:[0-9;]*;)?(?:4[0-7]m|10[0-7]m|48;5;)`, out)
+	}
+	opts.Profile = colorprofile.ASCII
+	require.Equal(t, dashboard.Render(frame, 120, 40, attrs), dashboard.Render(frame, 120, 40, opts))
 }
 
 func TestSelectionWithoutColour(t *testing.T) {
@@ -125,6 +203,6 @@ func TestRenderWideFrameAllocations(t *testing.T) {
 }
 
 func paletteHex(role int) string {
-	r, g, b, _ := dashboard.PaletteForTest()[role].RGBA()
+	r, g, b, _ := dashboard.PaletteForBackground(false)[role].RGBA()
 	return fmt.Sprintf("#%02x%02x%02x", r>>8, g>>8, b>>8)
 }

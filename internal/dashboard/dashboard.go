@@ -181,13 +181,14 @@ type Model struct {
 	// that was drawn.
 	scroll int
 
-	clock         time.Time
-	width, height int
-	profile       colorprofile.Profile
-	help          bool
-	sourceErr     error
-	focusErr      error
-	btopErr       error
+	clock           time.Time
+	width, height   int
+	profile         colorprofile.Profile
+	lightBackground bool
+	help            bool
+	sourceErr       error
+	focusErr        error
+	btopErr         error
 	// noTeam is set while the source says there is no team here
 	// (ErrNoTeamHere): no board is drawn then, not the last one.
 	noTeam error
@@ -253,14 +254,20 @@ func New(ctx context.Context, cfg Config) Model {
 	return Model{ctx: ctx, cfg: cfg, clock: cfg.Now()}
 }
 
-// Init fetches the first snapshot at once.
+// Init fetches the first snapshot and asks the terminal for its background.
 func (m Model) Init() tea.Cmd {
-	return m.fetch()
+	if m.cfg.Options.Profile == colorprofile.ASCII || m.cfg.Options.Profile == colorprofile.NoTTY {
+		return m.fetch()
+	}
+	return tea.Batch(m.fetch(), tea.RequestBackgroundColor)
 }
 
 // Update handles one message.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		m.lightBackground = msg.Color != nil && !msg.IsDark()
+		return m, nil
 	case tea.ColorProfileMsg:
 		m.profile = msg.Profile
 		return m, nil
@@ -430,6 +437,7 @@ func (m Model) click(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 // mouse clicks and wheel events.
 func (m Model) View() tea.View {
 	opts := m.cfg.Options
+	opts.LightBackground = m.lightBackground
 	if opts.Profile == colorprofile.Unknown && (m.profile == colorprofile.ASCII || m.profile == colorprofile.NoTTY) {
 		opts.Profile = m.profile
 	}

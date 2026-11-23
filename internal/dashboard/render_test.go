@@ -15,7 +15,6 @@ import (
 
 	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/charmbracelet/x/exp/golden"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -165,7 +164,7 @@ func TestRenderGolden(t *testing.T) {
 			t.Parallel()
 			// The trailing newline matches what end-of-file tooling expects
 			// of a text file, so a golden never differs by its last byte.
-			golden.RequireEqual(t, dashboard.Render(tc.frame(t), tc.w, tc.h, plain)+"\n")
+			checkFrameGolden(t, tc.frame(t), tc.w, tc.h)
 		})
 	}
 }

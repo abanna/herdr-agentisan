@@ -86,6 +86,8 @@ type Options struct {
 	// colour and attributes alike, which is what golden frames want; ASCII
 	// keeps attributes. Both use a selection pointer. Unknown means TrueColor.
 	Profile colorprofile.Profile
+	// LightBackground selects the palette for a light terminal background.
+	LightBackground bool
 }
 
 func (o Options) thresholds() Thresholds {
@@ -158,9 +160,10 @@ func Render(f Frame, w, h int, opts Options) string {
 	th := opts.thresholds()
 	l := plan(f, w, h)
 	bar := opts.Profile != colorprofile.ASCII && opts.Profile != colorprofile.NoTTY
+	light := opts.LightBackground && bar
 
 	canvas := make([]line, h)
-	l.drawHeader(canvas, f, th)
+	l.drawHeader(canvas, f, th, light)
 	switch {
 	case l.avail == 0:
 	case l.board != nil:
@@ -204,7 +207,7 @@ func Render(f Frame, w, h int, opts Options) string {
 		if ln.width() > w {
 			ln = ln.cut(0, w)
 		}
-		b.WriteString(ln.trimRight().render())
+		b.WriteString(ln.trimRight().render(light))
 	}
 	return downsample(b.String(), opts.Profile)
 }
@@ -469,14 +472,15 @@ func boxed(body line, inner int, border lipgloss.Style) line {
 }
 
 // drawHeader draws the project line and the boss line, boxed or bare.
-func (l layout) drawHeader(canvas []line, f Frame, th Thresholds) {
+func (l layout) drawHeader(canvas []line, f Frame, th Thresholds, light bool) {
 	var project *snapshot.Project
 	if f.Snapshot != nil {
 		project = f.Snapshot.Project
 	}
 	border := dimStyle
-	if c := projectColour(project); c != nil {
-		border = lipgloss.NewStyle().Foreground(c)
+	accent := projectColour(project, light)
+	if accent != nil {
+		border = lipgloss.NewStyle().Foreground(accent)
 	}
 	margin := 1
 	if l.boxed {
@@ -503,7 +507,7 @@ func (l layout) drawHeader(canvas []line, f Frame, th Thresholds) {
 	if tail != nil {
 		oneW = max(0, right-colGap-margin)
 	}
-	one := projectLine(f.Snapshot, oneW)
+	one := projectLine(f.Snapshot, oneW, accent)
 	if tail != nil {
 		one = slices.Concat(one.pad(max(0, right-margin)), tail)
 	}
@@ -534,13 +538,22 @@ func boardBadge(p *snapshot.Project) string {
 	return "board " + strconv.Itoa(p.BoardUnread)
 }
 
-// projectColour is the project's colour, or nil when it has none the
-// contract allows.
-func projectColour(p *snapshot.Project) color.Color {
+// projectColour preserves the configured hue. On light backgrounds it
+// caps the channels proportionally so even a near-white accent stays legible.
+func projectColour(p *snapshot.Project, light bool) color.Color {
 	if p == nil || !snapshot.ValidColor(p.Color) {
 		return nil
 	}
-	return lipgloss.Color(p.Color)
+	c := lipgloss.Color(p.Color)
+	if light {
+		r, g, b, _ := c.RGBA()
+		const maxChannel = 0x68
+		peak := max(r, g, b)
+		if peak > maxChannel*0x101 {
+			return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", r*maxChannel/peak, g*maxChannel/peak, b*maxChannel/peak))
+		}
+	}
+	return c
 }
 
 // prDetail is how much of each PR the project line shows.
@@ -556,13 +569,13 @@ const (
 // · slots 2/2", at most width cells. The PRs give way first: to their
 // compact form, then to a count. What the snapshot does not report is not
 // shown, never shown as zero.
-func projectLine(s *snapshot.Snapshot, width int) line {
+func projectLine(s *snapshot.Snapshot, width int, accent color.Color) line {
 	if s == nil || width <= 0 {
 		return nil
 	}
 	nameStyle := boldStyle
-	if c := projectColour(s.Project); c != nil {
-		nameStyle = nameStyle.Foreground(c)
+	if accent != nil {
+		nameStyle = nameStyle.Foreground(accent)
 	}
 	name := line{{clean(s.Team), nameStyle}}
 	p := s.Project
@@ -1312,11 +1325,15 @@ func (l line) width() int {
 	return n
 }
 
-func (l line) render() string {
+func (l line) render(light bool) string {
 	var b strings.Builder
 	for _, s := range l {
 		if s.text != "" {
-			b.WriteString(s.style.Render(s.text))
+			st := s.style
+			if light {
+				st = lightStyle(st)
+			}
+			b.WriteString(st.Render(s.text))
 		}
 	}
 	return b.String()

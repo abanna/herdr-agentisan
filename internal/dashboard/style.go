@@ -23,21 +23,44 @@ const (
 	colAccent
 )
 
-// All dashboard text colours, stored as 24-bit values for downsampling.
-var palette = [...]color.Color{
-	colText:   lipgloss.Color("#eef2ff"),
-	colDim:    lipgloss.Color("#becbe3"),
-	colGreen:  lipgloss.Color("#8ae99f"),
-	colYellow: lipgloss.Color("#f3de82"),
-	colOrange: lipgloss.Color("#ffba83"),
-	colRed:    lipgloss.Color("#ff989f"),
-	colCyan:   lipgloss.Color("#9ee6fa"),
-	colAccent: lipgloss.Color("#c8b5ff"),
+// A themed colour renders as dark's RGB by default. The light renderer swaps
+// in its counterpart before downsampling, keeping attributes and row layout.
+type themedColor struct {
+	color.Color
+	light color.Color
+}
+
+func themeColor(dark, light string) themedColor {
+	return themedColor{lipgloss.Color(dark), lipgloss.Color(light)}
+}
+
+var palette = [...]themedColor{
+	colText:   themeColor("#eef2ff", "#17233b"),
+	colDim:    themeColor("#becbe3", "#3c4c69"),
+	colGreen:  themeColor("#8ae99f", "#14532d"),
+	colYellow: themeColor("#f3de82", "#644600"),
+	colOrange: themeColor("#ffba83", "#783713"),
+	colRed:    themeColor("#ff989f", "#891e31"),
+	colCyan:   themeColor("#9ee6fa", "#125363"),
+	colAccent: themeColor("#c8b5ff", "#513b81"),
 }
 
 const selectionPointer = "▸"
 
-var selectionBackground = lipgloss.Color("#36476b")
+var (
+	selectionBackground = themeColor("#36476b", "#b6c7ec")
+	buttonForeground    = themeColor("#282a36", "#ffffff")
+)
+
+func lightStyle(st lipgloss.Style) lipgloss.Style {
+	if fg, ok := st.GetForeground().(themedColor); ok {
+		st = st.Foreground(fg.light)
+	}
+	if bg, ok := st.GetBackground().(themedColor); ok {
+		st = st.Background(bg.light)
+	}
+	return st
+}
 
 var (
 	plainStyle  = lipgloss.NewStyle().Foreground(palette[colText])
@@ -48,8 +71,8 @@ var (
 	noteStyle   = lipgloss.NewStyle().Foreground(palette[colYellow])
 	greenStyle  = lipgloss.NewStyle().Foreground(palette[colGreen])
 	orangeStyle = lipgloss.NewStyle().Foreground(palette[colOrange])
-	// buttonStyle pairs a dark foreground with the light accent background.
-	buttonStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#282a36")).Background(palette[colAccent])
+	// buttonStyle uses the accent as the button fill.
+	buttonStyle = lipgloss.NewStyle().Bold(true).Foreground(buttonForeground).Background(palette[colAccent])
 	// stageReadyStyle and stageRedStyle are a stage's READY and RED, v12's
 	// bold green and bold red.
 	stageReadyStyle = lipgloss.NewStyle().Bold(true).Foreground(palette[colGreen])
