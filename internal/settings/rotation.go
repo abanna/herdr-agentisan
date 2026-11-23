@@ -31,8 +31,7 @@ func (t Thresholds) For(group string) []int {
 }
 
 // RotationSettings are every project's thresholds, and the thresholds of a
-// team whose project the file does not name, such as the ◆ spaces with no
-// [spaces] project.
+// team whose project the file does not name.
 type RotationSettings struct {
 	Default  Thresholds
 	Projects map[string]Thresholds

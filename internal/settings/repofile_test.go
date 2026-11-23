@@ -93,7 +93,7 @@ func TestRepoFileRefusesUserOnlyKeys(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			repo, dir := newRepo(t), t.TempDir()
-			writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n", repo)
+			writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n", repo)
 			writeFile(t, repo, settings.RepoFileName, "schema_version = 1\n"+tc.repoFile, repo)
 
 			_, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
@@ -127,7 +127,7 @@ func TestRepoFileRefusesUserOnlyKeys(t *testing.T) {
 func TestRepoFileKeepsTheSafeKeys(t *testing.T) {
 	t.Parallel()
 	repo, dir := newRepo(t), t.TempDir()
-	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n[projects.app.groups.research]\nworkers = 0\nslots = 1\n", repo)
+	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n[projects.app.groups.research]\nworkers = 0\nslots = 1\n", repo)
 	writeFile(t, repo, settings.RepoFileName, `schema_version = 1
 color = "#123456"
 github = "acme/app"
@@ -192,6 +192,7 @@ url = "https://github.com"
 token = { env = "GH_TOKEN" }
 [projects.app]
 repo = "REPO"
+short = "ap"
 [projects.app.groups.qa]
 workers = 1
 slots = 1
@@ -232,7 +233,7 @@ func TestRepoFileNamesCannotSplitAPath(t *testing.T) {
 		"a group":        "[groups.\"qa.x\".agent]\ncommand = [\"codex\"]\n",
 	} {
 		repo, dir := newRepo(t), t.TempDir()
-		writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n", repo)
+		writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n", repo)
 		writeFile(t, repo, settings.RepoFileName, "schema_version = 1\n"+repoFile, repo)
 
 		_, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
@@ -272,7 +273,7 @@ func TestEveryProfileKeyIsClassified(t *testing.T) {
 	for _, key := range usersOnly {
 		path := strings.ReplaceAll(key, "*", "x")
 		repo, dir := newRepo(t), t.TempDir()
-		writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n", repo)
+		writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n", repo)
 		writeFile(t, repo, settings.RepoFileName, "schema_version = 1\n"+path+" = "+sample[keys[key]]+"\n", repo)
 
 		_, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
@@ -309,7 +310,7 @@ func tomlString(s string) string {
 // and never the model.
 func TestModelsAreSafeToPass(t *testing.T) {
 	t.Parallel()
-	const app = "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n"
+	const app = "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n"
 	layers := map[string]struct {
 		shared, repoFile string
 		set              func(model string) []string

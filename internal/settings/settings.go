@@ -122,8 +122,7 @@ type Agent struct {
 
 // Group is a worker group: how many workers team up starts, the cap the
 // boss can scale to, and the group's own agent, when it sets one (see
-// Profile.AgentFor). A group that sets only a description describes a group
-// of the team's layout, such as a ◆ space, and starts no worker: its Workers
+// Profile.AgentFor). A description-only group starts no workers. Its Workers
 // and Slots are zero, and it is DescribesOnly (ADR-001 A36).
 type Group struct {
 	Workers int

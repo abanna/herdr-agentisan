@@ -19,7 +19,7 @@ import (
 func TestGitHubLengthBound(t *testing.T) {
 	t.Parallel()
 
-	const app = "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n"
+	const app = "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n"
 	githubs := strings.Repeat("o", 39) + "/" + strings.Repeat("n", 100)
 	longest := "o/" + strings.Repeat("n", 243)
 	over := longest + "n"
@@ -29,7 +29,7 @@ func TestGitHubLengthBound(t *testing.T) {
 	// layers puts repo in each layer that can set github.
 	layers := map[string]func(repo string) (shared, repoFile string, set []string, layer string){
 		"the shared file": func(repo string) (string, string, []string, string) {
-			return "schema_version = 1\ngithub = \"" + repo + "\"\n[projects.app]\nrepo = \"REPO\"\n", "", nil, settings.LayerShared
+			return "schema_version = 1\ngithub = \"" + repo + "\"\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n", "", nil, settings.LayerShared
 		},
 		"the project's table": func(repo string) (string, string, []string, string) {
 			return app + "github = \"" + repo + "\"\n", "", nil, settings.LayerProject
@@ -85,7 +85,7 @@ func TestGitHubPatternIsNotTooLong(t *testing.T) {
 		"o/" + strings.Repeat("é", 200), // 402 bytes, 202 characters
 	} {
 		repo, dir := newRepo(t), t.TempDir()
-		writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\ngithub = \""+value+"\"\n", repo)
+		writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\ngithub = \""+value+"\"\n", repo)
 		_, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
 		require.ErrorIs(t, err, settings.ErrInvalid)
 		assert.NotErrorIs(t, err, settings.ErrTooLong)
@@ -105,7 +105,7 @@ func TestProjectNameLengthBound(t *testing.T) {
 
 	for _, project := range []string{longest, ""} {
 		repo, dir := newRepo(t), t.TempDir()
-		writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects."+longest+"]\nrepo = \"REPO\"\ngithub = \"o/r\"\n", repo)
+		writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects."+longest+"]\nrepo = \"REPO\"\nshort = \"lp\"\ngithub = \"o/r\"\n", repo)
 		r, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: project, LookupEnv: envOf(nil)})
 		require.NoError(t, err)
 		if project != "" {
@@ -118,7 +118,7 @@ func TestProjectNameLengthBound(t *testing.T) {
 
 	for _, project := range []string{over, "app", ""} {
 		repo, dir := newRepo(t), t.TempDir()
-		writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n[projects."+over+"]\nrepo = \"REPO\"\n", repo)
+		writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n[projects."+over+"]\nrepo = \"REPO\"\n", repo)
 		_, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Project: project, LookupEnv: envOf(nil)})
 		require.ErrorIs(t, err, settings.ErrInvalid)
 		require.ErrorIs(t, err, settings.ErrTooLong)

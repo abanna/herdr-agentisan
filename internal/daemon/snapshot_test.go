@@ -25,7 +25,6 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/plugin"
-	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/team"
 )
@@ -567,49 +566,6 @@ func TestSnapshotStageTimer(t *testing.T) {
 	assert.Equal(t, t2, *row(kept).StageStartedAt)
 }
 
-// TestSnapshotNamesTheConfiguredProject: the snapshot's team is [spaces]
-// project, read once at start, and its project colour that project's; with
-// no configuration, or one that does not resolve, the team is the unnamed
-// project and no project state is reported.
-func TestSnapshotNamesTheConfiguredProject(t *testing.T) {
-	t.Parallel()
-
-	tests := map[string]struct {
-		config      func(t *testing.T) string
-		wantTeam    string
-		wantProject *snapshot.Project
-	}{
-		"a configured project and its colour": {config: func(t *testing.T) string {
-			return configDir(t, "[projects.agentisan]\nrepo = \"/x\"\ncolor = \"#7c3aed\"\n")
-		}, wantTeam: "agentisan", wantProject: &snapshot.Project{Color: "#7c3aed"}},
-		"no configuration": {config: func(*testing.T) string { return "" }},
-		"no config file":   {config: func(t *testing.T) string { return t.TempDir() }},
-		"a project without a colour": {config: func(t *testing.T) string {
-			dir := t.TempDir()
-			require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte("schema_version = 1\n[projects.app]\nrepo = \"/x\"\n"), 0o600))
-			return dir
-		}, wantTeam: "app"},
-		"a file that does not resolve": {config: func(t *testing.T) string {
-			dir := t.TempDir()
-			require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte("schema_version = 2\n"), 0o600))
-			return dir
-		}},
-	}
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			th := newSpacesHerdr(t)
-			dir := shortDir(t)
-			serving(t, teamOpts(t, dir, th, tc.config(t)), th.fakeHerdr)
-
-			got := servedTeam(t, socketPath(t, dir, th.path), "", anySnapshot)
-			assert.Equal(t, tc.wantTeam, got.Team)
-			assert.Equal(t, tc.wantProject, got.Project)
-			assert.NotEmpty(t, got.Groups, "the layout is served either way")
-		})
-	}
-}
-
 // TestSnapshotKeepsTheLastGoodTeam: agent.list failing costs the snapshot
 // that poll, never `$team`, which needs no names: the pushes go on every
 // poll, the op answers not_ready until a poll has names, and after that the
@@ -1130,29 +1086,28 @@ func TestSnapshotOpServesEveryTeam(t *testing.T) {
 }
 
 // TestSnapshotOpSelectsTheSpaces is A24's selection on the ◆ spaces: every
-// space is the spaces project's workspace, ◆ boss and ◆ herdr included, and
+// space is the unnamed project's workspace, ◆ boss and ◆ herdr included, and
 // neither a project nor a workspace selects the spaces.
 func TestSnapshotOpSelectsTheSpaces(t *testing.T) {
 	t.Parallel()
 	th := newSpacesHerdr(t)
 	dir := shortDir(t)
-	serving(t, teamOpts(t, dir, th, configDir(t, "[projects.agentisan]\nrepo = \"/x\"\n")), th.fakeHerdr)
+	serving(t, teamOpts(t, dir, th, liveConfig(t, "")), th.fakeHerdr)
 	sock := socketPath(t, dir, th.path)
-	servedTeam(t, sock, "agentisan", anySnapshot)
+	servedTeam(t, sock, "", anySnapshot)
 
 	for name, tc := range map[string]struct {
-		args, team, code string
+		args, code string
 	}{
-		"by project":              {args: `{"project":"agentisan"}`, team: "agentisan"},
-		"a group space":           {args: `{"workspace_id":"wN"}`, team: "agentisan"},
-		"an empty group space":    {args: `{"workspace_id":"w0"}`, team: "agentisan"},
-		"◆ boss":                  {args: `{"workspace_id":"wJ"}`, team: "agentisan"},
-		"◆ herdr, the edit shell": {args: `{"workspace_id":"w12"}`, team: "agentisan"},
-		"neither":                 {team: "agentisan"},
-		"empty args":              {args: `{}`, team: "agentisan"},
-		"null args":               {args: `null`, team: "agentisan"},
-		"empty strings":           {args: `{"project":"","workspace_id":""}`, team: "agentisan"},
-		"args it does not know":   {args: `{"team":"alpha"}`, team: "agentisan"},
+		"a group space":           {args: `{"workspace_id":"wN"}`},
+		"an empty group space":    {args: `{"workspace_id":"w0"}`},
+		"◆ boss":                  {args: `{"workspace_id":"wJ"}`},
+		"◆ herdr, the edit shell": {args: `{"workspace_id":"w12"}`},
+		"neither":                 {},
+		"empty args":              {args: `{}`},
+		"null args":               {args: `null`},
+		"empty strings":           {args: `{"project":"","workspace_id":""}`},
+		"args it does not know":   {args: `{"team":"alpha"}`},
 		"a workspace no team's":   {args: `{"workspace_id":"w2"}`, code: "no_team"},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1164,7 +1119,7 @@ func TestSnapshotOpSelectsTheSpaces(t *testing.T) {
 			}
 			got, err := snapshot.Decode(bytes.NewReader(data))
 			require.NoError(t, err)
-			assert.Equal(t, tc.team, got.Team)
+			assert.Empty(t, got.Team)
 		})
 	}
 }

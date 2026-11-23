@@ -260,7 +260,6 @@ func TestSpawnReusesALostID(t *testing.T) {
 func TestSpawnRefusals(t *testing.T) {
 	t.Parallel()
 	two := teamConfig + "\n[projects.assay]\nrepo = \"REPO\"\nshort = \"as\"\n"
-	spaces := "schema_version = 1\n[spaces]\nproject = \"agentisan\"\n[projects.agentisan]\nrepo = \"REPO\"\n" + strings.TrimPrefix(teamConfig, "schema_version = 1\n")
 	long := strings.Replace(teamConfig, "groups.review]", "groups.reviewer-of-absolutely-everything]", 1)
 	x40 := strings.Repeat("x", 40) // a group name a repo file may create, past the 20 a name may have (A53)
 	tests := map[string]struct {
@@ -283,7 +282,6 @@ func TestSpawnRefusals(t *testing.T) {
 		"an option-like group":        {req: workforce.SpawnRequest{Group: "--count", Count: 1}, want: workforce.ErrUnknownGroup},
 		"past the slots":              {req: workforce.SpawnRequest{Group: "coder", Count: 4}, want: workforce.ErrSlotCap, says: "coder is capped at 3 slots (herdr-agentisan.toml): 0 occupied, 4 requested"},
 		"an unknown project":          {req: workforce.SpawnRequest{Selector: workforce.Selector{Project: "nope"}, Group: "coder", Count: 1}, want: workforce.ErrUnknownProject, says: "configured: herdr-agentisan"},
-		"the spaces project":          {config: spaces, req: workforce.SpawnRequest{Selector: workforce.Selector{Project: "agentisan"}, Group: "coder", Count: 1}, want: workforce.ErrNoTarget, says: "staffed by hand"},
 		"no way to pick":              {config: two, req: workforce.SpawnRequest{Group: "coder", Count: 1}, want: workforce.ErrBadRequest, says: "assay, herdr-agentisan"},
 		"a group name past 20 chars":  {config: long, req: workforce.SpawnRequest{Group: "reviewer-of-absolutely-everything", Count: 1}, want: settings.ErrInvalid, says: "groups.reviewer-of-absolutely-everything (project, "},
 		"a config that breaks":        {config: "schema_version = 1\n[projects.herdr-agentisan]\nrepo = \"REPO\"\nlayout = \"grid\"\n", req: workforce.SpawnRequest{Group: "coder", Count: 1}, want: workforce.ErrConfig},

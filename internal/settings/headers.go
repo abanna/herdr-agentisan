@@ -17,16 +17,14 @@ type Header struct {
 // Headers reads, from the shared file in configDir, every project that has
 // a github repo, by project name. The repo merges as the profile's does,
 // from the defaults, the shared tables and the project's own table; the
-// project's repo file is not read, so, as for the colour (ReadSpaces), a
-// github set only there is not seen. Like ReadSpaces it selects no project,
+// project's repo file is not read. Like Teams it selects no project,
 // so it runs no repo or D12 check and reads no environment variable. No
 // configDir, or no file in it, is no project and not an error.
 func Headers(configDir string) ([]Header, error) {
 	if configDir == "" {
 		return nil, nil
 	}
-	// Load lints the whole file, as ReadSpaces does; the merge below only
-	// reads what it has checked.
+	// Load checks the whole file before the header merge.
 	if _, err := Load(LoadOptions{ConfigDir: configDir, LookupEnv: func(string) (string, bool) { return "", false }}); err != nil {
 		return nil, err
 	}

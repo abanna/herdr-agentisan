@@ -10,53 +10,35 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/settings"
 )
 
-// TestTeams: every configured project has a team (A19). The [spaces] project
-// is a spaces team, explicitly or as the sole project's default; every other
-// project is a tabs team, which needs a short code. A sole project that sets
-// layout = "tabs" is no default for the spaces, which then belong to the
-// unnamed project. Each team's colour comes from the defaults, the shared
-// tables, its own table and --set, never its repo file; the same teams come
-// back whether or not a project is selected.
+// TestTeams checks team identity and colour with or without a project selected.
 func TestTeams(t *testing.T) {
 	t.Parallel()
 
 	const app = "[projects.app]\nrepo = \"REPO\"\n"
 	tests := map[string]struct {
-		file       string // the shared file after schema_version
-		repoFile   string
-		set        []string
-		want       []settings.Team
-		wantSpaces string
+		file     string // the shared file after schema_version
+		repoFile string
+		set      []string
+		want     []settings.Team
 	}{
 		"no projects": {},
-		"the sole project is the spaces'": {
-			file: app, want: []settings.Team{{Project: "app", Layout: settings.LayoutSpaces}}, wantSpaces: "app",
-		},
 		"the sole project, a tabs team": {
 			file: app + "short = \"ap\"\nlayout = \"tabs\"\n", want: []settings.Team{{Project: "app", Short: "ap", Layout: settings.LayoutTabs}},
-		},
-		"the spaces' project and a tabs team": {
-			file:       "[spaces]\nproject = \"b\"\n" + app + "short = \"ap\"\ncolor = \"#123456\"\n[projects.b]\nrepo = \"/x\"\n",
-			want:       []settings.Team{{Project: "app", Short: "ap", Layout: settings.LayoutTabs, Color: "#123456"}, {Project: "b", Layout: settings.LayoutSpaces}},
-			wantSpaces: "b",
 		},
 		"two tabs teams": {
 			file: app + "short = \"ap\"\n[projects.b]\nrepo = \"/x\"\nshort = \"b\"\nlayout = \"tabs\"\n",
 			want: []settings.Team{{Project: "app", Short: "ap", Layout: settings.LayoutTabs}, {Project: "b", Short: "b", Layout: settings.LayoutTabs}},
 		},
-		"the spaces' project may set a short code and its layout": {
-			file: app + "short = \"ap\"\nlayout = \"spaces\"\n", want: []settings.Team{{Project: "app", Short: "ap", Layout: settings.LayoutSpaces}}, wantSpaces: "app",
-		},
 		"the longest short code": {
 			file: app + "short = \"abcdefgh\"\nlayout = \"tabs\"\n", want: []settings.Team{{Project: "app", Short: "abcdefgh", Layout: settings.LayoutTabs}},
 		},
 		"a shared colour, overridden by --set": {
-			file: "color = \"#111111\"\n" + app, set: []string{`color="#222222"`},
-			want: []settings.Team{{Project: "app", Layout: settings.LayoutSpaces, Color: "#222222"}}, wantSpaces: "app",
+			file: "color = \"#111111\"\n" + app + "short = \"ap\"\n", set: []string{`color="#222222"`},
+			want: []settings.Team{{Project: "app", Short: "ap", Layout: settings.LayoutTabs, Color: "#222222"}},
 		},
 		"a repo file's colour is not the team's": {
-			file: app + "color = \"#111111\"\n", repoFile: "color = \"#333333\"\n",
-			want: []settings.Team{{Project: "app", Layout: settings.LayoutSpaces, Color: "#111111"}}, wantSpaces: "app",
+			file: app + "short = \"ap\"\ncolor = \"#111111\"\n", repoFile: "color = \"#333333\"\n",
+			want: []settings.Team{{Project: "app", Short: "ap", Layout: settings.LayoutTabs, Color: "#111111"}},
 		},
 	}
 	for name, tc := range tests {
@@ -71,7 +53,6 @@ func TestTeams(t *testing.T) {
 			all, err := settings.Load(settings.LoadOptions{ConfigDir: dir, Set: tc.set, LookupEnv: envOf(nil)})
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, all.Teams)
-			assert.Equal(t, tc.wantSpaces, all.SpacesProject())
 			if len(tc.want) == 0 {
 				return
 			}
@@ -87,8 +68,7 @@ func TestTeams(t *testing.T) {
 	}
 }
 
-// TestTeamsErrors: layout is "tabs" or "spaces", and "spaces" only for the
-// [spaces] project, which is never "tabs". A tabs team needs a short code: a
+// TestTeamsErrors checks the tabs layout and short codes. A short code starts with a
 // lower-case letter, then up to 7 lower-case letters or digits, unique across
 // projects. Only a project's own table sets short and layout; boss is the
 // boss's tab, never a group. Each error names the key path and, for a set
@@ -106,13 +86,10 @@ func TestTeamsErrors(t *testing.T) {
 		wantErr  error
 		wantIn   []string
 	}{
-		"an unknown layout":           {file: app + "layout = \"grid\"\n", wantErr: settings.ErrInvalid, wantIn: []string{"projects.app.layout", "project", settings.FileName, `"grid"`}},
-		"a layout in upper case":      {file: app + "layout = \"Tabs\"\n", wantErr: settings.ErrInvalid, wantIn: []string{"projects.app.layout"}},
-		"a layout that is no string":  {file: app + "layout = 3\n", wantErr: settings.ErrInvalid, wantIn: []string{"projects.app.layout", "want a string"}},
-		"the spaces' project as tabs": {file: "[spaces]\nproject = \"app\"\n" + app + "layout = \"tabs\"\n" + b, wantErr: settings.ErrInvalid, wantIn: []string{"projects.app.layout", "always"}},
-		"spaces on another project":   {file: "[spaces]\nproject = \"b\"\n" + app + "layout = \"spaces\"\nshort = \"ap\"\n" + b, wantErr: settings.ErrInvalid, wantIn: []string{"projects.app.layout", `spaces.project = "app"`}},
-		"spaces with two projects":    {file: app + "short = \"ap\"\nlayout = \"spaces\"\n" + b, wantErr: settings.ErrInvalid, wantIn: []string{"projects.app.layout"}},
-		"a tabs team with no short":   {file: app + b, wantErr: settings.ErrInvalid, wantIn: []string{"projects.app.short", "short code"}},
+		"an unknown layout":          {file: app + "layout = \"grid\"\n", wantErr: settings.ErrInvalid, wantIn: []string{"projects.app.layout", "project", settings.FileName, `"grid"`}},
+		"a layout in upper case":     {file: app + "layout = \"Tabs\"\n", wantErr: settings.ErrInvalid, wantIn: []string{"projects.app.layout"}},
+		"a layout that is no string": {file: app + "layout = 3\n", wantErr: settings.ErrInvalid, wantIn: []string{"projects.app.layout", "want a string"}},
+		"a tabs team with no short":  {file: app + b, wantErr: settings.ErrInvalid, wantIn: []string{"projects.app.short", "short code"}},
 		"the sole tabs team, no short": {
 			file: app + "layout = \"tabs\"\n", wantErr: settings.ErrInvalid, wantIn: []string{"projects.app.short"},
 		},
@@ -143,7 +120,7 @@ func TestTeamsErrors(t *testing.T) {
 			file: "[groups.boss]\nworkers = 1\nslots = 1\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"groups.boss", "boss's tab"},
 		},
 		"boss as a project's group": {
-			file: app + "[projects.app.groups.boss]\nworkers = 0\nslots = 1\n", wantErr: settings.ErrInvalid, wantIn: []string{"groups.boss"},
+			file: app + "short = \"ap\"\n[projects.app.groups.boss]\nworkers = 0\nslots = 1\n", wantErr: settings.ErrInvalid, wantIn: []string{"groups.boss"},
 		},
 	}
 	for name, tc := range tests {
@@ -172,7 +149,7 @@ func TestTeamsErrors(t *testing.T) {
 // GitHub notice's 256 bytes (TestProjectNameLengthBound).
 func TestGroupNamesFitAWorkerID(t *testing.T) {
 	t.Parallel()
-	const app = "[projects.app]\nrepo = \"REPO\"\n"
+	const app = "[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n"
 	at20, at21, long := strings.Repeat("g", 20), strings.Repeat("g", 21), strings.Repeat("g", 300)
 	longProject := strings.Repeat("p", settings.MaxProjectName)
 	counts := "workers = 1\nslots = 1\n"
@@ -195,7 +172,7 @@ func TestGroupNamesFitAWorkerID(t *testing.T) {
 			file: app + "[projects.app.groups." + at21 + "]\nslots = 1\n", repoFile: "[groups." + at21 + "]\nworkers = 1\n", wantIn: "groups." + at21 + " (project, ",
 		},
 		// A project's own bound is a GitHub notice's, 256 (NERD-5632).
-		"a long project name": {file: "[projects." + longProject + "]\nrepo = \"REPO\"\n"},
+		"a long project name": {file: "[projects." + longProject + "]\nrepo = \"REPO\"\nshort = \"lp\"\n"},
 		"a long integration name": {
 			file: app + "[integrations." + long + "]\nurl = \"https://example.com\"\n",
 		},

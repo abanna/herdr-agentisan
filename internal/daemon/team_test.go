@@ -821,56 +821,66 @@ func TestTeamPushFollowsARelabel(t *testing.T) {
 	}
 }
 
-// TestTeamPushReadsTheConfiguredProject: the daemon reads [spaces] project
-// once when it starts. No configuration at all, which is the user's case
-// today, is the unnamed project; a file that does not resolve is logged and
-// the spaces fall back to the unnamed project, since $team does not depend
-// on it and focus and Back must keep working. Pushes go out either way.
-func TestTeamPushReadsTheConfiguredProject(t *testing.T) {
+// TestTeamPollLogsAConfigThatDoesNotResolve checks that a startup config
+// error explains why the configured teams are absent and the unnamed spaces
+// still get their pushes.
+func TestTeamPollLogsAConfigThatDoesNotResolve(t *testing.T) {
 	t.Parallel()
 
-	tests := map[string]struct {
-		file     string // the config file; "" for none, "nodir" for no config dir
-		want     string
-		wantLogs []string
+	const schema = "schema_version = 1\n"
+	const tabs = "[projects.app]\nrepo = \"/x\"\nshort = \"ap\"\n"
+	const retired = "the ◆ spaces are retired (NERD-5670). Remove this entry. Every team is a tabs team"
+	for name, tc := range map[string]struct {
+		file   string
+		reason string
 	}{
-		"no config dir":    {file: "nodir", want: ""},
-		"no config file":   {want: ""},
-		"the key":          {file: "[spaces]\nproject = \"b\"\n[projects.a]\nrepo = \"/x\"\nshort = \"a\"\n[projects.b]\nrepo = \"/y\"\n", want: "b"},
-		"the sole project": {file: "[projects.a]\nrepo = \"/x\"\n", want: "a"},
-		"several, no key":  {file: "[projects.a]\nrepo = \"/x\"\nshort = \"a\"\n[projects.b]\nrepo = \"/y\"\nshort = \"b\"\n", want: ""},
-		"tabs teams, no short": {
-			file: "[projects.a]\nrepo = \"/x\"\n[projects.b]\nrepo = \"/y\"\n", want: "", wantLogs: []string{`"level":"error"`, "projects.a.short"},
+		"missing short": {
+			file:   schema + "[projects.app]\nrepo = \"/x\"\n",
+			reason: "a tabs project needs a short code",
 		},
-		"an unknown project":  {file: "[spaces]\nproject = \"c\"\n[projects.a]\nrepo = \"/x\"\n", want: "", wantLogs: []string{`"level":"error"`, "no such project"}},
-		"an unsupported file": {file: "-", want: "", wantLogs: []string{`"level":"error"`, "schema_version"}},
-		"a non-ASCII project": {file: "[spaces]\nproject = \"ä\"\n[projects.a]\nrepo = \"/x\"\n", want: "", wantLogs: []string{`"level":"error"`}},
-	}
-	for name, tc := range tests {
+		"retired table": {
+			file:   schema + "[spaces]\n" + tabs,
+			reason: retired,
+		},
+		"unsupported schema": {
+			file:   "schema_version = 2\n" + tabs,
+			reason: "schema_version is 2",
+		},
+		"retired reference to an unknown project": {
+			file:   schema + "spaces.project = \"unconfigured\"\n" + tabs,
+			reason: retired,
+		},
+		"non-ASCII project": {
+			file:   schema + "[projects.\"ä\"]\nrepo = \"/x\"\nshort = \"ap\"\n",
+			reason: "a project name must match",
+		},
+	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			dir := t.TempDir()
-			switch tc.file {
-			case "nodir":
-				dir = ""
-			case "":
-			case "-":
-				require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte("schema_version = 2\n"), 0o600))
-			default:
-				require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte("schema_version = 1\n"+tc.file), 0o600))
-			}
+
+			config := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(config, settings.FileName), []byte(tc.file), 0o600))
 			th := newSpacesHerdr(t)
 			var logs lockedLog
-			o := teamOpts(t, shortDir(t), th, dir)
-			o.Logger = zerolog.New(&logs)
-			serving(t, o, th.fakeHerdr)
+			opts := teamOpts(t, shortDir(t), th, config)
+			opts.Logger = zerolog.New(&logs)
+			serving(t, opts, th.fakeHerdr)
 
 			polled(t, th.srv, 1)
-			assert.Len(t, pushes(t, th.srv), 3, "the pushes do not depend on the project")
-			assert.Contains(t, logs.String(), fmt.Sprintf(`"project":%q`, tc.want))
-			for _, s := range tc.wantLogs {
-				assert.Contains(t, logs.String(), s)
+			assert.Len(t, pushes(t, th.srv), 3, "the unnamed spaces still receive their pushes")
+
+			var entry struct {
+				Level string `json:"level"`
+				Error string `json:"error"`
 			}
+			for line := range strings.SplitSeq(logs.String(), "\n") {
+				if strings.Contains(line, "herdr-agentisan.toml does not resolve; the ◆ spaces belong to the unnamed project") {
+					require.NoError(t, json.Unmarshal([]byte(line), &entry))
+					break
+				}
+			}
+			assert.Equal(t, "error", entry.Level, "startup log: %s", logs.String())
+			assert.Contains(t, entry.Error, tc.reason)
 		})
 	}
 }

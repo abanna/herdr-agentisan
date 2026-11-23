@@ -44,7 +44,6 @@ func TestSampleConfigResolves(t *testing.T) {
 	all, err := settings.Load(opts)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"agentisan", "assay"}, all.Projects)
-	assert.Equal(t, "agentisan", all.SpacesProject(), "the sample names the spaces' project")
 	assert.Equal(t, "127.0.0.1:4328", all.TelemetryEndpoint(), "the sample names the events' collector")
 	assert.Equal(t, []string{"/run/user/1000/agentisan/gate.0.lock"}, all.TestLocks(), "the sample names the test slots' lock")
 	locks, err := settings.ReadTestLocks(dir)
@@ -62,15 +61,15 @@ func TestSampleConfigResolves(t *testing.T) {
 	assert.Equal(t, filepath.Join(home, ".config", "herdr-agentisan", "typesafe.env"), envFile, "the sample names Jev's env file")
 	assert.Equal(t, settings.LayerShared, all.Sources["routing.enabled"], "the sample sets routing.enabled itself")
 	assert.Equal(t, []settings.Team{
-		{Project: "agentisan", Layout: settings.LayoutSpaces, Color: "#7c3aed", Descriptions: map[string]string{
+		{Project: "agentisan", Short: "ag", Layout: settings.LayoutTabs, Color: "#7c3aed", Descriptions: map[string]string{
 			"precheck": "a pre-Codex adversarial pass on finalized heads",
 			"qa":       "runs the pre-PR test gates and owns the test-slot queue",
-			"coders":   "write fixes + new code · run their own review loop",
+			"coder":    "write fixes + new code · run their own review loop",
 		}},
 		{Project: "assay", Short: "as", Layout: settings.LayoutTabs, Color: "#0ea5e9", Descriptions: map[string]string{
 			"precheck": "a pre-Codex adversarial pass on finalized heads",
 		}},
-	}, all.Teams, "the spaces' project and one tabs team, each with its group descriptions")
+	}, all.Teams, "two tabs teams, each with its group descriptions")
 
 	for name, repo := range repos {
 		t.Run(name, func(t *testing.T) {

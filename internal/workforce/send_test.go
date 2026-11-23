@@ -20,20 +20,6 @@ short = "as"
 layout = "tabs"
 `
 
-// spacesSendConfig is teamConfig plus the ◆ spaces project, agentisan, for
-// the tests of the ◆ spaces alone.
-const spacesSendConfig = teamConfig + `
-[spaces]
-project = "agentisan"
-
-[projects.agentisan]
-repo = "REPO"
-
-[projects.agentisan.groups.coders]
-workers = 1
-slots = 2
-`
-
 // terminal is the terminal pane shows.
 func (f *fixture) terminal(t *testing.T, pane string) string {
 	t.Helper()
@@ -115,7 +101,7 @@ func TestSendFindsTheSenderAndTheRecipient(t *testing.T) {
 // a ◆ space reaches it; ◆ boss reaches a tabs team's boss by name.
 func TestSendOnTheSpaces(t *testing.T) {
 	t.Parallel()
-	f := newFixture(t, spacesSendConfig)
+	f := newFixture(t, teamConfig)
 	spacesBoss := f.h.addTab(f.h.addWorkspace("◆ boss"), "1", "claude", "working")
 	spacesCoder := f.h.addTab(f.h.addWorkspace("◆ coders"), "1", "claude", "idle")
 	haBoss := workforce.Party{Kind: store.KindBoss, ID: "ha-boss"}
