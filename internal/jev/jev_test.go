@@ -2,10 +2,13 @@ package jev_test
 
 import (
 	"context"
+	"errors"
 	"io"
 	"maps"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"slices"
 	"strconv"
 	"strings"
@@ -36,6 +39,10 @@ func server(t *testing.T, h http.HandlerFunc) (*httptest.Server, *atomic.Int32) 
 	return srv, &hits
 }
 
+func fixtureClient(srv *httptest.Server, key string) jev.Client {
+	return jev.Client{URL: srv.URL, Key: key, HTTP: srv.Client()}
+}
+
 // TestAskPostsTheBodyWithTheKey: the body goes out as given, once, with the
 // key as the Bearer token, and the answer comes back by question.
 func TestAskPostsTheBodyWithTheKey(t *testing.T) {
@@ -49,7 +56,9 @@ func TestAskPostsTheBodyWithTheKey(t *testing.T) {
 		_, _ = io.WriteString(w, answer)
 	})
 
-	a, err := jev.Client{URL: srv.URL + "/v1/systemone", Key: testKey}.Ask(t.Context(), body, time.Second)
+	client := fixtureClient(srv, testKey)
+	client.URL += "/v1/systemone"
+	a, err := client.Ask(t.Context(), body, time.Second)
 	require.NoError(t, err)
 	// Close waits for the handler, so what it recorded is read after it.
 	srv.Close()
@@ -90,7 +99,7 @@ func TestAskRefusesABadKey(t *testing.T) {
 	t.Parallel()
 	srv, hits := server(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, answer) })
 	for name, key := range map[string]string{"empty": "", "a space": "k k", "a newline": "k\nX-Other: 1", "non-ASCII": "kéy", "a DEL": "k\x7f"} {
-		_, err := jev.Client{URL: srv.URL, Key: key}.Ask(t.Context(), []byte(`{}`), time.Second)
+		_, err := fixtureClient(srv, key).Ask(t.Context(), []byte(`{}`), time.Second)
 		require.ErrorIs(t, err, jev.ErrNoKey, name)
 		if key != "" {
 			assert.NotContains(t, err.Error(), key, name)
@@ -114,7 +123,7 @@ func TestAskRefusals(t *testing.T) {
 			w.WriteHeader(code)
 			_, _ = io.WriteString(w, `{"detail":[{"loc":["body","state"],"msg":"bad","type":"x","input":"the secret plan"}]}`)
 		})
-		_, err := jev.Client{URL: srv.URL, Key: testKey}.Ask(t.Context(), []byte(`{"state":"the secret plan"}`), time.Second)
+		_, err := fixtureClient(srv, testKey).Ask(t.Context(), []byte(`{"state":"the secret plan"}`), time.Second)
 		require.ErrorIs(t, err, jev.ErrStatus, "%d", code)
 		assert.Contains(t, err.Error(), "HTTP "+strconv.Itoa(code))
 		assert.NotContains(t, err.Error(), testKey)
@@ -124,6 +133,47 @@ func TestAskRefusals(t *testing.T) {
 	assert.Zero(t, elsewhereHits.Load(), "the redirect is never followed, so the key stays where it was sent")
 }
 
+func TestAsk307SurvivesSiblingServerClose(t *testing.T) {
+	sibling, _ := server(t, http.NotFoundHandler().ServeHTTP)
+	srv, hits := server(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		w.Header().Set("Location", sibling.URL)
+		w.WriteHeader(http.StatusTemporaryRedirect)
+	})
+
+	var conn net.Conn
+	pooled := make(chan error, 1)
+	askReturned := make(chan struct{})
+	ctx := httptrace.WithClientTrace(t.Context(), &httptrace.ClientTrace{
+		GotConn: func(info httptrace.GotConnInfo) { conn = info.Conn },
+		PutIdleConn: func(err error) {
+			pooled <- err
+			if err != nil {
+				return
+			}
+			// Go pools an empty response before handing off its status.
+			// If the sibling closed this connection, let Ask observe
+			// the close before the transport can hand off the response.
+			sibling.Close()
+			if errors.Is(conn.SetReadDeadline(time.Time{}), net.ErrClosed) {
+				<-askReturned
+			}
+		},
+	})
+	_, err := fixtureClient(srv, testKey).Ask(ctx, []byte(`{}`), 2*time.Second)
+	close(askReturned)
+
+	select {
+	case err := <-pooled:
+		require.NoError(t, err, "the response connection entered the idle pool")
+	default:
+		t.Fatal("the response connection never reached the idle pool")
+	}
+	require.ErrorIs(t, err, jev.ErrStatus)
+	assert.ErrorContains(t, err, "HTTP 307")
+	assert.Equal(t, int32(1), hits.Load())
+}
+
 // TestAskNeverFollowsARedirect: whatever client the caller gives, even one
 // that follows redirects, a redirect is answered as its status, so the key
 // never goes to another URL.
@@ -131,7 +181,7 @@ func TestAskNeverFollowsARedirect(t *testing.T) {
 	t.Parallel()
 	elsewhere, elsewhereHits := server(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, answer) })
 	srv, _ := server(t, func(w http.ResponseWriter, r *http.Request) { http.Redirect(w, r, elsewhere.URL, http.StatusFound) })
-	follows := &http.Client{Timeout: time.Minute}
+	follows := srv.Client()
 	_, err := jev.Client{URL: srv.URL, Key: testKey, HTTP: follows}.Ask(t.Context(), []byte(`{}`), time.Second)
 	require.ErrorIs(t, err, jev.ErrStatus)
 	assert.Contains(t, err.Error(), "HTTP 302")
@@ -154,7 +204,7 @@ func TestAskMalformedAnswers(t *testing.T) {
 		"an answer padded past 64 KiB": answer + strings.Repeat(" ", 64<<10),
 	} {
 		srv, _ := server(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, body) })
-		_, err := jev.Client{URL: srv.URL, Key: testKey}.Ask(t.Context(), []byte(`{}`), time.Second)
+		_, err := fixtureClient(srv, testKey).Ask(t.Context(), []byte(`{}`), time.Second)
 		require.ErrorIs(t, err, jev.ErrAnswer, name)
 	}
 }
@@ -174,7 +224,7 @@ func TestAskEndsAtItsTimeout(t *testing.T) {
 	})
 	defer close(release)
 	start := time.Now()
-	_, err := jev.Client{URL: srv.URL, Key: testKey}.Ask(t.Context(), []byte(`{}`), 100*time.Millisecond)
+	_, err := fixtureClient(srv, testKey).Ask(t.Context(), []byte(`{}`), 100*time.Millisecond)
 	require.ErrorIs(t, err, jev.ErrCall)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Less(t, time.Since(start), 5*time.Second)
@@ -184,13 +234,13 @@ func TestAskEndsAtItsTimeout(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err = jev.Client{URL: srv.URL, Key: testKey}.Ask(ctx, []byte(`{}`), time.Second)
+	_, err = fixtureClient(srv, testKey).Ask(ctx, []byte(`{}`), time.Second)
 	require.ErrorIs(t, err, jev.ErrCall)
 	require.ErrorIs(t, err, context.Canceled)
 
 	gone := httptest.NewServer(http.NotFoundHandler())
 	gone.Close()
-	_, err = jev.Client{URL: gone.URL, Key: testKey}.Ask(t.Context(), []byte(`{}`), time.Second)
+	_, err = fixtureClient(gone, testKey).Ask(t.Context(), []byte(`{}`), time.Second)
 	require.ErrorIs(t, err, jev.ErrCall)
 	assert.NotContains(t, err.Error(), testKey)
 }
@@ -208,7 +258,7 @@ func TestAskNeverRetriesADroppedConnection(t *testing.T) {
 			_ = c.Close()
 		}
 	})
-	_, err := jev.Client{URL: srv.URL, Key: testKey}.Ask(t.Context(), []byte(`{}`), time.Second)
+	_, err := fixtureClient(srv, testKey).Ask(t.Context(), []byte(`{}`), time.Second)
 	require.ErrorIs(t, err, jev.ErrCall)
 	srv.Close()
 	assert.Equal(t, int32(1), hits.Load(), "one POST, whatever the failure")
@@ -224,7 +274,7 @@ func TestAskReadsAnAnswerOfExactlyTheLimit(t *testing.T) {
 	}
 	for n, ok := range map[int]bool{64 << 10: true, 64<<10 + 1: false} {
 		srv, _ := server(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, pad(n)) })
-		_, err := jev.Client{URL: srv.URL, Key: testKey}.Ask(t.Context(), []byte(`{}`), time.Second)
+		_, err := fixtureClient(srv, testKey).Ask(t.Context(), []byte(`{}`), time.Second)
 		if ok {
 			require.NoError(t, err, "%d bytes", n)
 		} else {
