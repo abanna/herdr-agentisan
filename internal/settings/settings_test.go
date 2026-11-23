@@ -200,7 +200,7 @@ func TestLoadLayerPrecedence(t *testing.T) {
 			t.Parallel()
 			repo, dir := newRepo(t), t.TempDir()
 			writeFile(t, dir, settings.FileName,
-				"schema_version = 1\n"+tc.shared+"[projects.app]\nrepo = \"REPO\"\n"+tc.project, repo)
+				"schema_version = 1\n"+tc.shared+"[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n"+tc.project, repo)
 			if tc.repo != "" {
 				writeFile(t, repo, settings.RepoFileName, "schema_version = 1\n"+tc.repo, repo)
 			}
@@ -240,6 +240,7 @@ slots = 4
 
 [projects.app]
 repo = "~/src/app"
+short = "ap"
 color = "#7C3AED"
 github = "nerds-run/app"
 verify = [["task", "check"], ["go", "test", "./..."]]
@@ -366,7 +367,7 @@ func TestLoadMissingFilesAreNotErrors(t *testing.T) {
 	}, got.Sources)
 
 	repo, dir := newRepo(t), t.TempDir()
-	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n", repo)
+	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n", repo)
 	got, err = settings.Load(settings.LoadOptions{ConfigDir: dir, Project: "app", LookupEnv: envOf(nil)})
 	require.NoError(t, err)
 	assert.Equal(t, repo, got.Profile.Repo)
@@ -390,11 +391,11 @@ func TestLoadChecksEveryProfileWithoutAProject(t *testing.T) {
 		"bad shared thresholds":   {shared: "[rotation]\nthresholds = [1, 2]\n", wantErr: settings.ErrInvalid, wantIn: "rotation.thresholds"},
 		"unknown key, project":    {shared: "[projects.app]\nbogus = 1\n", wantErr: settings.ErrUnknownKey, wantIn: "projects.app.bogus"},
 		"project agent not claude": {
-			shared:  "[projects.app]\nrepo = \"/nonexistent\"\n[projects.app.agent]\ncommand = [\"aider\"]\n",
+			shared:  "[projects.app]\nrepo = \"/nonexistent\"\nshort = \"ap\"\n[projects.app.agent]\ncommand = [\"aider\"]\n",
 			wantErr: settings.ErrBypassesAgentisan, wantIn: "projects.app.agent.command",
 		},
 		"project slots below shared workers": {
-			shared:  "[groups.coders]\nworkers = 3\nslots = 4\n[projects.app]\n[projects.app.groups.coders]\nslots = 2\n",
+			shared:  "[groups.coders]\nworkers = 3\nslots = 4\n[projects.app]\nshort = \"ap\"\n[projects.app.groups.coders]\nslots = 2\n",
 			wantErr: settings.ErrInvalid, wantIn: "projects.app.groups.coders.slots",
 		},
 		"--set breaks a project": {
@@ -426,7 +427,7 @@ func TestLoadChecksEveryProfileWithoutAProject(t *testing.T) {
 func TestLoadErrors(t *testing.T) {
 	t.Parallel()
 
-	const app = "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n"
+	const app = "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n"
 	tests := map[string]struct {
 		shared    string // full shared file; empty means no file
 		emptyFile bool   // write the shared file with zero bytes
@@ -486,7 +487,7 @@ func TestLoadErrors(t *testing.T) {
 		},
 		"workers past the int64 range": {
 			shared:  app + "[projects.app.groups.coders]\nworkers = 9223372036854775808\nslots = 1\n",
-			wantErr: settings.ErrInvalid, wantIn: []string{settings.FileName, "line 5"},
+			wantErr: settings.ErrInvalid, wantIn: []string{settings.FileName, "line 6"},
 		},
 		"a key in another case": {
 			shared:  app + "Color = \"#123456\"\n",
@@ -526,15 +527,15 @@ func TestLoadErrors(t *testing.T) {
 			wantErr: settings.ErrInvalid, wantIn: []string{"repo", "absolute"},
 		},
 		"shared schema_version missing": {
-			shared:  "[projects.app]\nrepo = \"REPO\"\n",
+			shared:  "[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n",
 			wantErr: settings.ErrUnsupportedSchema, wantIn: []string{settings.FileName, "schema_version"},
 		},
 		"shared schema_version 2": {
-			shared:  "schema_version = 2\n[projects.app]\nrepo = \"REPO\"\nfuture_key = 1\n",
+			shared:  "schema_version = 2\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\nfuture_key = 1\n",
 			wantErr: settings.ErrUnsupportedSchema, wantIn: []string{settings.FileName, "2"},
 		},
 		"shared schema_version a string": {
-			shared:  "schema_version = \"1\"\n[projects.app]\nrepo = \"REPO\"\n",
+			shared:  "schema_version = \"1\"\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n",
 			wantErr: settings.ErrUnsupportedSchema, wantIn: []string{settings.FileName},
 		},
 		"repo file schema_version missing": {
@@ -546,7 +547,7 @@ func TestLoadErrors(t *testing.T) {
 			wantErr: settings.ErrUnsupportedSchema, wantIn: []string{settings.RepoFileName},
 		},
 		"unknown key in the shared tables": {
-			shared:  "schema_version = 1\n[agent]\nmodle = \"opus\"\n[projects.app]\nrepo = \"REPO\"\n",
+			shared:  "schema_version = 1\n[agent]\nmodle = \"opus\"\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n",
 			wantErr: settings.ErrUnknownKey, wantIn: []string{"agent.modle", settings.LayerShared, settings.FileName},
 		},
 		"unknown key in the selected project": {
@@ -607,7 +608,7 @@ func TestLoadErrors(t *testing.T) {
 		},
 		"an unquoted token is a syntax error that does not echo it": {
 			shared:  app + "[projects.app.integrations.github]\ntoken = " + plainSecret + "\n",
-			wantErr: settings.ErrInvalid, wantIn: []string{settings.FileName, "line 5"},
+			wantErr: settings.ErrInvalid, wantIn: []string{settings.FileName, "line 6"},
 		},
 		"a valid reference under a name the schema does not know": {
 			shared:  app + "[projects.app.integrations.linear]\napi_key = { env = \"LINEAR_API_KEY\" }\n",
@@ -976,7 +977,7 @@ func utf16le(s string) string {
 func TestLoadEncodingClasses(t *testing.T) {
 	t.Parallel()
 
-	const app = "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n"
+	const app = "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n"
 	tests := map[string]struct {
 		shared   string
 		repoFile string
@@ -1055,7 +1056,7 @@ func TestLoadEncodingClasses(t *testing.T) {
 func TestLoadNestingDepth(t *testing.T) {
 	t.Parallel()
 
-	const app = "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n"
+	const app = "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n"
 	const table = "[projects.app.integrations.x"
 	capDepth := (settings.MaxFileBytes - len(app) - len(table) - len("]\nb = 1\n") - 200) / len(".a")
 	tests := map[string]struct {

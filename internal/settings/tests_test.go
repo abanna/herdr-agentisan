@@ -30,7 +30,7 @@ func locksList(n int) string {
 func TestTestLocksPrecedence(t *testing.T) {
 	t.Parallel()
 
-	const app = "[projects.app]\nrepo = \"REPO\"\n"
+	const app = "[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n"
 	const two = "[tests]\nlocks = [\"/run/user/1000/agentisan/gate.0.lock\", \"/run/user/1000/agentisan/gate.1.lock\"]\n"
 	const own = "[projects.app.tests]\nlocks = [\"/tmp//own.lock\"]\n"
 	gates := []string{"/run/user/1000/agentisan/gate.0.lock", "/run/user/1000/agentisan/gate.1.lock"}
@@ -98,7 +98,7 @@ func settingsLocks(n int) []string {
 func TestTestLocksErrors(t *testing.T) {
 	t.Parallel()
 
-	const app = "[projects.app]\nrepo = \"REPO\"\n"
+	const app = "[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n"
 	locks := func(list string) string { return "[tests]\nlocks = " + list + "\n" + app }
 	tests := map[string]struct {
 		file     string
@@ -177,10 +177,10 @@ func TestReadTestLocks(t *testing.T) {
 	}{
 		"no config dir":  {file: "nodir", project: "app"},
 		"no file":        {want: settings.TestLocks{Projects: map[string][]string{}}, project: "app"},
-		"no [tests]":     {file: "[projects.app]\nrepo = \"/x\"\n", want: settings.TestLocks{Projects: map[string][]string{"app": nil}}, project: "app"},
+		"no [tests]":     {file: "[projects.app]\nrepo = \"/x\"\nshort = \"ap\"\n", want: settings.TestLocks{Projects: map[string][]string{"app": nil}}, project: "app"},
 		"two lock files": {file: shared, want: settings.TestLocks{Shared: gates, Projects: map[string][]string{}}, project: "app", wantOf: gates},
 		"a project with none of its own": {
-			file: shared + "[projects.app]\nrepo = \"/x\"\n", want: settings.TestLocks{Shared: gates, Projects: map[string][]string{"app": gates}},
+			file: shared + "[projects.app]\nrepo = \"/x\"\nshort = \"ap\"\n", want: settings.TestLocks{Shared: gates, Projects: map[string][]string{"app": gates}},
 			project: "app", wantOf: gates,
 		},
 		"a project's own": {
@@ -189,25 +189,25 @@ func TestReadTestLocks(t *testing.T) {
 			project: "app", wantOf: []string{"/tmp/skills/a.lock"},
 		},
 		"a project's own empty list": {
-			file:    shared + "[projects.app]\nrepo = \"/x\"\n[projects.app.tests]\nlocks = []\n",
+			file:    shared + "[projects.app]\nrepo = \"/x\"\nshort = \"ap\"\n[projects.app.tests]\nlocks = []\n",
 			want:    settings.TestLocks{Shared: gates, Projects: map[string][]string{"app": nil}},
 			project: "app",
 		},
 		"a project's own, with no shared list": {
-			file:    "[projects.app]\nrepo = \"/x\"\n[projects.app.tests]\nlocks = [\"/tmp/a.lock\"]\n",
+			file:    "[projects.app]\nrepo = \"/x\"\nshort = \"ap\"\n[projects.app.tests]\nlocks = [\"/tmp/a.lock\"]\n",
 			want:    settings.TestLocks{Projects: map[string][]string{"app": {"/tmp/a.lock"}}},
 			project: "app", wantOf: []string{"/tmp/a.lock"},
 		},
 		"the unnamed project": {
-			file: shared + "[projects.app]\nrepo = \"/x\"\n[projects.app.tests]\nlocks = []\n", want: settings.TestLocks{Shared: gates, Projects: map[string][]string{"app": nil}},
+			file: shared + "[projects.app]\nrepo = \"/x\"\nshort = \"ap\"\n[projects.app.tests]\nlocks = []\n", want: settings.TestLocks{Shared: gates, Projects: map[string][]string{"app": nil}},
 			wantOf: gates,
 		},
 		"a project the file does not configure": {
-			file: shared + "[projects.app]\nrepo = \"/x\"\n", want: settings.TestLocks{Shared: gates, Projects: map[string][]string{"app": gates}},
+			file: shared + "[projects.app]\nrepo = \"/x\"\nshort = \"ap\"\n", want: settings.TestLocks{Shared: gates, Projects: map[string][]string{"app": gates}},
 			project: "other", wantOf: gates,
 		},
 		"a relative one":           {file: "[tests]\nlocks = [\"gate.lock\"]\n", wantErr: settings.ErrInvalid},
-		"a project's relative one": {file: "[projects.app]\nrepo = \"/x\"\n[projects.app.tests]\nlocks = [\"gate.lock\"]\n", wantErr: settings.ErrInvalid, wantText: "projects.app.tests.locks"},
+		"a project's relative one": {file: "[projects.app]\nrepo = \"/x\"\nshort = \"ap\"\n[projects.app.tests]\nlocks = [\"gate.lock\"]\n", wantErr: settings.ErrInvalid, wantText: "projects.app.tests.locks"},
 		"a newer schema":           {file: "schema_version = 2\n", wantErr: settings.ErrUnsupportedSchema},
 		"a file that breaks":       {file: "[tests\n", wantErr: settings.ErrInvalid},
 	}

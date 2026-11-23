@@ -16,14 +16,13 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
-	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/testslots"
 )
 
-// slotsConfig writes a config dir naming project agentisan, with no colour,
-// and [tests] locks.
+// slotsConfig writes a config dir naming project agentisan, the tabs team
+// ag, with no colour, and [tests] locks.
 func slotsConfig(t *testing.T, locks ...string) string {
 	t.Helper()
 	quoted := make([]string, len(locks))
@@ -31,7 +30,7 @@ func slotsConfig(t *testing.T, locks ...string) string {
 		quoted[i] = fmt.Sprintf("%q", l)
 	}
 	dir := t.TempDir()
-	body := "schema_version = 1\n[tests]\nlocks = [" + strings.Join(quoted, ", ") + "]\n[projects.agentisan]\nrepo = \"~/Development/agentisan\"\n"
+	body := "schema_version = 1\n[tests]\nlocks = [" + strings.Join(quoted, ", ") + "]\n[projects.agentisan]\nrepo = \"~/Development/agentisan\"\nshort = \"ag\"\nlayout = \"tabs\"\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte(body), 0o600))
 	return dir
 }
@@ -85,8 +84,8 @@ func TestSnapshotCarriesTheTestSlots(t *testing.T) {
 	served(t, sock, slotsAre(1, 2))
 }
 
-// TestTestSlotsNotCounted: with no [tests] locks, or a file that does not
-// resolve, no slots are reported. When the kernel's lock list cannot be
+// TestTestSlotsNotCounted: with no [tests] locks no slots are reported; a
+// file that does not resolve, which names no team, is logged once. When the kernel's lock list cannot be
 // read, none are either, never all free; that is logged once however many
 // polls it lasts, and the slots return, with one more line, once it can be.
 func TestTestSlotsNotCounted(t *testing.T) {
@@ -98,10 +97,11 @@ func TestTestSlotsNotCounted(t *testing.T) {
 	}
 	tests := map[string]struct {
 		config  func(t *testing.T) string
+		team    bool // the config names fullTeam
 		wantLog string
 	}{
 		"no config":       {config: func(*testing.T) string { return "" }},
-		"no [tests]":      {config: projectConfig},
+		"no [tests]":      {config: projectConfig, team: true},
 		"a broken config": {config: broken, wantLog: "test slots: herdr-agentisan.toml does not resolve"},
 	}
 	for name, tc := range tests {
@@ -115,10 +115,11 @@ func TestTestSlotsNotCounted(t *testing.T) {
 			o.Logger = zerolog.New(&logs)
 			serving(t, o, th.fakeHerdr)
 
-			served(t, socketPath(t, dir, th.path), anySnapshot)
 			polled(t, th.srv, 3)
-			got := served(t, socketPath(t, dir, th.path), anySnapshot)
-			assert.True(t, got.Project == nil || got.Project.Slots == nil, "no slots reported")
+			if tc.team {
+				got := served(t, socketPath(t, dir, th.path), anySnapshot)
+				assert.True(t, got.Project == nil || got.Project.Slots == nil, "no slots reported")
+			}
 			if tc.wantLog != "" {
 				assert.Equal(t, 1, strings.Count(logs.String(), tc.wantLog), "logged once")
 			} else {
@@ -205,22 +206,22 @@ func (th *teamHerdr) setProcs(id string, procs ...map[string]any) {
 func TestSnapshotBossRuntime(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	ws := []herdr.WorkspaceInfo{{WorkspaceID: "wJ", Label: "◆ boss"}, {WorkspaceID: "wN", Label: "◆ coders"}}
+	ws, tabs, _, _ := fullTeam()
 	bossIn := func(id string) []map[string]any {
 		return []map[string]any{
-			teamPane(id, "wJ", "claude", "working", "", nil),
-			teamPane("wN:p1", "wN", "claude", "working", "", nil),
+			fullPane(id, "claude", "working", "", nil),
+			fullPane("wN:p1", "claude", "working", "", nil),
 		}
 	}
 	agents := []map[string]any{named("wJ:p1", "boss"), named("wJ:p2", "boss2"), named("wN:p1", "pee01")}
-	th.layout(ws, bossIn("wJ:p1"), agents)
+	th.layout(ws, tabs, bossIn("wJ:p1"), agents)
 	th.setProcs("wJ:p1", agentProc(1001, "claude", "--model", "opus"))
 	th.setProcs("wJ:p2", agentProc(1003, "claude"))
 	th.setProcs("wN:p1", agentProc(1002, "claude"))
 	pt := &procs{start: map[int]uint64{os.Getpid(): 77, 1001: 4200, 1002: 5000, 1003: 6000}}
 	c := &clock{now: t0}
 	dir := shortDir(t)
-	o := teamOpts(t, dir, th, "")
+	o := teamOpts(t, dir, th, projectConfig(t))
 	o.Hooks.StartTime = pt.startTime
 	o.Now = c.Now
 	serving(t, o, th.fakeHerdr)
@@ -249,7 +250,7 @@ func TestSnapshotBossRuntime(t *testing.T) {
 	th.setProcs("wJ:p1", agentProc(1004, "claude"))
 	served(t, sock, startedAt(ticks(7000)))
 
-	th.layout(ws, bossIn("wJ:p2"), agents)
+	th.layout(ws, tabs, bossIn("wJ:p2"), agents)
 	handed := served(t, sock, func(s snapshot.Snapshot) bool {
 		return s.Boss != nil && s.Boss.PaneID == "wJ:p2" && s.Boss.StartedAt != nil
 	})
@@ -270,13 +271,13 @@ func TestSnapshotBossRuntime(t *testing.T) {
 func TestBossRuntimeSurvivesADaemonRestart(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	ws := []herdr.WorkspaceInfo{{WorkspaceID: "wJ", Label: "◆ boss"}}
-	th.layout(ws, []map[string]any{teamPane("wJ:p1", "wJ", "claude", "working", "", nil)}, []map[string]any{named("wJ:p1", "boss")})
+	ws, tabs, _, _ := fullTeam()
+	th.layout(ws, tabs, []map[string]any{fullPane("wJ:p1", "claude", "working", "", nil)}, []map[string]any{named("wJ:p1", "boss")})
 	th.setProcs("wJ:p1", agentProc(1001, "claude"))
 	started := boot.Add(42 * time.Second)
 	c := &clock{now: t0}
 	dir := shortDir(t)
-	o := teamOpts(t, dir, th, "")
+	o := teamOpts(t, dir, th, projectConfig(t))
 	o.Hooks.StartTime = (&procs{start: map[int]uint64{os.Getpid(): 77, 1001: 4200}}).startTime
 	o.Now = c.Now
 	first := serving(t, o, th.fakeHerdr)
@@ -396,10 +397,10 @@ func TestEveryTeamCarriesTheSlotsAndItsOwnBoss(t *testing.T) {
 		assert.Equal(t, &snapshot.Slots{Used: 1, Total: 2}, s.Project.Slots, "team %s carries the slots", p)
 	}
 	assert.Nil(t, servedTeam(t, sock, "alpha", at(t0)).Boss, "alpha has no boss yet")
-	spaces := servedTeam(t, sock, "agentisan", func(s snapshot.Snapshot) bool {
+	ag := servedTeam(t, sock, "agentisan", func(s snapshot.Snapshot) bool {
 		return at(t0)(s) && s.Boss != nil && s.Boss.StartedAt != nil
 	})
-	assert.Equal(t, boot.Add(42*time.Second), *spaces.Boss.StartedAt, "the spaces' boss agent's start")
+	assert.Equal(t, boot.Add(42*time.Second), *ag.Boss.StartedAt, "agentisan's boss agent's start")
 
 	// The held slot is let go, then the clock moves to t1 and alpha's boss
 	// starts and alpha's coder moves on to review.
@@ -416,11 +417,11 @@ func TestEveryTeamCarriesTheSlotsAndItsOwnBoss(t *testing.T) {
 	assert.Equal(t, boot.Add(90*time.Second), *alpha.Boss.StartedAt, "alpha's boss runtime is its own agent's")
 	require.NotNil(t, alpha.Groups[0].Agents[0].StageStartedAt)
 	assert.Equal(t, t1, *alpha.Groups[0].Agents[0].StageStartedAt, "alpha's coder's stage restarted")
-	spaces = servedTeam(t, sock, "agentisan", at(t1))
-	require.NotNil(t, spaces.Boss.StartedAt)
-	assert.Equal(t, boot.Add(42*time.Second), *spaces.Boss.StartedAt, "the spaces' boss keeps its own start")
-	require.NotNil(t, spaces.Groups[0].Agents[0].StageStartedAt)
-	assert.Equal(t, t0, *spaces.Groups[0].Agents[0].StageStartedAt, "the spaces' coder keeps its stage start")
+	ag = servedTeam(t, sock, "agentisan", at(t1))
+	require.NotNil(t, ag.Boss.StartedAt)
+	assert.Equal(t, boot.Add(42*time.Second), *ag.Boss.StartedAt, "agentisan's boss keeps its own start")
+	require.NotNil(t, ag.Groups[0].Agents[0].StageStartedAt)
+	assert.Equal(t, t0, *ag.Groups[0].Agents[0].StageStartedAt, "agentisan's coder keeps its stage start")
 	for _, p := range teams {
 		s := servedTeam(t, sock, p, at(t1))
 		require.NotNil(t, s.Project, p)
@@ -541,8 +542,8 @@ func TestEachTeamCountsItsOwnLocks(t *testing.T) {
 			serving(t, o, th.fakeHerdr)
 			sock := socketPath(t, dir, th.path)
 
-			spaces := servedTeam(t, sock, "agentisan", slotsAre(1, 1))
-			assert.Equal(t, &snapshot.Slots{Used: 1, Total: 1}, spaces.Project.Slots, "the spaces count the shared list")
+			ag := servedTeam(t, sock, "agentisan", slotsAre(1, 1))
+			assert.Equal(t, &snapshot.Slots{Used: 1, Total: 1}, ag.Project.Slots, "agentisan counts the shared list")
 			polled(t, th.srv, 3)
 			alpha := servedTeam(t, sock, "alpha", anySnapshot)
 			if tc.wantAlpha == nil {
@@ -553,7 +554,7 @@ func TestEachTeamCountsItsOwnLocks(t *testing.T) {
 			}
 			beta := servedTeam(t, sock, "beta", anySnapshot)
 			assert.True(t, beta.Project == nil || beta.Project.Slots == nil, "beta's empty list reports no slots")
-			assert.Equal(t, &snapshot.Slots{Used: 1, Total: 1}, servedTeam(t, sock, "agentisan", anySnapshot).Project.Slots, "alpha's failure costs the spaces nothing")
+			assert.Equal(t, &snapshot.Slots{Used: 1, Total: 1}, servedTeam(t, sock, "agentisan", anySnapshot).Project.Slots, "alpha's failure costs agentisan nothing")
 			if tc.wantLog != "" {
 				assert.Equal(t, 1, strings.Count(logs.String(), tc.wantLog), "logged once over the polls")
 				assert.Contains(t, logs.String(), `"project":"alpha"`)

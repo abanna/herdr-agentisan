@@ -95,7 +95,7 @@ func TestRotationsFilesystemClasses(t *testing.T) {
 			}
 			repo, dir := t.TempDir(), t.TempDir()
 			path := tc.setup(t, repo)
-			writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n[projects.app.rotation]\nthresholds = [50, 60, 70]\n", path)
+			writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n[projects.app.rotation]\nthresholds = [50, 60, 70]\n", path)
 
 			done := make(chan settings.RotationSettings, 1)
 			go func() {

@@ -18,7 +18,7 @@ import (
 func TestDebuggerEnvFile(t *testing.T) {
 	t.Parallel()
 
-	const app = "[projects.app]\nrepo = \"REPO\"\n"
+	const app = "[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n"
 	home := t.TempDir()
 	tests := map[string]struct {
 		file     string // the shared file after schema_version; "-" for no file

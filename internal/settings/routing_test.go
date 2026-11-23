@@ -13,7 +13,7 @@ import (
 )
 
 // routingApp is a project for the routing tests to select.
-const routingApp = "[projects.app]\nrepo = \"REPO\"\n"
+const routingApp = "[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n"
 
 //go:fix inline
 

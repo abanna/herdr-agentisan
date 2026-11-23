@@ -32,8 +32,8 @@ func shell(id, ws string) herdr.PaneInfo {
 
 // TestTeamTokenGoldens is the `$team` format (ADR-001 A28, amending A17's
 // frozen v12 one): "N agents · W working · R ready", then " · B blocked" when
-// any are, and "1 agent" for one. N counts every pane in the space, shells
-// and unknown included; W counts working; R counts the panes carrying a
+// any are, and "1 agent" for one. N counts every pane in the team's worker
+// tabs, shells and unknown included; W counts working; R counts the panes carrying a
 // handoff token, whatever their status; B counts blocked. Idle and done are
 // not counted. The middle dots are spelled U+00B7 escapes so the test cannot
 // share a mistyped glyph with the code.
@@ -56,7 +56,7 @@ func TestTeamTokenGoldens(t *testing.T) {
 			want: "5 agents \u00b7 2 working \u00b7 2 ready \u00b7 1 blocked",
 		},
 		"one plain shell":         {panes: []herdr.PaneInfo{shell("w1:p1", "w1")}, want: "1 agent \u00b7 0 working \u00b7 0 ready"},
-		"an empty space":          {want: "0 agents \u00b7 0 working \u00b7 0 ready"},
+		"a team with no worker":   {want: "0 agents \u00b7 0 working \u00b7 0 ready"},
 		"shells counted in N":     {panes: []herdr.PaneInfo{shell("w1:p1", "w1"), shell("w1:p2", "w1"), p("w1:p3", "w1", "working")}, want: "3 agents \u00b7 1 working \u00b7 0 ready"},
 		"blocked only":            {panes: []herdr.PaneInfo{p("w1:p1", "w1", "blocked")}, want: "1 agent \u00b7 0 working \u00b7 0 ready \u00b7 1 blocked"},
 		"ready only, on idle":     {panes: []herdr.PaneInfo{p("w1:p1", "w1", "idle", "x")}, want: "1 agent \u00b7 0 working \u00b7 1 ready"},
@@ -79,40 +79,39 @@ func TestTeamTokenGoldens(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			l := team.Layout{Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "w1", Label: "◆ coders"}}, Panes: tc.panes}
+			panes := make([]herdr.PaneInfo, 0, len(tc.panes))
+			for _, pane := range tc.panes {
+				panes = append(panes, inTeam(pane, "coder-1"))
+			}
 
-			got := team.Tokens(team.Build(l, team.Spaces{}, nil))
+			got := team.Tokens(team.Build(teamOf(panes), liveTeam, nil))
 			require.Len(t, got, 1)
-			assert.Equal(t, team.Token{Target: team.Target{WorkspaceID: "w1"}, Value: tc.want}, got[0])
+			assert.Equal(t, team.Token{Target: liveTarget, Value: tc.want}, got[0])
 		})
 	}
 }
 
-// TestTokensForEveryGroupTarget: each ◆ group space gets the count of its own
-// panes, an empty one included; the boss and herdr spaces and spaces without
-// the prefix get nothing; tokens come sorted by target.
+// TestTokensForEveryGroupTarget: each team's workspace, its every group's
+// target, gets the count of its own worker panes, a team with none
+// included; the boss's tab, a tab outside the model and a workspace no team
+// holds count for nothing; tokens come sorted by target.
 func TestTokensForEveryGroupTarget(t *testing.T) {
 	t.Parallel()
-	l := team.Layout{
-		Workspaces: []herdr.WorkspaceInfo{
-			{WorkspaceID: "wJ", Label: "◆ boss"},
-			{WorkspaceID: "wN", Label: "◆ coders"},
-			{WorkspaceID: "wY", Label: "◆ qa"},
-			{WorkspaceID: "w12", Label: "◆ herdr"},
-			{WorkspaceID: "w13", Label: "◆ precheck"},
-			{WorkspaceID: "w2", Label: "notes"},
-		},
-		Panes: []herdr.PaneInfo{
-			p("wJ:p1", "wJ", "working"), p("wN:p1", "wN", "working"), p("wN:p2", "wN", "blocked"), shell("wN:p3", "wN"),
-			p("wY:p1", "wY", "done"), shell("w12:p1", "w12"), p("w2:p1", "w2", "working"),
-		},
-	}
+	l := teamOf([]herdr.PaneInfo{
+		inTeam(p("wJ:p1", "", "working"), "boss"), inTeam(p("wN:p1", "", "working"), "coder-1"),
+		inTeam(p("wN:p2", "", "blocked"), "coder-2"), inTeam(shell("wN:p3", ""), "coder-2"),
+		inTeam(p("wY:p1", "", "done"), "qa-1"), inTeam(shell("w12:p1", ""), "notes"),
+		p("w2:p1", "w2", "working"), p("w13:p1", "w13", "working"),
+	}, "precheck-1")
+	// A second team, assay, with only its boss's tab, and a plain workspace.
+	l.Workspaces = append(l.Workspaces, herdr.WorkspaceInfo{WorkspaceID: "w13", Label: "assay"}, herdr.WorkspaceInfo{WorkspaceID: "w2", Label: "notes"})
+	l.Tabs = append(l.Tabs, herdr.TabInfo{TabID: "w13:t1", WorkspaceID: "w13", Label: "as-boss"})
+	l.Panes[len(l.Panes)-1].TabID = "w13:t1"
 
 	assert.Equal(t, []team.Token{
 		{Target: team.Target{WorkspaceID: "w13"}, Value: "0 agents · 0 working · 0 ready"},
-		{Target: team.Target{WorkspaceID: "wN"}, Value: "3 agents · 1 working · 0 ready · 1 blocked"},
-		{Target: team.Target{WorkspaceID: "wY"}, Value: "1 agent · 0 working · 0 ready"},
-	}, team.Tokens(team.Build(l, team.Spaces{Project: "agentisan"}, nil)))
+		{Target: liveTarget, Value: "4 agents · 1 working · 0 ready · 1 blocked"},
+	}, team.Tokens(team.Build(l, team.Resolvers{liveTeam, team.Tabs{Project: "assay", Short: "as"}}, nil)))
 	assert.Empty(t, team.Tokens(team.Model{}), "no model, no tokens")
 }
 

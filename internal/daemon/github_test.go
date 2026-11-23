@@ -23,13 +23,13 @@ import (
 )
 
 // ghConfig writes a config dir with project agentisan, coloured, on
-// abanna/herdr-agentisan, the ◆ spaces' project, and project other, a tabs
+// abanna/herdr-agentisan, fullTeam's tabs team, and project other, a tabs
 // team, on acme/other.
 func ghConfig(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	body := "schema_version = 1\n[spaces]\nproject = \"agentisan\"\n" +
-		"[projects.agentisan]\nrepo = \"~/Development/agentisan\"\ncolor = \"#7c3aed\"\ngithub = \"abanna/herdr-agentisan\"\n" +
+	body := "schema_version = 1\n" +
+		"[projects.agentisan]\nrepo = \"~/Development/agentisan\"\nshort = \"ag\"\ncolor = \"#7c3aed\"\ngithub = \"abanna/herdr-agentisan\"\n" +
 		"[projects.other]\nrepo = \"/elsewhere\"\nshort = \"o\"\ngithub = \"acme/other\"\n"
 	require.NoError(t, os.WriteFile(filepath.Join(dir, settings.FileName), []byte(body), 0o600))
 	return dir
@@ -104,9 +104,7 @@ func TestSnapshotCarriesTheGitHubHeader(t *testing.T) {
 func TestSnapshotHeaderWithoutAColour(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	cfg := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(cfg, settings.FileName),
-		[]byte("schema_version = 1\n[projects.app]\nrepo = \"/x\"\ngithub = \"acme/app\"\n"), 0o600))
+	cfg := liveConfig(t, "github = \"acme/app\"\n")
 	f := ghtest.New(t)
 	dir := shortDir(t)
 	serving(t, ghOpts(t, dir, th, cfg, f, nil), th.fakeHerdr)
@@ -136,7 +134,7 @@ func TestGitHubPolledOncePerInterval(t *testing.T) {
 		var wg sync.WaitGroup
 		for range 40 {
 			wg.Go(func() {
-				s, err := daemon.Snapshot(t.Context(), sock)
+				s, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{Project: liveProject})
 				if assert.NoError(t, err) {
 					assert.True(t, hasHeader(s))
 				}
@@ -252,14 +250,15 @@ func TestGitHubNotCollected(t *testing.T) {
 	}
 	tests := map[string]struct {
 		config  func(t *testing.T) string
+		team    bool // the config names fullTeam
 		noGh    bool
 		wantLog string
 	}{
 		"no config":        {config: func(*testing.T) string { return "" }},
-		"no repo":          {config: noRepo},
-		"no gh":            {config: ghConfig, noGh: true, wantLog: "gh is not on the daemon's PATH"},
+		"no repo":          {config: noRepo, team: true},
+		"no gh":            {config: ghConfig, team: true, noGh: true, wantLog: "gh is not on the daemon's PATH"},
 		"a broken config":  {config: broken, wantLog: "the header reports no PRs or issues"},
-		"no gh, no repo":   {config: noRepo, noGh: true},
+		"no gh, no repo":   {config: noRepo, team: true, noGh: true},
 		"no gh, no config": {config: func(*testing.T) string { return "" }, noGh: true},
 	}
 	for name, tc := range tests {
@@ -277,9 +276,10 @@ func TestGitHubNotCollected(t *testing.T) {
 			o.Logger = zerolog.New(&logs)
 			serving(t, o, th.fakeHerdr)
 
-			got := served(t, socketPath(t, dir, th.path), anySnapshot)
 			polled(t, th.srv, 3)
-			assert.True(t, noPRs(got))
+			if tc.team {
+				assert.True(t, noPRs(served(t, socketPath(t, dir, th.path), anySnapshot)))
+			}
 			assert.Empty(t, f.Calls(t), "gh never ran")
 			if tc.wantLog != "" {
 				assert.Equal(t, 1, strings.Count(logs.String(), tc.wantLog), "logged once")
@@ -292,17 +292,15 @@ func TestGitHubNotCollected(t *testing.T) {
 
 // TestEachTeamCarriesItsOwnHeader: with every team snapshotted (A24), each
 // carries its own project's GitHub header (A29): the tabs team other gets
-// acme/other's, beside the ◆ spaces' agentisan with its own and its colour.
+// acme/other's, beside fullTeam's agentisan with its own and its colour.
 func TestEachTeamCarriesItsOwnHeader(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	ws, panes, agents := fullTeam()
+	ws, tabs, panes, agents := fullTeam()
 	th.layout(append(ws, herdr.WorkspaceInfo{WorkspaceID: "w30", Label: "other"}),
+		append(tabs, tabOf("w30:t1", "w30", "o-coder-1")),
 		append(panes, tabPane("w30:p1", "w30", "w30:t1", "claude", "idle", nil)),
 		append(agents, named("w30:p1", "o-coder-1")))
-	th.mu.Lock()
-	th.tabs = []map[string]any{tabOf("w30:t1", "w30", "o-coder-1")}
-	th.mu.Unlock()
 	f := recordedGh(t)
 	dir := shortDir(t)
 	serving(t, ghOpts(t, dir, th, ghConfig(t), f, nil), th.fakeHerdr)
@@ -318,27 +316,25 @@ func TestEachTeamCarriesItsOwnHeader(t *testing.T) {
 	assert.Equal(t, &snapshot.Project{PRs: recordedPRs(), Issues: new(14)}, other.Project)
 	assert.Contains(t, f.Args(t, "pr"), "--repo=acme/other")
 
-	spaces := served(t, sock, hasHeader)
-	assert.Equal(t, "agentisan", spaces.Team)
-	assert.Equal(t, &snapshot.Project{Color: "#7c3aed", PRs: recordedPRs(), Issues: new(14)}, spaces.Project)
+	team := served(t, sock, hasHeader)
+	assert.Equal(t, "agentisan", team.Team)
+	assert.Equal(t, &snapshot.Project{Color: "#7c3aed", PRs: recordedPRs(), Issues: new(14)}, team.Project)
 }
 
 // TestEachTeamCarriesOnlyItsOwnHeader: only the tabs team's project has a
 // repo, so a team given another project's header is caught: other carries
-// acme/other's, and the ◆ spaces' agentisan, with no repo, carries none.
+// acme/other's, and fullTeam's agentisan, with no repo, carries none.
 func TestEachTeamCarriesOnlyItsOwnHeader(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	ws, panes, agents := fullTeam()
+	ws, tabs, panes, agents := fullTeam()
 	th.layout(append(ws, herdr.WorkspaceInfo{WorkspaceID: "w30", Label: "other"}),
+		append(tabs, tabOf("w30:t1", "w30", "o-coder-1")),
 		append(panes, tabPane("w30:p1", "w30", "w30:t1", "claude", "idle", nil)),
 		append(agents, named("w30:p1", "o-coder-1")))
-	th.mu.Lock()
-	th.tabs = []map[string]any{tabOf("w30:t1", "w30", "o-coder-1")}
-	th.mu.Unlock()
 	cfg := t.TempDir()
-	body := "schema_version = 1\n[spaces]\nproject = \"agentisan\"\n" +
-		"[projects.agentisan]\nrepo = \"~/Development/agentisan\"\ncolor = \"#7c3aed\"\n" +
+	body := "schema_version = 1\n" +
+		"[projects.agentisan]\nrepo = \"~/Development/agentisan\"\nshort = \"ag\"\ncolor = \"#7c3aed\"\n" +
 		"[projects.other]\nrepo = \"/elsewhere\"\nshort = \"o\"\ngithub = \"acme/other\"\n"
 	require.NoError(t, os.WriteFile(filepath.Join(cfg, settings.FileName), []byte(body), 0o600))
 	f := recordedGh(t)
@@ -352,9 +348,9 @@ func TestEachTeamCarriesOnlyItsOwnHeader(t *testing.T) {
 	}, ready, 5*time.Millisecond, "other never carried its own header")
 	calls(t, f, 2)
 	polled(t, th.srv, 3)
-	spaces, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{})
+	team, err := daemon.SnapshotOf(t.Context(), sock, daemon.Selector{Project: liveProject})
 	require.NoError(t, err)
-	assert.Equal(t, "agentisan", spaces.Team)
-	assert.True(t, noPRs(spaces), "agentisan has no repo, so no header: %+v", spaces.Project)
-	assert.Equal(t, &snapshot.Project{Color: "#7c3aed"}, spaces.Project)
+	assert.Equal(t, "agentisan", team.Team)
+	assert.True(t, noPRs(team), "agentisan has no repo, so no header: %+v", team.Project)
+	assert.Equal(t, &snapshot.Project{Color: "#7c3aed"}, team.Project)
 }

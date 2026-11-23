@@ -17,21 +17,15 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/team"
 )
 
-// viewLayout is three teams and an outsider: the ◆ spaces, a group the
-// spaces' order does not name (zeta) and the ◆ herdr edit shell among them;
-// the herdr-agentisan tabs team, one of whose agents agent.list only names;
-// the assay tabs team, with a shell and no agent; and a plain workspace.
+// viewLayout is two teams and an outsider: the herdr-agentisan tabs team,
+// one of whose agents agent.list only names; the assay tabs team, with a
+// shell and no agent; and a plain workspace.
 func viewLayout() (team.Layout, team.Resolvers) {
 	pane := func(id, ws, tab, agent, status string) herdr.PaneInfo {
 		return herdr.PaneInfo{PaneID: id, WorkspaceID: ws, TabID: tab, Agent: agent, AgentStatus: status}
 	}
 	l := team.Layout{
 		Workspaces: []herdr.WorkspaceInfo{
-			{WorkspaceID: "wJ", Label: "◆ boss"},
-			{WorkspaceID: "wN", Label: "◆ coders"},
-			{WorkspaceID: "wY", Label: "◆ qa"},
-			{WorkspaceID: "wZ", Label: "◆ zeta"},
-			{WorkspaceID: "w12", Label: "◆ herdr"},
 			{WorkspaceID: "w14", Label: "herdr-agentisan"},
 			{WorkspaceID: "w20", Label: "assay"},
 			{WorkspaceID: "w2", Label: "notes"},
@@ -44,10 +38,6 @@ func viewLayout() (team.Layout, team.Resolvers) {
 			{TabID: "w20:t1", WorkspaceID: "w20", Label: "as-coder-1"},
 		},
 		Panes: []herdr.PaneInfo{
-			pane("wJ:p1", "wJ", "", "claude", "working"),
-			pane("wN:p1", "wN", "", "claude", "working"), pane("wN:p2", "wN", "", "", "unknown"), pane("wN:p3", "wN", "", "claude", "blocked"),
-			pane("wY:p1", "wY", "", "codex", "idle"), pane("wZ:p1", "wZ", "", "claude", "idle"),
-			pane("w12:p1", "w12", "", "claude", "idle"),
 			pane("w14:p1", "w14", "w14:t1", "claude", "working"), pane("w14:p2", "w14", "w14:t2", "claude", "working"),
 			pane("w14:p3", "w14", "w14:t3", "claude", "done"), pane("w14:p4", "w14", "w14:t4", "", "unknown"),
 			pane("w20:p1", "w20", "w20:t1", "", "unknown"),
@@ -55,7 +45,31 @@ func viewLayout() (team.Layout, team.Resolvers) {
 		},
 		Agents: []herdr.AgentInfo{{Name: "ha-coder-2", PaneID: "w14:p4"}},
 	}
-	return l, team.Resolvers{team.Spaces{Project: "agentisan"}, team.Tabs{Project: "herdr-agentisan", Short: "ha"}, team.Tabs{Project: "assay", Short: "as"}}
+	return l, team.Resolvers{team.Tabs{Project: "herdr-agentisan", Short: "ha"}, team.Tabs{Project: "assay", Short: "as"}}
+}
+
+// spacesViewLayout is viewLayout beside the ◆ spaces, for the tests of the
+// ◆ spaces alone: a group the spaces' order does not name (zeta) and the ◆
+// herdr edit shell among them.
+func spacesViewLayout() (team.Layout, team.Resolvers) {
+	l, r := viewLayout()
+	pane := func(id, ws, agent, status string) herdr.PaneInfo {
+		return herdr.PaneInfo{PaneID: id, WorkspaceID: ws, Agent: agent, AgentStatus: status}
+	}
+	l.Workspaces = append([]herdr.WorkspaceInfo{
+		{WorkspaceID: "wJ", Label: "◆ boss"},
+		{WorkspaceID: "wN", Label: "◆ coders"},
+		{WorkspaceID: "wY", Label: "◆ qa"},
+		{WorkspaceID: "wZ", Label: "◆ zeta"},
+		{WorkspaceID: "w12", Label: "◆ herdr"},
+	}, l.Workspaces...)
+	l.Panes = append([]herdr.PaneInfo{
+		pane("wJ:p1", "wJ", "claude", "working"),
+		pane("wN:p1", "wN", "claude", "working"), pane("wN:p2", "wN", "", "unknown"), pane("wN:p3", "wN", "claude", "blocked"),
+		pane("wY:p1", "wY", "codex", "idle"), pane("wZ:p1", "wZ", "claude", "idle"),
+		pane("w12:p1", "w12", "claude", "idle"),
+	}, l.Panes...)
+	return l, append(team.Resolvers{team.Spaces{Project: "agentisan"}}, r...)
 }
 
 // blockedOr is the filter of a team holding workspaces: those workspaces,
@@ -70,20 +84,15 @@ func blockedOr(workspaces ...[]string) *herdr.ViewFilter {
 }
 
 // TestView is the agents panel's view of the team the focused workspace
-// belongs to (ADR-001 A28 addendum): every workspace the team holds, ◆ herdr
-// included, or a blocked agent anywhere, labelled with the project's name
-// and sorted by the team's own order key, so its panes come first. Outside
-// every team there is no view.
+// belongs to (ADR-001 A28 addendum): every workspace the team holds, or a
+// blocked agent anywhere, labelled with the project's name and sorted by
+// the team's own order key, so its panes come first. Outside every team
+// there is no view.
 func TestView(t *testing.T) {
 	t.Parallel()
 	l, r := viewLayout()
 	m := team.Build(l, r, nil)
 
-	spaces := herdr.AgentView{
-		Label:  "agentisan",
-		Filter: blockedOr([]string{"w12", "wJ", "wN", "wY", "wZ"}),
-		Sort:   []herdr.ViewSort{herdr.ByToken("order-spaces")},
-	}
 	tabs := herdr.AgentView{
 		Label:  "herdr-agentisan",
 		Filter: blockedOr([]string{"w14"}),
@@ -94,11 +103,7 @@ func TestView(t *testing.T) {
 		want      herdr.AgentView
 		ok        bool
 	}{
-		"a group space":                {workspace: "wN", want: spaces, ok: true},
-		"the boss space":               {workspace: "wJ", want: spaces, ok: true},
-		"the edit shell is the team's": {workspace: "w12", want: spaces, ok: true},
-		"a group the order leaves out": {workspace: "wZ", want: spaces, ok: true},
-		"a tabs team's workspace":      {workspace: "w14", want: tabs, ok: true},
+		"a tabs team's workspace": {workspace: "w14", want: tabs, ok: true},
 		"a team with no agent yet": {workspace: "w20", ok: true, want: herdr.AgentView{
 			Label: "assay", Filter: blockedOr([]string{"w20"}), Sort: []herdr.ViewSort{herdr.ByToken("order_as")},
 		}},
@@ -115,8 +120,33 @@ func TestView(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
-	_, ok := team.View(team.Model{}, "wN")
+	_, ok := team.View(team.Model{}, "w14")
 	assert.False(t, ok, "no team, no view")
+}
+
+// TestSpacesView is TestView on the ◆ spaces: every space the team holds,
+// ◆ boss and the ◆ herdr edit shell included, one whose group the order
+// leaves out too, has the spaces' view, under order-spaces.
+func TestSpacesView(t *testing.T) {
+	t.Parallel()
+	l, r := spacesViewLayout()
+	m := team.Build(l, r, nil)
+
+	spaces := herdr.AgentView{
+		Label:  "agentisan",
+		Filter: blockedOr([]string{"w12", "wJ", "wN", "wY", "wZ"}),
+		Sort:   []herdr.ViewSort{herdr.ByToken("order-spaces")},
+	}
+	for name, workspace := range map[string]string{
+		"a group space":                "wN",
+		"the boss space":               "wJ",
+		"the edit shell is the team's": "w12",
+		"a group the order leaves out": "wZ",
+	} {
+		got, ok := team.View(m, workspace)
+		assert.True(t, ok, name)
+		assert.Equal(t, spaces, got, name)
+	}
 }
 
 // TestViewLabel: the spaces of a configuration that names no [spaces]
@@ -213,11 +243,39 @@ func TestOrderKey(t *testing.T) {
 // team under the team's key, beside its ctx display: the boss first, then
 // the groups in the order the snapshot shows them, each group's workers in
 // model order. Only agent panes count, so the places run without gaps; a
-// shell, the edit shell's panes and an agent outside every team get no key,
-// and a team with no agent pane, assay, gives none.
+// shell and an agent outside every team get no key, and a team with no
+// agent pane, assay, gives none.
 func TestSidebarTokens(t *testing.T) {
 	t.Parallel()
 	l, r := viewLayout()
+	m := team.Build(l, r, nil)
+
+	got := map[string]map[string]string{}
+	for _, pt := range team.SidebarTokens(m, l, nil, time.Time{}) {
+		got[pt.PaneID] = pt.Tokens
+	}
+	ctx := map[string]string{"ctx_ok": "ctx  --", "ctx_warn": "", "ctx_hot": "", "stage_now": "", "stage_old": ""}
+	with := func(key, value string) map[string]string {
+		out := map[string]string{key: value}
+		maps.Copy(out, ctx)
+		return out
+	}
+	assert.Equal(t, map[string]map[string]string{
+		"w14:p1": with("order_ha", "000"),
+		"w14:p2": with("order_ha", "001"),
+		"w14:p4": with("order_ha", "002"),
+		"w14:p3": with("order_ha", "003"),
+		"w2:p1":  ctx,
+	}, got)
+}
+
+// TestSpacesSidebarTokens is TestSidebarTokens beside the ◆ spaces: the spaces' boss first, then
+// their groups in v12's order, a group it leaves out (zeta) last, under
+// order-spaces; a shell and the ◆ herdr edit shell's agent get no key; the
+// tabs teams' places are unchanged.
+func TestSpacesSidebarTokens(t *testing.T) {
+	t.Parallel()
+	l, r := spacesViewLayout()
 	m := team.Build(l, r, nil)
 
 	got := map[string]map[string]string{}

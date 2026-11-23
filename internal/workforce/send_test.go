@@ -12,17 +12,12 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
-// sendConfig is teamConfig plus the ◆ spaces project, agentisan.
+// sendConfig is teamConfig plus a second tabs team, assay.
 const sendConfig = teamConfig + `
-[spaces]
-project = "agentisan"
-
-[projects.agentisan]
+[projects.assay]
 repo = "REPO"
-
-[projects.agentisan.groups.coders]
-workers = 1
-slots = 2
+short = "as"
+layout = "tabs"
 `
 
 // terminal is the terminal pane shows.
@@ -39,16 +34,17 @@ func (f *fixture) terminal(t *testing.T, pane string) string {
 // worker a live row binds to the caller pane's terminal, else the boss of
 // the team whose boss place holds the pane, else the pane by its terminal;
 // with no pane confirmed, the live worker HERDR_AGENTISAN_WORKER names. boss
-// is the sender's own team's boss: a tabs team's <short>-boss, the ◆
-// spaces' boss.
+// is the sender's own team's boss, its <short>-boss, another team's
+// included.
 func TestSendFindsTheSenderAndTheRecipient(t *testing.T) {
 	t.Parallel()
 	f := newFixture(t, sendConfig)
 	coder := f.worker(t, "ha-coder-1", "coder")
 	scratch := f.h.addTab(f.ws, "scratch", "", "")
 	notes := f.h.addTab(f.h.addWorkspace("notes"), "notes", "claude", "idle")
-	spacesBoss := f.h.addTab(f.h.addWorkspace("◆ boss"), "1", "claude", "working")
-	spacesCoder := f.h.addTab(f.h.addWorkspace("◆ coders"), "1", "claude", "idle")
+	assay := f.h.addWorkspace("assay")
+	asBoss := f.h.addTab(assay, "as-boss", "claude", "working")
+	asPane := f.h.addTab(assay, "as-coder-1", "claude", "idle")
 	inBossTab := f.h.addPane(f.boss, "claude", "idle") // a split in the boss tab
 	f.bindRow(t, "ha-coder-7", "coder", inBossTab)
 	lost := f.worker(t, "ha-coder-2", "coder")
@@ -60,7 +56,7 @@ func TestSendFindsTheSenderAndTheRecipient(t *testing.T) {
 	worker := workforce.Party{Kind: store.KindWorker, ID: "ha-coder-1"}
 	named := func(id string) workforce.Party { return workforce.Party{Kind: store.KindWorker, ID: id} }
 	haBoss := workforce.Party{Kind: store.KindBoss, ID: "ha-boss"}
-	spaces := workforce.Party{Kind: store.KindBoss, ID: "boss"}
+	theirBoss := workforce.Party{Kind: store.KindBoss, ID: "as-boss"}
 	pane := func(p string) workforce.Party { return workforce.Party{Kind: store.KindPane, ID: f.terminal(t, p)} }
 	tests := map[string]struct {
 		req      workforce.SendRequest
@@ -70,9 +66,9 @@ func TestSendFindsTheSenderAndTheRecipient(t *testing.T) {
 		"the boss's pane, to a worker":         {workforce.SendRequest{To: "ha-coder-1", CallerPane: f.boss}, haBoss, worker},
 		"a team pane no row binds, to boss":    {workforce.SendRequest{To: "boss", CallerPane: scratch}, pane(scratch), haBoss},
 		"a pane in no team, to a boss by name": {workforce.SendRequest{To: "ha-boss", CallerPane: notes}, pane(notes), haBoss},
-		"◆ boss, to boss":                      {workforce.SendRequest{To: "boss", CallerPane: spacesBoss}, spaces, spaces},
-		"a ◆ space's pane, to boss":            {workforce.SendRequest{To: "boss", CallerPane: spacesCoder}, pane(spacesCoder), spaces},
-		"◆ boss, to another team's boss":       {workforce.SendRequest{To: "ha-boss", CallerPane: spacesBoss}, spaces, haBoss},
+		"another team's boss, to boss":         {workforce.SendRequest{To: "boss", CallerPane: asBoss}, theirBoss, theirBoss},
+		"another team's pane, to boss":         {workforce.SendRequest{To: "boss", CallerPane: asPane}, pane(asPane), theirBoss},
+		"a boss, to another team's boss":       {workforce.SendRequest{To: "ha-boss", CallerPane: asBoss}, theirBoss, haBoss},
 		"no pane, the worker's variable":       {workforce.SendRequest{To: "boss", Worker: "ha-coder-1"}, worker, haBoss},
 		"a pane herdr lists nowhere":           {workforce.SendRequest{To: "boss", CallerPane: "w99:p1", Worker: "ha-coder-1"}, worker, haBoss},
 		"a confirmed pane beats the variable":  {workforce.SendRequest{To: "boss", CallerPane: scratch, Worker: "ha-coder-1"}, pane(scratch), haBoss},
@@ -82,6 +78,41 @@ func TestSendFindsTheSenderAndTheRecipient(t *testing.T) {
 		"no pane, a starting worker's":         {workforce.SendRequest{To: "boss", Worker: "ha-coder-3"}, named("ha-coder-3"), haBoss},
 		"a Codex worker, to its boss":          {workforce.SendRequest{To: "boss", CallerPane: codex.PaneID}, named("ha-coder-4"), haBoss},
 		"the boss's pane, to a Codex worker":   {workforce.SendRequest{To: "ha-coder-4", CallerPane: f.boss}, haBoss, named("ha-coder-4")},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			tc.req.Body = "hello"
+			got, err := f.svc.Send(t.Context(), tc.req)
+			require.NoError(t, err)
+			assert.Equal(t, tc.from, got.From)
+			assert.Equal(t, tc.to, got.To)
+			assert.Equal(t, store.MessageQueued, got.State)
+			m, err := f.st.Message(t.Context(), got.ID)
+			require.NoError(t, err)
+			assert.Equal(t, store.Address(tc.from), m.From)
+			assert.Equal(t, store.Address(tc.to), m.To)
+			assert.Equal(t, "hello", m.Body)
+		})
+	}
+}
+
+// TestSendOnTheSpaces is TestSendFindsTheSenderAndTheRecipient on the ◆
+// spaces: ◆ boss sends as the spaces' boss, boss, and boss from it or from
+// a ◆ space reaches it; ◆ boss reaches a tabs team's boss by name.
+func TestSendOnTheSpaces(t *testing.T) {
+	t.Parallel()
+	f := newFixture(t, teamConfig)
+	spacesBoss := f.h.addTab(f.h.addWorkspace("◆ boss"), "1", "claude", "working")
+	spacesCoder := f.h.addTab(f.h.addWorkspace("◆ coders"), "1", "claude", "idle")
+	haBoss := workforce.Party{Kind: store.KindBoss, ID: "ha-boss"}
+	spaces := workforce.Party{Kind: store.KindBoss, ID: "boss"}
+	tests := map[string]struct {
+		req      workforce.SendRequest
+		from, to workforce.Party
+	}{
+		"◆ boss, to boss":                {workforce.SendRequest{To: "boss", CallerPane: spacesBoss}, spaces, spaces},
+		"a ◆ space's pane, to boss":      {workforce.SendRequest{To: "boss", CallerPane: spacesCoder}, workforce.Party{Kind: store.KindPane, ID: f.terminal(t, spacesCoder)}, spaces},
+		"◆ boss, to another team's boss": {workforce.SendRequest{To: "ha-boss", CallerPane: spacesBoss}, spaces, haBoss},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

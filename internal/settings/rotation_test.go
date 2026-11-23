@@ -79,7 +79,7 @@ func TestRotationsExpandTheRepo(t *testing.T) {
 		"relative":      {repo: "r", env: map[string]string{"HOME": home}, want: []int{55, 65, 75}, wantIn: "not an absolute path"},
 	} {
 		dir := t.TempDir()
-		writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \""+tc.repo+"\"\n", "")
+		writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \""+tc.repo+"\"\nshort = \"ap\"\n", "")
 		got, err := settings.Rotations(settings.LoadOptions{ConfigDir: dir, LookupEnv: envOf(tc.env)})
 		require.NoError(t, err, name)
 		assert.Equal(t, tc.want, got.For("app").For(""), name)
@@ -110,7 +110,7 @@ func TestRotationsWithoutAFile(t *testing.T) {
 func TestRotationsNeedNoBundle(t *testing.T) {
 	t.Parallel()
 	repo, dir := t.TempDir(), t.TempDir()
-	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\n", repo)
+	writeFile(t, dir, settings.FileName, "schema_version = 1\n[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n", repo)
 	writeFile(t, repo, settings.RepoFileName, "schema_version = 1\n[rotation]\nthresholds = [20, 30, 40]\n", repo)
 
 	got, err := settings.Rotations(settings.LoadOptions{ConfigDir: dir, LookupEnv: envOf(nil)})

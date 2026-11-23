@@ -25,6 +25,8 @@ const (
 	// kindStringOrList is a string or a list of strings, kept as written: a
 	// routing override's one binding, or one per provider (A63).
 	kindStringOrList
+	kindRetiredSpaces
+	kindLayout
 )
 
 // node describes one key path of the profile. Tables and name maps are the
@@ -46,7 +48,7 @@ func leafOf(k kind) *node { return &node{kind: k} }
 
 // profileSchema is the body of a profile: a [projects.<name>] table and a
 // repo file are checked against it. The shared file's top level and each
-// --set are checked against sharedSchema, which adds [spaces] to it.
+// --set are checked against sharedSchema.
 var profileSchema = &node{kind: kindTable, fields: map[string]*node{
 	"repo":   leafOf(kindString),
 	"color":  leafOf(kindString),
@@ -70,6 +72,21 @@ var profileSchema = &node{kind: kindTable, fields: map[string]*node{
 	rotationKey: rotationSchema(),
 }}
 
+const retiredSpacesHelp = "the ◆ spaces are retired (NERD-5670). Remove this entry. Every team is a tabs team"
+
+// sharedSchema is the shared file's top level and each --set: a profile body
+// plus machine-wide tables. The retired [spaces] key gets a migration error.
+var sharedSchema = func() *node {
+	fields := maps.Clone(profileSchema.fields)
+	fields["spaces"] = leafOf(kindRetiredSpaces)
+	fields["telemetry"] = telemetrySchema
+	fields["tests"] = testsSchema
+	fields["debugger"] = debuggerSchema
+	fields["notices"] = noticesSchema
+	fields["routing"] = routingSchema
+	return &node{kind: kindTable, fields: fields}
+}()
+
 // rotationSchema is the context thresholds a project, or one of its groups,
 // sets (A33).
 func rotationSchema() *node {
@@ -86,7 +103,7 @@ func rotationSchema() *node {
 var projectSchema = func() *node {
 	fields := maps.Clone(profileSchema.fields)
 	fields["short"] = leafOf(kindString)
-	fields["layout"] = leafOf(kindString)
+	fields["layout"] = leafOf(kindLayout)
 	fields["notices"] = noticesSchema
 	fields["tests"] = testsSchema
 	return &node{kind: kindTable, fields: fields}
@@ -139,6 +156,8 @@ func (s *source) normalize(n *node, raw any, path string) (any, error) {
 		}
 	}
 	switch n.kind {
+	case kindRetiredSpaces:
+		return nil, fmt.Errorf("%s: %w: %s", s.at(path), ErrInvalid, retiredSpacesHelp)
 	case kindTable:
 		return s.table(n, raw, path)
 	case kindNames:
@@ -149,6 +168,19 @@ func (s *source) normalize(n *node, raw any, path string) (any, error) {
 			return nil, fmt.Errorf("%s: %w", s.at(path), err)
 		}
 		return ref, nil
+	case kindLayout:
+		layout, ok := asString(raw)
+		if !ok {
+			return nil, s.wrongType(path, "a string", raw)
+		}
+		switch layout {
+		case LayoutTabs:
+			return layout, nil
+		case "spaces":
+			return nil, fmt.Errorf("%s: %w: %s", s.at(path), ErrInvalid, retiredSpacesHelp)
+		default:
+			return nil, fmt.Errorf("%s: %w: %s must be %q", s.at(path), ErrInvalid, FormatValue(layout), LayoutTabs)
+		}
 	case kindString:
 		return scalarOf(s, raw, path, "a string", asString)
 	case kindInt:

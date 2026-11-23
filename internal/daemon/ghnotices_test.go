@@ -67,7 +67,7 @@ func merged(oid string) string {
 
 const noIssues = `{"data":{"repository":{"issues":{"totalCount":0}}}}`
 
-// ghNotices is a daemon whose ◆ spaces' project, agentisan, is on
+// ghNotices is a daemon whose tabs team, agentisan, is on
 // abanna/herdr-agentisan, its notices sent as they come, collecting with f
 // on ticks and saying each round's end on rounds, its log in logs. It runs
 // in dir, so a second one in the same dir reopens the first's state.db.
@@ -88,7 +88,7 @@ type ghNotices struct {
 func newGHNotices(t *testing.T, notices string) *ghNotices {
 	t.Helper()
 	cfg := t.TempDir()
-	body := "schema_version = 1\n[spaces]\nproject = \"agentisan\"\n[projects.agentisan]\nrepo = \"/x\"\ngithub = \"abanna/herdr-agentisan\"\n[notices]\ngap = 0\n" + notices
+	body := "schema_version = 1\n[projects.agentisan]\nrepo = \"/x\"\nshort = \"ag\"\nlayout = \"tabs\"\ngithub = \"abanna/herdr-agentisan\"\n[notices]\ngap = 0\n" + notices
 	require.NoError(t, os.WriteFile(filepath.Join(cfg, settings.FileName), []byte(body), 0o600))
 	return &ghNotices{th: newTeamHerdr(t), f: ghtest.New(t), ticks: make(chan time.Time), rounds: make(chan struct{}), dir: shortDir(t), cfg: cfg, logs: &lockedLog{}}
 }

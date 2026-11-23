@@ -38,7 +38,7 @@ func TestDaemonRunFindsGhOnItsPATH(t *testing.T) {
 	t.Setenv("FAKE_GH_DIR", f.Dir)
 	cfg := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(cfg, settings.FileName),
-		[]byte("schema_version = 1\n[projects.app]\nrepo = \"/x\"\ngithub = \"acme/app\"\n"), 0o600))
+		[]byte("schema_version = 1\n[projects.app]\nrepo = \"/x\"\nshort = \"ap\"\nlayout = \"tabs\"\ngithub = \"acme/app\"\n"), 0o600))
 
 	for name, path := range map[string]string{"gh on its PATH": filepath.Dir(f.Bin), "no gh on its PATH": t.TempDir(), "no PATH": "-"} {
 		t.Run(name, func(t *testing.T) {

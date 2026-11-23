@@ -23,10 +23,10 @@ func stamped(ctx string, at time.Time) map[string]string {
 func TestPaneReadsCtxAt(t *testing.T) {
 	t.Parallel()
 	_, got := modelPanes(
-		pane("wN:p1", "wN", "codex", "idle", stamped("70", modelAt)),
-		pane("wN:p2", "wN", "", "unknown", stamped("70", modelAt)),
-		pane("wN:p3", "wN", "codex", "idle", map[string]string{report.CtxKey: "70", report.CtxAtKey: "1761066000.5"}),
-		pane("wN:p4", "wN", "codex", "idle", map[string]string{report.CtxKey: "70"}),
+		inTeam(pane("wN:p1", "", "codex", "idle", stamped("70", modelAt)), "coder-1"),
+		inTeam(pane("wN:p2", "", "", "unknown", stamped("70", modelAt)), "coder-1"),
+		inTeam(pane("wN:p3", "", "codex", "idle", map[string]string{report.CtxKey: "70", report.CtxAtKey: "1761066000.5"}), "coder-1"),
+		inTeam(pane("wN:p4", "", "codex", "idle", map[string]string{report.CtxKey: "70"}), "coder-1"),
 	)
 	assert.True(t, modelAt.Equal(got["wN:p1"].CtxAt))
 	assert.Equal(t, "70", got["wN:p1"].Ctx)
@@ -65,14 +65,14 @@ func TestGateCtx(t *testing.T) {
 	t.Parallel()
 	start := modelAt.Add(-time.Minute)
 	m, _ := modelPanes(
-		pane("wJ:p1", "wJ", "codex", "working", stamped("88", start.Add(-time.Hour))),
-		pane("wN:p1", "wN", "codex", "idle", stamped("70", start.Add(-time.Hour))),
-		pane("wN:p2", "wN", "claude", "idle", stamped("40", modelAt)),
-		pane("wN:p3", "wN", "codex", "idle", stamped("30", start.Add(-time.Hour))),
+		inTeam(pane("wJ:p1", "", "codex", "working", stamped("88", start.Add(-time.Hour))), "boss"),
+		inTeam(pane("wN:p1", "", "codex", "idle", stamped("70", start.Add(-time.Hour))), "coder-1"),
+		inTeam(pane("wN:p2", "", "claude", "idle", stamped("40", modelAt)), "coder-1"),
+		inTeam(pane("wN:p3", "", "codex", "idle", stamped("30", start.Add(-time.Hour))), "coder-1"),
 	)
 	team.GateCtx(&m, map[string]time.Time{"wJ:p1": start, "wN:p1": start, "wN:p2": start})
 
-	s := team.Snapshot(m, "", modelAt, nil, nil)
+	s := team.Snapshot(m, liveProject, modelAt, nil, nil)
 	require.NotNil(t, s.Boss)
 	assert.Nil(t, s.Boss.Ctx, "the boss's too")
 	ctxs := map[string]*int{}
@@ -93,14 +93,12 @@ func TestGateCtx(t *testing.T) {
 func TestSidebarTokensShowTheGatedCtx(t *testing.T) {
 	t.Parallel()
 	start := modelAt.Add(-time.Minute)
-	l := team.Layout{
-		Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "wN", Label: "◆ coders"}, {WorkspaceID: "w2", Label: "notes"}},
-		Panes: []herdr.PaneInfo{
-			pane("wN:p1", "wN", "codex", "idle", stamped("70", start.Add(-time.Hour))),
-			pane("w2:p1", "w2", "codex", "idle", stamped("70", start.Add(-time.Hour))),
-		},
-	}
-	m := team.Build(l, team.Spaces{}, nil)
+	l := teamOf([]herdr.PaneInfo{
+		inTeam(pane("wN:p1", "", "codex", "idle", stamped("70", start.Add(-time.Hour))), "coder-1"),
+		pane("w2:p1", "w2", "codex", "idle", stamped("70", start.Add(-time.Hour))),
+	})
+	l.Workspaces = append(l.Workspaces, herdr.WorkspaceInfo{WorkspaceID: "w2", Label: "notes"})
+	m := team.Build(l, liveTeam, nil)
 	team.GateCtx(&m, map[string]time.Time{"wN:p1": start, "w2:p1": start})
 
 	bands := map[string]map[string]string{}
@@ -117,11 +115,11 @@ func TestSidebarTokensShowTheGatedCtx(t *testing.T) {
 func TestStartClock(t *testing.T) {
 	t.Parallel()
 	start := modelAt.Add(-time.Minute)
-	boss := pane("wJ:p1", "wJ", "claude", "working", nil)
+	boss := inTeam(pane("wJ:p1", "", "claude", "working", nil), "boss")
 	boss.TerminalID = "term_boss"
-	p1 := pane("wN:p1", "wN", "codex", "idle", nil)
+	p1 := inTeam(pane("wN:p1", "", "codex", "idle", nil), "coder-1")
 	p1.TerminalID = "term_a"
-	m, _ := modelPanes(boss, p1, pane("wN:p2", "wN", "codex", "idle", nil))
+	m, _ := modelPanes(boss, p1, inTeam(pane("wN:p2", "", "codex", "idle", nil), "coder-1"))
 
 	c := &team.StartClock{}
 	c.Observe(m, map[string]time.Time{"wJ:p1": start.Add(-time.Hour), "wN:p1": start, "w9:p9": start})

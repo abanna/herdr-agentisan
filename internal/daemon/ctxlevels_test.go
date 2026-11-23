@@ -83,7 +83,7 @@ func TestCtxLevelsReachTheBoss(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			t.Parallel()
 			th := newTeamHerdr(t)
-			th.setAgents(named("wJ:p1", "boss"), named("wN:p1", "pee01"))
+			th.setAgents(named("wJ:p1", liveShort+"-boss"), named("wN:p1", "pee01"))
 			th.setPane("wJ:p1", "agent", kind)
 			th.setPane("wN:p1", "agent", kind)
 			th.setToken("w2:p1", "ctx", "90")
@@ -112,7 +112,7 @@ func TestCtxLevelsReachTheBoss(t *testing.T) {
 			}, lines, "each once; w2:p1, in no team, never")
 			assert.Equal(t, []herdr.Notification{
 				{Title: "agentisan: pee01 at 76% context", Body: "past the 75% ceiling; its boss is told to rotate it", Sound: "request"},
-				{Title: "agentisan: boss at 80% context", Body: "the boss is past the 75% ceiling and is told to hand off", Sound: "request"},
+				{Title: "agentisan: ag-boss at 80% context", Body: "the boss is past the 75% ceiling and is told to hand off", Sound: "request"},
 			}, toasts(t, th), "one toast per ceiling crossed")
 			assert.Equal(t, []string{
 				"wN:p1 worker soft 56 55 false false",
@@ -188,7 +188,7 @@ func TestCtxThresholdsFromTheRepoFile(t *testing.T) {
 	for name, tc := range map[string]struct {
 		repoFile, want string
 	}{
-		"its group's":                       {"[groups.coders]\nworkers = 1\nslots = 2\nrotation = { thresholds = [20, 40, 60] }\n", "pee01 is at 40% context (hard: 40%): rotate it now"},
+		"its group's":                       {"[groups.coder]\nworkers = 1\nslots = 2\nrotation = { thresholds = [20, 40, 60] }\n", "pee01 is at 40% context (hard: 40%): rotate it now"},
 		"not read":                          {"verify = [[\"x\"]]\n", "pee01 is at 40% context (soft: 35%): let it finish its unit, then rotate it"},
 		"the project's, from the repo file": {"[rotation]\nthresholds = [30, 35, 38]\n", "pee01 is at 40% context (ceiling: 38%): act now; the user has been alerted"},
 	} {
@@ -196,7 +196,7 @@ func TestCtxThresholdsFromTheRepoFile(t *testing.T) {
 			t.Parallel()
 			repo, cfg := t.TempDir(), t.TempDir()
 			require.NoError(t, os.WriteFile(filepath.Join(repo, settings.RepoFileName), []byte("schema_version = 1\n"+tc.repoFile), 0o600))
-			body := "schema_version = 1\n[notices]\ngap = 0\n[spaces]\nproject = \"agentisan\"\n[projects.agentisan]\nrepo = \"" + repo + "\"\n[projects.agentisan.rotation]\nthresholds = [35, 50, 70]\n"
+			body := "schema_version = 1\n[notices]\ngap = 0\n[projects.agentisan]\nrepo = \"" + repo + "\"\nshort = \"ag\"\nlayout = \"tabs\"\n[projects.agentisan.rotation]\nthresholds = [35, 50, 70]\n"
 			require.NoError(t, os.WriteFile(filepath.Join(cfg, settings.FileName), []byte(body), 0o600))
 			th := newTeamHerdr(t)
 			th.setAgents(named("wN:p1", "pee01"))
@@ -218,7 +218,7 @@ func TestCtxThresholdsWhenTheFileDoesNotResolve(t *testing.T) {
 	t.Parallel()
 	cfg := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(cfg, settings.FileName), []byte("schema_version = 1\n[rotation]\nthresholds = [1, 2]\n"), 0o600))
-	th := newTeamHerdr(t)
+	th := newSpacesHerdr(t)
 	th.setAgents(named("wN:p1", "pee01"))
 	th.setToken("wN:p1", "ctx", "56")
 	var logs lockedLog
@@ -259,7 +259,7 @@ func TestCtxLevelsAfterARestart(t *testing.T) {
 func TestCtxWatchIgnoresACodexCtxLeftBehind(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	th.setAgents(named("wJ:p1", "boss"), named("wN:p1", "pee01"))
+	th.setAgents(named("wJ:p1", liveShort+"-boss"), named("wN:p1", "pee01"))
 	th.setPane("wN:p1", "agent", nil)
 	th.setToken("wN:p1", "ctx", "70")
 	var logs lockedLog
@@ -281,9 +281,9 @@ func TestCtxWatchIgnoresACodexCtxLeftBehind(t *testing.T) {
 func TestCtxWatchACodexWithNoHooksTellsNothing(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
-	th.setAgents(named("wJ:p1", "boss"), named("wN:p1", "pee01"))
+	th.setAgents(named("wJ:p1", liveShort+"-boss"), named("wN:p1", "pee01"))
 	th.setPane("wN:p1", "agent", "codex")
-	th.setToken("wN:p1", "ctx", "") // liveSpaces gives it 40
+	th.setToken("wN:p1", "ctx", "") // liveTabs gives it 40
 	var logs lockedLog
 	_, rec := ctxRun(t, teamOpts(t, shortDir(t), th, noticesConfig(t, "gap = 0\n")), &logs)
 
