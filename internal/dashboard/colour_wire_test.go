@@ -591,7 +591,8 @@ func TestDashboardContrastSweep(t *testing.T) {
 				// Hue ladders (NERD-5719) take a status or stage ink along its own
 				// hue. No stock slot of green or red reaches 4.5:1 on backgrounds
 				// of relative luminance 0.159 to 0.284, so there the two share the
-				// neutral. A stated limit, which the owner has yet to rule on.
+				// neutral. A stated limit: the owner ruled on 2026-11-24 07:08 that the
+				// floor stays and a non-colour cue is a separate item (NERD-5792).
 				require.Equal(t, sameBlockedReady, sameSlot["red/green"], "blocked and ready stage inks")
 			}
 		})
