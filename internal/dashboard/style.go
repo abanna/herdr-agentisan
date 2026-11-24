@@ -46,13 +46,15 @@ type themedColor struct {
 	indexed             [2]ansi.IndexedColor
 	legacy              color.Color
 	lightSelectionIndex ansi.IndexedColor
+	ladder              []ansi.IndexedColor
 }
 
-func themeColor(dark, light, legacy string, darkIndex, lightIndex, lightSelectionIndex ansi.IndexedColor) themedColor {
+func themeColor(dark, light, legacy string, darkIndex, lightIndex, lightSelectionIndex ansi.IndexedColor, ladder ...ansi.IndexedColor) themedColor {
 	c := themedColor{
 		rgb:                 [2]color.Color{lipgloss.Color(dark), lipgloss.Color(light)},
 		indexed:             [2]ansi.IndexedColor{darkIndex, lightIndex},
 		lightSelectionIndex: lightSelectionIndex,
+		ladder:              ladder,
 	}
 	if legacy != "" {
 		c.legacy = lipgloss.Color(legacy)
@@ -62,14 +64,18 @@ func themeColor(dark, light, legacy string, darkIndex, lightIndex, lightSelectio
 
 // Indexed paints are hand-picked xterm colours. A zero selected index
 // inherits the light ink. The legacy column is the original ANSI16 paint.
+// The trailing slots are the role's hue ladder, in the order tried once
+// neither configured shade reaches 4.5:1: slots from 22 up of the role's own
+// hue, darker or lighter than the shades. Red has 52 and 217, green 157 and
+// 193; a hue with no slot that helps on a background falls to the neutral.
 var palette = [colourRoles]themedColor{
 	colText:          themeColor("#eef2ff", "#17233b", "", 255, 234, 0),
 	colDim:           themeColor("#becbe3", "#3c4c69", "#6c7086", 153, 239, 0),
-	colGreen:         themeColor("#8ae99f", "#14532d", "#50fa7b", 120, 22, 0),
-	colYellow:        themeColor("#f3de82", "#644600", "#f1fa8c", 222, 58, 0),
-	colOrange:        themeColor("#ffba83", "#783713", "#ffb86c", 216, 94, 52),
-	colRed:           themeColor("#ff989f", "#870000", "#ff5555", 210, 88, 0),
-	colCyan:          themeColor("#9ee6fa", "#125363", "#8be9fd", 159, 23, 0),
+	colGreen:         themeColor("#8ae99f", "#14532d", "#50fa7b", 120, 22, 0, 157, 193),
+	colYellow:        themeColor("#f3de82", "#644600", "#f1fa8c", 222, 58, 0, 228, 229),
+	colOrange:        themeColor("#ffba83", "#783713", "#ffb86c", 216, 94, 52, 223),
+	colRed:           themeColor("#ff989f", "#870000", "#ff5555", 210, 88, 0, 52, 217),
+	colCyan:          themeColor("#9ee6fa", "#125363", "#8be9fd", 159, 23, 0, 195),
 	colAccent:        themeColor("#c8b5ff", "#513b81", "#bd93f9", 189, 54, 0),
 	colSelectionFill: themeColor("#36476b", "#b6c7ec", "", 54, 189, 0),
 	colButtonText:    themeColor("#282a36", "#ffffff", "#282a36", 235, 231, 0),

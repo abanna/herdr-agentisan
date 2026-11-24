@@ -124,6 +124,36 @@ func TestANSI256ClippedBlockedStageStaysRed(t *testing.T) {
 	require.Equal(t, ansi.IndexedColor(210), stage)
 }
 
+// A clipped stage keeps only its colour (ADR-001 A38). On #a0a0a0 neither
+// configured red nor configured green reaches 4.5:1, so each falls back along
+// its own hue: red to slot 52, and green, which has no slot that helps there,
+// to the shared neutral.
+func TestANSI256ClippedStagesKeepTheirHueOnGrey(t *testing.T) {
+	t.Parallel()
+
+	const bg = "#a0a0a0"
+	prefix := strings.Repeat("x", 80)
+	snap := &snapshot.Snapshot{V: 1, Team: "crew", Groups: []snapshot.Group{{Name: "coders", Agents: []snapshot.Agent{
+		{Name: "alpha1", Status: snapshot.StatusWorking, Stage: prefix + " blocked"},
+		{Name: "alpha2", Status: snapshot.StatusWorking, Stage: prefix + " ready"},
+	}}}}
+	frame := dashboard.Frame{Snapshot: snap, Selection: dashboard.Selection{Group: -1}, Now: at}
+	out := dashboard.Render(frame, 80, 24, dashboard.Options{Profile: colorprofile.ANSI256, Background: lipgloss.Color(bg)})
+	plain := ansi.Strip(out)
+	require.NotContains(t, plain, "blocked", "the trigger word is clipped")
+	require.NotContains(t, plain, "ready", "the trigger word is clipped")
+	blocked := paintedCell(t, lineWith(t, out, "alpha1"), "xxx").ink
+	ready := paintedCell(t, lineWith(t, out, "alpha2"), "xxx").ink
+	require.NotNil(t, blocked)
+	require.NotNil(t, ready)
+	require.NotEqual(t, blocked, ready, "a blocked stage must not draw as a ready one")
+	requireRedInk(t, blocked)
+	for name, ink := range map[string]color.Color{"blocked": blocked, "ready": ready} {
+		require.GreaterOrEqualf(t, contrastRatio(ink, lipgloss.Color(bg)), readableContrast, "%s stage on %s", name, bg)
+	}
+	require.Equal(t, ansi.IndexedColor(52), blocked)
+}
+
 func TestANSI256SelectionStaysVisible(t *testing.T) {
 	t.Parallel()
 
@@ -262,7 +292,20 @@ func TestReadableInkKeepsAnAvailablePaletteShade(t *testing.T) {
 	const backgroundLuminance = 0.22
 	preferred := ansi.IndexedColor(244)
 	alternate := ansi.IndexedColor(232)
-	require.Equal(t, alternate, dashboard.ReadableInk(preferred, alternate, backgroundLuminance, true))
+	require.Equal(t, alternate, dashboard.ReadableInk(preferred, alternate, nil, backgroundLuminance, true))
+}
+
+func TestReadableInkFallsBackAlongItsLadder(t *testing.T) {
+	t.Parallel()
+
+	// Background luminance 0.35: neither shade reaches 4.5:1, slot 52 does.
+	const backgroundLuminance = 0.35
+	preferred := ansi.IndexedColor(210)
+	alternate := ansi.IndexedColor(88)
+	ladder := []ansi.IndexedColor{124, 52}
+	require.Equal(t, ansi.IndexedColor(52), dashboard.ReadableInk(preferred, alternate, ladder, backgroundLuminance, true))
+	require.Equal(t, ansi.IndexedColor(232), dashboard.ReadableInk(preferred, alternate, ladder[:1], backgroundLuminance, true), "no ladder slot reaches 4.5:1: the shared neutral")
+	require.Equal(t, alternate, dashboard.ReadableInk(preferred, alternate, ladder, 0.8, true), "a configured shade that passes wins over the ladder")
 }
 
 // Match attributes, resets and extended colours from the standard xterm palette.
@@ -271,16 +314,20 @@ var indexedSGR = regexp.MustCompile(`^(?:(?:[0-9]|2[0-9]|39|49|(?:38|48);5;(?:2[
 func TestANSI256ReservedSlots(t *testing.T) {
 	t.Parallel()
 
-	snap := paletteSpecimen()
-	snap.Project = &snapshot.Project{Color: "#000000"}
-	m := paletteModel(t, snap)
-	for _, bg := range []string{"#181818", "#fdf6e3", "#878787", "#777777"} {
-		t.Run(bg, func(t *testing.T) {
-			out := reportProfile(t, m, colorprofile.ANSI256, lipgloss.Color(bg), true).View().Content
-			for _, match := range sgr.FindAllStringSubmatch(out, -1) {
-				assert.Truef(t, indexedSGR.MatchString(match[1]), "expected indexed SGR in slots 22–255, got %q", match[0])
-			}
-		})
+	// #000000 draws the nearest slot, 232. #0000ff would draw slot 21 on a
+	// white or cream terminal if the reserved range ended below it.
+	for _, project := range []string{"#000000", "#0000ff"} {
+		snap := paletteSpecimen()
+		snap.Project = &snapshot.Project{Color: project}
+		m := paletteModel(t, snap)
+		for _, bg := range []string{"#181818", "#fdf6e3", "#ffffff", "#878787", "#777777"} {
+			t.Run(project+"/"+bg, func(t *testing.T) {
+				out := reportProfile(t, m, colorprofile.ANSI256, lipgloss.Color(bg), true).View().Content
+				for _, match := range sgr.FindAllStringSubmatch(out, -1) {
+					assert.Truef(t, indexedSGR.MatchString(match[1]), "expected indexed SGR in slots 22–255, got %q", match[0])
+				}
+			})
+		}
 	}
 }
 
@@ -302,6 +349,10 @@ func TestANSI256UsesBestNeutralOnMidtones(t *testing.T) {
 		require.Equal(t, tc.want, paintedCell(t, lineWith(t, out, "stopped"), "⚠").ink, tc.bg)
 	}
 }
+
+// sameBlockedReady is the number of the sweep's 4,096 backgrounds on which a
+// blocked and a ready stage draw the same 256-colour ink.
+const sameBlockedReady = 913
 
 func TestDashboardContrastSweep(t *testing.T) {
 	t.Parallel()
@@ -340,6 +391,10 @@ func TestDashboardContrastSweep(t *testing.T) {
 			darkBar, lightBar := rowPaint(dark, "readying", "readying").fill, rowPaint(light, "readying", "readying").fill
 
 			neutral := make(map[string]int)
+			// hueRoles carry a meaning by hue: status, stage and ctx. sameSlot
+			// counts the backgrounds on which two of them draw the same ink.
+			hueRoles := []string{"green", "yellow", "orange", "red", "cyan"}
+			sameSlot := make(map[string]int)
 			checkedSGR := make(map[string]bool)
 			seen := 0
 			check := func(role string, ink, bg color.Color) {
@@ -390,6 +445,7 @@ func TestDashboardContrastSweep(t *testing.T) {
 						if contrastRatio(lightText, bg) > contrastRatio(darkText, bg) {
 							bar = lightBar
 						}
+						inks := make(map[string]color.Color)
 						for _, sample := range []struct {
 							frame              int
 							role, worker, text string
@@ -407,7 +463,15 @@ func TestDashboardContrastSweep(t *testing.T) {
 							require.Nil(t, normal.fill, sample.role)
 							require.Equalf(t, bar, selected.fill, "selected %s on %v", sample.role, bg)
 							record(sample.role, normal.ink, bg)
+							inks[sample.role] = normal.ink
 							check(sample.role+" selected", selected.ink, selected.fill)
+						}
+						for i, a := range hueRoles {
+							for _, b := range hueRoles[:i] {
+								if inks[a] == inks[b] {
+									sameSlot[a+"/"+b]++
+								}
+							}
 						}
 						seen++
 					}
@@ -415,6 +479,18 @@ func TestDashboardContrastSweep(t *testing.T) {
 			}
 			for _, role := range []string{"text", "secondary", "green", "yellow", "orange", "red", "cyan", "accent"} {
 				t.Logf("%s neutral fallback: %d/%d (%.2f%%)", role, neutral[role], seen, 100*float64(neutral[role])/float64(seen))
+			}
+			for i, a := range hueRoles {
+				for _, b := range hueRoles[:i] {
+					t.Logf("%s and %s draw the same ink: %d/%d", a, b, sameSlot[a+"/"+b], seen)
+				}
+			}
+			if p == colorprofile.ANSI256 {
+				// Hue ladders (NERD-5719) take a status or stage ink along its own
+				// hue. No stock slot of green or red reaches 4.5:1 on backgrounds
+				// of relative luminance 0.159 to 0.284, so there the two share the
+				// neutral. A stated limit, which the owner has yet to rule on.
+				require.Equal(t, sameBlockedReady, sameSlot["red/green"], "blocked and ready stage inks")
 			}
 		})
 	}

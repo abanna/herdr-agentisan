@@ -107,5 +107,5 @@ func ProjectColour(light bool, hex string) color.Color {
 	return projectColour(&snapshot.Project{Color: hex}, &theme)
 }
 
-// ReadableInk exercises a pair of palette shades against a surface.
+// ReadableInk exercises a pair of palette shades and a hue ladder against a surface.
 var ReadableInk = readableInk

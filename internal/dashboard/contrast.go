@@ -57,12 +57,33 @@ func neutralInk(background float64, indexed bool) color.Color {
 	return color.Black
 }
 
-func readableInk(preferred, alternate color.Color, background float64, indexed bool) color.Color {
+// ladderInk is the first slot of a hue's ladder that reaches the floor on
+// the background. ok is false when no slot of the hue does.
+func ladderInk(ladder []ansi.IndexedColor, background float64) (ink ansi.IndexedColor, ok bool) {
+	for _, slot := range ladder {
+		if contrast(relativeLuminance(slot), background) >= textContrast {
+			return slot, true
+		}
+	}
+	return 0, false
+}
+
+// readableInk picks the first of the role's two configured shades that
+// reaches the floor. At 256 colours a role that carries meaning by hue then
+// falls back along its own ladder, so a red stays red, before the neutral
+// every role shares (NERD-5719). The neutral is the last resort, where no
+// stock slot of the hue reaches the floor.
+func readableInk(preferred, alternate color.Color, ladder []ansi.IndexedColor, background float64, indexed bool) color.Color {
 	if contrast(relativeLuminance(preferred), background) >= textContrast {
 		return preferred
 	}
 	if contrast(relativeLuminance(alternate), background) >= textContrast {
 		return alternate
+	}
+	if indexed {
+		if slot, ok := ladderInk(ladder, background); ok {
+			return slot
+		}
 	}
 	return neutralInk(background, indexed)
 }
@@ -107,14 +128,14 @@ func makeRenderTheme(indexed bool, background color.Color) renderTheme {
 	for role := range colSelectionFill {
 		c := palette[role]
 		preferred, alternate := c.paint(side, indexed), c.paint(other, indexed)
-		theme.terminal[role] = readableInk(preferred, alternate, luminance, indexed)
+		theme.terminal[role] = readableInk(preferred, alternate, c.ladder, luminance, indexed)
 		if indexed && side == lightPalette && c.lightSelectionIndex != 0 {
 			preferred = c.lightSelectionIndex
 		}
-		theme.selected[role] = readableInk(preferred, alternate, barLuminance, indexed)
+		theme.selected[role] = readableInk(preferred, alternate, c.ladder, barLuminance, indexed)
 	}
 	button := palette[colButtonText]
-	theme.buttonInk = readableInk(button.paint(side, indexed), button.paint(other, indexed),
+	theme.buttonInk = readableInk(button.paint(side, indexed), button.paint(other, indexed), nil,
 		relativeLuminance(theme.button), indexed)
 	return theme
 }
