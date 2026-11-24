@@ -22,8 +22,14 @@ func stamped(ctx string, at time.Time) map[string]string {
 // with its ctx_at and the processes that wrote it.
 func owned(ctx string, at time.Time, owner ...report.Proc) map[string]string {
 	t := stamped(ctx, at)
-	t[report.CtxOwnerKey] = report.FormatCtxOwner(owner)
+	t[report.CtxOwnerKey] = report.FormatCtxOwner(at, owner)
 	return t
+}
+
+// withOwner is tokens with the ctx_owner a report stamped at wrote.
+func withOwner(tokens map[string]string, at time.Time, owner ...report.Proc) map[string]string {
+	tokens[report.CtxOwnerKey] = report.FormatCtxOwner(at, owner)
+	return tokens
 }
 
 var (
@@ -40,10 +46,16 @@ func TestPaneReadsCtxOwner(t *testing.T) {
 		inTeam(pane("wN:p2", "", "", "unknown", owned("70", modelAt, agentA)), "coder-1"),
 		inTeam(pane("wN:p3", "", "codex", "idle", map[string]string{report.CtxKey: "70", report.CtxOwnerKey: "1002"}), "coder-1"),
 		inTeam(pane("wN:p4", "", "codex", "idle", stamped("70", modelAt)), "coder-1"),
+		// An older build wrote ctx and ctx_at over the previous owner.
+		inTeam(pane("wN:p5", "", "codex", "idle", withOwner(stamped("70", modelAt.Add(time.Minute)), modelAt, agentA)), "coder-1"),
 	)
 	assert.Equal(t, []report.Proc{agentA, agentB}, got["wN:p1"].CtxOwner)
-	for id, why := range map[string]string{"wN:p2": "no agent in the pane", "wN:p3": "an owner the report never writes", "wN:p4": "no ctx_owner"} {
+	for id, why := range map[string]string{"wN:p2": "no agent in the pane", "wN:p4": "no ctx_owner"} {
 		assert.Empty(t, got[id].CtxOwner, why)
+	}
+	for id, why := range map[string]string{"wN:p3": "an owner the report never writes", "wN:p5": "an owner written with another ctx_at"} {
+		assert.Equal(t, []report.Proc{{}}, got[id].CtxOwner, why+": the processes of nobody")
+		assert.Empty(t, team.CtxGate{Agent: agentA}.Ctx(got[id]), why)
 	}
 }
 
@@ -189,15 +201,44 @@ func TestStartClock(t *testing.T) {
 		return team.Pane{ID: id, TerminalID: terminal, Ctx: "70", CtxAt: start.Add(-time.Second), CtxOwner: []report.Proc{agentA}}
 	}
 	c.Observe(m, entries)
+	legacy := func(id, terminal string) team.Pane {
+		p := ctx(id, terminal)
+		p.CtxOwner = nil
+		return p
+	}
 	assert.Empty(t, c.Ctx(ctx("wJ:p1", "term_boss")), "the boss's: no verified agent")
 	assert.Empty(t, c.Ctx(ctx("wN:p1", "term_a")), "another agent is in front")
-	assert.Equal(t, "70", c.Ctx(ctx("wN:p1", "term_b")), "another terminal: a reissued id")
-	assert.Equal(t, "70", c.Ctx(ctx("wN:p2", "")), "no gate held")
-	assert.Equal(t, "70", c.Ctx(ctx("w9:p9", "")), "a pane in no team")
+	assert.Empty(t, c.Ctx(legacy("wJ:p1", "term_boss")), "a ctx older than the boss's agent")
+	// Where it holds no gate it has no verified agent: an owned ctx is
+	// unknown, one that names no writer is read as before.
+	for name, p := range map[string]team.Pane{"another terminal: a reissued id": ctx("wN:p1", "term_b"), "no gate held": ctx("wN:p2", ""), "a pane in no team": ctx("w9:p9", "")} {
+		assert.Empty(t, c.Ctx(p), name)
+		p.CtxOwner = nil
+		assert.Equal(t, "70", c.Ctx(p), name+", ctx of no writer")
+	}
 
 	c.Observe(m, nil)
-	assert.Equal(t, "70", c.Ctx(ctx("wN:p1", "term_a")), "replaced")
+	assert.Empty(t, c.Ctx(ctx("wN:p1", "term_a")), "replaced")
+	assert.Equal(t, "70", c.Ctx(legacy("wN:p1", "term_a")))
 	var none *team.StartClock
 	none.Observe(m, entries)
-	assert.Equal(t, "70", none.Ctx(ctx("wN:p1", "term_a")))
+	assert.Empty(t, none.Ctx(ctx("wN:p1", "term_a")))
+	assert.Equal(t, "70", none.Ctx(legacy("wN:p1", "term_a")))
+}
+
+// Team status reads the gate the poll last held. A pane the poll holds none
+// for, as before its first probe after a restart, shows no owned ctx: the
+// agent that wrote it is not verified (review of 13d84f7, P1 3).
+func TestStartClockHidesAnOwnedCtxItHoldsNoGateFor(t *testing.T) {
+	t.Parallel()
+	owned := team.Pane{ID: "wN:p1", TerminalID: "term_a", Ctx: "80", CtxOwner: []report.Proc{agentA}}
+	legacy := team.Pane{ID: "wN:p1", TerminalID: "term_a", Ctx: "80"}
+	m, _ := modelPanes(inTeam(pane("wN:p1", "", "codex", "idle", nil), "coder-1"))
+	for name, c := range map[string]*team.StartClock{"no gate held": {}, "a nil clock": nil} {
+		assert.Empty(t, c.Ctx(owned), name)
+		assert.Equal(t, "80", c.Ctx(legacy), name+": a ctx that names no writer")
+	}
+	held := &team.StartClock{}
+	held.Observe(m, map[string]team.CtxGate{})
+	assert.Empty(t, held.Ctx(owned), "a pane the poll holds no gate for")
 }

@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -32,6 +33,8 @@ func TestIsAgentArgv(t *testing.T) {
 		"node running codex.js":  {[]string{"node", "/x/codex.js"}, true},
 		"node running something": {[]string{"node", "/x/server.js"}, false},
 		"a shell":                {[]string{"/bin/sh", "-c", "claude"}, false},
+		"a name holding claude":  {[]string{"/usr/bin/claudette", "--resume"}, false},
+		"claude as an argument":  {[]string{"/usr/bin/env", "claude"}, false},
 		"the reporter":           {[]string{"herdr-agentisan", "report", "codex"}, false},
 		"no arguments":           {nil, false},
 	} {
@@ -42,17 +45,18 @@ func TestIsAgentArgv(t *testing.T) {
 func TestCtxOwnerValues(t *testing.T) {
 	t.Parallel()
 	owner := []report.Proc{{PID: 900, Start: 500}, {PID: 899, Start: 31337}}
-	assert.Equal(t, "900:500,899:31337", report.FormatCtxOwner(owner))
-	assert.Empty(t, report.FormatCtxOwner(nil), "none clears the token")
-	got, ok := report.ParseCtxOwner("900:500,899:31337")
+	assert.Equal(t, "1761066000900@900:500,899:31337", report.FormatCtxOwner(reportedAt(), owner))
+	assert.Empty(t, report.FormatCtxOwner(reportedAt(), nil), "none clears the token")
+	at, got, ok := report.ParseCtxOwner("1761066000900@900:500,899:31337")
 	require.True(t, ok)
 	assert.Equal(t, owner, got)
+	assert.True(t, at.Equal(reportedAt()), "the stamp it belongs to")
 	// The widest value, a darwin start in microseconds, fits herdr's 80.
 	wide := report.Proc{PID: 9999999, Start: 1761066000123456}
-	assert.LessOrEqual(t, len(report.FormatCtxOwner([]report.Proc{wide, wide, wide})), report.MaxValueChars)
+	assert.LessOrEqual(t, len(report.FormatCtxOwner(reportedAt(), []report.Proc{wide, wide})), report.MaxValueChars)
 
-	for _, bad := range []string{"", "900", "900:", ":500", "0:500", "900:0", "-1:500", "0900:500", "900:05", "900:500,", "a:b", "1:1,2:2,3:3,4:4", "900:500 ", "900:500;899:1"} {
-		_, ok := report.ParseCtxOwner(bad)
+	for _, bad := range []string{"", "900:500", "@900:500", "1761066000900", "1761066000900@", "1761066000900@900", "1761066000900@900:", "1761066000900@:500", "1761066000900@0:500", "1761066000900@900:0", "1761066000900@-1:500", "1761066000900@0900:500", "1761066000900@900:05", "1761066000900@900:500,", "1761066000900@a:b", "1761066000900@1:1,2:2,3:3", "1761066000900@900:500 ", "01761066000900@900:500", "0@900:500", "1761066000900@900:500;899:1"} {
+		_, _, ok := report.ParseCtxOwner(bad)
 		assert.False(t, ok, "%q", bad)
 	}
 }
@@ -101,7 +105,7 @@ func TestReportsNameTheirWriter(t *testing.T) {
 		lineage *report.Lineage
 		want    string
 	}{
-		"under an agent":  {codexLineage(embeddedProcs(), embeddedArgv), "900:500,899:500"},
+		"under an agent":  {codexLineage(embeddedProcs(), embeddedArgv), "1761066000900@900:500,899:500"},
 		"no agent in it":  {codexLineage(embeddedProcs(), map[int][]string{5000: {"herdr-agentisan"}}), ""},
 		"no lineage read": {nil, ""},
 	} {
@@ -133,7 +137,7 @@ func TestHelperProcessTree(t *testing.T) {
 	name, tail, _ := strings.Cut(rest, ",")
 	if name == "reporter" {
 		l := report.SelfLineage(func(string) (string, bool) { return "", false })
-		_, _ = os.Stdout.WriteString(report.FormatCtxOwner(l.AgentProcs()) + "\n")
+		_, _ = os.Stdout.WriteString(report.FormatCtxOwner(time.Now(), l.AgentProcs()) + "\n")
 		// Stay until the test has read the whole tree.
 		_, _ = io.Copy(io.Discard, os.Stdin)
 		return
@@ -192,7 +196,7 @@ func TestOwnerIsTheAgentTheDaemonVerifies(t *testing.T) {
 			require.NoError(t, in.Close())
 			require.NoError(t, cmd.Wait(), stderr.String())
 
-			owner, ok := report.ParseCtxOwner(strings.TrimSpace(line))
+			_, owner, ok := report.ParseCtxOwner(strings.TrimSpace(line))
 			require.True(t, ok, "owner %q", line)
 			// Whoever runs the tests is an ancestor too, so only the tree's
 			// own agents, the nearest ones, are asserted.

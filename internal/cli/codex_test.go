@@ -72,7 +72,7 @@ func TestReportCodexPushesCtx(t *testing.T) {
 	assert.Equal(t, "pane.report_metadata", reqs[1].Method)
 	params, owner := stampedCtx(t, reqs[1].Params, before)
 	assert.JSONEq(t, `{"pane_id":"w15:p4","source":"agentisan","tokens":{"ctx":"5"},"ttl_ms":86400000}`, params)
-	assert.Equal(t, "900:50", owner, "the report names the Codex it ran under")
+	assert.True(t, strings.HasSuffix(owner, "@900:50"), "the report names the Codex it ran under: %q", owner)
 	assert.Contains(t, logs.String(), `"ctx":5`)
 }
 

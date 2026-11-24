@@ -346,6 +346,11 @@ func stampedCtx(t *testing.T, params []byte, before time.Time) (rest, owner stri
 	assert.False(t, at.Before(before.Truncate(time.Millisecond)), "stamped during the report")
 	assert.False(t, at.After(time.Now()), "stamped during the report")
 	owner, _ = tokens[report.CtxOwnerKey].(string)
+	if owner != "" {
+		ownedAt, _, ok := report.ParseCtxOwner(owner)
+		require.True(t, ok, "ctx_owner is a value the daemon reads: %q", owner)
+		assert.True(t, ownedAt.Equal(at), "ctx_owner belongs to the ctx_at it is written with")
+	}
 	delete(tokens, report.CtxAtKey)
 	delete(tokens, report.CtxOwnerKey)
 	out, err := json.Marshal(m)
@@ -369,12 +374,8 @@ func TestReportStatuslinePushesCtx(t *testing.T) {
 	require.Len(t, reqs, 2, "check the pane runs this process, then report")
 	assert.Equal(t, "pane.process_info", reqs[0].Method)
 	assert.Equal(t, "pane.report_metadata", reqs[1].Method)
-	rest, owner := stampedCtx(t, reqs[1].Params, before)
+	rest, _ := stampedCtx(t, reqs[1].Params, before)
 	assert.JSONEq(t, `{"pane_id":"w14:p1","source":"agentisan","tokens":{"ctx":"43"},"ttl_ms":180000}`, rest)
-	if owner != "" {
-		_, ok := report.ParseCtxOwner(owner)
-		assert.True(t, ok, "ctx_owner is a value the daemon reads: %q", owner)
-	}
 	assert.Contains(t, logs.String(), `"ctx":43`)
 }
 

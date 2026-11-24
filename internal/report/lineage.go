@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 )
@@ -271,10 +272,11 @@ func SystemCmdline() CmdlineFunc {
 	return cmdline
 }
 
-// MaxOwnerProcs bounds the processes a ctx_owner names: a node launcher, its
-// native child and one more, 74 characters at the widest (darwin's
-// microsecond starts), inside herdr's 80 for a token value.
-const MaxOwnerProcs = 3
+// MaxOwnerProcs bounds the processes a ctx_owner names: a node launcher and
+// its native child. With the stamp it is bound to, 13 digits and an "@", the
+// widest value, with darwin's microsecond starts, is 63 characters, inside
+// herdr's 80 for a token value.
+const MaxOwnerProcs = 2
 
 // IsAgentArgv reports whether argv runs Claude or Codex: argv[0] named
 // claude or codex, or node running codex or codex.js. It is the agent the
@@ -307,33 +309,42 @@ func (l *Lineage) AgentProcs() []Proc {
 	return out
 }
 
-// FormatCtxOwner is ps as a ctx_owner value: "pid:start" in decimal, comma
-// separated; "" for none, which clears the token.
-func FormatCtxOwner(ps []Proc) string {
+// FormatCtxOwner is a ctx_owner value: the ctx_at stamp the owner belongs to,
+// as FormatModelAt writes it, "@", then ps as "pid:start" in decimal, comma
+// separated. It is "" for no process, which clears the token. A ctx_owner
+// names its stamp because herdr patches each key on its own: a writer that
+// knows no ctx_owner updates ctx and ctx_at and leaves the previous owner
+// beside them, and the stamp tells that owner from the ctx's.
+func FormatCtxOwner(at time.Time, ps []Proc) string {
+	if len(ps) == 0 {
+		return ""
+	}
 	parts := make([]string, 0, len(ps))
 	for _, p := range ps {
 		parts = append(parts, strconv.Itoa(p.PID)+":"+strconv.FormatUint(p.Start, 10))
 	}
-	return strings.Join(parts, ",")
+	return FormatModelAt(at) + "@" + strings.Join(parts, ",")
 }
 
-// ParseCtxOwner reads a ctx_owner value as FormatCtxOwner writes it: one to
-// MaxOwnerProcs positive pid:start pairs in canonical decimal. Anything else
-// is no owner, and the ctx is read as one an older build wrote.
-func ParseCtxOwner(v string) ([]Proc, bool) {
-	fields := strings.Split(v, ",")
-	if v == "" || len(fields) > MaxOwnerProcs {
-		return nil, false
+// ParseCtxOwner reads a ctx_owner value as FormatCtxOwner writes it: a
+// stamp, "@", and one to MaxOwnerProcs positive pid:start pairs in canonical
+// decimal. Anything else is not one.
+func ParseCtxOwner(v string) (at time.Time, owner []Proc, ok bool) {
+	stamp, pairs, found := strings.Cut(v, "@")
+	at, valid := parseMillis(stamp)
+	fields := strings.Split(pairs, ",")
+	if !found || !valid || len(fields) > MaxOwnerProcs {
+		return time.Time{}, nil, false
 	}
-	out := make([]Proc, 0, len(fields))
+	owner = make([]Proc, 0, len(fields))
 	for _, f := range fields {
 		pid, start, ok := strings.Cut(f, ":")
 		n, err := strconv.Atoi(pid)
 		s, err2 := strconv.ParseUint(start, 10, 64)
 		if !ok || err != nil || err2 != nil || n <= 0 || s == 0 || strconv.Itoa(n) != pid || strconv.FormatUint(s, 10) != start {
-			return nil, false
+			return time.Time{}, nil, false
 		}
-		out = append(out, Proc{PID: n, Start: s})
+		owner = append(owner, Proc{PID: n, Start: s})
 	}
-	return out, true
+	return at, owner, true
 }

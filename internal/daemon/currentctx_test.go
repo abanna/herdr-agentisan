@@ -447,6 +447,48 @@ func TestContextFirstSeenInAnotherJobsTurnShowsWhenItsWriterReturns(t *testing.T
 	assert.Equal(t, new(80), ctx)
 }
 
+// A staggered upgrade: an older reporter writes B's ctx and ctx_at and leaves
+// A's ctx_owner where it was. The owner belongs to the stamp it was written
+// with, so A's returning does not give A B's 80% (review of 13d84f7, P1 1).
+func TestContextOwnerNeverOutlivesItsCtx(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	const pane = "wN:p1"
+	th.setAgents(named(pane, "pee01"))
+	th.setPane(pane, "agent", "codex")
+	th.setProcs(pane, agentProc(1002, "codex"))
+	showCtxAt(th, pane, "20", boot.Add(time.Hour), 1002)
+	o := teamOpts(t, shortDir(t), th, noticesConfig(t, "gap = 0\n"))
+	fakeForeground(t, &o)
+	var logs lockedLog
+	_, rec := ctxRun(t, o, &logs)
+	sock := socketPath(t, o.StateDir, th.path)
+	served(t, sock, func(s snapshot.Snapshot) bool {
+		ctx, _ := agentCtx(s, pane)
+		return ctx != nil && *ctx == 20
+	})
+
+	// B's report, by a build that knows no ctx_owner: new ctx and ctx_at, the
+	// old owner stays. B then exits and A is in front again.
+	tokens := map[string]string{
+		report.CtxKey: "80", report.CtxAtKey: report.FormatModelAt(boot.Add(2 * time.Hour)),
+		report.CtxOwnerKey: report.FormatCtxOwner(boot.Add(time.Hour), []report.Proc{{PID: 1002, Start: 1002}}),
+	}
+	th.setPane(pane, "tokens", tokens)
+	polled(t, th.srv, 3)
+	ctx, present := agentCtx(served(t, sock, anySnapshot), pane)
+	require.True(t, present)
+	assert.Nil(t, ctx, "B's 80% is not A's")
+	assert.Equal(t, "ctx  --", lastBands(t, th, pane)["ctx_ok"])
+	assert.Empty(t, ctxEvents(rec))
+	assert.Empty(t, toasts(t, th))
+
+	showCtxAt(th, pane, "30", boot.Add(3*time.Hour), 1002)
+	polled(t, th.srv, 2)
+	ctx, _ = agentCtx(served(t, sock, anySnapshot), pane)
+	assert.Equal(t, new(30), ctx, "A's own next report counts")
+}
+
 // fakeForeground lets the agent PIDs survive while the foreground job
 // changes. Start and process group match the PID for each fake agent.
 func fakeForeground(t *testing.T, o *daemon.Options) *atomic.Int32 {
@@ -470,11 +512,16 @@ func fakeForeground(t *testing.T, o *daemon.Options) *atomic.Int32 {
 // fake agent started, and naming the fake agents, whose start is their pid,
 // that wrote it.
 func showCtx(th *teamHerdr, pane, ctx string, owner ...int) {
+	showCtxAt(th, pane, ctx, boot.Add(time.Hour), owner...)
+}
+
+// showCtxAt is showCtx stamped at.
+func showCtxAt(th *teamHerdr, pane, ctx string, at time.Time, owner ...int) {
 	procs := make([]report.Proc, 0, len(owner))
 	for _, pid := range owner {
 		procs = append(procs, report.Proc{PID: pid, Start: uint64(pid)}) //nolint:gosec // small test pids
 	}
 	th.setPane(pane, "tokens", map[string]string{
-		report.CtxKey: ctx, report.CtxAtKey: report.FormatModelAt(boot.Add(time.Hour)), report.CtxOwnerKey: report.FormatCtxOwner(procs),
+		report.CtxKey: ctx, report.CtxAtKey: report.FormatModelAt(at), report.CtxOwnerKey: report.FormatCtxOwner(at, procs),
 	})
 }

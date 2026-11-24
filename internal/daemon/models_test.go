@@ -700,6 +700,115 @@ func TestLaunchModelsDeferredPaneNeverShowsAnEarlierAgentsCtx(t *testing.T) {
 	assert.Zero(t, processAsks(ph.srv)[y.PaneID], "Y was not asked in time")
 }
 
+// A miss that no ask made is no miss: a pane whose agent was lost more than
+// ModelRetry ago and whose probe the budget leaves out is asked at the next
+// poll, not after another ModelRetry (review of 13d84f7, P1 2).
+func TestLaunchModelsDeferredLostPaneIsAskedAtTheNextPoll(t *testing.T) {
+	t.Parallel()
+	ph := newProcHerdr(t)
+	lm := daemon.NewLaunchModels()
+	clk := &clock{now: t0}
+	lm.SetClock(clk.Now)
+	c := herdr.Client{SocketPath: ph.srv.Path}
+	pt := &procs{start: map[int]uint64{1: 1, 2: 2, 100: 100, 102: 102}}
+	foreground := map[int]int{1: 1, 2: 2, 100: 100, 102: 102}
+	lm.SetProcessStat(func(pid int) (report.Stat, error) {
+		start, err := pt.startTime(pid)
+		return report.Stat{Start: start, Pgrp: pid, Tpgid: foreground[pid]}, err
+	})
+	x, y := agentPane("w1:p1", "t1", "codex"), agentPane("w1:p2", "t2", "codex")
+	panes := []herdr.PaneInfo{x, y}
+	ph.set(x.PaneID, agentProc(1, "codex"))
+	ph.set(y.PaneID, agentProc(2, "codex"))
+	poll := func(now time.Time) team.CtxGate {
+		t.Helper()
+		_, err := lm.Refresh(t.Context(), c, panes, pt.startTime, now, zerolog.Nop())
+		require.NoError(t, err)
+		return lm.CtxGates(panes)[y.PaneID]
+	}
+	byY := team.Pane{Ctx: "20", CtxOwner: []report.Proc{{PID: 2, Start: 2}}}
+	require.Equal(t, "20", poll(t0).Ctx(byY))
+
+	// Y is suspended behind its shell, and is left so for minutes.
+	ph.set(y.PaneID, agentProc(102, "/bin/sh"))
+	foreground[2] = 102
+	assert.Empty(t, poll(t0.Add(time.Second)).Ctx(byY))
+
+	// Y resumes. X's own re-probe takes the whole budget of the next poll.
+	ph.set(y.PaneID, agentProc(2, "codex"))
+	foreground[2] = 2
+	ph.set(x.PaneID, agentProc(100, "/bin/sh"))
+	foreground[1] = 100
+	c.Dialed = func() error { clk.advance(daemon.ModelBudget); return nil }
+	later := t0.Add(3 * time.Minute)
+	assert.Empty(t, poll(later).Ctx(byY), "Y's probe was left out")
+	asks := processAsks(ph.srv)[y.PaneID]
+	c.Dialed = nil
+	assert.Equal(t, "20", poll(later.Add(time.Second)).Ctx(byY), "the next poll asks, with budget to spare")
+	assert.Greater(t, processAsks(ph.srv)[y.PaneID], asks)
+}
+
+// lostPane is one pane whose agent, process 2, can be put behind its shell.
+func lostPane(t *testing.T, terminal string) (poll func(now time.Time, terminal string), asks func() int, lose func()) {
+	t.Helper()
+	ph := newProcHerdr(t)
+	lm := daemon.NewLaunchModels()
+	c := herdr.Client{SocketPath: ph.srv.Path}
+	pt := &procs{start: map[int]uint64{2: 2, 102: 102}}
+	foreground := map[int]int{2: 2, 102: 102}
+	lm.SetProcessStat(func(pid int) (report.Stat, error) {
+		start, err := pt.startTime(pid)
+		return report.Stat{Start: start, Pgrp: pid, Tpgid: foreground[pid]}, err
+	})
+	ph.set("w1:p1", agentProc(2, "codex"))
+	poll = func(now time.Time, terminal string) {
+		t.Helper()
+		_, err := lm.Refresh(t.Context(), c, []herdr.PaneInfo{agentPane("w1:p1", terminal, "codex")}, pt.startTime, now, zerolog.Nop())
+		require.NoError(t, err)
+	}
+	lose = func() {
+		ph.set("w1:p1", agentProc(102, "/bin/sh"))
+		foreground[2] = 102
+	}
+	return poll, func() int { return processAsks(ph.srv)["w1:p1"] }, lose
+}
+
+// A lost agent's pane is asked at every poll for ModelRetry, and then held as
+// a miss like any other: the retry has a bound (review of 13d84f7, P3 a).
+func TestLaunchModelsAskAgainForModelRetryOnly(t *testing.T) {
+	t.Parallel()
+	poll, asks, lose := lostPane(t, "t1")
+	poll(t0, "t1")
+	lose()
+	for _, at := range []time.Duration{time.Second, 20 * time.Second, 40 * time.Second, 60 * time.Second} {
+		before := asks()
+		poll(t0.Add(at), "t1")
+		assert.Equal(t, before+1, asks(), "asked at %v", at)
+	}
+	before := asks()
+	for _, at := range []time.Duration{61 * time.Second, 62 * time.Second, 90 * time.Second, 119 * time.Second} {
+		poll(t0.Add(at), "t1")
+	}
+	assert.Equal(t, before, asks(), "after ModelRetry the miss is held, not asked again")
+	poll(t0.Add(125*time.Second), "t1")
+	assert.Equal(t, before+1, asks(), "and asked again ModelRetry after it was last asked")
+}
+
+// What was lost belongs to the terminal it was lost on: a pane reissued to
+// another terminal is a new pane, and its first miss is held (P3 d).
+func TestLaunchModelsLostStateStaysWithItsTerminal(t *testing.T) {
+	t.Parallel()
+	poll, asks, lose := lostPane(t, "t1")
+	poll(t0, "t1")
+	lose()
+	poll(t0.Add(time.Second), "t1")
+	poll(t0.Add(2*time.Second), "t2")
+	before := asks()
+	poll(t0.Add(3*time.Second), "t2")
+	poll(t0.Add(4*time.Second), "t2")
+	assert.Equal(t, before, asks(), "no retry for a terminal that lost nothing")
+}
+
 // budgetDial is a client of ph whose first dial spends the whole budget by
 // clk, as an answer that comes back on the deadline does, while the ask's
 // context, on the wall clock, is a second from expiring.

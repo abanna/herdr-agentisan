@@ -150,11 +150,12 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 			continue
 		}
 		// A pane whose agent was lost keeps that until an ask finds its
-		// replacement, whether the ask fails, is cut off or is left out.
+		// replacement, whether the ask fails, is cut off or is left out. No
+		// ask was made yet, so it is never a miss that holds.
 		prev := lm.byPane[p.PaneID]
 		delete(lm.byPane, p.PaneID)
 		if prev.terminal == p.TerminalID && (prev.pid != 0 || !prev.lostSince.IsZero()) {
-			lm.byPane[p.PaneID] = launchModel{terminal: p.TerminalID, agent: p.Agent, asked: now, lostSince: cmp.Or(prev.lostSince, now)}
+			lm.byPane[p.PaneID] = launchModel{terminal: p.TerminalID, agent: p.Agent, lostSince: cmp.Or(prev.lostSince, now)}
 		}
 		since := lm.byPane[p.PaneID].lostSince
 		// A reply the poll already holds costs no call, so the budget does

@@ -60,14 +60,25 @@ func GateCtx(m *Model, gates map[string]CtxGate) {
 	}
 }
 
-// ctxOwnerOf is the processes p's ctx_owner token names; none when it is
-// absent, not a value the report writes, or when herdr detects no agent in p,
-// as for ctxOf.
-func ctxOwnerOf(p herdr.PaneInfo) []report.Proc {
-	if p.Agent == "" {
+// unreadableOwner is the owner of a ctx whose ctx_owner is not the one its
+// ctx_at was written with: a process nobody is, so no agent verified in
+// front of the pane is among them.
+var unreadableOwner = []report.Proc{{}}
+
+// ctxOwnerOf is the processes p's ctx_owner token names for the ctx stamped
+// ctxAt; none when it is absent, or when herdr detects no agent in p, as for
+// ctxOf. A token that is not a value the report writes, or that belongs to
+// another stamp, as when an older build wrote ctx and ctx_at over it, names
+// the processes of nobody.
+func ctxOwnerOf(p herdr.PaneInfo, ctxAt time.Time) []report.Proc {
+	v := p.Tokens[report.CtxOwnerKey]
+	if p.Agent == "" || v == "" {
 		return nil
 	}
-	owner, _ := report.ParseCtxOwner(p.Tokens[report.CtxOwnerKey])
+	at, owner, ok := report.ParseCtxOwner(v)
+	if !ok || ctxAt.IsZero() || at.UnixMilli() != ctxAt.UnixMilli() {
+		return unreadableOwner
+	}
 	return owner
 }
 
@@ -83,7 +94,9 @@ func ctxAtOf(p herdr.PaneInfo) time.Time {
 }
 
 // StartClock holds the last poll's ctx gates by pane and terminal for team
-// status. It is safe for concurrent use. A nil clock applies no gate.
+// status. It is safe for concurrent use. A pane it holds no gate for, as
+// before the poll's first look at it, has the zero gate: no owned ctx counts,
+// for no agent is verified in front of it.
 type StartClock struct {
 	mu     sync.Mutex
 	byPane map[string]paneStart
@@ -118,16 +131,16 @@ func (c *StartClock) Observe(m Model, gates map[string]CtxGate) {
 	c.byPane = next
 }
 
-// Ctx gates p's report while its pane still shows the same terminal.
+// Ctx gates p's report by the gate c holds for its pane while the pane still
+// shows the same terminal.
 func (c *StartClock) Ctx(p Pane) string {
-	if c == nil {
-		return p.Ctx
+	var gate CtxGate
+	if c != nil {
+		c.mu.Lock()
+		if s, ok := c.byPane[p.ID]; ok && s.terminal == p.TerminalID {
+			gate = s.gate
+		}
+		c.mu.Unlock()
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	s, ok := c.byPane[p.ID]
-	if !ok || s.terminal != p.TerminalID {
-		return p.Ctx
-	}
-	return s.gate.Ctx(p)
+	return gate.Ctx(p)
 }
