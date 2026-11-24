@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"fmt"
 	"image/color"
 	"math"
 	"sort"
@@ -58,34 +59,49 @@ func neutralInk(background float64, indexed bool) color.Color {
 }
 
 // ladderInk is the first slot of a hue's ladder that reaches the floor on
-// the background. ok is false when no slot of the hue does.
-func ladderInk(ladder []ansi.IndexedColor, background float64) (ink ansi.IndexedColor, ok bool) {
+// the background, drawn as the slot at 256 colours and as the slot's own RGB
+// otherwise. ok is false when no slot of the hue does.
+func ladderInk(ladder []ansi.IndexedColor, background float64, indexed bool) (ink color.Color, ok bool) {
 	for _, slot := range ladder {
-		if contrast(relativeLuminance(slot), background) >= textContrast {
+		if contrast(relativeLuminance(slot), background) < textContrast {
+			continue
+		}
+		if indexed {
 			return slot, true
 		}
+		r, g, b := colourChannels(slot)
+		return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", r, g, b)), true
 	}
-	return 0, false
+	return nil, false
 }
 
 // readableInk picks the first of the role's two configured shades that
-// reaches the floor. At 256 colours a role that carries meaning by hue then
-// falls back along its own ladder, so a red stays red, before the neutral
-// every role shares (NERD-5719). The neutral is the last resort, where no
-// stock slot of the hue reaches the floor.
-func readableInk(preferred, alternate color.Color, ladder []ansi.IndexedColor, background float64, indexed bool) color.Color {
+// reaches the floor. A role that carries meaning by hue then falls back
+// along its own ladder, so a red stays red (NERD-5719). Where no shade of the
+// hue reaches the floor, 256 colours use the neutral every role shares, and
+// TrueColor keeps the preferred shade, the ink main drew: below the floor,
+// but a blocked and a ready stage never share an ink. hue is false for the
+// roles that do not carry a meaning by hue, which take the neutral.
+func readableInk(preferred, alternate color.Color, ladder []ansi.IndexedColor, background float64, indexed, hue bool) color.Color {
 	if contrast(relativeLuminance(preferred), background) >= textContrast {
 		return preferred
 	}
 	if contrast(relativeLuminance(alternate), background) >= textContrast {
 		return alternate
 	}
-	if indexed {
-		if slot, ok := ladderInk(ladder, background); ok {
-			return slot
-		}
+	if ink, ok := ladderInk(ladder, background, indexed); ok {
+		return ink
+	}
+	if hue && !indexed {
+		return preferred
 	}
 	return neutralInk(background, indexed)
+}
+
+// carriesHue reports whether a role's colour is its meaning: status, stage
+// and ctx levels.
+func (r colourRole) carriesHue() bool {
+	return r >= colGreen && r <= colCyan
 }
 
 // renderTheme resolves the palette once per frame. Foreground roles are
@@ -128,15 +144,15 @@ func makeRenderTheme(indexed bool, background color.Color) renderTheme {
 	for role := range colSelectionFill {
 		c := palette[role]
 		preferred, alternate := c.paint(side, indexed), c.paint(other, indexed)
-		theme.terminal[role] = readableInk(preferred, alternate, c.ladder, luminance, indexed)
+		theme.terminal[role] = readableInk(preferred, alternate, c.ladder, luminance, indexed, role.carriesHue())
 		if indexed && side == lightPalette && c.lightSelectionIndex != 0 {
 			preferred = c.lightSelectionIndex
 		}
-		theme.selected[role] = readableInk(preferred, alternate, c.ladder, barLuminance, indexed)
+		theme.selected[role] = readableInk(preferred, alternate, c.ladder, barLuminance, indexed, role.carriesHue())
 	}
 	button := palette[colButtonText]
 	theme.buttonInk = readableInk(button.paint(side, indexed), button.paint(other, indexed), nil,
-		relativeLuminance(theme.button), indexed)
+		relativeLuminance(theme.button), indexed, false)
 	return theme
 }
 

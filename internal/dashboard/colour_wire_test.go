@@ -154,6 +154,38 @@ func TestANSI256ClippedStagesKeepTheirHueOnGrey(t *testing.T) {
 	require.Equal(t, ansi.IndexedColor(52), blocked)
 }
 
+// The same clipped stages at TrueColor. On #a0a0a0 neither configured red
+// (#870000, 3.96:1) nor configured green (#14532d, 3.48:1) reaches 4.5:1. Red
+// falls back along its ladder to #5f0000 (5.40:1). Green has no shade that
+// reaches the floor, so it keeps the ink main drew, #14532d at 3.48:1, below
+// the floor but never the shared neutral: blocked and ready stay apart.
+func TestTrueColorClippedStagesKeepTheirHueOnGrey(t *testing.T) {
+	t.Parallel()
+
+	const bg = "#a0a0a0"
+	prefix := strings.Repeat("x", 80)
+	snap := &snapshot.Snapshot{V: 1, Team: "crew", Groups: []snapshot.Group{{Name: "coders", Agents: []snapshot.Agent{
+		{Name: "alpha1", Status: snapshot.StatusWorking, Stage: prefix + " blocked"},
+		{Name: "alpha2", Status: snapshot.StatusWorking, Stage: prefix + " ready"},
+	}}}}
+	frame := dashboard.Frame{Snapshot: snap, Selection: dashboard.Selection{Group: -1}, Now: at}
+	out := dashboard.Render(frame, 80, 24, dashboard.Options{Profile: colorprofile.TrueColor, Background: lipgloss.Color(bg)})
+	plain := ansi.Strip(out)
+	require.NotContains(t, plain, "blocked", "the trigger word is clipped")
+	require.NotContains(t, plain, "ready", "the trigger word is clipped")
+	blocked := paintedCell(t, lineWith(t, out, "alpha1"), "xxx").ink
+	ready := paintedCell(t, lineWith(t, out, "alpha2"), "xxx").ink
+	require.NotNil(t, blocked)
+	require.NotNil(t, ready)
+	require.NotEqual(t, rgbBytes(blocked), rgbBytes(ready), "a blocked stage must not draw as a ready one")
+	require.Equal(t, [3]uint8{0x5f, 0, 0}, rgbBytes(blocked))
+	require.Equal(t, [3]uint8{0x14, 0x53, 0x2d}, rgbBytes(ready))
+	require.InDelta(t, 5.40, contrastRatio(blocked, lipgloss.Color(bg)), 0.01)
+	require.GreaterOrEqual(t, contrastRatio(blocked, lipgloss.Color(bg)), readableContrast)
+	require.InDelta(t, 3.48, contrastRatio(ready, lipgloss.Color(bg)), 0.01)
+	requireRedInk(t, blocked)
+}
+
 func TestANSI256SelectionStaysVisible(t *testing.T) {
 	t.Parallel()
 
@@ -292,7 +324,7 @@ func TestReadableInkKeepsAnAvailablePaletteShade(t *testing.T) {
 	const backgroundLuminance = 0.22
 	preferred := ansi.IndexedColor(244)
 	alternate := ansi.IndexedColor(232)
-	require.Equal(t, alternate, dashboard.ReadableInk(preferred, alternate, nil, backgroundLuminance, true))
+	require.Equal(t, alternate, dashboard.ReadableInk(preferred, alternate, nil, backgroundLuminance, true, false))
 }
 
 func TestReadableInkFallsBackAlongItsLadder(t *testing.T) {
@@ -303,9 +335,23 @@ func TestReadableInkFallsBackAlongItsLadder(t *testing.T) {
 	preferred := ansi.IndexedColor(210)
 	alternate := ansi.IndexedColor(88)
 	ladder := []ansi.IndexedColor{124, 52}
-	require.Equal(t, ansi.IndexedColor(52), dashboard.ReadableInk(preferred, alternate, ladder, backgroundLuminance, true))
-	require.Equal(t, ansi.IndexedColor(232), dashboard.ReadableInk(preferred, alternate, ladder[:1], backgroundLuminance, true), "no ladder slot reaches 4.5:1: the shared neutral")
-	require.Equal(t, alternate, dashboard.ReadableInk(preferred, alternate, ladder, 0.8, true), "a configured shade that passes wins over the ladder")
+	require.Equal(t, ansi.IndexedColor(52), dashboard.ReadableInk(preferred, alternate, ladder, backgroundLuminance, true, true))
+	require.Equal(t, ansi.IndexedColor(232), dashboard.ReadableInk(preferred, alternate, ladder[:1], backgroundLuminance, true, true), "no ladder slot reaches 4.5:1: the shared neutral")
+	require.Equal(t, alternate, dashboard.ReadableInk(preferred, alternate, ladder, 0.8, true, true), "a configured shade that passes wins over the ladder")
+}
+
+func TestReadableInkAtTrueColorKeepsMainsInkBelowTheFloor(t *testing.T) {
+	t.Parallel()
+
+	const backgroundLuminance = 0.35
+	preferred := lipgloss.Color("#ff989f")
+	alternate := lipgloss.Color("#870000")
+	ladder := []ansi.IndexedColor{124, 52}
+	got := dashboard.ReadableInk(preferred, alternate, ladder, backgroundLuminance, false, true)
+	require.Equal(t, [3]uint8{0x5f, 0, 0}, rgbBytes(got), "the ladder slot's own RGB, not its index")
+	require.IsType(t, color.RGBA{}, got)
+	require.Equal(t, preferred, dashboard.ReadableInk(preferred, alternate, ladder[:1], backgroundLuminance, false, true), "no shade reaches 4.5:1: main's ink")
+	require.Equal(t, color.Black, dashboard.ReadableInk(preferred, alternate, ladder[:1], backgroundLuminance, false, false), "a role without a hue takes the neutral")
 }
 
 // Match attributes, resets and extended colours from the standard xterm palette.
@@ -398,6 +444,17 @@ func TestDashboardContrastSweep(t *testing.T) {
 			// nearInk counts the backgrounds on which two hue inks that differ
 			// are closer than the OKLab floor of TestANSI256StatusColoursStayDistinct.
 			nearInk := make(map[string]int)
+			// At TrueColor the sweep also compares every hue ink with the one main
+			// drew on that background: the palette shade of the side that reads
+			// best. A pair main kept apart must stay apart, and a pair main could
+			// tell must stay tellable.
+			paletteRole := map[string]int{
+				"green": dashboard.PaletteGreen, "yellow": dashboard.PaletteYellow, "orange": dashboard.PaletteOrange,
+				"red": dashboard.PaletteRed, "cyan": dashboard.PaletteCyan,
+			}
+			var mainInk []color.Color
+			mainNear := make(map[string]int)
+			worseThanMain := make(map[string]int)
 			checkedSGR := make(map[string]bool)
 			seen := 0
 			check := func(role string, ink, bg color.Color) {
@@ -405,6 +462,11 @@ func TestDashboardContrastSweep(t *testing.T) {
 				require.NotNil(t, ink, role)
 				require.NotNil(t, bg, role)
 				floor := readableContrast
+				if idx, hue := paletteRole[strings.TrimSuffix(role, " selected")]; hue && p == colorprofile.TrueColor && contrastRatio(ink, bg) < floor {
+					// No shade of the hue reaches the floor here: the ink is main's.
+					require.Equalf(t, rgbBytes(mainInk[idx]), rgbBytes(ink), "%s on %v is below the floor and not main's ink", role, bg)
+					return
+				}
 				if p == colorprofile.ANSI256 {
 					floor = min(floor, max(contrastRatio(ansi.IndexedColor(232), bg), contrastRatio(ansi.IndexedColor(231), bg)))
 				}
@@ -422,6 +484,9 @@ func TestDashboardContrastSweep(t *testing.T) {
 				for g := 0; g <= 255; g += 17 {
 					for b := 0; b <= 255; b += 17 {
 						bg := color.RGBA{R: uint8(r), G: uint8(g), B: uint8(b), A: 255}
+						if p == colorprofile.TrueColor {
+							mainInk = dashboard.PaletteForBackground(contrastRatio(lightText, bg) > contrastRatio(darkText, bg))
+						}
 						var frames [len(models)]string
 						for i, model := range models {
 							frames[i] = draw(model, bg)
@@ -469,6 +534,23 @@ func TestDashboardContrastSweep(t *testing.T) {
 							inks[sample.role] = normal.ink
 							check(sample.role+" selected", selected.ink, selected.fill)
 						}
+						if p == colorprofile.TrueColor {
+							for i, a := range hueRoles {
+								for _, b := range hueRoles[:i] {
+									ma, mb := mainInk[paletteRole[a]], mainInk[paletteRole[b]]
+									if rgbBytes(ma) == rgbBytes(mb) {
+										continue
+									}
+									if oklabDistance(ma, mb) < minimumInkDistance {
+										mainNear[a+"/"+b]++
+									}
+									if rgbBytes(inks[a]) == rgbBytes(inks[b]) ||
+										oklabDistance(ma, mb) >= minimumInkDistance && oklabDistance(inks[a], inks[b]) < minimumInkDistance {
+										worseThanMain[a+"/"+b]++
+									}
+								}
+							}
+						}
 						for i, a := range hueRoles {
 							for _, b := range hueRoles[:i] {
 								if inks[a] == inks[b] {
@@ -489,6 +571,18 @@ func TestDashboardContrastSweep(t *testing.T) {
 				for _, b := range hueRoles[:i] {
 					t.Logf("%s and %s draw the same ink: %d/%d", a, b, sameSlot[a+"/"+b], seen)
 				}
+			}
+			if p == colorprofile.TrueColor {
+				// Where no shade of a hue reaches 4.5:1 the owner kept main's ink,
+				// below the floor, so blocked and ready never share an ink at
+				// TrueColor (NERD-5719). The yellow and orange of main's own palette are
+				// near each other (OKLab 0.047), so near pairs equal main's count.
+				require.Zero(t, sameSlot["red/green"], "blocked and ready stage inks")
+				require.Empty(t, worseThanMain, "a pair main kept apart, or could tell apart, on some background")
+				for pair, n := range nearInk {
+					require.LessOrEqualf(t, n, mainNear[pair], "%s near-identical backgrounds against main", pair)
+				}
+				t.Logf("near-identical hue inks: %v; main's: %v", nearInk, mainNear)
 			}
 			if p == colorprofile.ANSI256 {
 				// A ladder slot must stay tellable from every other hue ink on
