@@ -308,6 +308,9 @@ func Run(ctx context.Context, o Options) (err error) {
 	mutes := newNoticeMutes(st)
 	var ops map[string]op
 	if svc := o.newWorkforce(st, ident, idle, starts, paths.Dir); svc != nil {
+		svc.HoldWorkerMute = func(row store.Worker) func() {
+			return mutes.Hold(row.LogicalID, row.Generation)
+		}
 		svc.ClearWorkerMute = func(row store.Worker) bool {
 			return mutes.ClearWorker(row.LogicalID, row.Generation, o.Now())
 		}

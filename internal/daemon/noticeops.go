@@ -63,7 +63,7 @@ func (o Options) noticeOps(in *inbox, mutes *notice.Mutes) map[string]op {
 			}
 			return mutes.Mute(ctx, *m, req.Worker, req.For, o.Now())
 		}},
-		OpNoticesUnmute: {run: func(_ context.Context, args json.RawMessage) (any, error) {
+		OpNoticesUnmute: {run: func(ctx context.Context, args json.RawMessage) (any, error) {
 			var req UnmuteRequest
 			if err := decodeArgs(args, &req); err != nil {
 				return nil, err
@@ -72,7 +72,7 @@ func (o Options) noticeOps(in *inbox, mutes *notice.Mutes) map[string]op {
 			if m == nil {
 				return nil, fmt.Errorf("%w: the team poll has no model to find %q in", ErrNotReady, req.Worker)
 			}
-			return UnmuteResult{Worker: req.Worker, Ended: mutes.Unmute(*m, req.Worker, o.Now())}, nil
+			return UnmuteResult{Worker: req.Worker, Ended: mutes.Unmute(ctx, *m, req.Worker, o.Now())}, nil
 		}},
 		OpNoticesList: {run: func(_ context.Context, args json.RawMessage) (any, error) {
 			if err := decodeArgs(args, &struct{}{}); err != nil {

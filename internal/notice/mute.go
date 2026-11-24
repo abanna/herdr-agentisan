@@ -45,6 +45,7 @@ type Mute struct {
 type Mutes struct {
 	mu      sync.Mutex
 	entries map[muteScope]muteEntry
+	ending  map[muteScope]bool // rows a retire holds (Hold)
 	resolve func(context.Context, string, team.Worker) (generation int64, bound bool, err error)
 }
 
@@ -76,7 +77,7 @@ type muteEntry struct {
 // the selected worker against the live bindings and can link a replacement
 // pane to its pending handoff's generation.
 func NewMutes(resolve func(context.Context, string, team.Worker) (generation int64, bound bool, err error)) *Mutes {
-	return &Mutes{entries: map[muteScope]muteEntry{}, resolve: resolve}
+	return &Mutes{entries: map[muteScope]muteEntry{}, ending: map[muteScope]bool{}, resolve: resolve}
 }
 
 // selectWorker is the worker a name selects, for mute and unmute alike: a
@@ -126,12 +127,33 @@ func (s *Mutes) Mute(ctx context.Context, m team.Model, worker string, d time.Du
 			scope = muteScope{bound: true, name: worker, generation: generation}
 		}
 	}
+	if s.ending[scope] {
+		return Mute{}, fmt.Errorf("%w: %q is being retired", ErrUnknownWorker, worker)
+	}
 	e := muteEntry{until: until}
 	if !scope.bound {
 		e.pane = w.Pane.ID
 	}
 	s.entries[scope] = e
 	return Mute{Worker: worker, Pane: e.pane, Until: until}, nil
+}
+
+// Hold keeps a bound row's mute from silencing any notice, and refuses a new
+// mute of the row, until release (NERD-5730): a retire holds it while it closes
+// the pane and ends the row, so a poll that sees either tells the worker's
+// departure with nothing to drop it, and no mute set meanwhile outlives the row.
+// A retire that fails releases it and the mute stands; one that succeeds
+// clears the mute (ClearWorker) first.
+func (s *Mutes) Hold(worker string, generation int64) (release func()) {
+	k := muteScope{bound: true, name: worker, generation: generation}
+	s.mu.Lock()
+	s.ending[k] = true
+	s.mu.Unlock()
+	return func() {
+		s.mu.Lock()
+		delete(s.ending, k)
+		s.mu.Unlock()
+	}
 }
 
 // ClearWorker clears this row's mute, and no other entry's, and reports
@@ -154,7 +176,7 @@ func (s *Mutes) ClearWorker(worker string, generation int64, now time.Time) bool
 // a closed pane's, or one that is now a row's, which nothing else could end.
 // A namesake still in m keeps its own. With no model there is nothing to
 // select from, so the caller refuses. A worker with none is no refusal.
-func (s *Mutes) Unmute(m team.Model, worker string, now time.Time) bool {
+func (s *Mutes) Unmute(ctx context.Context, m team.Model, worker string, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	named := func(keep func(muteScope) bool) []muteScope {
@@ -162,7 +184,7 @@ func (s *Mutes) Unmute(m team.Model, worker string, now time.Time) bool {
 	}
 	keys := named(func(k muteScope) bool { return k.bound })
 	if w, found := selectWorker(m, worker); found && !w.Bound {
-		if _, held := s.entries[scopeOf(w)]; held {
+		if _, held := s.entries[scopeOf(w)]; held && !s.rowHolds(ctx, worker, w) {
 			keys = []muteScope{scopeOf(w)}
 		}
 	}
@@ -177,6 +199,17 @@ func (s *Mutes) Unmute(m team.Model, worker string, now time.Time) bool {
 		delete(s.entries, k)
 	}
 	return inForce
+}
+
+// rowHolds reports whether a live row holds the id the unbound w carries as its
+// name, as Mute's resolver tells, or the resolver cannot tell: the model lacks
+// a row whose pane left the team's tabs, and the name still selects the row.
+func (s *Mutes) rowHolds(ctx context.Context, worker string, w team.Worker) bool {
+	if s.resolve == nil {
+		return false
+	}
+	_, bound, err := s.resolve(ctx, worker, w)
+	return bound || err != nil
 }
 
 // List is every mute in force at now, by worker name, a bound worker's
@@ -222,5 +255,5 @@ func (s *Mutes) Muted(n Notice, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m, ok := s.entries[n.scope]
-	return ok && now.Before(m.until)
+	return ok && !s.ending[n.scope] && now.Before(m.until)
 }

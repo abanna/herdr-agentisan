@@ -78,12 +78,12 @@ func TestRetireAfterThePollConfirmedLoss(t *testing.T) {
 	waitLine(t, logs, "ha-coder-1 is blocked")
 }
 
-// TestRetireClearsTheMuteBeforeThePaneCloses is the retire-first order of the
-// Gone notice (NERD-5730): retire is held at its pane.close, and the worker's
-// mute is already gone, so a poll that sees the closed pane, before or after
-// retire ends the row, builds the departure with no mute to drop it. The poll
+// TestRetireHoldsTheMuteWhileItCloses is the retire-first order of the Gone
+// notice (NERD-5730): retire is held at its pane.close, and the worker's mute
+// is held, not cleared: a second mute of the worker is refused, so none
+// survives the retirement, and the notice of its departure is told. The poll
 // first order is TestRetireAfterThePollConfirmedLoss.
-func TestRetireClearsTheMuteBeforeThePaneCloses(t *testing.T) {
+func TestRetireHoldsTheMuteWhileItCloses(t *testing.T) {
 	t.Parallel()
 	th, _, dir := haTeam(t)
 	s, logs := serveMuteWorkers(t, th, dir)
@@ -97,12 +97,36 @@ func TestRetireClearsTheMuteBeforeThePaneCloses(t *testing.T) {
 			got, retireErr = daemon.Workforce(t.Context(), s, daemon.OpWorkerRetire, workforce.RetireRequest{Target: muteWorker})
 		}()
 	})
-	assert.Empty(t, listedMutes(t, s), "cleared while the pane is open")
-	assert.Equal(t, store.StatusActive, row(t, dir, th, muteWorker).Status)
+	_, err := daemon.Workforce(t.Context(), s, daemon.OpNoticesMute, daemon.MuteRequest{Worker: muteWorker})
+	assertUnknownMuteWorker(t, err)
+	assert.Equal(t, []string{muteWorker}, listedMutes(t, s), "held until the row has ended")
 	release()
 	<-done
 	require.NoError(t, retireErr)
 	assert.JSONEq(t, `{"id":"ha-coder-1","pane_id":"w14:p2","changed":true,"outcome":"retired","mute_cleared":true}`, string(got))
+	assert.Empty(t, listedMutes(t, s))
+	waitLine(t, logs, "ha-coder-1 left the team (pane w14:p2)")
+}
+
+// TestMutedDepartureSurvivesAFailedAgentList: a poll that cannot list the
+// agents reconciles nothing, so it cannot clear the mute of a worker whose
+// pane has closed; it must not tell the departure either, which the mute
+// would drop for good. The next poll that reconciles tells it.
+func TestMutedDepartureSurvivesAFailedAgentList(t *testing.T) {
+	t.Parallel()
+	th, _, dir := haTeam(t)
+	s, logs := serveMuteWorkers(t, th, dir)
+	muteForThreeHours(t, s, muteWorker)
+	th.mu.Lock()
+	th.agentsErr = true
+	th.mu.Unlock()
+	polled(t, th.srv, 2)
+	require.NoError(t, (herdr.Client{SocketPath: th.path}).ClosePane(t.Context(), muteOldPane))
+	polled(t, th.srv, 3)
+	assert.Equal(t, []string{muteWorker}, listedMutes(t, s), "no loss is confirmed without the agent list")
+	th.mu.Lock()
+	th.agentsErr = false
+	th.mu.Unlock()
 	waitLine(t, logs, "ha-coder-1 left the team (pane w14:p2)")
 }
 

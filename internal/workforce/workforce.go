@@ -156,6 +156,10 @@ type Service struct {
 	// through (A33); nil records nothing. The daemon sends it as a workflow
 	// event.
 	HandoffSteps func(context.Context, HandoffStep)
+	// HoldWorkerMute holds a row's mute while retire ends the row, until its
+	// release (NERD-5730): the mute silences nothing and takes no new mute.
+	// Nil holds nothing.
+	HoldWorkerMute func(store.Worker) (release func())
 	// ClearWorkerMute clears an ended row's mute and reports whether it was
 	// active (NERD-5730). Nil has no mute storage to update.
 	ClearWorkerMute func(store.Worker) bool

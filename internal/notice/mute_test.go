@@ -1,6 +1,7 @@
 package notice_test
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -137,14 +138,14 @@ func TestUnmute(t *testing.T) {
 	s := notice.NewMutes(nil)
 	_, err := s.Mute(t.Context(), muteTeam(), "c2", time.Minute, t0)
 	require.NoError(t, err)
-	assert.True(t, s.Unmute(muteTeam(), "c2", t0.Add(time.Second)))
+	assert.True(t, s.Unmute(t.Context(), muteTeam(), "c2", t0.Add(time.Second)))
 	assert.False(t, s.Muted(about("c2", notice.Blocked), t0.Add(time.Second)))
-	assert.False(t, s.Unmute(muteTeam(), "c2", t0.Add(time.Second)), "none left")
-	assert.False(t, s.Unmute(muteTeam(), "nobody", t0))
+	assert.False(t, s.Unmute(t.Context(), muteTeam(), "c2", t0.Add(time.Second)), "none left")
+	assert.False(t, s.Unmute(t.Context(), muteTeam(), "nobody", t0))
 
 	_, err = s.Mute(t.Context(), muteTeam(), "c2", time.Minute, t0)
 	require.NoError(t, err)
-	assert.False(t, s.Unmute(muteTeam(), "c2", t0.Add(time.Minute)), "one that ended was not in force")
+	assert.False(t, s.Unmute(t.Context(), muteTeam(), "c2", t0.Add(time.Minute)), "one that ended was not in force")
 }
 
 // TestMuteAgainSetsItsEnd: muting a muted worker sets its end anew, shorter
@@ -179,7 +180,7 @@ func TestMuteList(t *testing.T) {
 		{Worker: "ha-coder-1", Until: t0.Add(2 * time.Hour)},
 		{Worker: "w1:p3", Pane: "w1:p3", Until: t0.Add(time.Hour)},
 	}, s.List(t0.Add(time.Minute)))
-	assert.False(t, s.Unmute(muteTeam(), "c2", t0), "the list forgot the mute that ended, so it is no longer there even before its end")
+	assert.False(t, s.Unmute(t.Context(), muteTeam(), "c2", t0), "the list forgot the mute that ended, so it is no longer there even before its end")
 }
 
 // TestMutesAreSafeAcrossGoroutines: the ops mute while the poll reads, as
@@ -193,7 +194,7 @@ func TestMutesAreSafeAcrossGoroutines(t *testing.T) {
 		wg.Go(func() {
 			for range 100 {
 				_, _ = s.Mute(t.Context(), m, "c2", time.Minute, t0)
-				s.Unmute(m, "c2", t0)
+				s.Unmute(t.Context(), m, "c2", t0)
 			}
 		})
 		wg.Go(func() {
@@ -309,21 +310,21 @@ func TestUnmuteSelectsAsMuteDoes(t *testing.T) {
 	t.Run("the bound row holds the id and has no mute", func(t *testing.T) {
 		t.Parallel()
 		s := muted(t, alone)
-		assert.False(t, s.Unmute(both, name, t0), "nothing of the row's was in force")
+		assert.False(t, s.Unmute(t.Context(), both, name, t0), "nothing of the row's was in force")
 		assert.True(t, s.Muted(softNotice(unbound), t0), "the namesake's mute stands")
 	})
 	t.Run("the bound row's mute only", func(t *testing.T) {
 		t.Parallel()
 		s := muted(t, alone, both)
-		assert.True(t, s.Unmute(both, name, t0))
+		assert.True(t, s.Unmute(t.Context(), both, name, t0))
 		assert.False(t, s.Muted(softNotice(bound), t0))
 		assert.True(t, s.Muted(softNotice(unbound), t0))
-		assert.False(t, s.Unmute(both, name, t0), "while the row holds the id, the name selects the row")
+		assert.False(t, s.Unmute(t.Context(), both, name, t0), "while the row holds the id, the name selects the row")
 	})
 	t.Run("an unbound pane while no row holds the id", func(t *testing.T) {
 		t.Parallel()
 		s := muted(t, alone)
-		assert.True(t, s.Unmute(alone, name, t0))
+		assert.True(t, s.Unmute(t.Context(), alone, name, t0))
 		assert.Empty(t, s.List(t0))
 	})
 }
@@ -351,7 +352,7 @@ func TestUnmuteEndsAnUnboundMuteWhoseTerminalIsNoUnboundWorkers(t *testing.T) {
 		t.Parallel()
 		s := notice.NewMutes(nil)
 		muteAs(t, s, first)
-		assert.True(t, s.Unmute(teamOf(boss, second), "c2", t0), "the closed pane's mute ends")
+		assert.True(t, s.Unmute(t.Context(), teamOf(boss, second), "c2", t0), "the closed pane's mute ends")
 		assert.Empty(t, s.List(t0))
 	})
 	t.Run("two namesakes, the first one gone", func(t *testing.T) {
@@ -360,7 +361,7 @@ func TestUnmuteEndsAnUnboundMuteWhoseTerminalIsNoUnboundWorkers(t *testing.T) {
 		muteAs(t, s, first)
 		muteAs(t, s, second)
 		require.Len(t, s.List(t0), 2)
-		assert.True(t, s.Unmute(teamOf(boss, second), "c2", t0))
+		assert.True(t, s.Unmute(t.Context(), teamOf(boss, second), "c2", t0))
 		assert.Empty(t, s.List(t0), "the second's mute ends with the gone first's")
 	})
 	t.Run("the muted pane became a row", func(t *testing.T) {
@@ -368,7 +369,7 @@ func TestUnmuteEndsAnUnboundMuteWhoseTerminalIsNoUnboundWorkers(t *testing.T) {
 		s := notice.NewMutes(nil)
 		muteAs(t, s, first)
 		row := team.Worker{ID: "c2", Bound: true, Generation: 1, Pane: team.Pane{ID: "w1:p1", TerminalID: "t1", Name: "c2", Agent: "claude"}}
-		assert.True(t, s.Unmute(teamOf(boss, row), "c2", t0), "the entry no longer silences anything and ends")
+		assert.True(t, s.Unmute(t.Context(), teamOf(boss, row), "c2", t0), "the entry no longer silences anything and ends")
 		assert.Empty(t, s.List(t0))
 	})
 	t.Run("a namesake still in the model keeps its mute", func(t *testing.T) {
@@ -376,9 +377,55 @@ func TestUnmuteEndsAnUnboundMuteWhoseTerminalIsNoUnboundWorkers(t *testing.T) {
 		s := notice.NewMutes(nil)
 		muteAs(t, s, first)
 		row := team.Worker{ID: "c2", Bound: true, Generation: 1, Pane: team.Pane{ID: "w1:p9", TerminalID: "t9", Name: "session", Agent: "claude"}}
-		assert.False(t, s.Unmute(teamOf(boss, first, row), "c2", t0), "the row holds the id and has no mute")
+		assert.False(t, s.Unmute(t.Context(), teamOf(boss, first, row), "c2", t0), "the row holds the id and has no mute")
 		assert.True(t, s.Muted(softNotice(first), t0))
 	})
+}
+
+// TestHoldSilencesNothingAndRefusesAMute: a retiring row's mute, held, silences
+// no notice and no new mute is taken for the row, so none outlives it
+// (NERD-5730, fifth review); the hold's release gives the mute back.
+func TestHoldSilencesNothingAndRefusesAMute(t *testing.T) {
+	t.Parallel()
+	_, both, bound, _ := namesakes()
+	s := notice.NewMutes(nil)
+	_, err := s.Mute(t.Context(), both, "ha-qa-1", time.Hour, t0)
+	require.NoError(t, err)
+	release := s.Hold("ha-qa-1", 4)
+	assert.False(t, s.Muted(softNotice(bound), t0))
+	_, err = s.Mute(t.Context(), both, "ha-qa-1", time.Hour, t0)
+	require.ErrorIs(t, err, notice.ErrUnknownWorker)
+	assert.Len(t, s.List(t0), 1, "the mute is held, not cleared")
+	release()
+	assert.True(t, s.Muted(softNotice(bound), t0))
+	_, err = s.Mute(t.Context(), both, "ha-qa-1", time.Hour, t0)
+	require.NoError(t, err)
+}
+
+// TestUnmuteLeavesANamesakeWhileALiveRowHoldsTheID: the model may lack a live
+// row (its pane left the team's tabs), so unmute asks the live bindings, as
+// mute does, and never ends the namesake's mute for the row's.
+func TestUnmuteLeavesANamesakeWhileALiveRowHoldsTheID(t *testing.T) {
+	t.Parallel()
+	alone, both, bound, unbound := namesakes()
+	live := false
+	s := notice.NewMutes(func(_ context.Context, _ string, w team.Worker) (int64, bool, error) {
+		switch {
+		case w.Bound:
+			return w.Generation, true, nil
+		case live:
+			return 0, false, notice.ErrUnknownWorker
+		}
+		return 0, false, nil
+	})
+	for _, m := range []team.Model{alone, both} {
+		_, err := s.Mute(t.Context(), m, "ha-qa-1", time.Hour, t0)
+		require.NoError(t, err)
+	}
+	live = true
+	assert.True(t, s.Unmute(t.Context(), alone, "ha-qa-1", t0), "the row's mute ends, as the name selects the row")
+	assert.True(t, s.Muted(softNotice(unbound), t0), "the namesake's stands")
+	assert.False(t, s.Muted(softNotice(bound), t0))
 }
 
 // TestListTellsNamesakesApart: a bound row's mute is listed before an unbound

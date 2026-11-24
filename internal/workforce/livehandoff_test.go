@@ -84,9 +84,12 @@ func TestRetireWaitsForTheRekeyOfALiveHandoff(t *testing.T) {
 			if tc.byPane {
 				target = w.PaneID
 			}
+			cleared := 0
+			f.svc.ClearWorkerMute = func(store.Worker) bool { cleared++; return false }
 
 			res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: target, AfterHandoff: tc.afterHandoff})
 			assert.ErrorIs(t, err, workforce.ErrPaneChanged, "answered %+v", res)
+			assert.Zero(t, cleared, "a refused retire leaves the worker's mute")
 			assert.Empty(t, f.h.params("pane.close"), "the worker's pane is not closed")
 			f.h.mu.Lock()
 			assert.NotNil(t, f.h.pane(w.PaneID), "the worker's pane stays open")

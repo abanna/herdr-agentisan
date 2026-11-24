@@ -109,21 +109,27 @@ func TestRetire(t *testing.T) {
 	f.h.mu.Unlock()
 }
 
-// TestRetireClearsTheMuteBeforeItClosesThePane (NERD-5730): the worker's mute
-// ends while its pane is open and its row active, so a poll that sees the
-// closed pane, or the ended row, builds the worker's Gone notice with no mute
-// in the way. The cost is a close that fails: the worker is still there, with
-// its mute already cleared.
-func TestRetireClearsTheMuteBeforeItClosesThePane(t *testing.T) {
+// TestRetireHoldsTheMuteWhileItRetires (NERD-5730): the worker's mute is held
+// before its pane closes, so no poll that sees the closed pane or the ended
+// row drops the Gone notice, and cleared only once the row has ended. A retire
+// that fails clears nothing and releases the hold: the mute stands.
+func TestRetireHoldsTheMuteWhileItRetires(t *testing.T) {
 	t.Parallel()
 	for _, closeFails := range []bool{false, true} {
 		t.Run(map[bool]string{false: "close_works", true: "close_fails"}[closeFails], func(t *testing.T) {
 			t.Parallel()
 			f := newFixture(t, teamConfig)
 			w := f.worker(t, "ha-coder-1", "coder")
-			var at []string
+			var events []string
+			at := func(what string, row store.Worker) {
+				events = append(events, fmt.Sprintf("%s: %d closes, %s", what, len(f.h.params("pane.close")), f.row(t, row.LogicalID).Status))
+			}
+			f.svc.HoldWorkerMute = func(row store.Worker) func() {
+				at("hold", row)
+				return func() { events = append(events, "release") }
+			}
 			f.svc.ClearWorkerMute = func(row store.Worker) bool {
-				at = append(at, fmt.Sprintf("%d closes, %s", len(f.h.params("pane.close")), f.row(t, row.LogicalID).Status))
+				at("clear", row)
 				return true
 			}
 			if closeFails {
@@ -131,15 +137,14 @@ func TestRetireClearsTheMuteBeforeItClosesThePane(t *testing.T) {
 			}
 
 			res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID})
-			assert.Equal(t, []string{"0 closes, " + store.StatusActive}, at, "cleared once, before the close, with the row active")
 			if closeFails {
 				require.ErrorIs(t, err, workforce.ErrHerdr)
-				assert.Equal(t, store.StatusActive, f.row(t, w.ID).Status, "the worker is still there, unmuted")
+				assert.Equal(t, []string{"hold: 0 closes, active", "release"}, events, "nothing cleared")
 				return
 			}
 			require.NoError(t, err)
 			assert.True(t, res.MuteCleared)
-			assert.Equal(t, store.StatusRetired, f.row(t, w.ID).Status)
+			assert.Equal(t, []string{"hold: 0 closes, active", "clear: 1 closes, retired", "release"}, events)
 		})
 	}
 }

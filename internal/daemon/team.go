@@ -264,7 +264,8 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	pp := paneProcesses{} // one process_info ask per pane this poll
 	// A candidate pane can be the one herdr names a worker by, so a failed
 	// agent list proves and loses nothing this poll.
-	if rowsErr == nil && agentsErr == nil {
+	reconciled := rowsErr == nil && agentsErr == nil
+	if reconciled {
 		if rows, err = o.reconcile(ctx, c, pp, st, tp.bind, l, rows); err != nil {
 			return nil, "", err
 		}
@@ -285,7 +286,9 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	// A pane's rest is pane.list's status, so a failed agent list does not
 	// stop the idle clock, nor the notices of a status change.
 	tp.idle.Observe(m, now)
-	tp.notices.observe(m, agents, agentsErr == nil, now)
+	// Without the reconcile no loss is confirmed and no mute cleared, so a
+	// departure is told by the next poll that has (NERD-5730).
+	tp.notices.observe(m, agents, agentsErr == nil, reconciled, now)
 	o.observeCtx(ctx, c, tp.notices, m, now)
 	if agentsErr == nil {
 		tp.stages.Observe(m, now)

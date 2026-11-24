@@ -23,6 +23,10 @@ type Watch struct {
 	// so it cannot tell a pane herdr knows only by name from a shell: it
 	// keeps each pane judged before as it was named, and judges no exit.
 	agents []placed
+	// hold keeps a departure for the next call (Hold); kept are the panes it
+	// kept, which stay in agents until a call tells them.
+	hold bool
+	kept []placed
 	// untold holds the panes that turned blocked at a call whose agent.list
 	// failed, which could not judge them to run an agent, while they stay
 	// blocked and unjudged: each block is told at the first call that judges
@@ -55,6 +59,12 @@ func NewWatch() *Watch {
 	return &Watch{untold: map[string]bool{}, turns: map[string]*uint64{}, unknown: map[string]bool{}, known: map[string]bool{}, fresh: map[string]int{}}
 }
 
+// Hold makes the calls that follow tell no departure of a pane that has left:
+// the pane stays known, and the first call without the hold tells it. A poll
+// that did not reconcile holds, so a mute its reconcile would have cleared
+// does not drop the departure (NERD-5730).
+func (w *Watch) Hold(hold bool) { w.hold = hold }
+
 // Observe is what changed from the last model observed to m, as notices:
 //   - the first call only takes m as its baseline, and is one Started
 //     notice per team in m;
@@ -77,6 +87,7 @@ func NewWatch() *Watch {
 // list never becomes the baseline (A21).
 func (w *Watch) Observe(m team.Model, agents []herdr.AgentInfo, named bool) []Notice {
 	first := w.last == nil
+	w.kept = nil
 	now := w.judge(m, agents, named)
 	w.renew(now)
 	var out []Notice
@@ -91,7 +102,7 @@ func (w *Watch) Observe(m team.Model, agents []herdr.AgentInfo, named bool) []No
 	if named {
 		out = append(out, w.turnsOf(m, agents, first)...)
 	}
-	w.last, w.agents = &m, now
+	w.last, w.agents = &m, slices.Concat(now, w.kept)
 	return out
 }
 
@@ -208,6 +219,8 @@ func (w *Watch) statuses(prev, m team.Model, now []placed, named bool) []Notice 
 		id := a.worker.Pane.ID
 		isShell, there := shell[id]
 		switch {
+		case !there && w.hold:
+			w.kept = append(w.kept, a)
 		case !there:
 			out = append(out, workerNotice(a.project, a.worker, Gone, goneText(a.worker)))
 		case isShell && named:
