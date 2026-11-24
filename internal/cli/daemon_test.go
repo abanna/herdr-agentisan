@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -391,7 +392,16 @@ func TestDaemonRunRefusesAnUnverifiedProtocol(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	e := daemonEnv{herdrSock: filepath.Join(dir, "h.sock"), stateDir: filepath.Join(dir, "state")}
-	herdrtest.StartAt(t, e.herdrSock, func(herdrtest.Request) herdrtest.Reply {
+	var pings atomic.Int32
+	subscribed := make(chan struct{})
+	markSubscribed := sync.OnceFunc(func() { close(subscribed) })
+	herdrtest.StartAt(t, e.herdrSock, func(req herdrtest.Request) herdrtest.Reply {
+		switch req.Method {
+		case "ping":
+			pings.Add(1)
+		case "events.subscribe":
+			markSubscribed()
+		}
 		return herdrtest.Reply{Result: map[string]any{"type": "pong", "version": "0.10.0", "protocol": 23}}
 	})
 	var logs bytes.Buffer
@@ -399,21 +409,56 @@ func TestDaemonRunRefusesAnUnverifiedProtocol(t *testing.T) {
 	_, err = runCtx(daemonCtx(t, e, nil, &logs), "daemon", "run")
 	require.ErrorIs(t, err, daemon.ErrUnverifiedProtocol)
 
-	ctx, cancel := context.WithCancel(config.Into(daemonCtx(t, e, nil, &logs),
-		config.Config{DaemonLockWait: time.Second, AllowUnverified: true}))
-	done := make(chan error, 1)
-	go func() {
-		_, err := runCtx(ctx, "daemon", "run")
-		done <- err
-	}()
+	// Use a fresh lock: a child forked by a parallel test can briefly retain
+	// the refused run's flock while its recorded PID is still this process.
+	e.stateDir = filepath.Join(dir, "allow")
 	paths, err := daemon.PathsFor(e.stateDir, e.herdrSock)
 	require.NoError(t, err)
-	require.Eventually(t, func() bool {
-		info, err := daemon.Health(t.Context(), paths.Socket)
-		return err == nil && info.HerdrProtocol == 23
-	}, ready, 10*time.Millisecond, "the override runs protocol 23")
-	cancel()
-	<-done
+
+	ctx, cancel := context.WithCancel(config.Into(daemonCtx(t, e, nil, &logs),
+		config.Config{DaemonLockWait: time.Second, AllowUnverified: true}))
+	var runErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, runErr = runCtx(ctx, "daemon", "run")
+	}()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+			if t.Failed() {
+				t.Logf("override daemon exit error: %v", runErr)
+			} else {
+				assert.NoError(t, runErr, "override daemon shutdown")
+			}
+		case <-time.After(ready):
+			t.Error("override daemon did not stop after cancellation")
+		}
+
+		if t.Failed() {
+			raw, err := os.ReadFile(paths.Log)
+			if err != nil {
+				t.Logf("read override daemon log: %v", err)
+			} else {
+				t.Logf("override daemon log tail:\n%s", raw[max(0, len(raw)-4096):])
+			}
+		}
+	}()
+
+	// Run binds the health socket before starting the focus collector.
+	const startupCeiling = 90 * time.Second
+	select {
+	case <-subscribed:
+	case <-done:
+		t.Fatal("override daemon exited before subscribing to focus")
+	case <-time.After(startupCeiling):
+		t.Fatalf("override daemon did not subscribe to focus within %v (herdr pings observed: %d, including the refused run)", startupCeiling, pings.Load())
+	}
+
+	info, err := daemon.Health(t.Context(), paths.Socket)
+	require.NoError(t, err, "override daemon subscribed to focus but did not answer health")
+	require.EqualValues(t, 23, info.HerdrProtocol, "the override runs protocol 23")
 }
 
 // TestDaemonRunPushesTeam: `daemon run` turns the team poll on, reading the
