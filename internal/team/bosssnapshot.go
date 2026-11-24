@@ -66,16 +66,13 @@ func bossRow(p Pane, at, start time.Time, idle *IdleClock) snapshot.BossRow {
 	if start.IsZero() || p.CtxAt.IsZero() || p.CtxAt.After(at) {
 		a.Ctx = nil
 	}
-	var stage *string
-	if report.CheckValue(a.Stage) == nil {
-		stage = &a.Stage
-	}
+	stage := reported(a.Stage)
 	if stage == nil {
 		a.StageAt, a.StageStale = nil, false
 	}
 	return snapshot.BossRow{
 		PaneID: p.ID, Name: a.Name, Agent: bossField(a.Kind), Status: a.Status,
-		Item: bossField(a.Item), Stage: stage, StageAt: a.StageAt,
+		Item: reported(a.Item), Stage: stage, StageAt: a.StageAt,
 		StageStale: a.StageStale, IdleSince: a.IdleSince, Ctx: a.Ctx,
 	}
 }
@@ -85,4 +82,12 @@ func bossField(s string) *string {
 		return nil
 	}
 	return new(s)
+}
+
+// reported bounds an item or a stage as its reporter does (report.CheckValue).
+func reported(s string) *string {
+	if report.CheckValue(s) != nil {
+		return nil
+	}
+	return &s
 }

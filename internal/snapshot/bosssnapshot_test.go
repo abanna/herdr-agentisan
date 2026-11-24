@@ -42,6 +42,7 @@ func TestBossSnapshotJSONStrict(t *testing.T) {
 		{"time value", `T09:00:03Z`, `T09:60:03Z`},
 		{"UTF-8", `"w"`, "\"\xff\""},
 		{"field length", `"w"`, "\"" + strings.Repeat("a", 257) + "\""},
+		{"item length", `"item":null`, `"item":"` + strings.Repeat("a", 81) + `"`},
 		{"stage length", `"stage":null`, `"stage":"` + strings.Repeat("a", 81) + `"`},
 		{"context", `"ctx":0`, `"ctx":101`},
 		{"binding", `"generation":null`, `"generation":1`},

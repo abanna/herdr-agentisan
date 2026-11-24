@@ -129,12 +129,12 @@ func boundedBossString(s string, limit int) bool {
 }
 
 func (r BossRow) valid() bool {
-	for _, s := range []*string{r.Agent, r.Item} {
-		if s != nil && !boundedBossString(*s, MaxBossFieldBytes) {
+	for _, s := range []*string{r.Item, r.Stage} {
+		if s != nil && report.CheckValue(*s) != nil {
 			return false
 		}
 	}
-	return (r.Stage == nil || report.CheckValue(*r.Stage) == nil) && boundedBossString(r.Name, MaxBossFieldBytes) && boundedBossString(r.PaneID, MaxBossFieldBytes) &&
+	return (r.Agent == nil || boundedBossString(*r.Agent, MaxBossFieldBytes)) && boundedBossString(r.Name, MaxBossFieldBytes) && boundedBossString(r.PaneID, MaxBossFieldBytes) &&
 		r.Status.Valid() && (r.Ctx == nil || *r.Ctx >= 0 && *r.Ctx <= MaxCtx)
 }
 

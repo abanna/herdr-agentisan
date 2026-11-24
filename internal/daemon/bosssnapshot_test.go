@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -358,7 +359,7 @@ func TestBossSnapshotBoardAsOfPrecedesItsRead(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, st.Close()) })
 	var armed atomic.Bool
 	o.Now = func() time.Time {
-		if armed.CompareAndSwap(true, false) {
+		if strings.Contains(string(debug.Stack()), "bossSnapshotOp") && armed.CompareAndSwap(true, false) {
 			boardPost(t, st, "alpha", "committed as the clock is read")
 			return boardNow.Add(time.Second)
 		}
@@ -372,33 +373,59 @@ func TestBossSnapshotBoardAsOfPrecedesItsRead(t *testing.T) {
 	assert.True(t, *got.Unread > 0 || !got.AsOf.After(boardNow), "unread=%d as_of=%s", *got.Unread, got.AsOf)
 }
 
-// NERD-5748: a pane placed by the previous poll's model is refused by the new projection.
-func TestBossSnapshotRefusesFormerBossDuringPublish(t *testing.T) {
+// NERD-5748: a request paused after placement is refused, never served, once a shift change is published.
+func TestBossSnapshotRefusesFormerBossAfterPlacement(t *testing.T) {
+	t.Parallel()
+	h := shiftHerdr(t)
+	shiftCaller(h, "w14:p0")
+	o := shiftOpts(t, h)
+	var armed atomic.Bool
+	paused, resume := make(chan struct{}), make(chan struct{})
+	o.Now = func() time.Time {
+		if strings.Contains(string(debug.Stack()), "bossSnapshotOp") && armed.CompareAndSwap(true, false) {
+			close(paused)
+			<-resume
+		}
+		return boardNow
+	}
+	sock := startShift(t, h, o)
+	shiftRead(t, sock)
+	armed.Store(true)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	got := make(chan error, 1)
+	go func() { _, err := daemon.Workforce(ctx, sock, bossSnapshotOp, struct{}{}); got <- err }()
+	<-paused
+	h.mu.Lock()
+	h.tabs = append(slices.DeleteFunc(slices.Clone(h.tabs), func(tab map[string]any) bool { return tab["tab_id"] == "w14:t1" || tab["tab_id"] == "w14:t4" }),
+		tabOf("w14:t1", "w14", "al-coder-2"), tabOf("w14:t4", "w14", "al-boss"))
+	h.mu.Unlock()
+	require.Eventually(t, func() bool { // placement has moved on
+		_, err := daemon.Workforce(t.Context(), sock, daemon.OpBoardRead, daemon.BoardReadRequest{})
+		return err != nil
+	}, ready, 10*time.Millisecond)
+	close(resume)
+	assert.Contains(t, []string{"not_ready", "not_allowed"}, refusedWith(t, <-got), "never served; placement refuses the retry")
+}
+
+// NERD-5748: a degraded poll keeps the old projection while board placement moves on.
+func TestBossSnapshotIncomingBossDuringDegradedPoll(t *testing.T) {
 	t.Parallel()
 	h := shiftHerdr(t)
 	shiftCaller(h, "w14:p0")
 	sock := startShift(t, h, shiftOpts(t, h))
 	shiftRead(t, sock)
-	published, release := make(chan struct{}), make(chan struct{})
-	defer close(release)
-	var armed, sawTabs atomic.Bool
 	h.mu.Lock()
+	h.agentsErr = true
 	h.tabs = append(slices.DeleteFunc(slices.Clone(h.tabs), func(tab map[string]any) bool { return tab["tab_id"] == "w14:t1" || tab["tab_id"] == "w14:t4" }),
 		tabOf("w14:t1", "w14", "al-coder-2"), tabOf("w14:t4", "w14", "al-boss"))
-	h.onCall = func(method string) {
-		sawTabs.CompareAndSwap(false, method == "tab.list" && armed.Load())
-		if method == "workspace.report_metadata" && sawTabs.Load() && armed.CompareAndSwap(true, false) {
-			close(published)
-			<-release
-		}
-	}
-	armed.Store(true)
 	h.mu.Unlock()
-	select {
-	case <-published:
-		_, err := daemon.BossSnapshotOf(t.Context(), sock)
-		assert.Equal(t, "not_allowed", refusedWith(t, err))
-	case <-time.After(ready):
-		t.Fatal("poll never reached metadata publication")
-	}
+	shiftCaller(h, "w14:p4")
+	polled(t, h.srv, 2)
+	_, err := daemon.Workforce(t.Context(), sock, daemon.OpBoardRead, daemon.BoardReadRequest{})
+	require.NoError(t, err)
+	cold, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	_, err = daemon.Workforce(cold, sock, bossSnapshotOp, struct{}{})
+	assert.Equal(t, "not_ready", refusedWith(t, err), "asked again, never not_allowed")
 }

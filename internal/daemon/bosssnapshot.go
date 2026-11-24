@@ -64,22 +64,18 @@ func (o Options) bossSnapshotOp(st *store.Store, cache *snapshotCache, place pla
 		if who.Reader != store.ReaderBoss {
 			return nil, bossRefusal(codeNotAllowed)
 		}
-		poll := cache.boss.Load()
-		if poll == nil {
-			return nil, bossRefusal(codeNotReady)
-		}
-		out, ok := poll.teams[who.Project]
-		if !ok {
-			return nil, bossRefusal(codeNotReady)
-		}
-		if !slices.Contains(poll.bosses[who.Project], who.Pane) {
-			return nil, bossRefusal(codeNotAllowed)
-		}
-
 		read, cancel := context.WithTimeout(ctx, bossBoardBudget)
 		defer cancel()
 		asOf := o.Now().UTC() // before the read, so no later post is older
 		board, err := st.BoardStatus(read, who.Project, store.ReaderBoss)
+		poll := cache.boss.Load() // after the read: a shift change published since placement is seen
+		if poll == nil {
+			return nil, bossRefusal(codeNotReady)
+		}
+		out, ok := poll.teams[who.Project]
+		if !ok || !slices.Contains(poll.bosses[who.Project], who.Pane) {
+			return nil, bossRefusal(codeNotReady) // the views disagree: the client asks again
+		}
 		out.At = o.Now().UTC()
 		out.Board.State = snapshot.Unavailable
 		if err == nil {

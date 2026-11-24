@@ -500,10 +500,11 @@ func TestBossSnapshotOmitsMismatchedBindingAndOversizedStage(t *testing.T) {
 	project := team.Project{Name: "alpha", Short: "al", Groups: []team.Group{{Name: "coder", Workers: []team.Worker{worker}}}}
 	rows := map[string]store.Worker{worker.ID: {Project: project.Name, TerminalID: "previous", Generation: 2}}
 	multibyte := strings.Repeat("調", report.MaxValueChars)
-	project.Groups[0].Workers = append(project.Groups[0].Workers, team.Worker{Pane: team.Pane{ID: "pane2", Stage: multibyte, StageAt: at}})
+	project.Groups[0].Workers = append(project.Groups[0].Workers, team.Worker{Pane: team.Pane{ID: "pane2", Item: multibyte, Stage: multibyte, StageAt: at}})
 	workers := team.BossSnapshot(project, at, nil, nil, rows).Groups[0].Workers
 	assert.Equal(t, &multibyte, workers[1].Stage, "a stage the reporter accepts keeps its value")
 	assert.Equal(t, &at, workers[1].StageAt)
+	assert.Equal(t, &multibyte, workers[1].Item)
 	got := workers[0]
 	assert.Nil(t, got.ID)
 	assert.Nil(t, got.Generation)
