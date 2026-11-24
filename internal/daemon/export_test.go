@@ -15,6 +15,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/github"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/notice"
+	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/store"
@@ -303,6 +304,16 @@ func (l LaunchModels) SetClock(clock func() time.Time) { l.m.clock = clock }
 // through wall, as the last Refresh left the entries (A47).
 func (l LaunchModels) Started(wall func(uint64) (time.Time, error)) map[string]time.Time {
 	return l.m.started(wall)
+}
+
+// SetProcessStat supplies foreground state from a test's process table.
+func (l LaunchModels) SetProcessStat(stat report.StatFunc) { l.m.stat = stat }
+
+// CtxGates observes the reports with the process evidence from the last Refresh.
+func (l LaunchModels) CtxGates(panes []herdr.PaneInfo) map[string]team.CtxGate {
+	return l.m.ctxGates(panes, l.m.started(func(start uint64) (time.Time, error) {
+		return time.Unix(int64(start), 0), nil
+	}))
 }
 
 // PaneProcesses are one poll's process_info replies.

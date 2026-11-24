@@ -1,8 +1,10 @@
 package daemon
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -35,6 +37,8 @@ type launchModels struct {
 	// overran is set while the budget runs out before every pane is asked,
 	// so that is logged once.
 	overran bool
+	// nextProbe gives a deferred pane first use of the next budget.
+	nextProbe string
 	// clock is what the budget is measured by: time.Now, but for tests.
 	clock func() time.Time
 }
@@ -55,12 +59,13 @@ type launchModel struct {
 	asked time.Time
 }
 
-// processCtx remembers the last verified agent and its report across an
-// unread foreground, so dropping a model cache entry cannot revive old ctx.
+// processCtx remembers the last verified agent and which process qualified
+// the pane's latest report. The pane can retain it through a different job
+// and the original agent's return.
 type processCtx struct {
 	terminal string
-	pid      uint32
-	start    uint64
+	agent    report.Proc
+	owner    report.Proc
 	reported time.Time
 	after    time.Time
 	replaced bool
@@ -112,8 +117,9 @@ func agentPanes(m team.Model, panes []herdr.PaneInfo) []herdr.PaneInfo {
 // pp, the poll's replies, so a pane whose shell the reconcile read this poll
 // is not asked again and gives its model from that reply, even once the
 // budget is spent; the asks are all within ModelBudget, and a pane the
-// budget leaves out has no model until a later poll. A miss is asked again
-// ModelRetry after it was asked.
+// budget leaves out has no model until a later poll. The next budget goes
+// first to the first skipped pane, or to the cut-off probe if none was
+// skipped. An initial miss is retried after ModelRetry.
 //
 // A failed ask leaves its pane no model, keeps nothing and is asked again at
 // the next poll; it is logged once until an ask succeeds, unless the pane
@@ -136,7 +142,12 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 	out := map[string]string{}
 	listed := make(map[string]bool, len(panes))
 	left := false
-	for _, p := range panes {
+	var deferred, timedOut string
+	from := max(0, slices.IndexFunc(panes, func(p herdr.PaneInfo) bool {
+		return p.PaneID == lm.nextProbe
+	}))
+	for offset := range panes {
+		p := panes[(from+offset)%len(panes)]
 		listed[p.PaneID] = true
 		if e, ok := lm.byPane[p.PaneID]; ok && e.holds(p, startTime, now) {
 			if e.model != "" {
@@ -149,6 +160,7 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 		// not leave it out, and its failure is not the budget's.
 		_, held := pp[p.PaneID]
 		if !held && spent() {
+			deferred = cmp.Or(deferred, p.PaneID)
 			left = true
 			continue
 		}
@@ -159,6 +171,7 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 		if err != nil {
 			// A stopping poll logs nothing, a held reply's failure included.
 			if ctx.Err() != nil || !held && spent() {
+				timedOut = p.PaneID
 				left = true
 				continue
 			}
@@ -173,7 +186,7 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 		// A lost foreground agent makes ctx unknown. Retry an unresolved
 		// replacement next poll so the 60 s miss cache cannot prolong it.
 		prior := lm.ctxs[p.PaneID]
-		if e.pid != 0 || prior.pid == 0 || prior.terminal != p.TerminalID {
+		if e.pid != 0 || prior.agent.PID == 0 || prior.terminal != p.TerminalID {
 			lm.byPane[p.PaneID] = e
 		}
 		if e.model != "" {
@@ -183,7 +196,7 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 	if left && !lm.overran && ctx.Err() == nil {
 		log.Warn().Dur("budget", ModelBudget).Msg("team poll: herdr is slow; the panes not asked in time have no model until a later poll")
 	}
-	lm.overran = left
+	lm.overran, lm.nextProbe = left, cmp.Or(deferred, timedOut)
 	for id := range lm.byPane {
 		if !listed[id] {
 			delete(lm.byPane, id)
@@ -259,23 +272,43 @@ func (lm *launchModels) ctxGates(panes []herdr.PaneInfo, started map[string]time
 		}
 		e := lm.byPane[id]
 		if !e.timed {
-			if prior.pid != 0 {
+			if prior.agent.PID != 0 {
 				next[id], gates[id] = prior, team.CtxGate{RequireFresh: true}
 			}
 			continue
 		}
-		if prior.pid != 0 && (e.pid != prior.pid || e.start != prior.start) {
+		agent := report.Proc{PID: int(e.pid), Start: e.start}
+		if prior.agent.PID != 0 && agent != prior.agent {
 			prior.after, prior.replaced = prior.reported, true
 		}
-		gates[id] = team.CtxGate{Start: started[id], After: prior.after, RequireFresh: prior.replaced}
-		if at, ok := report.ParseCtxAt(p.Tokens[report.CtxAtKey]); ok && at.After(prior.reported) {
-			prior.reported = at
+		gate := team.CtxGate{Start: started[id], After: prior.after, RequireFresh: prior.replaced}
+		if agent == prior.owner {
+			gate.Retained = prior.reported
 		}
-		prior.pid, prior.start = e.pid, e.start
-		next[id] = prior
+		prior.agent = agent
+		prior.observeReport(p.Tokens, gate)
+		next[id], gates[id] = prior, gate
 	}
 	lm.ctxs = next
 	return gates
+}
+
+// observeReport binds a qualifying stamp once to the verified process that
+// owned it. Seeing the same pane token under a different job cannot move it.
+func (p *processCtx) observeReport(tokens map[string]string, gate team.CtxGate) {
+	at, ok := report.ParseCtxAt(tokens[report.CtxAtKey])
+	if !ok || at.Before(p.reported) {
+		return
+	}
+	if at.After(p.reported) {
+		p.reported, p.owner = at, report.Proc{}
+	}
+	if p.owner.PID != 0 || gate.Start.IsZero() || !gate.Allows(at) {
+		return
+	}
+	if _, ok := team.ParseCtx(tokens[report.CtxKey]); ok {
+		p.owner = p.agent
+	}
 }
 
 // holds reports whether e is still pane p's: the same terminal and agent,

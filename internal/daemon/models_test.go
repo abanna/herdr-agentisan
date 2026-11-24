@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/herdr/herdrtest"
+	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/team"
 )
@@ -487,7 +489,7 @@ func TestLaunchModelsBudget(t *testing.T) {
 	ph.delay("w1:p1", daemon.ModelBudget+300*time.Millisecond)
 	poll(map[string]string{})
 	assert.Equal(t, map[string]int{"w1:p1": 1}, processAsks(ph.srv), "the panes after the slow one wait")
-	poll(map[string]string{})
+	poll(map[string]string{"w1:p2": "sonnet", "w1:p3": "haiku"})
 	assert.Equal(t, 1, slow(), "logged once")
 	ph.delay("w1:p1", 0)
 	poll(map[string]string{"w1:p1": "opus", "w1:p2": "sonnet", "w1:p3": "haiku"})
@@ -497,6 +499,85 @@ func TestLaunchModelsBudget(t *testing.T) {
 	poll(map[string]string{"w1:p1": "opus", "w1:p3": "haiku"})
 	assert.Equal(t, 2, slow(), "logged again after a poll that asked every pane")
 	assert.NotContains(t, logs.String(), "read a pane's processes", "running out of time is not a failed ask")
+}
+
+func TestLaunchModelsBudgetResumesWithADeferredPane(t *testing.T) {
+	t.Parallel()
+	ph := newProcHerdr(t)
+	lm := daemon.NewLaunchModels()
+	clk := &clock{now: t0}
+	lm.SetClock(clk.Now)
+	c := herdr.Client{SocketPath: ph.srv.Path}
+	pt := &procs{start: map[int]uint64{}}
+	foreground := map[int]int{}
+	lm.SetProcessStat(func(pid int) (report.Stat, error) {
+		start, err := pt.startTime(pid)
+		return report.Stat{Start: start, Pgrp: pid, Tpgid: foreground[pid]}, err
+	})
+	var panes []herdr.PaneInfo
+	for n := 1; n <= 7; n++ {
+		id := fmt.Sprintf("w1:p%d", n)
+		panes = append(panes, agentPane(id, fmt.Sprintf("term%d", n), "codex"))
+		ph.set(id, agentProc(n, "codex"))
+		pt.set(n, uint64(n))
+		foreground[n] = n
+	}
+	const active = "w1:p7"
+	oldStamp := time.Unix(9, 0)
+	panes[6].Tokens = map[string]string{report.CtxKey: "20", report.CtxAtKey: report.FormatModelAt(oldStamp)}
+	poll := func() map[string]team.CtxGate {
+		t.Helper()
+		_, err := lm.Refresh(t.Context(), c, panes, pt.startTime, t0, zerolog.Nop())
+		require.NoError(t, err)
+		return lm.CtxGates(panes)
+	}
+	assert.Equal(t, "20", poll()[active].Ctx(team.Pane{Ctx: "20", CtxAt: oldStamp}))
+
+	// Six formerly verified agents still appear in pane.list, but their
+	// shells now own the foreground. Each miss consumes 180 ms of budget.
+	for i, pane := range panes[:6] {
+		shell := 100 + i
+		ph.set(pane.PaneID, agentProc(shell, "/bin/sh"))
+		foreground[i+1] = shell
+	}
+	ph.set(active, agentProc(8, "codex"))
+	exit(pt, 7)
+	pt.set(8, 8)
+	foreground[8] = 8
+	newStamp := time.Unix(10, 0)
+	panes[6].Tokens[report.CtxKey] = "80"
+	panes[6].Tokens[report.CtxAtKey] = report.FormatModelAt(newStamp)
+	c.Dialed = func() error {
+		clk.advance(180 * time.Millisecond)
+		return nil
+	}
+
+	fresh := team.Pane{Ctx: "80", CtxAt: newStamp}
+	assert.Empty(t, poll()[active].Ctx(fresh), "the final pane was deferred by the budget")
+	assert.Equal(t, 1, processAsks(ph.srv)[active], "no additional ask on the overrun poll")
+	assert.Equal(t, "80", poll()[active].Ctx(fresh), "the next budget reaches the restarted agent")
+	assert.Equal(t, 2, processAsks(ph.srv)[active], "the deferred pane gets a probe")
+}
+
+func TestLaunchModelsBudgetRetriesTheLastTimedOutProbe(t *testing.T) {
+	t.Parallel()
+	ph := newProcHerdr(t)
+	ph.refuse("w1:p1", "server_error")
+	ph.refuse("w1:p2", "server_error")
+	clk := &clock{now: t0}
+	lm := daemon.NewLaunchModels()
+	lm.SetClock(clk.Now)
+	var logs lockedLog
+	c := herdr.Client{SocketPath: ph.srv.Path, Dialed: func() error {
+		clk.advance(daemon.ModelBudget / 2)
+		return nil
+	}}
+	panes := []herdr.PaneInfo{agentPane("w1:p1", "t1", "claude"), agentPane("w1:p2", "t2", "claude")}
+	for range 2 {
+		_, err := lm.Refresh(t.Context(), c, panes, nil, t0, zerolog.New(&logs))
+		require.NoError(t, err)
+	}
+	assert.Contains(t, logs.String(), `"pane":"w1:p2"`, "the last timed-out probe gets a full budget next poll")
 }
 
 // budgetDial is a client of ph whose first dial spends the whole budget by

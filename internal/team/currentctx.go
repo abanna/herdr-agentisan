@@ -11,20 +11,29 @@ import (
 // CtxGate qualifies a pane's report against the last verified foreground
 // start. RequireFresh covers a lost or replaced process. After is the last
 // stamp observed before a replacement, which its own report must exceed.
+// Retained is a stamp already qualified for this exact foreground process.
 type CtxGate struct {
-	Start, After time.Time
-	RequireFresh bool
+	Start, After, Retained time.Time
+	RequireFresh           bool
 }
 
-// Ctx keeps the legacy fallback for an initial unknown start or old token.
+// Allows checks a report's stamp, keeping A61's legacy initial fallback.
+func (g CtxGate) Allows(at time.Time) bool {
+	if !at.IsZero() && at.Equal(g.Retained) {
+		return true
+	}
+	if g.RequireFresh && (g.Start.IsZero() || !at.After(g.After)) {
+		return false
+	}
+	return g.Start.IsZero() || at.IsZero() || !at.Before(g.Start)
+}
+
+// Ctx returns p's report when its stamp qualifies.
 func (g CtxGate) Ctx(p Pane) string {
-	if g.RequireFresh && (g.Start.IsZero() || !p.CtxAt.After(g.After)) {
-		return ""
+	if g.Allows(p.CtxAt) {
+		return p.Ctx
 	}
-	if !g.Start.IsZero() && !p.CtxAt.IsZero() && p.CtxAt.Before(g.Start) {
-		return ""
-	}
-	return p.Ctx
+	return ""
 }
 
 // GateCtx applies each team's ctx gates before the poll's readers see it.

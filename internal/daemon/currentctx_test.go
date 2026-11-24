@@ -243,6 +243,18 @@ func TestContextNoticeIgnoresAnUnreadBackgroundReport(t *testing.T) {
 	assert.Empty(t, ctxEvents(rec), "no old crossing to deduplicate")
 	assert.Empty(t, toasts(t, th), "no toast for the previous agent")
 
+	// The unqualified stamp must not become a retained report for the
+	// replacement if that same process later returns to the foreground.
+	showCtx(th, pane, "", "")
+	th.setProcs(pane, agentProc(1002, "claude"))
+	fg.Store(1002)
+	polled(t, th.srv, 2)
+	th.setProcs(pane, agentProc(2002, "claude"))
+	fg.Store(2002)
+	showCtx(th, pane, "80", report.FormatModelAt(boot.Add(15*time.Second)))
+	polled(t, th.srv, 2)
+	assert.Empty(t, ctxEvents(rec), "a rejected report earns no retained stamp")
+
 	showCtx(th, pane, "80", report.FormatModelAt(boot.Add(30*time.Second)))
 	polled(t, th.srv, 2)
 	assert.Equal(t, []string{"wN:p1 worker ceiling 80 75 true true"}, ctxEvents(rec))
@@ -275,6 +287,64 @@ func TestContextWithoutForegroundGroupIsUnknown(t *testing.T) {
 
 	fg.Store(1002)
 	served(t, sock, reported)
+}
+
+func TestContextReturnsWithTheOriginalForegroundProcess(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	const pane = "wJ:p1"
+	th.setAgents(named(pane, liveShort+"-boss"))
+	th.setPane(pane, "agent", "codex")
+	th.setProcs(pane, agentProc(1002, "codex"))
+	stamp := report.FormatModelAt(boot.Add(20500 * time.Millisecond))
+	showCtx(th, pane, "74", stamp)
+
+	o := teamOpts(t, shortDir(t), th, liveConfig(t, ""))
+	fg := fakeForeground(t, &o)
+	var reused atomic.Bool
+	stat := o.Hooks.ProcessStat
+	o.Hooks.ProcessStat = func(pid int) (report.Stat, error) {
+		s, err := stat(pid)
+		if reused.Load() && pid == 1002 {
+			s.Start++
+		}
+		return s, err
+	}
+	serving(t, o, th.fakeHerdr)
+	sock := socketPath(t, o.StateDir, th.path)
+	served(t, sock, func(s snapshot.Snapshot) bool {
+		return s.Boss != nil && s.Boss.Ctx != nil && *s.Boss.Ctx == 74
+	})
+	foreground := func(pid int32, want *int) {
+		t.Helper()
+		th.setProcs(pane, agentProc(int(pid), "codex"))
+		fg.Store(pid)
+		polled(t, th.srv, 2)
+		boss := served(t, sock, anySnapshot).Boss
+		require.NotNil(t, boss)
+		assert.Equal(t, want, boss.Ctx, "foreground PID %d", pid)
+	}
+
+	foreground(2002, nil)
+	foreground(1002, new(74))
+	assert.Equal(t, "ctx 74%", lastBands(t, th, pane)["ctx_hot"])
+	showCtx(th, pane, "65", report.FormatModelAt(boot.Add(20*time.Second)))
+	foreground(1002, nil)
+	showCtx(th, pane, "74", stamp)
+	foreground(1002, new(74))
+
+	// The same report still cannot pass for a different process that
+	// happens to receive 1002. Its rounded wall start precedes the stamp.
+	foreground(2002, nil)
+	reused.Store(true)
+	foreground(1002, nil)
+
+	// A fresh report from 2002 belongs to it on later returns.
+	foreground(2002, nil)
+	showCtx(th, pane, "78", report.FormatModelAt(boot.Add(30*time.Second)))
+	foreground(2002, new(78))
+	foreground(1002, nil)
+	foreground(2002, new(78))
 }
 
 // fakeForeground lets both agent PIDs survive while the foreground job
