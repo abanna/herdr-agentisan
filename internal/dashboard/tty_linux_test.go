@@ -120,7 +120,7 @@ func TestRunSelectsPaletteFromTerminal(t *testing.T) {
 		{name: "light", reply: "ffff/ffff/ffff", want: lightText},
 		{name: "near black with 16-bit channels", reply: "00ee/00ee/00ee", want: darkText, fromLight: true},
 		{name: "fragmented 16-bit reply", reply: "00ee/00ee/00ee", want: darkText, fromLight: true, split: true},
-		{name: "indexed near black", reply: "00ee/00ee/00ee", want: "38;5;255", indexed: true},
+		{name: "indexed near black", reply: "00ee/00ee/00ee", want: "38;5;255", fromLight: true, indexed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			master, slave := openPTY(t, 120, 40)
@@ -149,10 +149,14 @@ func TestRunSelectsPaletteFromTerminal(t *testing.T) {
 			}, 5*time.Second, 10*time.Millisecond, "request the terminal background")
 			start := 0
 			if tc.fromLight {
+				baseline := lightText
+				if tc.indexed {
+					baseline = "48;5;189"
+				}
 				_, err := io.WriteString(master, "\x1b]11;rgb:ffff/ffff/ffff\a")
 				require.NoError(t, err)
 				require.Eventually(t, func() bool {
-					return strings.Contains(out.String(), lightText)
+					return strings.Contains(out.String(), baseline)
 				}, 5*time.Second, 10*time.Millisecond, "establish the light palette before the regression reply")
 				start = len(out.String())
 			}
