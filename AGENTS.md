@@ -344,14 +344,13 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   spawn a second; `Asker` drops a key TypeSafe refuses. The daemon holds
   one `Keys` for its life. Tests run an
   httptest TypeSafe, never the real one, and a FIFO for a locked file.
-- `internal/recall/` — the boss's rule library (NERD-5741): each memory file,
-  and each top-level bullet of each bullet file with its indented lines, from
-  the paths `[recall]` names in the shared config only. An ID is `mem:<name>`
-  or `<prefix>:<8 hex of the SHA-256 of the bullet's first line>`, so it stays
-  while the section does and a removed one is gone. `recall list` and `recall
-  show <id>` read the files at each call and print sections word for word with
-  file:line, and fail whole on a source they cannot read or an ID that is gone.
-  No TypeSafe and no daemon: those are the next PRs.
+- `internal/recall/` — the boss's rule library (NERD-5741): each memory file
+  and each top-level bullet of a bullet file, from `[recall]` in the shared
+  config only. A bullet's ID hashes its own words (`<prefix>:<8 hex>`): it
+  names them or, edited or removed, nothing. `recall list` and `recall show
+  <id>` read the files at each call, print sections word for word with
+  file:line, and fail whole on a source they cannot read (never links, pipes,
+  the config dir or env files) or an ID that is gone.
 - `internal/store/` — `state.db` (ADR-001 D13, A1): SQLite through the pure-Go
   `modernc.org/sqlite`, WAL with `synchronous=FULL` and `recursive_triggers`
   on, so a REPLACE fires delete triggers, and numbered migrations

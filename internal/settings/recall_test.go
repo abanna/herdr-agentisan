@@ -91,9 +91,28 @@ func TestRecallSources(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+			got.Deny = nil // TestRecallSourcesDeny
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+// TestRecallSourcesDeny: recall never reads the config dir, the user's
+// ~/.config/agentisan, or the env files that hold the debugger's and Jev's keys,
+// whatever [recall] names.
+func TestRecallSourcesDeny(t *testing.T) {
+	t.Parallel()
+	repo, dir := newRepo(t), t.TempDir()
+	writeFile(t, dir, settings.FileName, "schema_version = 1\n[debugger]\nenv_file = \"~/d.env\"\n[routing]\nenabled = true\n[routing.jev]\nenv_file = \"/run/jev.env\"\n"+
+		"[projects.app]\nrepo = \"REPO\"\nshort = \"ap\"\n", repo)
+	got, err := settings.RecallSources(dir, envOf(map[string]string{"HOME": "/home/u"}))
+	require.NoError(t, err)
+	assert.Equal(t, []string{dir, "/home/u/.config/agentisan", "/home/u/d.env", "/run/jev.env"}, got.Deny)
+
+	none := t.TempDir()
+	got, err = settings.RecallSources(none, envOf(nil))
+	require.NoError(t, err)
+	assert.Equal(t, []string{none}, got.Deny, "no HOME and no env file: only the config dir")
 }
 
 // TestRecallSourcesWithoutAConfigDir: no config dir has no sources, and that

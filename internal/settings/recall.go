@@ -2,15 +2,14 @@ package settings
 
 import (
 	"maps"
+	"path/filepath"
 	"slices"
 
 	"github.com/abanna/herdr-agentisan/internal/recall"
 )
 
-// [recall] is where the boss's rules are kept (NERD-5741): memory directories,
-// and bullet files each under the prefix its sections' IDs carry. Like
-// [debugger] it belongs to the shared file and --set only: a committed file
-// must not name what a command reads.
+// [recall] (NERD-5741) names the boss's rule sources. Like [debugger] it is the
+// shared file's and --set's only: a committed file must not name what is read.
 const (
 	recallMemoryDirsPath  = "recall.memory_dirs"
 	recallBulletFilesPath = "recall.bullet_files"
@@ -21,8 +20,7 @@ var recallSchema = &node{kind: kindTable, fields: map[string]*node{
 	"bullet_files": {kind: kindNames, elem: leafOf(kindString)},
 }}
 
-// checkRecall checks every path is absolute or under ~/, which is expanded with
-// HOME when it is read.
+// checkRecall checks every path is absolute or under ~/ (expanded when read).
 func (m merged) checkRecall() error {
 	v, _ := m.get(recallMemoryDirsPath)
 	dirs, _ := v.([]string)
@@ -41,9 +39,9 @@ func (m merged) checkRecall() error {
 	return nil
 }
 
-// RecallSources is [recall] from the shared file in configDir, each path with a
-// leading ~/ expanded through lookupEnv's HOME, the bullet files by prefix. No
-// configDir, and no file or table in it, is no sources.
+// RecallSources is [recall] from the shared file in configDir, ~/ expanded with
+// HOME, and what recall never reads: the config dir, ~/.config/agentisan and the
+// env files of [debugger] and [routing.jev]. No configDir or table is no sources.
 func RecallSources(configDir string, lookupEnv func(string) (string, bool)) (recall.Sources, error) {
 	if configDir == "" {
 		return recall.Sources{}, nil
@@ -52,7 +50,20 @@ func RecallSources(configDir string, lookupEnv func(string) (string, bool)) (rec
 	if err != nil {
 		return recall.Sources{}, err
 	}
-	var out recall.Sources
+	out := recall.Sources{Deny: []string{configDir}}
+	if home, _ := lookupEnv("HOME"); home != "" {
+		out.Deny = append(out.Deny, filepath.Join(home, ".config", "agentisan"))
+	}
+	for _, path := range []string{debuggerEnvFilePath, routingJevEnvFilePath} {
+		v, _ := lookup(res.Values, path)
+		if s, _ := v.(string); s != "" {
+			p, err := ExpandHome(s, lookupEnv)
+			if err != nil {
+				return recall.Sources{}, err
+			}
+			out.Deny = append(out.Deny, p)
+		}
+	}
 	v, _ := lookup(res.Values, recallMemoryDirsPath)
 	dirs, _ := v.([]string)
 	for _, d := range dirs {

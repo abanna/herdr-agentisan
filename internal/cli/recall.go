@@ -19,7 +19,10 @@ func newRecallCmd() *cobra.Command {
 		Use:   "recall",
 		Short: "Read the boss's rules, word for word, with the file and lines they are in",
 		Long: "recall reads the library [recall] names in the shared config ($" + trail.ConfigDirEnv + "): each memory file,\n" +
-			"and each top-level bullet of each bullet file, is a section with an ID. Files are read at each call.",
+			"and each top-level bullet of each bullet file, is a section with an ID. Files are read at each call.\n" +
+			"An ID names those words or nothing: edit a rule anywhere, or remove it, and its ID fails, never answering with other text.\n" +
+			"A bullet is a line starting \"- \" and the lines under it indented by two spaces or a tab, with the blanks between. A line indented\n" +
+			"by one space or not at all ends it, and a \"- \" line in a code fence is a bullet. A leading byte-order mark is dropped.",
 	}
 	list := &cobra.Command{
 		Use:   "list",

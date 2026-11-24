@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/stretchr/testify/assert"
@@ -84,20 +86,20 @@ func TestBulletFileCutsSectionsWithLineRanges(t *testing.T) {
 	assert.Equal(t, "Hello   world, the first rule.", lib.Sections[0].Heading, "the heading is the first line without its marker")
 }
 
-// TestBulletIDIsAHashOfTheFirstLine pins the ID's contract: the first 8 hex of
-// the SHA-256 of the first line with its whitespace collapsed. A label made
-// today names the same section after any release.
-func TestBulletIDIsAHashOfTheFirstLine(t *testing.T) {
+// TestBulletIDIsAHashOfTheSection pins the ID's contract: the first 8 hex of
+// the SHA-256 of the section's own words, whitespace collapsed. A label made
+// today names the same words after any release, or nothing.
+func TestBulletIDIsAHashOfTheSection(t *testing.T) {
 	t.Parallel()
 	p := write(t, t.TempDir(), "r.md", "- Hello   world\n  tail\n")
 	lib := load(t, recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: p}}})
 	require.Len(t, lib.Sections, 1)
-	assert.Equal(t, "rul:3a1d2b00", lib.Sections[0].ID, "sha256(\"- Hello world\")")
+	assert.Equal(t, "rul:b31f0abb", lib.Sections[0].ID, "sha256(\"- Hello world tail\")")
 }
 
 // TestBulletIDsSurviveTheEditsAroundThem: a section that stays keeps its ID
-// when others are added, removed or edited below their first line, and a
-// removed section is simply gone. Editing a first line is a new section.
+// when others are added or removed, and a removed section is simply gone. A
+// section edited anywhere is another section: its old ID fails.
 func TestBulletIDsSurviveTheEditsAroundThem(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
@@ -108,8 +110,8 @@ func TestBulletIDsSurviveTheEditsAroundThem(t *testing.T) {
 	alpha, beta, gamma := before.Sections[0].ID, before.Sections[1].ID, before.Sections[2].ID
 	assert.Len(t, map[string]bool{alpha: true, beta: true, gamma: true}, 3)
 
-	// Prepend a new rule, edit alpha's second line, remove beta.
-	write(t, dir, "r.md", "- New rule\n- Alpha rule\n  more alpha, edited\n- Gamma rule\n")
+	// Prepend a new rule, remove beta.
+	write(t, dir, "r.md", "- New rule\n- Alpha rule\n  more alpha\n- Gamma rule\n")
 	after := load(t, src)
 	assert.Equal(t, []string{after.Sections[0].ID, alpha, gamma}, ids(after))
 	_, err := after.Pick([]string{beta})
@@ -117,24 +119,61 @@ func TestBulletIDsSurviveTheEditsAroundThem(t *testing.T) {
 	got, err := after.Pick([]string{alpha})
 	require.NoError(t, err)
 	assert.Equal(t, 2, got[0].Start, "its range moved with the file")
-	assert.Equal(t, "- Alpha rule\n  more alpha, edited", got[0].Text)
 
-	// A new first line is a new section.
-	write(t, dir, "r.md", "- Alpha rule, reworded\n")
-	assert.NotContains(t, ids(load(t, src)), alpha)
+	// Edit alpha, on its second line and on its first.
+	for _, edit := range []string{"- Alpha rule\n  more alpha, edited\n", "- Alpha rule, reworded\n  more alpha\n"} {
+		write(t, dir, "r.md", edit)
+		assert.NotContains(t, ids(load(t, src)), alpha, edit)
+	}
 }
 
-// TestRepeatedFirstLinesGetOccurrenceSuffixes: two bullets that open alike
-// are told apart by order.
-func TestRepeatedFirstLinesGetOccurrenceSuffixes(t *testing.T) {
+// TestAGoneIDNeverReturnsAnotherRule: two rules that open alike but say
+// different things have different IDs, so deleting one leaves its ID failing,
+// never answering with the other's words (the ID names words, not an order).
+func TestAGoneIDNeverReturnsAnotherRule(t *testing.T) {
 	t.Parallel()
-	p := write(t, t.TempDir(), "r.md", "- Same\n- Same\n- Same\n- Other\n")
+	dir := t.TempDir()
+	p := write(t, dir, "r.md", "- Approval is required\n  by Alice\n- Approval is required\n  by Bob\n")
+	src := recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: p}}}
+	both := load(t, src)
+	require.Len(t, both.Sections, 2)
+	alice, bob := both.Sections[0].ID, both.Sections[1].ID
+	require.NotEqual(t, alice, bob)
+
+	write(t, dir, "r.md", "- Approval is required\n  by Bob\n")
+	left := load(t, src)
+	_, err := left.Pick([]string{alice})
+	require.ErrorIs(t, err, recall.ErrUnknownID)
+	got, err := left.Pick([]string{bob})
+	require.NoError(t, err)
+	assert.Equal(t, "- Approval is required\n  by Bob", got[0].Text)
+}
+
+// TestIdenticalRulesGetOccurrenceSuffixes: two bullets with the same words
+// have the same hash; the second is -2, and either ID gives those words.
+func TestIdenticalRulesGetOccurrenceSuffixes(t *testing.T) {
+	t.Parallel()
+	p := write(t, t.TempDir(), "r.md", "- Same\n  words\n- Same\n  words\n- Same\n  words\n- Other\n")
 	lib := load(t, recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: p}}})
 	got := ids(lib)
 	require.Len(t, got, 4)
 	assert.Equal(t, got[0]+"-2", got[1])
 	assert.Equal(t, got[0]+"-3", got[2])
 	assert.Len(t, map[string]bool{got[0]: true, got[3]: true}, 2)
+}
+
+// TestABulletKeepsItsParagraphsAfterABlankLine: a blank line inside an item
+// does not end it when an indented line follows; blank lines at its end are
+// not part of it. A tab indents too.
+func TestABulletKeepsItsParagraphsAfterABlankLine(t *testing.T) {
+	t.Parallel()
+	p := write(t, t.TempDir(), "r.md", "# H\n- The team may merge hotfixes.\n\n  Owner approval is required before merging.\n\n- Next rule\n\n\ttabbed on\n  \nplain\n")
+	lib := load(t, recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: p}}})
+	require.Len(t, lib.Sections, 2)
+	assert.Equal(t, "- The team may merge hotfixes.\n\n  Owner approval is required before merging.", lib.Sections[0].Text)
+	assert.Equal(t, p+":2-4", lib.Sections[0].Ref())
+	assert.Equal(t, "- Next rule\n\n\ttabbed on", lib.Sections[1].Text)
+	assert.Equal(t, p+":6-8", lib.Sections[1].Ref())
 }
 
 // TestCRLFLinesStayAsWritten: lines end at "\n", so a "\r" is part of the line
@@ -185,8 +224,8 @@ func TestMemoryFilesAreWholeSections(t *testing.T) {
 }
 
 // TestMemoryIDs: the name comes from the frontmatter, else from the file's
-// stem, cleaned to the ID alphabet; a repeated name is told apart by order of
-// the files.
+// stem, cleaned to the ID alphabet. A name used twice is refused (see
+// TestLoadRefusesWhatItCannotRead), never told apart by order.
 func TestMemoryIDs(t *testing.T) {
 	t.Parallel()
 	tests := map[string]struct {
@@ -205,9 +244,6 @@ func TestMemoryIDs(t *testing.T) {
 		"a file name outside it is too":    {map[string]string{"My Note.md": "plain\n"}, []string{"mem:my-note"}},
 		"a name of nothing but marks":      {map[string]string{"!!!.md": "plain\n"}, []string{"mem:file"}},
 		"an indented name is not the name": {map[string]string{"s.md": "---\nmetadata:\n  name: nested\n---\nx\n"}, []string{"mem:s"}},
-		"a repeated name": {
-			map[string]string{"a.md": "---\nname: same\n---\n1\n", "b.md": "---\nname: same\n---\n2\n"}, []string{"mem:same", "mem:same-2"},
-		},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -286,23 +322,48 @@ func TestLoadRefusesWhatItCannotRead(t *testing.T) {
 	require.NoError(t, err)
 	relFile, err := filepath.Rel(wd, ok)
 	require.NoError(t, err)
+	// Sources that must not be read: links, pipes, a name used twice, and what
+	// the config keeps out of recall.
+	dup := t.TempDir()
+	write(t, dup, "a.md", "---\nname: same\n---\n1\n")
+	write(t, dup, "b.md", "---\nname: same\n---\n2\n")
+	link := filepath.Join(dir, "link.md")
+	require.NoError(t, os.Symlink(ok, link))
+	linkDir, fifoDir, secret := t.TempDir(), t.TempDir(), t.TempDir()
+	require.NoError(t, os.Symlink(ok, filepath.Join(linkDir, "note.md")))
+	fifo := filepath.Join(dir, "pipe")
+	require.NoError(t, syscall.Mkfifo(fifo, 0o600))
+	require.NoError(t, syscall.Mkfifo(filepath.Join(fifoDir, "note.md"), 0o600))
+	env := write(t, secret, "env.md", "- KEY=x\n")
+	alias := filepath.Join(dir, "alias")
+	require.NoError(t, os.Symlink(secret, alias))
+	one := func(path string) []recall.Bullets { return []recall.Bullets{{Prefix: "rul", Path: path}} }
 	tests := map[string]struct {
 		src    recall.Sources
 		err    error
 		namesY string
 	}{
-		"no source at all":             {recall.Sources{}, recall.ErrNoSources, ""},
-		"a missing bullet file":        {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: filepath.Join(dir, "gone.md")}}}, recall.ErrSource, "gone.md"},
-		"a missing memory dir":         {recall.Sources{MemoryDirs: []string{filepath.Join(dir, "nodir")}}, recall.ErrSource, "nodir"},
-		"a file as a memory dir":       {recall.Sources{MemoryDirs: []string{notDir}}, recall.ErrSource, "plain"},
-		"a directory as a file":        {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: dir}}}, recall.ErrSource, dir},
-		"a file over MaxFile":          {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: big}}}, recall.ErrSource, "big.md"},
-		"a device, not a regular file": {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: "/dev/null"}}}, recall.ErrSource, "/dev/null"},
-		"a relative path":              {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: "rel.md"}}}, recall.ErrSource, "rel.md"},
-		"a relative file that exists":  {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: relFile}}}, recall.ErrSource, relFile},
-		"a prefix of mem":              {recall.Sources{Bullets: []recall.Bullets{{Prefix: "mem", Path: ok}}}, recall.ErrSource, "mem"},
-		"an empty prefix":              {recall.Sources{Bullets: []recall.Bullets{{Prefix: "", Path: ok}}}, recall.ErrSource, "prefix"},
-		"an upper-case prefix":         {recall.Sources{Bullets: []recall.Bullets{{Prefix: "RUL", Path: ok}}}, recall.ErrSource, "RUL"},
+		"no source at all":              {recall.Sources{}, recall.ErrNoSources, ""},
+		"a missing bullet file":         {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: filepath.Join(dir, "gone.md")}}}, recall.ErrSource, "gone.md"},
+		"a missing memory dir":          {recall.Sources{MemoryDirs: []string{filepath.Join(dir, "nodir")}}, recall.ErrSource, "nodir"},
+		"a file as a memory dir":        {recall.Sources{MemoryDirs: []string{notDir}}, recall.ErrSource, "plain"},
+		"a directory as a file":         {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: dir}}}, recall.ErrSource, dir},
+		"a file over MaxFile":           {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: big}}}, recall.ErrSource, "big.md"},
+		"a device, not a regular file":  {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: "/dev/null"}}}, recall.ErrSource, "/dev/null"},
+		"a relative path":               {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: "rel.md"}}}, recall.ErrSource, "rel.md"},
+		"a relative file that exists":   {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: relFile}}}, recall.ErrSource, relFile},
+		"a symlinked bullet file":       {recall.Sources{Bullets: one(link)}, recall.ErrSource, "link.md"},
+		"a symlinked memory file":       {recall.Sources{MemoryDirs: []string{linkDir}}, recall.ErrSource, "note.md"},
+		"a pipe as a bullet file":       {recall.Sources{Bullets: one(fifo)}, recall.ErrSource, "pipe"},
+		"a pipe among the memory files": {recall.Sources{MemoryDirs: []string{fifoDir}}, recall.ErrSource, "note.md"},
+		"a memory name used twice":      {recall.Sources{MemoryDirs: []string{dup}}, recall.ErrSource, "mem:same"},
+		"a denied file":                 {recall.Sources{Bullets: one(env), Deny: []string{env}}, recall.ErrSource, "env.md"},
+		"a file in a denied dir":        {recall.Sources{Bullets: one(env), Deny: []string{secret}}, recall.ErrSource, "env.md"},
+		"a denied dir by a linked path": {recall.Sources{Bullets: one(filepath.Join(alias, "env.md")), Deny: []string{secret}}, recall.ErrSource, "env.md"},
+		"a memory file in a denied dir": {recall.Sources{MemoryDirs: []string{secret}, Deny: []string{secret}}, recall.ErrSource, "env.md"},
+		"a prefix of mem":               {recall.Sources{Bullets: []recall.Bullets{{Prefix: "mem", Path: ok}}}, recall.ErrSource, "mem"},
+		"an empty prefix":               {recall.Sources{Bullets: []recall.Bullets{{Prefix: "", Path: ok}}}, recall.ErrSource, "prefix"},
+		"an upper-case prefix":          {recall.Sources{Bullets: []recall.Bullets{{Prefix: "RUL", Path: ok}}}, recall.ErrSource, "RUL"},
 		"a prefix used twice": {
 			recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: ok}, {Prefix: "rul", Path: ok}}}, recall.ErrSource, "rul",
 		},
@@ -310,9 +371,15 @@ func TestLoadRefusesWhatItCannotRead(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			_, err := recall.Load(tc.src)
-			require.ErrorIs(t, err, tc.err)
-			assert.Contains(t, err.Error(), tc.namesY)
+			done := make(chan error, 1)
+			go func() { _, err := recall.Load(tc.src); done <- err }()
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, tc.err)
+				assert.Contains(t, err.Error(), tc.namesY)
+			case <-time.After(5 * time.Second):
+				t.Fatal("Load blocked on a source")
+			}
 		})
 	}
 }
@@ -363,4 +430,56 @@ func TestMemoryFrontmatterToleratesCRLFAndEmptyFiles(t *testing.T) {
 	assert.Equal(t, "mem:crlf-name", lib.Sections[0].ID)
 	assert.Equal(t, "crlf description", lib.Sections[0].Heading)
 	assert.Equal(t, 5, lib.Sections[0].End)
+}
+
+// TestDenyIsByPathNotByPrefix: a file beside a denied name, or a denied
+// directory's namesake, is read; only what is under the denied path is not.
+func TestDenyIsByPathNotByPrefix(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	p := write(t, dir, "rules.md", "- Fine\n")
+	lib := load(t, recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: p}}, Deny: []string{filepath.Join(dir, "rul"), filepath.Join(dir, "rules.m")}})
+	assert.Len(t, lib.Sections, 1)
+}
+
+// TestAByteOrderMarkIsNotPartOfTheFirstLine: an editor's mark must not hide
+// the first rule of a file, or a memory file's frontmatter.
+func TestAByteOrderMarkIsNotPartOfTheFirstLine(t *testing.T) {
+	t.Parallel()
+	mem := t.TempDir()
+	write(t, mem, "n.md", "\ufeff---\nname: bommed\n---\nx\n")
+	write(t, mem, "e.md", "\ufeff") // a mark alone is an empty file
+	p := write(t, t.TempDir(), "r.md", "\ufeff- First rule\n- Second\n")
+	lib := load(t, recall.Sources{MemoryDirs: []string{mem}, Bullets: []recall.Bullets{{Prefix: "rul", Path: p}}})
+	require.Len(t, lib.Sections, 3)
+	assert.Equal(t, "mem:bommed", lib.Sections[0].ID)
+	assert.Equal(t, "- First rule", lib.Sections[1].Text)
+	assert.Equal(t, p+":1", lib.Sections[1].Ref())
+}
+
+// TestLinesThatAreNotBulletsAreNoSections: only "- " at the line start opens one.
+func TestLinesThatAreNotBulletsAreNoSections(t *testing.T) {
+	t.Parallel()
+	p := write(t, t.TempDir(), "r.md", "-x a\n---\n-\n* b\n+ c\n-\td\n1. e\n  - f\n")
+	assert.Empty(t, load(t, recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: p}}}).Sections)
+}
+
+// TestAFileOfExactlyMaxFileIsRead: the limit is over MaxFile, not at it.
+func TestAFileOfExactlyMaxFileIsRead(t *testing.T) {
+	t.Parallel()
+	p := write(t, t.TempDir(), "r.md", "- "+strings.Repeat("x", recall.MaxFile-3)+"\n")
+	assert.Len(t, load(t, recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: p}}}).Sections, 1)
+}
+
+// TestAMemoryNameAndDescriptionAreSafeToPrint: an ID fits the 64 bytes a choice
+// option takes (mem: and 60), and a control byte in a description is escaped in
+// the heading, so `recall list` cannot drive a terminal.
+func TestAMemoryNameAndDescriptionAreSafeToPrint(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	write(t, dir, "n.md", "---\nname: "+strings.Repeat("a", 500)+"\ndescription: \"\x1b[31mred\x07\"\n---\nx\n")
+	lib := load(t, recall.Sources{MemoryDirs: []string{dir}})
+	require.Len(t, lib.Sections, 1)
+	assert.Equal(t, "mem:"+strings.Repeat("a", 60), lib.Sections[0].ID)
+	assert.Equal(t, `\x1b[31mred\a`, lib.Sections[0].Heading)
 }

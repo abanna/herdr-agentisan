@@ -1,6 +1,5 @@
 // Package recall is the boss's rule library (NERD-5741): the sections of the
-// files its standing rules are kept in, each with an ID that stays while the
-// section does, read word for word at each call. Nothing is cached.
+// files its rules are kept in, read word for word at each call, never cached.
 package recall
 
 import (
@@ -15,14 +14,17 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
+	"unicode"
 )
 
-// What the library is cut by.
+// Names and limits of the library.
 const (
 	MemoryPrefix = "mem"       // starts the ID of every memory file's section
 	IndexFile    = "MEMORY.md" // a memory directory's index repeats the files' descriptions: no section
 	MaxFile      = 4 << 20     // the most of one source file that is read
 	MaxHeading   = 100         // the most characters of a heading, before its cut mark
+	MaxName      = 60          // the most bytes of a memory ID after "mem:", so it is 64 at most
 )
 
 var (
@@ -34,11 +36,11 @@ var (
 	ErrUnknownID = errors.New("no such section")
 )
 
-// Sources are the files the library is cut from: directories of memory files,
-// each *.md a section, and files whose top-level bullets are sections.
+// Sources are the files the library is cut from; Deny is never read.
 type Sources struct {
 	MemoryDirs []string
 	Bullets    []Bullets
+	Deny       []string
 }
 
 // Bullets is a bullet file and the prefix its sections' IDs carry.
@@ -46,9 +48,9 @@ type Bullets struct{ Prefix, Path string }
 
 // Section is one rule and where it is written.
 type Section struct {
-	// ID is mem:<name> for a memory file, else <prefix>:<first 8 hex of the
-	// SHA-256 of the bullet's first line, whitespace collapsed>; a repeat gets
-	// -2, -3.
+	// ID is mem:<name> (no two files share one), else <prefix>:<first 8 hex of
+	// the SHA-256 of the bullet's text, whitespace collapsed>: those words or,
+	// edited or removed, nothing. The same words again get -2, -3.
 	ID string
 	// File, Start and End are where Text is: 1-based lines, both inclusive.
 	File       string
@@ -88,27 +90,38 @@ func Load(src Sources) (Library, error) {
 		used[b.Prefix] = true
 	}
 	var lib Library
-	seen := map[string]bool{}
-	add := func(s Section) {
-		base := s.ID
-		for n := 2; seen[s.ID]; n++ {
-			s.ID = base + "-" + strconv.Itoa(n)
-		}
-		seen[s.ID] = true
+	file := map[string]string{} // ID -> the file it is in
+	put := func(s Section) {
+		file[s.ID] = s.File
 		lib.Sections = append(lib.Sections, s)
 	}
+	addMemory := func(s Section) error {
+		if other, ok := file[s.ID]; ok {
+			return fmt.Errorf("%w: %s is the name of both %s and %s", ErrSource, s.ID, other, s.File)
+		}
+		put(s)
+		return nil
+	}
+	addBullet := func(s Section) {
+		base := s.ID
+		for n := 2; file[s.ID] != ""; n++ {
+			s.ID = base + "-" + strconv.Itoa(n)
+		}
+		put(s)
+	}
+	read := func(path string) ([]string, error) { return readLines(path, src.Deny) }
 	for _, dir := range src.MemoryDirs {
-		if err := loadMemoryDir(dir, add); err != nil {
+		if err := loadMemoryDir(dir, read, addMemory); err != nil {
 			return Library{}, err
 		}
 	}
 	for _, b := range src.Bullets {
-		lines, err := readLines(b.Path)
+		lines, err := read(b.Path)
 		if err != nil {
 			return Library{}, err
 		}
 		for _, s := range cutBullets(b.Prefix, b.Path, lines) {
-			add(s)
+			addBullet(s)
 		}
 	}
 	return lib, nil
@@ -130,17 +143,21 @@ func (l Library) Pick(ids []string) ([]Section, error) {
 		}
 	}
 	if len(unknown) > 0 {
-		return nil, fmt.Errorf("%w: %s (removed, or its first line edited? `herdr-agentisan recall list` shows what there is)", ErrUnknownID, strings.Join(unknown, ", "))
+		return nil, fmt.Errorf("%w: %s (removed, or edited? `herdr-agentisan recall list` shows what there is)", ErrUnknownID, strings.Join(unknown, ", "))
 	}
 	return out, nil
 }
 
-// readLines reads the file at path, at most MaxFile bytes, as the lines "\n" ends.
-func readLines(path string) ([]string, error) {
+// readLines reads the file at path, at most MaxFile bytes, as the lines "\n" ends:
+// never a denied file, a link or a non-regular file (a pipe is refused at once).
+func readLines(path string, deny []string) ([]string, error) {
 	if !filepath.IsAbs(path) {
 		return nil, fmt.Errorf("%w: %s is not an absolute path", ErrSource, path)
 	}
-	f, err := os.Open(path) // #nosec G304 -- a source path the shared config names; only read.
+	if denied(path, deny) {
+		return nil, fmt.Errorf("%w: %s is kept out of recall", ErrSource, path)
+	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0) // #nosec G304 -- a source path the shared config names; only read.
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSource, err)
 	}
@@ -154,15 +171,33 @@ func readLines(path string) ([]string, error) {
 		return nil, fmt.Errorf("%w: %w", ErrSource, err)
 	case len(raw) > MaxFile:
 		return nil, fmt.Errorf("%w: %s is over %d MiB", ErrSource, path, MaxFile>>20)
-	case len(raw) == 0:
+	}
+	text := strings.TrimPrefix(string(raw), "\uFEFF") // an editor's mark is not the first line's
+	if text == "" {
 		return nil, nil
 	}
-	return strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n"), nil
+	return strings.Split(strings.TrimSuffix(text, "\n"), "\n"), nil
 }
 
-// loadMemoryDir adds a section for each *.md in dir, in name order, but the
-// index, a hidden file and a directory.
-func loadMemoryDir(dir string, add func(Section)) error {
+// denied reports whether path is, or is inside, one of deny, links resolved.
+func denied(path string, deny []string) bool {
+	resolve := func(p string) string {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			return r
+		}
+		return filepath.Clean(p)
+	}
+	p := resolve(path)
+	for _, d := range deny {
+		if r, err := filepath.Rel(resolve(d), p); err == nil && r != ".." && !strings.HasPrefix(r, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// loadMemoryDir adds each *.md of dir in name order, but the index and hidden files.
+func loadMemoryDir(dir string, read func(string) ([]string, error), add func(Section) error) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrSource, err)
@@ -173,7 +208,7 @@ func loadMemoryDir(dir string, add func(Section)) error {
 			continue
 		}
 		path := filepath.Join(dir, name)
-		lines, err := readLines(path)
+		lines, err := read(path)
 		if err != nil {
 			return err
 		}
@@ -181,11 +216,14 @@ func loadMemoryDir(dir string, add func(Section)) error {
 			continue
 		}
 		id, desc := frontmatter(lines)
-		id = strings.Trim(slugRuns.ReplaceAllString(strings.ToLower(cmp.Or(id, strings.TrimSuffix(name, ".md"))), "-"), "-")
-		add(Section{
+		slug := slugRuns.ReplaceAllString(strings.ToLower(cmp.Or(id, strings.TrimSuffix(name, ".md"))), "-")
+		id = strings.Trim(slug[:min(len(slug), MaxName)], "-")
+		if err := add(Section{
 			ID: MemoryPrefix + ":" + cmp.Or(id, "file"), File: path, Start: 1, End: len(lines),
 			Heading: heading(cmp.Or(desc, id)), Text: strings.Join(lines, "\n"),
-		})
+		}); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -210,36 +248,48 @@ func frontmatter(lines []string) (name, desc string) {
 	return "", ""
 }
 
-// cutBullets cuts each top-level "- " bullet of lines with the lines under it
-// that start with two spaces; a section ends at the first line that does not,
-// a blank one included.
+// cutBullets cuts each top-level "- " bullet of lines with the indented lines
+// (two spaces or a tab) under it and the blanks between them, up to the last.
 func cutBullets(prefix, path string, lines []string) []Section {
+	blank := func(l string) bool { return strings.TrimSpace(l) == "" }
 	var out []Section
 	for i := 0; i < len(lines); {
 		if !strings.HasPrefix(lines[i], "- ") {
 			i++
 			continue
 		}
-		j := i + 1
-		for j < len(lines) && strings.HasPrefix(lines[j], "  ") {
-			j++
+		end := i + 1 // past the last line of the section so far
+		for j := i + 1; j < len(lines) && (blank(lines[j]) || strings.HasPrefix(lines[j], "  ") || strings.HasPrefix(lines[j], "\t")); j++ {
+			if !blank(lines[j]) {
+				end = j + 1
+			}
 		}
-		sum := sha256.Sum256([]byte(strings.Join(strings.Fields(lines[i]), " ")))
+		text := strings.Join(lines[i:end], "\n")
+		sum := sha256.Sum256([]byte(strings.Join(strings.Fields(text), " ")))
 		out = append(out, Section{
-			ID: prefix + ":" + hex.EncodeToString(sum[:4]), File: path, Start: i + 1, End: j,
-			Heading: heading(strings.TrimPrefix(lines[i], "- ")), Text: strings.Join(lines[i:j], "\n"),
+			ID: prefix + ":" + hex.EncodeToString(sum[:4]), File: path, Start: i + 1, End: end,
+			Heading: heading(strings.TrimPrefix(lines[i], "- ")), Text: text,
 		})
-		i = j
+		i = end
 	}
 	return out
 }
 
-// heading is s trimmed and cut to MaxHeading characters, with a mark that says
-// so. Converting to runes also makes it valid UTF-8.
+// heading is s trimmed, cut to MaxHeading characters, as valid UTF-8 with control characters escaped.
 func heading(s string) string {
 	r := []rune(strings.TrimSpace(s))
-	if len(r) > MaxHeading {
-		return string(r[:MaxHeading]) + "…"
+	cut := len(r) > MaxHeading
+	var b strings.Builder
+	for _, c := range r[:min(len(r), MaxHeading)] {
+		if unicode.IsControl(c) {
+			c := strconv.Quote(string(c))
+			b.WriteString(c[1 : len(c)-1])
+		} else {
+			b.WriteRune(c)
+		}
 	}
-	return string(r)
+	if cut {
+		b.WriteString("…")
+	}
+	return b.String()
 }
