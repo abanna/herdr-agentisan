@@ -238,3 +238,13 @@ func TestMuteMatchesOnlyTheWorkerGeneration(t *testing.T) {
 	assert.False(t, s.ClearWorker(id, 0, t0), "a late clear cannot remove the next generation's mute")
 	assert.Equal(t, []notice.Mute{fresh}, s.List(t0))
 }
+
+func TestClearWorkerReportsAnExpiredMuteAsInactive(t *testing.T) {
+	t.Parallel()
+	s := notice.NewMutes(nil)
+	const worker = "ha-coder-1"
+	_, err := s.Mute(t.Context(), muteTeam(), worker, time.Minute, t0)
+	require.NoError(t, err)
+	assert.False(t, s.ClearWorker(worker, 0, t0.Add(time.Minute)))
+	assert.Empty(t, s.List(t0), "the expired entry was deleted")
+}

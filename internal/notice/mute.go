@@ -41,7 +41,7 @@ type Mute struct {
 type Mutes struct {
 	mu      sync.Mutex
 	entries map[string]muteEntry
-	live    func(context.Context, string, int64) (bool, error)
+	resolve func(context.Context, string, team.Worker) (generation int64, bound bool, err error)
 }
 
 // A logical ID and its generation identify the row of a bound worker
@@ -56,15 +56,17 @@ type muteEntry struct {
 	until time.Time
 }
 
-// NewMutes is a Mutes with no one muted. When supplied, live verifies that
-// the logical ID still has the generation selected by the poll model.
-func NewMutes(live func(context.Context, string, int64) (bool, error)) *Mutes {
-	return &Mutes{entries: map[string]muteEntry{}, live: live}
+// NewMutes is a Mutes with no one muted. When supplied, resolve verifies
+// the selected worker against the live bindings and can link a replacement
+// pane to its pending handoff's generation.
+func NewMutes(resolve func(context.Context, string, team.Worker) (generation int64, bound bool, err error)) *Mutes {
+	return &Mutes{entries: map[string]muteEntry{}, resolve: resolve}
 }
 
 // Mute mutes worker from now for d, DefaultMute when d is 0. worker is the
 // WorkerName of a worker in one of m's groups: a name no worker has is
 // ErrUnknownWorker, so a typo is never a mute that silences nothing.
+// The resolver also refuses a stale selection that would mute another row.
 // Muting a worker again sets its end anew.
 func (s *Mutes) Mute(ctx context.Context, m team.Model, worker string, d time.Duration, now time.Time) (Mute, error) {
 	switch {
@@ -85,14 +87,12 @@ func (s *Mutes) Mute(ctx context.Context, m team.Model, worker string, d time.Du
 	defer s.mu.Unlock()
 	// Retire and confirmed loss clear the mute after changing the row, under
 	// this same lock. Check here so an old model cannot restore their mute.
-	if scope.bound && s.live != nil {
-		live, err := s.live(ctx, worker, scope.generation)
+	if s.resolve != nil {
+		generation, bound, err := s.resolve(ctx, worker, w)
 		if err != nil {
 			return Mute{}, fmt.Errorf("check mute for worker %q: %w", worker, err)
 		}
-		if !live {
-			return Mute{}, fmt.Errorf("%w: %q", ErrUnknownWorker, worker)
-		}
+		scope = muteScope{bound: bound, generation: generation}
 	}
 	s.entries[worker] = muteEntry{scope: scope, until: until}
 	return Mute{Worker: worker, Until: until}, nil

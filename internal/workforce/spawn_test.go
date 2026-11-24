@@ -849,12 +849,23 @@ func TestSpawnCleansUpWhenATabFails(t *testing.T) {
 		f.h.fail["tab.create"] = "workspace_not_found"
 		f.h.failAfter["tab.create"] = 1
 
+		cleared := make(chan store.Worker, 2)
+		f.svc.ClearWorkerMute = func(w store.Worker) bool {
+			cleared <- w
+			return true
+		}
+
 		_, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 2})
 		require.ErrorIs(t, err, workforce.ErrHerdr)
 		assert.Len(t, f.h.params("tab.create"), 2)
 		assert.Empty(t, f.h.params("agent.start"))
 		assert.Nil(t, f.h.tabByLabel("ha-coder-1"), "the first worker's tab is closed again")
 		assert.Equal(t, store.StatusFailed, f.row(t, "ha-coder-1").Status)
+		require.Len(t, cleared, 1, "closing the failed row clears its mute")
+		want := f.row(t, "ha-coder-1")
+		w := <-cleared
+		assert.Equal(t, want.LogicalID, w.LogicalID)
+		assert.Equal(t, want.Generation, w.Generation)
 	})
 	t.Run("a new workspace's tab that cannot be labelled", func(t *testing.T) {
 		t.Parallel()

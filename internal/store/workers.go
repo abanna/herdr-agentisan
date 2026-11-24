@@ -456,6 +456,28 @@ func (s *Store) OtherProjectsIDs(ctx context.Context, project string) ([]string,
 	return out, nil
 }
 
+// LiveWorkerGeneration returns the current generation and whether terminal
+// is its pending handoff's replacement (NERD-5730). Both come from one
+// read, so a concurrent ack cannot combine answers from two bindings.
+// ErrNoWorker means no live, non-lost row exists for logicalID.
+func (s *Store) LiveWorkerGeneration(ctx context.Context, logicalID, terminal string) (int64, bool, error) {
+	var generation int64
+	var replacement bool
+	err := s.db.QueryRowContext(ctx, `SELECT w.generation, EXISTS (
+	SELECT 1 FROM handoffs AS h WHERE h.logical_id = w.logical_id AND h.generation = w.generation
+	AND h.state = 'pending' AND h.new_terminal_id = ?2 AND ?2 <> ''
+)
+FROM workers AS w WHERE w.logical_id = ?1 AND w.retired_at IS NULL AND w.status <> ?3`,
+		logicalID, terminal, StatusLost).Scan(&generation, &replacement)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return 0, false, fmt.Errorf("%w: %s", ErrNoWorker, logicalID)
+	case err != nil:
+		return 0, false, fmt.Errorf("%w: read live worker %s: %w", ErrStore, logicalID, err)
+	}
+	return generation, replacement, nil
+}
+
 // WorkerRow returns the row for logicalID, retired or not. ErrNoWorker means
 // there is none.
 func (s *Store) WorkerRow(ctx context.Context, logicalID string) (Row, error) {

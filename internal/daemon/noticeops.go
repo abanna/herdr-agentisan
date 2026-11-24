@@ -9,6 +9,7 @@ import (
 
 	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/store"
+	"github.com/abanna/herdr-agentisan/internal/team"
 )
 
 // The notices ops (A44): the boss mutes a worker's notices for a while,
@@ -84,18 +85,24 @@ func (o Options) noticeOps(in *inbox, mutes *notice.Mutes) map[string]op {
 	return ops
 }
 
-// newNoticeMutes checks the row selected by the model against state.db.
-// A handoff can rebind the terminal while keeping the same generation.
+// newNoticeMutes checks the selection from the poll against state.db
+// (NERD-5730). The terminal proves an unbound pane is the pending replacement.
 func newNoticeMutes(st *store.Store) *notice.Mutes {
-	return notice.NewMutes(func(ctx context.Context, worker string, generation int64) (bool, error) {
-		row, err := st.WorkerRow(ctx, worker)
-		if errors.Is(err, store.ErrNoWorker) {
-			return false, nil
+	return notice.NewMutes(func(ctx context.Context, worker string, w team.Worker) (int64, bool, error) {
+		generation, replacement, err := st.LiveWorkerGeneration(ctx, worker, w.Pane.TerminalID)
+		switch {
+		case errors.Is(err, store.ErrNoWorker) && !w.Bound:
+			return 0, false, nil
+		case errors.Is(err, store.ErrNoWorker):
+			return 0, false, notice.ErrUnknownWorker
+		case err != nil:
+			return 0, false, fmt.Errorf("read mute binding: %w", err)
+		case w.Bound && generation == w.Generation, !w.Bound && replacement:
+			return generation, true, nil
+		default:
+			// The cached selection cannot mute a different live binding.
+			return 0, false, notice.ErrUnknownWorker
 		}
-		if err != nil {
-			return false, fmt.Errorf("read worker row: %w", err)
-		}
-		return row.Generation == generation && row.RetiredAt.IsZero() && row.Status != store.StatusLost, nil
 	})
 }
 
