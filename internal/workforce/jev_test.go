@@ -212,6 +212,43 @@ func TestSpawnLaunchesWhatJevsAnswerMaps(t *testing.T) {
 	}
 }
 
+func TestSpawnCodexCoderEffortWithJev(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		config string
+		answer jev.Answer
+		err    error
+		asks   int
+		effort string
+		reason routing.Reason
+	}{
+		"Jev off": {config: routingOn, effort: "medium", reason: routing.ReasonJevDisabled},
+		"Jev unreachable": {
+			err: fmt.Errorf("%w: %w", jev.ErrCall, context.DeadlineExceeded), asks: 1, effort: "medium", reason: routing.ReasonJevFailure,
+		},
+		"missing key": {err: jev.ErrNoKey, asks: 1, effort: "medium", reason: routing.ReasonJevKeyUnavailable},
+		"bounded":     {answer: jevAnswer(routing.ComplexityBounded, 0.95, 0.95), asks: 1, effort: "medium"},
+		"uncertain":   {answer: jevAnswer(routing.ComplexityDemanding, 0.74, 0.95), asks: 1, effort: "medium", reason: routing.ReasonJevLowConfidence},
+		"demanding":   {answer: jevAnswer(routing.ComplexityDemanding, 0.75, 0.8), asks: 1, effort: "high"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f, _, j := jevFixture(t, cmp.Or(tc.config, jevOn), tc.answer, tc.err)
+			res, err := f.svc.Spawn(t.Context(), workforce.SpawnRequest{Group: "coder", Count: 1, Provider: "codex", Task: jevTask()})
+			require.NoError(t, err)
+			require.Len(t, res.Workers, 1)
+			w := res.Workers[0]
+			assert.Equal(t, "gpt-6.2-sol", w.Model)
+			assert.Equal(t, tc.effort, w.Effort)
+			assert.Equal(t, tc.reason, w.FallbackReason)
+			assert.Len(t, j.all(), tc.asks)
+			starts := f.h.params("agent.start")
+			require.Len(t, starts, 1)
+			assert.Equal(t, []any{"--no-daemon", "--sandbox", "danger-full-access", "--model", "gpt-6.2-sol", "-c", fmt.Sprintf("model_reasoning_effort=%q", tc.effort)}, starts[0]["args"])
+		})
+	}
+}
+
 // TestSpawnReadsJevsKeyUnderHOME: an env file under ~/ is read under the
 // daemon's HOME; with no HOME there is no key to ask with, so Jev is not
 // asked and the coder keeps its default as jev_key_unavailable (A57).
@@ -251,7 +288,7 @@ func TestSpawnReadsJevsKeyUnderHOME(t *testing.T) {
 
 // TestSpawnAsksJevNothing: from a spawn that would ask, each one change that
 // takes the ask away asks nothing, and the decision says which: routing or
-// Jev off keeps jev_disabled, a codex coder jev_no_change, an override names
+// Jev off keeps jev_disabled, a Codex coder with explicit effort jev_no_change, an override names
 // its binding, a packet without what Jev needs gives its own reason; a
 // service with no Jev asks no one; a failed preflight asks before nothing
 // opens, so it asks nothing either; and a packet that is not UTF-8 is never
@@ -277,15 +314,15 @@ func TestSpawnAsksJevNothing(t *testing.T) {
 		binding string
 		applied bool
 	}{
-		"routing off":           {config: routingOff, req: workforce.SpawnRequest{Task: jevTask()}, reason: routing.ReasonJevDisabled, binding: "claude_mid"},
-		"Jev off":               {config: jevOff, req: workforce.SpawnRequest{Task: jevTask()}, reason: routing.ReasonJevDisabled, binding: "claude_mid", applied: true},
-		"a codex coder":         {config: codex, req: workforce.SpawnRequest{Task: jevTask()}, reason: routing.ReasonJevNoChange, binding: "codex_strong", applied: true},
-		"the user's override":   {config: userOverride, req: workforce.SpawnRequest{Task: jevTask()}, binding: "claude_strong", applied: true},
-		"the boss's --model":    {req: workforce.SpawnRequest{Model: "claude_mid", Task: jevTask()}, binding: "claude_mid", applied: true},
-		"no packet":             {req: workforce.SpawnRequest{}, reason: routing.ReasonTaskNotFound, binding: "claude_mid", applied: true},
-		"a lookup unavailable":  {req: workforce.SpawnRequest{Task: unavailable}, reason: routing.ReasonLookupUnavailable, binding: "claude_mid", applied: true},
-		"an empty assignment":   {req: workforce.SpawnRequest{Task: empty}, reason: routing.ReasonInsufficientAssignment, binding: "claude_mid", applied: true},
-		"a service with no Jev": {noJev: true, req: workforce.SpawnRequest{Task: jevTask()}, reason: routing.ReasonJevDisabled, binding: "claude_mid", applied: true},
+		"routing off":                        {config: routingOff, req: workforce.SpawnRequest{Task: jevTask()}, reason: routing.ReasonJevDisabled, binding: "claude_mid"},
+		"Jev off":                            {config: jevOff, req: workforce.SpawnRequest{Task: jevTask()}, reason: routing.ReasonJevDisabled, binding: "claude_mid", applied: true},
+		"a codex coder with explicit effort": {config: codex, req: workforce.SpawnRequest{Effort: "high", Task: jevTask()}, reason: routing.ReasonJevNoChange, binding: "codex_strong", applied: true},
+		"the user's override":                {config: userOverride, req: workforce.SpawnRequest{Task: jevTask()}, binding: "claude_strong", applied: true},
+		"the boss's --model":                 {req: workforce.SpawnRequest{Model: "claude_mid", Task: jevTask()}, binding: "claude_mid", applied: true},
+		"no packet":                          {req: workforce.SpawnRequest{}, reason: routing.ReasonTaskNotFound, binding: "claude_mid", applied: true},
+		"a lookup unavailable":               {req: workforce.SpawnRequest{Task: unavailable}, reason: routing.ReasonLookupUnavailable, binding: "claude_mid", applied: true},
+		"an empty assignment":                {req: workforce.SpawnRequest{Task: empty}, reason: routing.ReasonInsufficientAssignment, binding: "claude_mid", applied: true},
+		"a service with no Jev":              {noJev: true, req: workforce.SpawnRequest{Task: jevTask()}, reason: routing.ReasonJevDisabled, binding: "claude_mid", applied: true},
 	}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {

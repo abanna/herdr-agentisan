@@ -7,17 +7,18 @@
     "codex_small": {"model_id": "gpt-6-luna", "alias": "Luna 6", "efforts": ["low"]},
     "claude_mid": {"model_id": "claude-sonnet-5-5", "alias": "Sonnet 5.5", "efforts": ["high"]},
     "claude_strong": {"model_id": "claude-opus-5-5", "alias": "Opus 5.5", "efforts": ["high", "xhigh"]},
-    "codex_strong": {"model_id": "gpt-6.1-sol", "alias": "Sol 6.1", "efforts": ["high", "xhigh"]},
+    "codex_strong": {"model_id": "gpt-6.2-sol", "alias": "Sol 6.2", "efforts": ["medium", "high", "xhigh"]},
+    "codex_terra": {"model_id": "gpt-6.1-terra", "alias": "Terra 6.1", "efforts": ["low"]},
     "claude_premium": {"model_id": "claude-fable-5-1", "alias": "Fable 5.1", "efforts": ["high", "xhigh"]},
-    "codex_premium": {"model_id": "gpt-6-astra", "alias": "Astra 6", "efforts": ["high", "xhigh"]}
+    "codex_premium": {"model_id": "gpt-6.2-astra", "alias": "Astra 6.2", "efforts": ["high", "xhigh"]}
   },
   "roles": {
     "boss": {"allowed": ["claude_strong", "codex_strong"], "default": "claude_strong", "default_effort": "high", "selection": "explicit", "premium_allowed": false},
-    "coder": {"allowed": ["claude_mid", "claude_strong", "codex_strong"], "defaults": {"claude": "claude_mid", "codex": "codex_strong"}, "default_effort": "high", "selection": "jev_complexity"},
-    "clerk": {"allowed": ["claude_small", "codex_small"], "defaults": {"claude": "claude_small", "codex": "codex_small"}, "selection": "fixed",
+    "coder": {"allowed": ["claude_mid", "claude_strong", "claude_small", "codex_strong", "codex_terra"], "defaults": {"claude": "claude_mid", "codex": "codex_strong"}, "selection": "jev_complexity"},
+    "clerk": {"allowed": ["claude_small", "codex_small", "claude_mid", "codex_terra", "codex_strong"], "defaults": {"claude": "claude_small", "codex": "codex_small"}, "selection": "fixed",
       "scope": ["PR lifecycle lookup", "board reconciliation", "worktree cleanup eligibility"],
       "cleanup_requires": ["explicit cleanup policy authorization", "confirmed merged changes or explicit abandonment", "no uncommitted or unpushed work", "not owned by an active worker"]},
-    "researcher": {"allowed": ["claude_small", "codex_small"], "defaults": {"claude": "claude_small", "codex": "codex_small"}, "selection": "fixed",
+    "researcher": {"allowed": ["claude_small", "codex_small", "claude_mid", "codex_terra", "codex_strong"], "defaults": {"claude": "claude_mid", "codex": "codex_strong"}, "selection": "fixed",
       "scope": ["bounded code inspection", "source gathering", "website research"],
       "output_requires": ["sources_or_file_references", "facts_separate_from_inferences", "unresolved_questions"]},
     "pre_check": {"allowed": ["claude_mid", "codex_strong"], "defaults": {"claude": "claude_mid", "codex": "codex_strong"}, "default_effort": "high", "selection": "fixed",

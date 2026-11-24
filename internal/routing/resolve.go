@@ -126,8 +126,8 @@ const (
 	// ReasonJevDisabled: the assignment is one Jev would classify, and no
 	// answer of Jev's is applied (AsksJev): Jev is off, or not asked yet.
 	ReasonJevDisabled Reason = "jev_disabled"
-	// ReasonJevNoChange: no answer could change the binding, so Jev is not
-	// asked: a codex coder's default is already its strong binding at high.
+	// ReasonJevNoChange: no answer could change the binding or effort,
+	// so the spawn skips Jev.
 	ReasonJevNoChange Reason = "jev_no_change"
 	// ReasonJevFailure: Jev gave no usable answer; jev_error says why.
 	ReasonJevFailure Reason = "jev_failure"

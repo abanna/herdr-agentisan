@@ -101,9 +101,9 @@ func TestSpawnLaunchesWhatRoutingChose(t *testing.T) {
 			},
 		},
 		"review, on Codex": {
-			group: "review", count: 1, kind: "codex", role: "code_review", binding: "codex_strong", model: "gpt-6.1-sol",
+			group: "review", count: 1, kind: "codex", role: "code_review", binding: "codex_strong", model: "gpt-6.2-sol",
 			args: func(string) []any {
-				return []any{"--no-daemon", "--sandbox", "read-only", "--model", "gpt-6.1-sol", "-c", `model_reasoning_effort="high"`}
+				return []any{"--no-daemon", "--sandbox", "read-only", "--model", "gpt-6.2-sol", "-c", `model_reasoning_effort="high"`}
 			},
 		},
 	}
@@ -241,10 +241,11 @@ func TestSpawnRoutingRefusals(t *testing.T) {
 			config: routingOn + "\n[routing.overrides]\npre_check = \"claude_mid\"\n\n[routing.bindings.claude_mid]\nenabled = false\n",
 			req:    workforce.SpawnRequest{Group: "qa", Count: 1}, want: routing.ErrOverrideRefused, says: "claude_mid, which the user's [routing.overrides] chose for pre_check, is disabled",
 		},
-		"a binding the role refuses":  {req: workforce.SpawnRequest{Group: "coder", Count: 1, Model: "claude_small"}, want: routing.ErrOverrideRefused, says: "claude_mid, claude_strong, codex_strong"},
+		"a binding the role refuses":  {req: workforce.SpawnRequest{Group: "coder", Count: 1, Model: "claude_premium"}, want: routing.ErrOverrideRefused, says: "claude_mid, claude_strong, claude_small, codex_strong, codex_terra"},
 		"an alias, not a binding":     {req: workforce.SpawnRequest{Group: "coder", Count: 1, Model: "opus"}, want: routing.ErrOverrideRefused},
 		"a premium binding":           {req: workforce.SpawnRequest{Group: "debugger", Count: 1, Model: "claude_premium"}, config: strings.Replace(routingOn, opsGroup, "\n[projects.herdr-agentisan.groups.debugger]\nworkers = 0\nslots = 1\n", 1) + debuggerEnvFile, want: routing.ErrOverrideRefused, says: "premium"},
 		"the other provider's model":  {req: workforce.SpawnRequest{Group: "coder", Count: 1, Model: "codex_strong"}, want: routing.ErrProviderMismatch, says: "and the worker type coder runs claude"},
+		"Astra by model ID":           {req: workforce.SpawnRequest{Group: "coder", Count: 1, Provider: "codex", Model: "gpt-6.2-astra"}, want: routing.ErrOverrideRefused, says: "is not a binding coder allows"},
 		"an effort the binding lacks": {req: workforce.SpawnRequest{Group: "coder", Count: 1, Effort: "low"}, want: routing.ErrOverrideRefused, says: "--effort"},
 		"a packet --provider disagrees with": {
 			req:  workforce.SpawnRequest{Group: "coder", Count: 1, Provider: "claude", Task: &routing.Task{LookupStatus: routing.LookupFound, ProviderPreference: "codex"}},
@@ -303,15 +304,15 @@ func TestSpawnUnderAnOverrideOfTheOtherProvider(t *testing.T) {
 	t.Parallel()
 	codexCoder := strings.Replace(routingOn, "groups.coder]\n", "groups.coder]\nagent = { command = [\"codex\"] }\n", 1)
 	// A coder's Codex starts with full access (A59).
-	codexArgs := []any{"--no-daemon", "--sandbox", "danger-full-access", "--model", "gpt-6.1-sol", "-c", `model_reasoning_effort="high"`}
+	codexArgs := []any{"--no-daemon", "--sandbox", "danger-full-access", "--model", "gpt-6.2-sol", "-c", `model_reasoning_effort="medium"`}
 	tests := map[string]struct {
 		overrides string
 		reason    routing.Reason
 		row       *store.Routing
 	}{
-		"the live string": {overrides: "coder = \"claude_strong\"\n", reason: routing.ReasonTaskNotFound, row: &store.Routing{Role: "coder", Provider: "codex", Binding: "codex_strong", ModelID: "gpt-6.1-sol", Effort: "high"}},
+		"the live string": {overrides: "coder = \"claude_strong\"\n", reason: routing.ReasonTaskNotFound, row: &store.Routing{Role: "coder", Provider: "codex", Binding: "codex_strong", ModelID: "gpt-6.2-sol", Effort: "medium"}},
 		"a list": {overrides: "coder = [\"claude_strong\", \"codex_strong\"]\n", row: &store.Routing{
-			Role: "coder", Provider: "codex", Binding: "codex_strong", ModelID: "gpt-6.1-sol", Effort: "high", OverrideBinding: "codex_strong", OverrideBy: "user",
+			Role: "coder", Provider: "codex", Binding: "codex_strong", ModelID: "gpt-6.2-sol", Effort: "medium", OverrideBinding: "codex_strong", OverrideBy: "user",
 		}},
 	}
 	for name, tc := range tests {
@@ -398,7 +399,7 @@ func TestSpawnWhileRoutingIsOff(t *testing.T) {
 func TestPlanRefusesAChangedAgent(t *testing.T) {
 	t.Parallel()
 	p := &settings.Profile{Agent: settings.Agent{Command: []string{"claude"}}}
-	_, _, err := workforce.PlanRouted(p, "coder", "gpt-6.1-sol", "high", "codex")
+	_, _, err := workforce.PlanRouted(p, "coder", "gpt-6.2-sol", "high", "codex")
 	require.ErrorIs(t, err, workforce.ErrConfig)
 	assert.Contains(t, err.Error(), "changed from codex to claude")
 
@@ -450,7 +451,7 @@ func TestUpLaunchesWhatRoutingChose(t *testing.T) {
 	want := map[string]upRouting{
 		"coder":  {"claude", "coder", "claude_mid", "claude-sonnet-5-5", routing.ReasonTaskNotFound},
 		"qa":     {"claude", "pre_check", "claude_mid", "claude-sonnet-5-5", ""},
-		"review": {"codex", "code_review", "codex_strong", "gpt-6.1-sol", ""},
+		"review": {"codex", "code_review", "codex_strong", "gpt-6.2-sol", ""},
 	}
 
 	res, err := f.svc.Up(t.Context(), workforce.UpRequest{})
