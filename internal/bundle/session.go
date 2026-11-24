@@ -63,7 +63,7 @@ func Open(ctx context.Context, l Launch) (*Session, error) {
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
 	s := &Session{ctx: ctx, in: inW, out: outR, rd: bufio.NewReaderSize(outR, 64<<10), exited: make(chan struct{})}
-	cmd := exec.CommandContext(ctx, l.Argv[0], l.Argv[1:]...) //nolint:gosec // argv is Locate's, or a test's
+	cmd := exec.CommandContext(ctx, l.Argv[0], l.Argv[1:]...) // #nosec G204 -- argv is Locate's, or a test's
 	s.cmd = cmd
 	// The context's end kills the whole group, not just the leader.
 	cmd.Cancel = func() error { s.kill(); return nil }

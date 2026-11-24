@@ -180,11 +180,11 @@ func call(mode string, getenv func(string) string, out, errw io.Writer, send fun
 	case "die_mid_call":
 		return 7, true
 	case "hang_call":
-		child := exec.CommandContext(context.Background(), os.Args[0]) //nolint:gosec // the test binary again
+		child := exec.CommandContext(context.Background(), os.Args[0]) // #nosec G204 G702 -- the test binary again
 		child.Env = append(os.Environ(), ModeEnv+"=sleep")
 		child.Stdout, child.Stderr = out.(*os.File), errw.(*os.File)
 		if child.Start() == nil {
-			_ = os.WriteFile(getenv(PidFileEnv), //nolint:gosec // the test names the file
+			_ = os.WriteFile(getenv(PidFileEnv), // #nosec G703 -- the test names the file
 				fmt.Appendf(nil, "%d", child.Process.Pid), 0o600)
 		}
 		time.Sleep(time.Hour)
