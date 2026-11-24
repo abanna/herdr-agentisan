@@ -100,7 +100,7 @@ func (s BossSnapshot) Validate() error {
 		s.Groups == nil || len(s.Groups) > MaxBossWorkers || s.WorkersOmitted < 0 || s.WorkersOmitted > math.MaxInt-MaxBossWorkers || !s.Board.valid() {
 		return ErrInvalid
 	}
-	if s.Boss != nil && !s.Boss.BossRow.valid() {
+	if s.Boss != nil && !s.Boss.valid() {
 		return ErrInvalid
 	}
 	count := 0
@@ -110,7 +110,7 @@ func (s BossSnapshot) Validate() error {
 			return ErrInvalid
 		}
 		for _, w := range g.Workers {
-			if !w.BossRow.valid() || (w.ID == nil) != (w.Generation == nil) ||
+			if !w.valid() || (w.ID == nil) != (w.Generation == nil) ||
 				(w.ID != nil && (!boundedBossString(*w.ID, MaxBossFieldBytes) || *w.Generation < 0)) {
 				return ErrInvalid
 			}
@@ -152,7 +152,7 @@ func bossObject(keys map[string]*shape) *shape {
 var (
 	bossScalar = &shape{nonNull: true}
 	bossFields = map[string]*shape{
-		"pane_id": nil, "name": nil, "agent": nil, "status": nil, "item": nil, "stage": nil,
+		"pane_id": nil, "name": nil, agentKey: nil, "status": nil, "item": nil, "stage": nil,
 		"stage_at": timeShape, "stage_stale": bossScalar, "idle_since": timeShape, "ctx": nil,
 	}
 	bossSnapshotShape = bossObject(map[string]*shape{

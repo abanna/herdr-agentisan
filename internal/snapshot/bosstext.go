@@ -77,7 +77,7 @@ func appendBossRow(out []byte, r BossRow) []byte {
 	for _, f := range []struct {
 		key   string
 		value *string
-	}{{"agent", r.Agent}, {"item", r.Item}, {"stage", r.Stage}} {
+	}{{agentKey, r.Agent}, {"item", r.Item}, {"stage", r.Stage}} {
 		if f.value != nil {
 			out = fmt.Appendf(out, " %s=%s", f.key, bossText(*f.value))
 		}
