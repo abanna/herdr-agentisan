@@ -395,6 +395,9 @@ func TestDashboardContrastSweep(t *testing.T) {
 			// counts the backgrounds on which two of them draw the same ink.
 			hueRoles := []string{"green", "yellow", "orange", "red", "cyan"}
 			sameSlot := make(map[string]int)
+			// nearInk counts the backgrounds on which two hue inks that differ
+			// are closer than the OKLab floor of TestANSI256StatusColoursStayDistinct.
+			nearInk := make(map[string]int)
 			checkedSGR := make(map[string]bool)
 			seen := 0
 			check := func(role string, ink, bg color.Color) {
@@ -470,6 +473,8 @@ func TestDashboardContrastSweep(t *testing.T) {
 							for _, b := range hueRoles[:i] {
 								if inks[a] == inks[b] {
 									sameSlot[a+"/"+b]++
+								} else if oklabDistance(inks[a], inks[b]) < minimumInkDistance {
+									nearInk[a+"/"+b]++
 								}
 							}
 						}
@@ -486,6 +491,9 @@ func TestDashboardContrastSweep(t *testing.T) {
 				}
 			}
 			if p == colorprofile.ANSI256 {
+				// A ladder slot must stay tellable from every other hue ink on
+				// its background; a hue with no such slot keeps the neutral.
+				require.Empty(t, nearInk, "distinct hue inks closer than %.3f in OKLab", minimumInkDistance)
 				// Hue ladders (NERD-5719) take a status or stage ink along its own
 				// hue. No stock slot of green or red reaches 4.5:1 on backgrounds
 				// of relative luminance 0.159 to 0.284, so there the two share the
@@ -532,6 +540,14 @@ func okLab(c color.Color) [3]float64 {
 	}
 }
 
+// minimumInkDistance is the OKLab distance two semantic inks keep apart.
+const minimumInkDistance = 0.060
+
+func oklabDistance(a, b color.Color) float64 {
+	x, y := okLab(a), okLab(b)
+	return math.Hypot(math.Hypot(x[0]-y[0], x[1]-y[1]), x[2]-y[2])
+}
+
 func TestANSI256StatusColoursStayDistinct(t *testing.T) {
 	t.Parallel()
 
@@ -568,9 +584,7 @@ func TestANSI256StatusColoursStayDistinct(t *testing.T) {
 				}
 				for i, a := range colours {
 					for j, b := range colours[:i] {
-						x, y := okLab(a), okLab(b)
-						d := math.Hypot(math.Hypot(x[0]-y[0], x[1]-y[1]), x[2]-y[2])
-						require.GreaterOrEqualf(t, d, 0.060, "%s and %s OKLab distance", roles[i].role, roles[j].role)
+						require.GreaterOrEqualf(t, oklabDistance(a, b), minimumInkDistance, "%s and %s OKLab distance", roles[i].role, roles[j].role)
 					}
 				}
 			})
