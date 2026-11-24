@@ -1,21 +1,21 @@
 --- shift.sh
 +++ shift.sh
-@@ -18,0 +19,3 @@
-+# open starts the candidate with its own --session-id. brief pins the Claude that runs it, once, with
-+# the plugin's `boss shift check-model`; go and takeover prove that same process reports the model
-+# asked for. Nothing here waits for a report: when go is refused, fix the cause and run it again.
-@@ -29,0 +33 @@
+@@ -18,0 +19,2 @@
++# The candidate starts with its own --session-id. brief pins that Claude once and proves its model with the
++# plugin's `boss shift check-model`; go and takeover prove the same process again. Nothing waits for a report.
+@@ -29,0 +32 @@
 +PLUGIN=${SHIFT_PLUGIN:-herdr-agentisan}
-@@ -41,0 +46,22 @@
-+# check_model: the plugin's proof about the candidate Claude launched with this shift's --session-id.
-+# With no pin saved it names that Claude; with one it proves the same process reports the model.
+@@ -42,2 +45,20 @@
+-# model_ok <reported> <wanted>: an alias ("fable") matches a full id ("claude-fable-5-2").
+-model_ok(){ case "$(printf %s "$1" | tr '[:upper:]' '[:lower:]')" in *"$(printf %s "$2" | tr '[:upper:]' '[:lower:]')"*) return 0 ;; esac; return 1; }
++# check_model: names the candidate Claude (no pin saved) or proves that pinned process and its model.
 +check_model(){
 +    "$PLUGIN" boss shift check-model --pane "$(val new)" --terminal "$(val terminal)" --name "$(val next)" \
 +        --model "$(val model)" --launched-at "$(val launched_at)" --session-id "$(val session)" \
 +        --pid "$(val model_pid)" --start "$(val model_start)"
 +}
 +pinned(){ [[ "$(val model_pid)" =~ ^[1-9][0-9]*$ ]]; }
-+# pin_model: only brief calls it, only while nothing is pinned. A pin is never replaced.
++# pin_model: only brief calls it, only while nothing is pinned.
 +pin_model(){
 +    local v pid start tmp
 +    v=$(check_model) || { printf '%s\n' "$v"; return 1; }
@@ -24,35 +24,49 @@
 +      { cat "$CUR/state"; printf 'model_pid=%s\nmodel_start=%s\n' "$pid" "$start"; } > "$tmp" && mv "$tmp" "$CUR/state" || { rm -f "$tmp"; return 1; }
 +}
 +candidate_ready(){ pinned || { echo "shift: no candidate process pin; run shift.sh brief, or abort and open again" >&2; return 1; }; check_model; }
-+# close_checked <pane> <terminal>: close the pane only while it still holds that terminal.
 +close_checked(){
 +    [ -n "$2" ] && [ "$({ herdr pane get "$1" 2>/dev/null | field result.pane.terminal_id 2>/dev/null; } || true)" = "$2" ] &&
 +      herdr pane close "$1" >/dev/null
 +}
-@@ -50 +76,3 @@
+@@ -50,2 +71,4 @@
 -    who=$(herdr agent get "$BOSS" | field result.agent.pane_id)
+-    [ "$who" = "$old" ] || die "agent $BOSS is on pane '$who', and I am on '$old': refusing"
 +    help=$("$PLUGIN" boss shift check-model --help 2>/dev/null) && [[ "$help" == *"--session-id"* ]] ||
 +      die "install a herdr-agentisan build with boss shift check-model, or set SHIFT_PLUGIN to its path"
 +    me=$(herdr agent get "$BOSS"); who=$(field result.agent.pane_id <<< "$me"); oldterm=$(field result.agent.terminal_id <<< "$me")
-@@ -53,3 +81,4 @@
++    [ "$who" = "$old" ] && [ -n "$oldterm" ] || die "agent $BOSS is on pane '$who' (terminal '$oldterm'), and I am on '$old': refusing"
+@@ -53,4 +76,10 @@
 -    new=$(herdr pane split "$old" --direction right --no-focus --cwd "$REPO" | field result.pane.pane_id)
 -    [ -n "$new" ] || die "the split returned no pane id"
 -    printf 'old=%s\nnew=%s\nboss=%s\nnext=%s\nopened=%s\nmodel=%s\neffort=%s\n' "$old" "$new" "$BOSS" "$NEXT" "$(date +%H:%M:%S)" "$MODEL" "$EFFORT" > "$dir/state"
+-    ln -s "$dir" "$CUR"
 +    session=$(python3 -c 'import uuid;print(uuid.uuid4())')
-+    # the record comes first, so a split whose reply is lost still leaves one: status and abort say what to do
++    ln -sn "$dir" "$CUR" || die "another open took the shift ($(readlink "$CUR")); nothing written"
++    # the record comes before the split, so a lost split reply still leaves one: status and abort say what to do
 +    printf 'old=%s\nboss=%s\nnext=%s\nopened=%s\nmodel=%s\neffort=%s\nold_terminal=%s\nlaunched_at=%s\nsession=%s\nmodel_pid=0\nmodel_start=0\n' \
 +      "$old" "$BOSS" "$NEXT" "$(date +%H:%M:%S)" "$MODEL" "$EFFORT" "$oldterm" "$(date +%s%3N)" "$session" > "$dir/state"
-@@ -56,0 +86,4 @@
 +    split=$(herdr pane split "$old" --direction right --no-focus --cwd "$REPO") || die "the split failed; it may still have made a pane (run: shift.sh status)"
-+    new=$(field result.pane.pane_id <<< "$split"); terminal=$(field result.pane.terminal_id <<< "$split")
++    new=$(field result.pane.pane_id <<< "$split" 2>/dev/null || true); terminal=$(field result.pane.terminal_id <<< "$split" 2>/dev/null || true)
 +    printf 'new=%s\nterminal=%s\n' "$new" "$terminal" >> "$dir/state"
 +    [ -n "$new" ] && [ -n "$terminal" ] || die "the split returned no pane or terminal id: close the new pane (${new:-unknown}) by hand, then run: shift.sh abort"
-@@ -58 +91 @@
++    [ "$(readlink "$CUR")" = "$dir" ] || { close_checked "$new" "$terminal"; die "the shift ended during the split; closed the new pane $new if it was the candidate's"; }
+@@ -58 +87 @@
 -    herdr agent start "$NEXT" --kind claude --pane "$new" --timeout 90000 -- --name "$NEXT" --model "$MODEL" --effort "$EFFORT" >/dev/null \
 +    herdr agent start "$NEXT" --kind claude --pane "$new" --timeout 90000 -- --name "$NEXT" --model "$MODEL" --effort "$EFFORT" --session-id "$session" >/dev/null \
-@@ -69,0 +103 @@
+@@ -60,8 +89 @@
+-    # what it was asked for is not what it runs: read the model back from its pane
+-    got=; for _ in $(seq 1 30); do got=$(model_of "$NEXT"); [ -n "$got" ] && break; sleep 2; done
+-    if [ -z "$got" ]; then
+-      echo "warning: $NEXT has reported no model yet (asked for $MODEL); 'shift.sh go' checks again and refuses a wrong one"
+-    elif ! model_ok "$got" "$MODEL"; then
+-      die "the incoming boss runs on '$got', not '$MODEL' (pane $new left open; run: shift.sh abort, then open again)"
+-    fi
+-    echo "opened: incoming boss $NEXT on $new, model ${got:-not reported yet}; shift folder $dir" ;;
++    echo "opened: incoming boss $NEXT on $new; shift folder $dir. Next: shift.sh brief, which proves its model" ;;
+@@ -69,0 +92,2 @@
 +    pinned || pin_model || die "the candidate Claude is not identified, so nothing was sent: wait for it to start and run brief again, or abort"
-@@ -85,9 +119,6 @@
++    candidate_ready || die "the candidate's model is not proved, so nothing was sent: run brief again once it has reported, or abort"
+@@ -85,9 +109,6 @@
 -    # no GO to a boss on the wrong model: the team is not handed to it
 -    want=$(val model); want=${want:-$MODEL}; got=$(model_of "$(val next)")
 -    if [ -z "$got" ]; then
@@ -63,25 +77,27 @@
 -    date +%H:%M:%S > "$CUR/GO"
 -    herdr agent prompt "$(val next)" "From the outgoing boss: GO. You have the picture. Run: $here/shift.sh takeover" >/dev/null
 +    [ ! -e "$CUR/GO-CUED" ] || die "GO is already recorded and the candidate cued (run: shift.sh status)"
-+    candidate_ready || die "GO not written"
++    candidate_ready || die "the candidate is not verified; nothing was sent"
 +    [ -e "$CUR/GO" ] || { date +%H:%M:%S > "$CUR/GO.tmp" && mv "$CUR/GO.tmp" "$CUR/GO"; }
 +    herdr agent prompt "$(val next)" "From the outgoing boss: GO. You have the picture. Run: $here/shift.sh takeover" >/dev/null ||
 +      die "GO is recorded but the cue failed: run shift.sh go again"
 +    touch "$CUR/GO-CUED"
-@@ -98 +129,2 @@
+@@ -98 +119,3 @@
 -    herdr pane close "$(val new)" >/dev/null 2>&1 || true
 +    if [ -z "$(val new)" ]; then echo "shift: no pane was recorded; if the split made one, close it by hand (herdr pane list)" >&2
-+    else close_checked "$(val new)" "$(val terminal)" || echo "shift: pane $(val new) is not confirmed as the candidate's terminal; not closed (close it by hand if it still exists)" >&2; fi
-@@ -104,0 +137 @@
++    elif close_checked "$(val new)" "$(val terminal)"; then echo "closed candidate pane $(val new)"
++    else echo "shift: pane $(val new) is not confirmed as the candidate's terminal; not closed. Look (herdr pane list) before closing anything" >&2; fi
+@@ -100 +123 @@
+-    echo "aborted: incoming pane closed; the outgoing boss stays in charge. Tell the user." ;;
++    echo "aborted: the outgoing boss stays in charge. Tell the user." ;;
+@@ -104,0 +128 @@
 +    candidate_ready || die "candidate model unverified; old pane left open"
-@@ -106 +139 @@
+@@ -106 +130 @@
 -    herdr pane close "$old" >/dev/null || die "could not close the old pane $old; nothing renamed"
 +    close_checked "$old" "$(val old_terminal)" || die "the old pane $old is not the recorded terminal, or did not close; nothing renamed"
-@@ -114 +147,6 @@
+@@ -114 +138,4 @@
 -    if [ -L "$CUR" ]; then cat "$CUR/state"; echo "reported_model=$(model_of "$(val next)")"; ls "$CUR"; else echo "no shift open"; fi ;;
-+    if [ -L "$CUR" ]; then
-+      cat "$CUR/state"
-+      if [ -n "$(val new)" ]; then echo "reported_model=$(model_of "$(val next)")"; check_model || true
++    if [ -L "$CUR" ]; then cat "$CUR/state"; ls "$CUR"
++      if [ -n "$(val new)" ]; then check_model || true
 +      else echo "no candidate pane was recorded: the split may have made one. Look (herdr pane list), close it by hand, then run: shift.sh abort"; fi
-+      ls "$CUR"
 +    else echo "no shift open"; fi ;;

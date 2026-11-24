@@ -31,25 +31,6 @@ func TestCheckModelExpiresAtTTL(t *testing.T) {
 	require.Equal(t, "stale_report", verdict.Reason)
 }
 
-func TestCheckModelRejectsPaneSwapAfterAgentGet(t *testing.T) {
-	t.Parallel()
-	fixture := newModelFixture()
-	fixture.paneTerminal = "replacement-terminal"
-	verdict, err := fixture.check(t)
-	require.ErrorIs(t, err, bossshift.ErrModelProof)
-	require.Equal(t, "candidate_changed", verdict.Reason)
-}
-
-func TestCheckModelRejectsReplacementPID(t *testing.T) {
-	t.Parallel()
-	fixture := newModelFixture()
-	// Two processes may start in the same clock tick.
-	fixture.foreground[0].PID++
-	verdict, err := fixture.check(t)
-	require.ErrorIs(t, err, bossshift.ErrModelProof)
-	require.Equal(t, "candidate_changed", verdict.Reason)
-}
-
 func TestCheckModelRejectsUnreadableProcess(t *testing.T) {
 	t.Parallel()
 	fixture := newModelFixture()
@@ -93,44 +74,36 @@ func TestCheckModelRejectsZombieAtEitherRead(t *testing.T) {
 	}
 }
 
-// The first call names the Claude the launch id belongs to, before any report.
-func TestCheckModelIdentifiesTheLaunchedClaude(t *testing.T) {
-	t.Parallel()
-	fixture := newModelFixture()
-	fixture.target.PID, fixture.target.Start = 0, 0
-	fixture.noTokens = true
-	verdict, err := fixture.check(t)
-	require.NoError(t, err)
-	require.Equal(t, "identified", verdict.Reason)
-	require.Equal(t, uint32(100), verdict.PID)
-	require.Equal(t, uint64(200), verdict.Start)
-}
-
-// The launch id must be the value of --session-id, in either form.
+// The launch id must be the value of --session-id, in either form. The first
+// call, before the pin, names the Claude and reads no report.
 func TestCheckModelRequiresTheLaunchSessionID(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		name   string
-		argv   []string
-		reason string
+		name     string
+		argv     []string
+		reason   string
+		unpinned bool // also run before the pin
 	}{
-		{"space form", []string{"claude", "--session-id", "launch-1"}, "verified"},
-		{"equals form", []string{"claude", "--session-id=launch-1"}, "verified"},
-		{"no id", []string{"claude", "--model", "fable"}, "candidate_changed"},
-		{"another id", []string{"claude", "--session-id", "launch-2"}, "candidate_changed"},
-		{"the id as another flag's value", []string{"claude", "--name", "launch-1"}, "candidate_changed"},
-		{"the id with nothing after the flag", []string{"claude", "--session-id"}, "candidate_changed"},
-		{"a longer id", []string{"claude", "--session-id=launch-12"}, "candidate_changed"},
+		{"space form", []string{"claude", "--session-id", "launch-1"}, "verified", true},
+		{"equals form", []string{"claude", "--session-id=launch-1"}, "verified", false},
+		{"no id", []string{"claude", "--model", "fable"}, "candidate_changed", true},
+		{"another id", []string{"claude", "--session-id", "launch-2"}, "candidate_changed", false},
+		{"the id as another flag's value", []string{"claude", "--name", "launch-1"}, "candidate_changed", false},
+		{"the id with nothing after the flag", []string{"claude", "--session-id"}, "candidate_changed", false},
+		{"a longer id", []string{"claude", "--session-id=launch-12"}, "candidate_changed", false},
 	}
 	for _, tc := range tests {
-		for _, pinned := range []bool{false, true} {
+		for _, pinned := range []bool{true, false} {
+			if !pinned && !tc.unpinned {
+				continue
+			}
 			t.Run(fmt.Sprintf("%s pinned=%t", tc.name, pinned), func(t *testing.T) {
 				t.Parallel()
 				fixture := newModelFixture()
 				fixture.foreground[0].Argv = tc.argv
 				want := tc.reason
 				if !pinned {
-					fixture.target.PID, fixture.target.Start = 0, 0
+					fixture.target.PID, fixture.target.Start, fixture.noTokens = 0, 0, true
 					if want == "verified" {
 						want = "identified"
 					}
@@ -161,6 +134,8 @@ func TestCheckModelRefusesBrokenProof(t *testing.T) {
 			f.foreground = nil
 			f.target.PID, f.target.Start = 0, 0
 		}},
+		{"pane_swap_after_agent_get", "candidate_changed", func(f *modelFixture) { f.paneTerminal = "replacement-terminal" }},
+		{"replacement_PID_in_the_same_tick", "candidate_changed", func(f *modelFixture) { f.foreground[0].PID++ }},
 		{"agent_is_not_Claude", "claude_unavailable", func(f *modelFixture) { f.agent.Agent = "codex" }},
 		{"pane_agent_is_not_Claude", "candidate_changed", func(f *modelFixture) { f.paneAgent = "codex" }},
 		{"process_changes_during_read", "candidate_changed", func(f *modelFixture) {
@@ -176,6 +151,11 @@ func TestCheckModelRefusesBrokenProof(t *testing.T) {
 		}},
 		{"pid_without_start", "invalid_candidate", func(f *modelFixture) { f.target.Start = 0 }},
 		{"no_launch_id", "invalid_candidate", func(f *modelFixture) { f.target.SessionID = "" }},
+		{"report_from_another_session", "wrong_session", func(f *modelFixture) { f.reportSession = "launch-2" }},
+		{"report_names_no_session", "wrong_session", func(f *modelFixture) { f.reportSession = "" }},
+		{"same_pid_different_start", "candidate_changed", func(f *modelFixture) {
+			f.stat = func(int) (report.Stat, error) { return report.Stat{Start: f.target.Start + 1}, nil }
+		}},
 		{"zero_launch", "invalid_candidate", func(f *modelFixture) { f.target.LaunchedAt = 0 }},
 		{"different_agent_name", "candidate_changed", func(f *modelFixture) { f.agent.Name = "stranger" }},
 		{"different_agent_terminal", "candidate_changed", func(f *modelFixture) { f.agent.TerminalID = "stranger" }},
@@ -200,6 +180,7 @@ type modelFixture struct {
 	agent                   herdr.Agent
 	paneTerminal, paneAgent string
 	noTokens                bool
+	reportSession           string
 	processPane             string
 	foreground              []herdr.Process
 	stat                    report.StatFunc
@@ -215,7 +196,7 @@ func newModelFixture() modelFixture {
 			Pane: "p", Terminal: "term", Name: "next", Model: "fable",
 			LaunchedAt: launched.UnixMilli(), SessionID: "launch-1", PID: pid, Start: start,
 		},
-		now: now, stamp: now,
+		now: now, stamp: now, reportSession: "launch-1",
 		agent:        herdr.Agent{PaneID: "p", TerminalID: "term", Name: "next", Agent: "claude"},
 		paneTerminal: "term", paneAgent: "claude", processPane: "p",
 		foreground: []herdr.Process{{PID: pid, Argv: []string{"claude", "--session-id", "launch-1"}}},
@@ -237,6 +218,7 @@ func (f modelFixture) check(t *testing.T) (bossshift.ModelVerdict, error) {
 			pane := herdr.PaneInfo{PaneID: f.target.Pane, TerminalID: f.paneTerminal, Agent: f.paneAgent, Tokens: map[string]string{
 				report.ModelKey: f.target.Model, report.ModelAtKey: strconv.FormatInt(f.stamp.UnixMilli(), 10),
 			}}
+			pane.Tokens[report.ModelSessionKey] = f.reportSession
 			if f.noTokens {
 				pane.Tokens = nil
 			}

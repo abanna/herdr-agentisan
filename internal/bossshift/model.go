@@ -136,6 +136,11 @@ func checkModel(ctx context.Context, c herdr.Client, target Candidate, stat repo
 	if stamp.Before(launch) || stamp.Before(started.Truncate(time.Millisecond)) || now.Sub(stamp) >= report.CtxTTL {
 		return v.refuse("stale_report")
 	}
+	// The pane's model token is the pane's: only a report that names this
+	// launch's session is this Claude's.
+	if session := pane.Tokens[report.ModelSessionKey]; session != target.SessionID {
+		return v.refuse("wrong_session")
+	}
 	fableAlias := target.Model == "fable" && fableID.MatchString(v.Observed)
 	if target.Model != v.Observed && !fableAlias {
 		return v.refuse("wrong_model")

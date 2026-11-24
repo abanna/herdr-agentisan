@@ -25,6 +25,7 @@ var shiftModelHints = map[string]string{
 	"missing_model":         "the candidate has reported no model: wait for a statusline report, fix its hook, or abort",
 	"invalid_report_time":   "check the host clock and wait for a fresh statusline report",
 	"stale_report":          "the report is old: wait for a fresh one, fix the statusline hook, or abort",
+	"wrong_session":         "the model report is not from this candidate's session: fix its statusline hook (this build's report statusline), or abort",
 	"wrong_model":           "select the requested model with /model in the candidate pane",
 }
 

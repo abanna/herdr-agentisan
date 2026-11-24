@@ -65,7 +65,7 @@ func TestBossModelReadbackRejectsLaunchFallbackAndStaleToken(t *testing.T) {
 			t.Parallel()
 			agent := herdr.Agent{PaneID: "p", TerminalID: tc.terminal, Name: "next", Agent: "claude"}
 			pane := herdr.PaneInfo{PaneID: "p", TerminalID: tc.terminal, Agent: "claude", Tokens: map[string]string{
-				"model": tc.model, "model_at": strconv.FormatInt(tc.stamp, 10),
+				"model": tc.model, "model_at": strconv.FormatInt(tc.stamp, 10), "model_session": "launch-1",
 			}}
 			info := herdr.ProcessInfo{PaneID: "p", ForegroundProcesses: []herdr.Process{
 				{PID: uint32(os.Getpid()), Argv: []string{"claude", "--model", "fable", "--session-id", "launch-1"}}, // #nosec G115 -- OS PID fits in a uint32
@@ -127,7 +127,8 @@ func TestShiftOpenRecordsTheLaunchBeforeStartingClaude(t *testing.T) {
 	require.Equal(t, "new", s.state("new"))
 	require.Equal(t, "0", s.state("model_pid"))
 	require.Contains(t, s.read("starts"), " --session-id "+session)
-	require.NoFileExists(t, s.path("calls"), "open asks the plugin nothing: the model peek is advisory")
+	require.NoFileExists(t, s.path("calls"), "open asks the plugin nothing")
+	require.NoFileExists(t, s.path("sleeps"), "open never polls for a report")
 	require.Error(t, s.run("old", "verified", "open"), "a second open is refused")
 }
 
@@ -136,9 +137,7 @@ func TestShiftOpenKeepsAStubWhenTheSplitFails(t *testing.T) {
 	s := setupShiftScript(t)
 	_, err := s.invoke("old", "verified", "open", "SPLIT_FAIL=1")
 	require.Error(t, err)
-	require.FileExists(t, s.path("split"))
 	require.NotContains(t, s.read("current/state"), "new=")
-	require.NoFileExists(t, s.path("starts"))
 	before := s.snapshot()
 	out, err := s.invoke("old", "verified", "status")
 	require.NoError(t, err)
@@ -153,19 +152,52 @@ func TestShiftOpenKeepsAStubWhenTheSplitFails(t *testing.T) {
 	require.FileExists(t, s.path("last-aborted/state"))
 }
 
-func TestShiftOpenStopsAtASplitWithoutATerminal(t *testing.T) {
+func TestShiftOpenStopsAtASplitWithoutAUsableReply(t *testing.T) {
+	t.Parallel()
+	for mode, abortSays := range map[string]string{"SPLIT_WITHOUT_TERMINAL=1": "not closed", "SPLIT_JUNK=1": "no pane was recorded"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Parallel()
+			s := setupShiftScript(t)
+			out, err := s.invoke("old", "verified", "open", mode)
+			require.Error(t, err)
+			require.Contains(t, out, "by hand")
+			require.NotContains(t, out, "Traceback")
+			require.NoFileExists(t, s.path("starts"))
+			// A pane that has gone reads as no terminal, which must not match a record with none.
+			out, err = s.invoke("old", "verified", "abort", "NEW_GONE=1")
+			require.NoError(t, err)
+			require.Contains(t, out, abortSays)
+			require.NoFileExists(t, s.path("close"), "an unconfirmed terminal is never closed")
+		})
+	}
+}
+
+func TestShiftOpenRefusesAnOutgoingAgentWithoutATerminal(t *testing.T) {
 	t.Parallel()
 	s := setupShiftScript(t)
-	out, err := s.invoke("old", "verified", "open", "SPLIT_WITHOUT_TERMINAL=1")
+	require.Error(t, s.runEnv("open", "OLD_NO_TERMINAL=1"))
+	require.NoFileExists(t, s.path("split"))
+	require.NoFileExists(t, s.path("current"))
+}
+
+func TestShiftOpenStopsWhenTheShiftEndsDuringTheSplit(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	out, err := s.invoke("old", "verified", "open", `ON_SPLIT=rm "$SHIFT_ROOT/current"`)
 	require.Error(t, err)
-	require.Contains(t, out, "close the new pane (new) by hand")
-	require.Equal(t, "new", s.state("new"))
+	require.Contains(t, out, "ended during the split")
 	require.NoFileExists(t, s.path("starts"))
-	// A pane that has gone reads as no terminal, which must not match a record with none.
-	out, err = s.invoke("old", "verified", "abort", "NEW_GONE=1")
-	require.NoError(t, err)
-	require.Contains(t, out, "not closed")
-	require.NoFileExists(t, s.path("close"), "an unconfirmed terminal is never closed")
+	require.Equal(t, "new\n", s.read("close"), "the pane the split made is closed")
+}
+
+func TestShiftOpenLeavesAnActiveShiftsRecordAlone(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	won := `w="$SHIFT_ROOT/20261124-000000"; mkdir -p "$w"; echo WINNER > "$w/state"; ln -s "$w" "$SHIFT_ROOT/current"`
+	_, err := s.invoke("old", "verified", "open", "ON_GET="+won, "SPLIT_FAIL=1")
+	require.Error(t, err)
+	require.Equal(t, "WINNER\n", s.read("current/state"))
+	require.NoFileExists(t, s.path("split"))
 }
 
 func TestShiftOpenChecksPluginBeforeSplit(t *testing.T) {
@@ -187,7 +219,8 @@ func TestShiftOpenChecksPluginBeforeSplit(t *testing.T) {
 	}
 }
 
-// The candidate is identified once, before its first instructions.
+// The candidate is identified once and its model proved before any instructions,
+// on every brief.
 func TestShiftBriefPinsTheLaunchedClaudeOnce(t *testing.T) {
 	t.Parallel()
 	s := setupShiftScript(t)
@@ -196,6 +229,7 @@ func TestShiftBriefPinsTheLaunchedClaudeOnce(t *testing.T) {
 	require.Equal(t, "100", s.state("model_pid"))
 	require.Equal(t, "200", s.state("model_start"))
 	require.Contains(t, s.read("calls"), "--session-id "+s.state("session")+" --pid 0 --start 0")
+	require.Contains(t, s.read("calls"), "--pid 100 --start 200", "the model is proved after the pin")
 	require.True(t, strings.HasPrefix(s.read("cues"), "1 "), "the pin was saved before the cue: %q", s.read("cues"))
 	_, err := s.invoke("old", "verified", "brief", "PLUGIN_PID=999")
 	require.NoError(t, err)
@@ -203,21 +237,27 @@ func TestShiftBriefPinsTheLaunchedClaudeOnce(t *testing.T) {
 	require.Equal(t, 1, strings.Count(s.read("calls"), "--pid 0"))
 	require.Equal(t, 2, strings.Count(s.read("cues"), "INCOMING.md"))
 	require.Empty(t, s.glob("current/state.*"))
+	require.Error(t, s.run("old", "candidate_changed", "brief"), "a retry rechecks the process")
+	require.Equal(t, 2, strings.Count(s.read("cues"), "INCOMING.md"))
 }
 
-func TestShiftBriefWithholdsTheCueUntilTheLaunchIsIdentified(t *testing.T) {
+func TestShiftBriefWithholdsTheCueUntilTheModelIsProved(t *testing.T) {
 	t.Parallel()
-	for _, refusal := range []string{"candidate_changed", "claude_unavailable", "candidate_unavailable"} {
-		t.Run(refusal, func(t *testing.T) {
+	for _, tc := range []struct{ name, env, verdict, pid string }{
+		{"not identified", "IDENTIFY_VERDICT=candidate_changed", "verified", "0"},
+		{"wrong model", "X=1", "wrong_model", "100"},
+		{"no report yet", "X=1", "missing_model", "100"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			s := setupShiftScript(t)
 			require.NoError(t, s.run("old", "verified", "open"))
-			_, err := s.invoke("old", "verified", "brief", "IDENTIFY_VERDICT="+refusal)
+			_, err := s.invoke("old", tc.verdict, "brief", tc.env)
 			require.Error(t, err)
-			require.Equal(t, "0", s.state("model_pid"), "a refused identity is never saved")
+			require.Equal(t, tc.pid, s.state("model_pid"), "a refused identity is never saved")
 			require.NoFileExists(t, s.path("cues"))
 			require.Empty(t, s.glob("current/state.*"))
-			require.NoError(t, s.run("old", "verified", "brief"), "brief reruns once Claude is up")
+			require.NoError(t, s.run("old", "verified", "brief"), "brief reruns")
 			require.Equal(t, "100", s.state("model_pid"))
 			require.FileExists(t, s.path("cues"))
 		})
@@ -244,6 +284,7 @@ func TestShiftGoWritesOnlyAfterAPinnedProof(t *testing.T) {
 	require.FileExists(t, s.path("current/GO-CUED"))
 	require.NoFileExists(t, s.path("current/GO.tmp"))
 	calls := s.read("calls")
+	require.Contains(t, calls, "boss shift check-model --pane new --terminal split-terminal --name ha-boss-next --model fable --launched-at ")
 	require.Contains(t, calls, "--pid 100 --start 200")
 	require.NotContains(t, calls, "pinned-at")
 	require.Error(t, s.run("old", "verified", "go"), "a recorded GO cannot be repeated")
@@ -257,12 +298,11 @@ func TestShiftGoRetriesAFailedCue(t *testing.T) {
 	s.account()
 	_, err := s.invoke("old", "verified", "go", "FAIL_PROMPT=1")
 	require.Error(t, err)
-	require.FileExists(t, s.path("current/GO"))
 	require.Equal(t, 1, strings.Count(s.read("cues"), "INCOMING.md"))
-	require.Zero(t, strings.Count(s.read("cues"), "takeover"))
 	s.write("current/GO", "saved GO\n")
-	require.Error(t, s.run("old", "wrong_model", "go"))
-	require.Zero(t, strings.Count(s.read("cues"), "takeover"))
+	out, err := s.invoke("old", "wrong_model", "go")
+	require.Error(t, err)
+	require.NotContains(t, out, "GO not written", "the saved GO is still there")
 	require.NoError(t, s.run("old", "verified", "go"))
 	require.Equal(t, "saved GO\n", s.read("current/GO"))
 	require.Equal(t, 1, strings.Count(s.read("cues"), "takeover"))
@@ -284,7 +324,6 @@ func TestShiftTakeoverClosesOnlyAVerifiedOldTerminal(t *testing.T) {
 	require.Error(t, err, "the old pane id now holds another terminal")
 	require.NoFileExists(t, s.path("close"))
 	require.NoFileExists(t, s.path("rename"))
-	require.FileExists(t, s.path("current/GO"))
 	require.NoError(t, s.run("new", "verified", "takeover"))
 	require.Equal(t, "old\n", s.read("close"))
 	require.Equal(t, "ha-boss-next ha-boss\n", s.read("rename"))
@@ -301,6 +340,8 @@ func TestShiftAbortClosesOnlyTheRecordedTerminal(t *testing.T) {
 		out, err := s.invoke("old", "verified", "abort", "NEW_TERMINAL=reused-terminal")
 		require.NoError(t, err)
 		require.Contains(t, out, "not closed")
+		require.NotContains(t, out, "by hand", "a refused terminal may be someone else's pane")
+		require.NotContains(t, out, "incoming pane closed")
 		require.NoFileExists(t, s.path("close"))
 		require.NoFileExists(t, s.path("current"), "the shift record still ends")
 	})
@@ -308,8 +349,10 @@ func TestShiftAbortClosesOnlyTheRecordedTerminal(t *testing.T) {
 		t.Parallel()
 		s := setupShiftScript(t)
 		require.NoError(t, s.run("old", "verified", "open"))
-		require.NoError(t, s.run("old", "verified", "abort"))
+		out, err := s.invoke("old", "verified", "abort")
+		require.NoError(t, err)
 		require.Equal(t, "new\n", s.read("close"))
+		require.Contains(t, out, "closed candidate pane new")
 	})
 }
 
@@ -320,8 +363,8 @@ func TestShiftStatusShowsTheVerdictAndWritesNothing(t *testing.T) {
 	before := s.snapshot()
 	out, err := s.invoke("old", "verified", "status")
 	require.NoError(t, err)
-	require.Equal(t, before, s.snapshot(), "status never pins")
 	require.Contains(t, out, "model_pid=0")
+	require.Equal(t, before, s.snapshot(), "status never pins")
 	require.NoError(t, s.run("old", "verified", "brief"))
 	before = s.snapshot()
 	out, err = s.invoke("old", "wrong_model", "status")
@@ -352,15 +395,24 @@ func setupShiftScript(t *testing.T) shiftScript {
 	require.NoError(t, err, "%s", out)
 
 	for name, body := range map[string]string{
+		"date": `#!/bin/bash
+[ "$1" != +%Y%m%d-%H%M%S ] || { echo 20261124-000000; exit; }
+exec /bin/date "$@"
+`,
 		"sleep": "#!/bin/bash\nprintf '%s\\n' \"$1\" >> \"$SHIFT_ROOT/sleeps\"\n",
 		"herdr": `#!/bin/bash
 case "$1 $2" in
   "agent get") [ ! -e "$SHIFT_ROOT/close" ] || exit 1
-               if [ "$3" = ha-boss ]; then echo '{"result":{"agent":{"pane_id":"old","terminal_id":"old-terminal"}}}'
+               if [ "$3" = ha-boss ]; then
+                 [ "$OLD_NO_TERMINAL" = 1 ] && echo '{"result":{"agent":{"pane_id":"old"}}}' || echo '{"result":{"agent":{"pane_id":"old","terminal_id":"old-terminal"}}}'
+                 eval "$ON_GET"
                else echo '{"result":{"agent":{"pane_id":"new","tokens":{"model":"fable"}}}}'; fi ;;
   "pane split") touch "$SHIFT_ROOT/split"
+                eval "$ON_SPLIT"
                 [ "${SPLIT_FAIL:-0}" = 0 ] || exit 7
-                if [ "${SPLIT_WITHOUT_TERMINAL:-0}" = 1 ]; then
+                if [ "${SPLIT_JUNK:-0}" = 1 ]; then
+                  echo junk
+                elif [ "${SPLIT_WITHOUT_TERMINAL:-0}" = 1 ]; then
                   echo '{"result":{"pane":{"pane_id":"new"}}}'
                 else
                   echo '{"result":{"pane":{"pane_id":"new","terminal_id":"split-terminal"}}}'
@@ -437,6 +489,12 @@ func (s shiftScript) read(name string) string {
 	contents, err := os.ReadFile(s.path(name))
 	require.NoError(s.t, err)
 	return string(contents)
+}
+
+func (s shiftScript) runEnv(verb string, env ...string) error {
+	s.t.Helper()
+	_, err := s.invoke("old", "verified", verb, env...)
+	return err
 }
 
 func (s shiftScript) glob(pattern string) []string {
