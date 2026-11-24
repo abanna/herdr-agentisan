@@ -99,7 +99,7 @@ func (s BossSnapshot) Validate() error {
 		return ErrUnsupportedVersion
 	}
 	if !boundedBossString(s.Team, 2*MaxBossFieldBytes) || s.At.IsZero() ||
-		s.TeamPoll.AsOf == nil || s.TeamPoll.AsOf.IsZero() ||
+		s.TeamPoll.AsOf == nil || s.TeamPoll.AsOf.IsZero() || s.TeamPoll.AsOf.After(s.At) ||
 		(s.TeamPoll.State != Fresh && s.TeamPoll.State != Stale) ||
 		s.MissingBossName != nil && (s.Boss != nil || !bossNamePattern.MatchString(*s.MissingBossName)) ||
 		s.Groups == nil || len(s.Groups) > MaxBossWorkers || s.WorkersOmitted < 0 || s.WorkersOmitted > math.MaxInt-MaxBossWorkers || !s.Board.valid() || s.Board.AsOf != nil && s.Board.AsOf.After(s.At) {

@@ -553,3 +553,61 @@ func TestBossSnapshotIgnoresWallClockSteps(t *testing.T) {
 	wall.Store(int64(o.Poll)) // a correction of three intervals back: the rows are no younger
 	assert.Equal(t, snapshot.Stale, shiftRead(t, sock).TeamPoll.State)
 }
+
+// NERD-5748: a boss tab renamed since the last poll is no longer the caller's place.
+func TestBossSnapshotRefusesRenamedBossTabBeforePoll(t *testing.T) {
+	t.Parallel()
+	h := shiftHerdr(t)
+	shiftCaller(h, "w14:p0")
+	o := shiftOpts(t, h)
+	o.Poll = time.Hour
+	sock := startShift(t, h, o)
+	shiftRead(t, sock)
+	h.mu.Lock()
+	swapBoss(h)
+	h.mu.Unlock()
+	_, err := daemon.Workforce(t.Context(), sock, bossSnapshotOp, struct{}{})
+	assert.Equal(t, "not_ready", refusedWith(t, err))
+}
+
+// NERD-5748: a wall clock step back after the poll leaves its as_of no later than the reply.
+func TestBossSnapshotTeamAsOfFollowsMonotonicAge(t *testing.T) {
+	t.Parallel()
+	h := shiftHerdr(t)
+	shiftCaller(h, "w14:p0")
+	o := shiftOpts(t, h)
+	o.Poll = time.Hour
+	var wall, mono atomic.Int64
+	wall.Store(int64(10 * time.Second))
+	o.Now = func() time.Time { return boardNow.Add(time.Duration(wall.Load())) }
+	o.Mono = func() time.Duration { return time.Duration(mono.Load()) }
+	sock := startShift(t, h, o)
+	shiftRead(t, sock)
+	wall.Store(int64(5 * time.Second)) // the poll saw +10 s, a correction of 5 s, a millisecond later
+	mono.Store(int64(time.Millisecond))
+	got := shiftRead(t, sock)
+	assert.Equal(t, snapshot.Fresh, got.TeamPoll.State)
+	assert.Equal(t, got.At.Add(-time.Millisecond), *got.TeamPoll.AsOf)
+}
+
+// NERD-5748: placement may use its whole budget and the board read and live check still run.
+func TestBossSnapshotStagesKeepTheirBudgets(t *testing.T) {
+	t.Parallel()
+	h := shiftHerdr(t)
+	shiftCaller(h, "w20:p0")
+	o := shiftOpts(t, h)
+	o.Poll = time.Hour // the poll's own herdr calls would queue behind the delayed ones
+	sock := startShift(t, h, o)
+	served(t, sock, anySnapshot)
+	h.mu.Lock()
+	h.onCall = func(method string) { // five probes take 9.5 s of the 10 s placement budget
+		switch method {
+		case "pane.process_info":
+			time.Sleep(1900 * time.Millisecond)
+		case "pane.list", "tab.list":
+			time.Sleep(time.Second)
+		}
+	}
+	h.mu.Unlock()
+	assert.Equal(t, "beta", shiftRead(t, sock).Team)
+}

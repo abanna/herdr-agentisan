@@ -38,6 +38,7 @@ func TestBossSnapshotJSONStrict(t *testing.T) {
 		{"status", `"unknown"`, `"running"`},
 		{"freshness", `"stale"`, `"old"`},
 		{"board fresher than the reply", `"board":{"as_of":null,"state":"unavailable","mark":null,"newest":null,"unread":null}`, `"board":{"as_of":"2026-11-24T09:00:04Z","state":"fresh","mark":0,"newest":0,"unread":0}`},
+		{"team poll fresher than the reply", `"team_poll":{"as_of":"2026-11-24T09:00:00Z"`, `"team_poll":{"as_of":"2026-11-24T09:00:04Z"`},
 		{"unavailable count", `"mark":null`, `"mark":0`},
 		{"time spelling", `T09:00:00Z`, `T09:00:00,0Z`},
 		{"time value", `T09:00:03Z`, `T09:60:03Z`},

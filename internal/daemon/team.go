@@ -232,7 +232,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 // model. With the model it returns the workspace of the pane the list had
 // focused, "" for none, which the agent view takes as focus (A49).
 func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, tp teamPoll) (*team.Model, string, error) {
-	observed, seen := o.Now(), o.Mono()
+	seen := o.Mono()
 	// The rows are read before the panes: the workforce commands write a
 	// row only once its pane exists, so every row read is one whose pane,
 	// unless it closed, the list after holds, and the reconcile never takes
@@ -313,7 +313,7 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 		}
 	}
 	if agentsErr == nil && rowsErr == nil {
-		publishBossPoll(tp.cache, &m, rows, now, observed, seen, tp.idle, started)
+		publishBossPoll(tp.cache, &m, rows, now, seen, tp.idle, started)
 	} else {
 		carryBossPoll(tp.cache, &m)
 	}

@@ -383,7 +383,7 @@ func boardStat(pid int) (report.Stat, error) {
 func TestPlaceBoardCaller(t *testing.T) {
 	t.Parallel()
 	model := &team.Model{Projects: []team.Project{{
-		Name: "ha",
+		Name: "ha", Short: "ha",
 		// w1:pS is an unlabelled split in the boss's tab, so the tabs
 		// resolver includes it among the boss's panes.
 		Boss: []team.Worker{
@@ -401,7 +401,7 @@ func TestPlaceBoardCaller(t *testing.T) {
 		peer daemon.Peer
 		want daemon.BoardCaller
 	}{
-		"a command the boss runs":       {me(101), daemon.BoardCaller{Project: "ha", Reader: store.ReaderBoss, Pane: "w1:pB", Tab: "t1"}},
+		"a command the boss runs":       {me(101), daemon.BoardCaller{Project: "ha", Reader: store.ReaderBoss, Pane: "w1:pB", Tab: "t1", Label: "ha-boss"}},
 		"the dashboard in the boss tab": {me(200), daemon.BoardCaller{Project: "ha", Reader: store.ReaderUser, Pane: "w1:pD"}},
 		"a dashboard in the boss place": {me(700), daemon.BoardCaller{Project: "ha", Reader: store.ReaderUser, Pane: "w1:pS"}},
 	}

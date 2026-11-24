@@ -19,6 +19,7 @@ import (
 const (
 	opBossSnapshot  = "boss.snapshot"
 	bossBoardBudget = time.Second
+	bossLiveBudget  = 3 * time.Second // the live check's own, after a placement that used its whole budget
 	bossPollMaxAge  = 3
 	// bossClockSlack covers the wall clock's slew over bossBoardBudget (500 ppm).
 	bossClockSlack = time.Millisecond
@@ -27,19 +28,18 @@ const (
 // bossPoll is the one state every poll publishes, one that built no model
 // too: placement and rows come from it, never from the inbox's later view.
 type bossPoll struct {
-	at       time.Time
 	seen     time.Duration // o.Mono when the poll began: ages never read the wall clock
 	teams    map[string]snapshot.BossSnapshot
 	model    *team.Model // the newest poll's; nil when it built none
 	degraded bool        // teams and at are the last complete poll's, carried over
 }
 
-func publishBossPoll(cache *snapshotCache, m *team.Model, rows []store.Worker, at, observed time.Time, seen time.Duration, idle *team.IdleClock, started map[string]time.Time) {
+func publishBossPoll(cache *snapshotCache, m *team.Model, rows []store.Worker, at time.Time, seen time.Duration, idle *team.IdleClock, started map[string]time.Time) {
 	bindings := make(map[string]store.Worker, len(rows))
 	for _, r := range rows {
 		bindings[r.LogicalID] = r
 	}
-	next := &bossPoll{at: observed.UTC(), seen: seen, teams: make(map[string]snapshot.BossSnapshot, len(m.Projects)), model: m}
+	next := &bossPoll{seen: seen, teams: make(map[string]snapshot.BossSnapshot, len(m.Projects)), model: m}
 	for _, p := range m.Projects {
 		next.teams[p.Name] = team.BossSnapshot(p, at, idle, started, bindings)
 	}
@@ -49,7 +49,7 @@ func publishBossPoll(cache *snapshotCache, m *team.Model, rows []store.Worker, a
 // carryBossPoll publishes m with the last complete poll's rows.
 func carryBossPoll(cache *snapshotCache, m *team.Model) {
 	prev := cache.boss.Load()
-	cache.boss.Store(&bossPoll{at: prev.at, teams: prev.teams, model: m, degraded: true})
+	cache.boss.Store(&bossPoll{seen: prev.seen, teams: prev.teams, model: m, degraded: true})
 }
 
 func bossPlaced(m *team.Model, project, pane, terminal string) bool {
@@ -69,9 +69,11 @@ func (o Options) bossSnapshotOp(st *store.Store, cache *snapshotCache) op {
 			}
 		}
 		first := cache.boss.Load()
-		who, err := o.boardPlacer(func() (*team.Model, map[string]string) { return first.model, nil })(ctx, peerFrom(ctx))
+		placing, stop := context.WithTimeout(ctx, BoardBudget) // the stages after it keep theirs
+		defer stop()
+		who, err := o.boardPlacer(func() (*team.Model, map[string]string) { return first.model, nil })(placing, peerFrom(ctx))
 		if err != nil {
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			if errors.Is(placing.Err(), context.DeadlineExceeded) {
 				return nil, bossRefusal(codeTimeout)
 			}
 			return nil, bossRefusal(boardCode(err))
@@ -83,10 +85,13 @@ func (o Options) bossSnapshotOp(st *store.Store, cache *snapshotCache) op {
 		defer cancel()
 		asOf, since := o.Now().UTC().Add(-bossClockSlack), o.Mono() // before the read, so no later post is older
 		board, err := st.BoardStatus(read, who.Project, store.ReaderBoss)
-		poll := cache.boss.Load() // after the read: a state published since placement is the one that counts
+		live, stopLive := context.WithTimeout(ctx, bossLiveBudget)
+		defer stopLive()
+		stillPlaced := o.stillPlaced(live, who)
+		poll := cache.boss.Load() // last: a state published since placement, live check included, is the one that counts
 		out, ok := poll.teams[who.Project]
-		if !ok || !bossPlaced(poll.model, who.Project, who.Pane, who.Term) || !o.paneShows(ctx, who.Pane, who.Term, who.Tab) {
-			return nil, bossRefusal(codeNotReady) // demoted, no model or a reissued pane id: the client asks again
+		if !ok || !stillPlaced || !bossPlaced(poll.model, who.Project, who.Pane, who.Term) {
+			return nil, bossRefusal(codeNotReady) // demoted, no model, or the caller's pane or tab changed: the client asks again
 		}
 		out.At = o.Now().UTC()
 		out.Board.State = snapshot.Unavailable
@@ -96,8 +101,10 @@ func (o Options) bossSnapshotOp(st *store.Store, cache *snapshotCache) op {
 				Mark:       &board.Mark, Newest: &board.Newest, Unread: &board.Unread,
 			}
 		}
-		out.TeamPoll = snapshot.BossSource{AsOf: &poll.at, State: snapshot.Fresh}
-		if poll.degraded || o.Mono()-poll.seen > bossPollMaxAge*o.Poll {
+		age := o.Mono() - poll.seen // as_of is now less the monotonic age: never after at, whatever the wall clock did
+		teamAsOf := out.At.Add(-age)
+		out.TeamPoll = snapshot.BossSource{AsOf: &teamAsOf, State: snapshot.Fresh}
+		if poll.degraded || age > bossPollMaxAge*o.Poll {
 			out.TeamPoll.State = snapshot.Stale
 		}
 		if err := out.Validate(); err != nil {
@@ -111,12 +118,20 @@ func (o Options) bossSnapshotOp(st *store.Store, cache *snapshotCache) op {
 	}, code: boardCode}
 }
 
-// paneShows reports whether herdr lists pane now, showing terminal in tab: a pane id can be
-// reissued, or the pane moved, before the poll sees it; the lineage that placed the caller is the pane's.
-func (o Options) paneShows(ctx context.Context, pane, terminal, tab string) bool {
+// stillPlaced reports whether herdr lists who's pane now with the terminal and tab it was
+// placed in, and that tab still the team's boss tab: a pane id can be reissued, or its pane
+// moved or its tab renamed, before the poll sees it.
+func (o Options) stillPlaced(ctx context.Context, who boardCaller) bool {
 	c, _ := o.Herdr.(herdr.Client)
 	panes, err := c.ListPanes(ctx)
-	return err == nil && slices.ContainsFunc(panes, func(p herdr.PaneInfo) bool { return p.PaneID == pane && p.TerminalID == terminal && p.TabID == tab })
+	if err != nil {
+		return false
+	}
+	tabs, err := c.ListTabs(ctx)
+	return err == nil && slices.ContainsFunc(panes, func(p herdr.PaneInfo) bool {
+		return p.PaneID == who.Pane && p.TerminalID == who.Term && p.TabID == who.Tab
+	}) &&
+		slices.ContainsFunc(tabs, func(t herdr.TabInfo) bool { return t.TabID == who.Tab && t.Label == who.Label })
 }
 
 func bossRefusal(code string) *workforce.RefusalError {
