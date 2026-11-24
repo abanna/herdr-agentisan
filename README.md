@@ -660,7 +660,7 @@ group can move to Codex with one line:
 ```toml
 [agent.codex]
 command = ["codex", "--no-daemon"]
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 
 [groups.research]
 workers = 1
@@ -716,7 +716,8 @@ version a decision records; with `--project` it also refuses an override
 a worker type's spawns under either provider it may run would be refused
 for at the role's effort, such as a binding switched off in `[routing.bindings]`, and
 a model in another provider's table. Routing routes within the provider the
-worker runs, never across.
+worker runs, never across. The rules list Astra 6.2 as premium, with no
+eligible role.
 
 `[routing.jev]` is for Jev's complexity answer about a coder's assignment
 (ADR-001 A57): `enabled` (off by default, and Jev is asked only while
@@ -727,11 +728,21 @@ percents in place of the rules' 75 and 80. Like the rest of `[routing]` it
 belongs to the shared file and `--set`. `config resolve --check-secrets`
 reads the key from the file, and prints only whether it is there. While
 both are enabled, `worker spawn` asks Jev once about a coder's task packet,
-before it opens anything, unless an override names the coder's binding;
-`team up` never asks. A demanding answer that meets the thresholds starts
-the coder on its strong binding. Anything else, a failure or a missing key
-included, keeps its default, and the routed event's `fallback_reason` and
-`jev_error` say why.
+before it opens anything, if it has an assignment and Jev can change the
+route. A model override skips Jev. `team up` uses defaults. A Codex coder
+defaults to Sol 6.2 at medium.
+A demanding answer that meets the thresholds raises it to high. With no
+qualifying answer, including when Jev is off, unreachable, or missing its
+key, the coder keeps its default. Claude coders default to Sonnet 5.5 at high
+and can move to Opus 5.5 at high. The routed event's `fallback_reason` and
+`jev_error` record any fallback.
+
+Research defaults to Sonnet 5.5 at high or Sol 6.2 at medium. Librarians
+default to Haiku 5.5 or Luna 6 at low. For small jobs, bosses can choose an
+allowed model per spawn, such as `--model claude_small` for a Claude coder
+or `--provider codex --model codex_terra` for a Codex coder. Those bindings
+use low effort by default. Coder and research take their first binding
+effort by default, including when `[routing.bindings]` sets the list.
 
 `worker spawn` asks routing once per spawn, and `team up` once per group it
 fills, before it opens anything: while routing is on, a group it refuses

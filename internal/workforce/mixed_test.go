@@ -50,12 +50,12 @@ func TestSpawnRunsTheProviderAsked(t *testing.T) {
 		},
 		"codex asked, routing on": {
 			config: mixedConfig + "\n[routing]\nenabled = true\n", req: workforce.SpawnRequest{Group: "coder", Count: 1, Provider: "codex"},
-			kind: "codex", args: []any{"--search", "--no-daemon", "--sandbox", "danger-full-access", "--model", "gpt-6.1-sol", "-c", `model_reasoning_effort="high"`},
+			kind: "codex", args: []any{"--search", "--no-daemon", "--sandbox", "danger-full-access", "--model", "gpt-6.2-sol", "-c", `model_reasoning_effort="medium"`},
 			routed: "codex_strong",
 		},
 		"codex asked with its own binding": {
 			config: mixedConfig + "\n[routing]\nenabled = true\n", req: workforce.SpawnRequest{Group: "coder", Count: 1, Provider: "codex", Model: "codex_strong"},
-			kind: "codex", args: []any{"--search", "--no-daemon", "--sandbox", "danger-full-access", "--model", "gpt-6.1-sol", "-c", `model_reasoning_effort="high"`},
+			kind: "codex", args: []any{"--search", "--no-daemon", "--sandbox", "danger-full-access", "--model", "gpt-6.2-sol", "-c", `model_reasoning_effort="medium"`},
 			routed: "codex_strong",
 		},
 		"the packet prefers codex, routing off": {
@@ -64,7 +64,7 @@ func TestSpawnRunsTheProviderAsked(t *testing.T) {
 		},
 		"the packet prefers codex, routing on": {
 			config: mixedConfig + "\n[routing]\nenabled = true\n", req: workforce.SpawnRequest{Group: "coder", Count: 1, Task: preferring("codex")},
-			kind: "codex", args: []any{"--search", "--no-daemon", "--sandbox", "danger-full-access", "--model", "gpt-6.1-sol", "-c", `model_reasoning_effort="high"`},
+			kind: "codex", args: []any{"--search", "--no-daemon", "--sandbox", "danger-full-access", "--model", "gpt-6.2-sol", "-c", `model_reasoning_effort="medium"`},
 			routed: "codex_strong",
 		},
 		"--provider and the packet agree": {

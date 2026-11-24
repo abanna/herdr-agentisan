@@ -65,7 +65,7 @@ model = "opus"
 # [agent.codex], and spawn any launch whose model the other provider runs.
 [agent.codex]
 command = ["codex", "--no-daemon"]
-model = "gpt-6.1-sol"
+model = "gpt-6.2-sol"
 
 # The context percentages at which the daemon tells a team's boss a pane is
 # due to rotate (ADR-001 D7, A33): soft, hard and the ceiling, which also
@@ -190,14 +190,14 @@ workers = 0
 slots = 1
 
 # A Codex qa group, commented out (ADR-001 A59). Its workers start as
-#   codex --no-daemon --sandbox danger-full-access --model gpt-6.1-sol
+#   codex --no-daemon --sandbox danger-full-access --model gpt-6.2-sol
 # so the repo's tests, git, signing, gh and team/ files work, as a Claude
 # worker's do: with no OS sandbox and no Codex reviewer. To keep Codex's
 # sandbox, put one in the command (--sandbox workspace-write, say), at the
 # cost the README's Codex sandbox paragraph states. The sandbox goes with
 # each Codex launch, never with a Claude one.
 # [groups.qa]
-# agent = { command = ["codex"], model = "gpt-6.1-sol" }
+# agent = { command = ["codex"], model = "gpt-6.2-sol" }
 
 [integrations.github]
 token = { env = "GITHUB_TOKEN" }
@@ -275,11 +275,16 @@ locks = ["/run/user/1000/agentisan/gate.0.lock"]
 #            client takes (claude: low to max, codex: minimal to xhigh) and
 #            enabled, e.g. [routing.bindings.claude_mid] model_id = "…".
 #   [routing.overrides]  <role> = "<binding>": your standing choice, and the
-#            only way to a premium binding (Fable, Astra). This file only.
+#            only way to a premium binding the role allows. This file only.
+#            Astra 6.2 has no eligible role.
 #            A binding binds only workers of its provider (ADR-001 A63), so
 #            coder = "claude_strong" leaves a Codex coder on codex_strong;
 #            a list sets one per provider:
 #            coder = ["claude_strong", "codex_strong"].
+#   A Codex coder or researcher defaults to Sol 6.2 at medium. Only the
+#   coder can ask Jev to raise effort to high for demanding work. For a
+#   small coding job, choose claude_small on Claude or codex_terra on
+#   Codex with worker spawn --model. Both use low effort by default.
 #   [routing.jev]  Jev's complexity answer for a coder spawned with a task
 #            packet (ADR-001 A57). enabled false (the default) never asks
 #            Jev, and Jev is asked only while routing is enabled too;

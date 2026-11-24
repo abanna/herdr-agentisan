@@ -173,8 +173,8 @@ func TestParseRulesRefusesWhatJevCannotDo(t *testing.T) {
 }
 
 // TestWhoAsksJev: only a coder's decision with an assignment and no binding
-// named asks Jev, and only while escalating could change its binding: a
-// codex coder's default is already codex_strong at high (jev_no_change).
+// named asks Jev, and only if the answer can change its binding or effort.
+// An explicit Codex effort leaves Jev no change to make.
 func TestWhoAsksJev(t *testing.T) {
 	t.Parallel()
 	p := policy(t, routing.Deployment{})
@@ -185,7 +185,7 @@ func TestWhoAsksJev(t *testing.T) {
 	}{
 		"a claude coder":                    {req: routing.Request{Role: "coder", Provider: routing.Claude, Task: coderTask()}, asks: true, why: routing.ReasonJevDisabled},
 		"a claude coder at the boss's high": {req: routing.Request{Role: "coder", Provider: routing.Claude, Effort: "high", Task: coderTask()}, asks: true, why: routing.ReasonJevDisabled},
-		"a codex coder":                     {req: routing.Request{Role: "coder", Provider: routing.Codex, Task: coderTask()}, why: routing.ReasonJevNoChange},
+		"a codex coder":                     {req: routing.Request{Role: "coder", Provider: routing.Codex, Task: coderTask()}, asks: true, why: routing.ReasonJevDisabled},
 		"a codex coder at xhigh":            {req: routing.Request{Role: "coder", Provider: routing.Codex, Effort: "xhigh", Task: coderTask()}, why: routing.ReasonJevNoChange},
 		"a coder the boss named":            {req: routing.Request{Role: "coder", Provider: routing.Claude, Model: "claude_mid", Task: coderTask()}},
 		"a coder with no packet":            {req: routing.Request{Role: "coder", Provider: routing.Claude}, why: routing.ReasonTaskNotFound},
@@ -569,23 +569,22 @@ func TestApplyJevWithoutAKey(t *testing.T) {
 	assert.LessOrEqual(t, len(got.JevError), 200)
 	assert.True(t, utf8.ValidString(got.JevError))
 
-	codex, err := p.Resolve(routing.Request{Role: "coder", Provider: routing.Codex, Task: coderTask()}, now)
+	codex, err := p.Resolve(routing.Request{Role: "coder", Provider: routing.Codex, Effort: "xhigh", Task: coderTask()}, now)
 	require.NoError(t, err)
 	require.False(t, codex.AsksJev())
 	assert.Equal(t, codex, p.ApplyJev(codex, "", nil, locked))
 }
 
 // TestJevLeavesEarlierVersionsAlone: a deployment that sets nothing of
-// [routing.jev] keeps the version it had before it (pinned from 5c51912), so
-// no decision recorded earlier changes its name; each of its facts makes
-// another version.
+// [routing.jev] hashes the same fields it did before Jev was added. These
+// versions use the current rules. Each Jev fact makes a distinct version.
 func TestJevLeavesEarlierVersionsAlone(t *testing.T) {
 	t.Parallel()
 	off := false
 	for want, d := range map[string]routing.Deployment{
-		"v1-51d7b6fdd14c": {},
-		"v1-f0225362e568": {Enabled: true, Overrides: map[string]routing.RoleOverride{"coder": {"claude_strong"}}},
-		"v1-75a1580a7d6a": {Enabled: true, Bindings: map[string]routing.Facts{"claude_strong": {Enabled: &off}}},
+		"v1-510e7b9c2fbd": {},
+		"v1-566b5feb2801": {Enabled: true, Overrides: map[string]routing.RoleOverride{"coder": {"claude_strong"}}},
+		"v1-a0e08a133be9": {Enabled: true, Bindings: map[string]routing.Facts{"claude_strong": {Enabled: &off}}},
 	} {
 		assert.Equal(t, want, policy(t, d).Version())
 	}

@@ -106,7 +106,7 @@ func TestRoutingRefuses(t *testing.T) {
 		"two claude bindings in a list":             {file: "[routing.overrides]\ncoder = [\"claude_mid\", \"claude_strong\"]\n", wantErr: routing.ErrOverrideRefused, wantIn: []string{"routing.overrides.coder (shared, ", "one binding per provider"}},
 		"one binding twice in a list":               {file: "[routing.overrides]\ncoder = [\"codex_strong\", \"codex_strong\"]\n", wantErr: routing.ErrOverrideRefused, wantIn: []string{"routing.overrides.coder (shared, "}},
 		"an empty list":                             {file: "[routing.overrides]\ncoder = []\n", wantErr: routing.ErrOverrideRefused, wantIn: []string{"routing.overrides.coder (shared, ", "names no binding"}},
-		"a list with a binding the role refuses":    {file: "[routing.overrides]\nclerk = [\"claude_small\", \"codex_strong\"]\n", wantErr: routing.ErrOverrideRefused, wantIn: []string{"routing.overrides.clerk (shared, ", "codex_strong"}},
+		"a list with a binding the role refuses":    {file: "[routing.overrides]\nclerk = [\"claude_small\", \"codex_premium\"]\n", wantErr: routing.ErrOverrideRefused, wantIn: []string{"routing.overrides.clerk (shared, ", "codex_premium"}},
 		"a list of numbers":                         {file: "[routing.overrides]\ncoder = [1]\n", wantErr: settings.ErrInvalid, wantIn: []string{"routing.overrides.coder (shared, ", "a string or a list of strings"}},
 		"an override as a table":                    {file: "[routing.overrides]\ncoder = { claude = \"claude_strong\" }\n", wantErr: settings.ErrInvalid, wantIn: []string{"a string or a list of strings"}},
 		"a list override from --set":                {set: []string{`routing.overrides.coder=["claude_strong", "codex_strong"]`}, wantErr: settings.ErrInvalid, wantIn: []string{"never by --set"}},
@@ -446,7 +446,7 @@ func TestCheckRoutingProviders(t *testing.T) {
 
 // TestRoutingOverrideLists: a role's override is a binding's name or a list
 // of them, kept as written, each leaf with its layer; the policy binds each
-// to its own provider, and the live string keeps its version (A63).
+// to its own provider, and a single binding keeps the string form (A63).
 func TestRoutingOverrideLists(t *testing.T) {
 	t.Parallel()
 	res, err := loadRouting(t, "[routing.overrides]\ncoder = [\"codex_strong\", \"claude_strong\"]\nalex_debugger = \"claude_premium\"\n", "", nil, true)
@@ -469,7 +469,7 @@ func TestRoutingOverrideLists(t *testing.T) {
 	require.NoError(t, err)
 	lp, err := live.Policy()
 	require.NoError(t, err)
-	assert.Equal(t, "v1-f0225362e568", lp.Version(), "the live override keeps its version")
+	assert.Equal(t, "v1-566b5feb2801", lp.Version(), "the string override has its current policy version")
 	one, err := loadRouting(t, "[routing]\nenabled = true\n[routing.overrides]\ncoder = [\"claude_strong\"]\n", "", nil, true)
 	require.NoError(t, err)
 	op, err := one.Policy()
