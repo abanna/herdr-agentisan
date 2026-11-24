@@ -13,7 +13,7 @@ func TestWorkDirResolutionHonorsDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	_, err := ResolveWithin(ctx, func() (string, error) {
+	_, err := resolveWithin(ctx, 0, func() (string, error) {
 		time.Sleep(2 * time.Second)
 		return "/late", nil
 	})

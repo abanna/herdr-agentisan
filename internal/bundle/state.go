@@ -23,12 +23,17 @@ type State struct {
 }
 
 // ReadInstalledState discovers, starts, reads and closes the bundle session.
-func ReadInstalledState(ctx context.Context, locate func() (Launch, error), workDir string) (State, error) {
-	return ResolveWithin(ctx, func() (st State, err error) {
-		launch, err := locate()
+func ReadInstalledState(ctx context.Context, locate func(string) (Launch, error), repo, workDir string) (State, error) {
+	return resolveWithin(ctx, 250*time.Millisecond, func() (st State, err error) {
+		paths, err := resolveWorktree(repo, workDir)
 		if err != nil {
 			return State{}, err
 		}
+		launch, err := locate(paths.repo)
+		if err != nil {
+			return State{}, err
+		}
+		launch.Dir = paths.repo
 		s, err := Open(ctx, launch)
 		if err != nil {
 			return State{}, err
@@ -38,7 +43,7 @@ func ReadInstalledState(ctx context.Context, locate func() (Launch, error), work
 				err = closeErr
 			}
 		}()
-		return ReadState(s, workDir)
+		return readResolvedState(s, paths.dir)
 	})
 }
 
@@ -48,13 +53,17 @@ func ReadState(s *Session, workDir string) (State, error) {
 		return State{}, s.failed
 	}
 	root := s.cmd.Dir
-	dir, err := ResolveWithin(s.ctx, func() (string, error) { return contain(root, workDir) })
+	paths, err := resolveWithin(s.ctx, 0, func() (worktree, error) { return resolveWorktree(root, workDir) })
 	if err != nil {
 		if s.ctx.Err() != nil {
 			return State{}, s.broken(err)
 		}
 		return State{}, err
 	}
+	return readResolvedState(s, paths.dir)
+}
+
+func readResolvedState(s *Session, dir string) (State, error) {
 	raw, err := s.Execute("convergence.read_state", map[string]any{"work_dir": dir})
 	if err != nil {
 		return State{}, err
@@ -87,30 +96,43 @@ func ReadState(s *Session, workDir string) (State, error) {
 	return st, nil
 }
 
-// contain resolves workDir and compares path components against the repo.
-func contain(repo, workDir string) (string, error) {
-	if !filepath.IsAbs(workDir) {
-		return "", fmt.Errorf("%w: the work dir %q is not an absolute path", ErrRefused, workDir)
-	}
-	real, err := filepath.EvalSymlinks(workDir)
+type worktree struct{ repo, dir string }
+
+func resolveWorktree(repo, workDir string) (worktree, error) {
+	root, err := canonicalDir(repo, ErrUnavailable)
 	if err != nil {
-		return "", fmt.Errorf("%w: the work dir: %w", ErrRefused, err)
+		return worktree{}, err
 	}
-	if info, err := os.Stat(real); err != nil || !info.IsDir() {
-		return "", fmt.Errorf("%w: the work dir %s is not a directory", ErrRefused, real)
-	}
-	root, err := filepath.EvalSymlinks(repo)
+	dir, err := canonicalDir(workDir, ErrRefused)
 	if err != nil {
-		return "", fmt.Errorf("%w: the repo: %w", ErrRefused, err)
+		return worktree{}, err
 	}
-	if rel, err := filepath.Rel(root, real); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("%w: the work dir %s is outside the repo %s", ErrRefused, real, root)
+	if rel, err := filepath.Rel(root, dir); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return worktree{}, fmt.Errorf("%w: the work dir %s is outside the repo %s", ErrRefused, dir, root)
 	}
-	return real, nil
+	return worktree{repo: root, dir: dir}, nil
 }
 
-// ResolveWithin bounds the wait for work whose callback owns any late cleanup.
-func ResolveWithin[T any](ctx context.Context, resolve func() (T, error)) (T, error) {
+func canonicalDir(path string, unavailable error) (string, error) {
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("%w: %q is not an absolute path", ErrRefused, path)
+	}
+	dir, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", fmt.Errorf("%w: %q: %w", unavailable, path, err)
+	}
+	dir, err = filepath.Abs(dir)
+	if err != nil {
+		return "", fmt.Errorf("%w: %q: %w", unavailable, path, err)
+	}
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return "", fmt.Errorf("%w: %s is not a directory", unavailable, dir)
+	}
+	return dir, nil
+}
+
+// resolveWithin bounds the caller's wait and allows cleanup grace after cancellation.
+func resolveWithin[T any](ctx context.Context, grace time.Duration, resolve func() (T, error)) (T, error) {
 	var value T
 	var err error
 	done := make(chan struct{})
@@ -124,6 +146,12 @@ func ResolveWithin[T any](ctx context.Context, resolve func() (T, error)) (T, er
 			return value, err
 		}
 	case <-ctx.Done():
+		if grace > 0 {
+			select {
+			case <-done:
+			case <-time.After(grace):
+			}
+		}
 	}
 	var zero T
 	return zero, fmt.Errorf("%w: %w", ErrTimeout, ctx.Err())

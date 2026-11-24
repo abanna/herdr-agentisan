@@ -102,3 +102,24 @@ func TestStageReadTimesOutDuringDiscovery(t *testing.T) {
 	require.ErrorIs(t, err, bundle.ErrTimeout)
 	assert.Less(t, time.Since(start), time.Second)
 }
+
+func TestStageReadResolvesPathsBeforeDiscovery(t *testing.T) {
+	t.Parallel()
+	repo := t.TempDir()
+	dir := filepath.Join(repo, "g001")
+	require.NoError(t, os.Mkdir(dir, 0o700))
+	alias := filepath.Join(t.TempDir(), "linked")
+	require.NoError(t, os.Symlink(dir, alias))
+	root, err := filepath.EvalSymlinks(repo)
+	require.NoError(t, err)
+	dir, err = filepath.EvalSymlinks(dir)
+	require.NoError(t, err)
+	seen := make(chan string, 1)
+	ctx := cli.WithBundleLocator(t.Context(), func(path, _ string) (bundle.Launch, error) {
+		seen <- path
+		return bundletest.Launch(t, path, "ok", bundletest.WorkDirEnv+"="+dir), nil
+	})
+	_, err = runBundle(ctx, "stage", "read", "--repo", alias+"/..", "--work-dir", alias)
+	require.NoError(t, err)
+	require.Equal(t, root, <-seen)
+}

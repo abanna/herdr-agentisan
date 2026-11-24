@@ -65,7 +65,7 @@ func newStageReadCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), budget)
 			defer cancel()
 			locate := bundleLocatorFrom(ctx)
-			st, err := bundle.ReadInstalledState(ctx, func() (bundle.Launch, error) { return locate(repo, config.Version) }, workDir)
+			st, err := bundle.ReadInstalledState(ctx, func(root string) (bundle.Launch, error) { return locate(root, config.Version) }, repo, workDir)
 			if err != nil {
 				return fmt.Errorf("stage read: %w", err)
 			}

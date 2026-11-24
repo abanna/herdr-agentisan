@@ -13,6 +13,9 @@ import (
 // joins. Its only input is the CLI-owned lifeline. EOF kills the group.
 const watchLifeline = "printf r; IFS= read -r ignored; kill -s KILL 0"
 
+// The bootstrap may exec uv only after Start returns and the CLI permits it.
+const launchGate = `IFS= read -r permit <&3 || exit 0; exec "$@" 3<&-`
+
 func startSupervisor(ctx context.Context) (*exec.Cmd, *os.File, error) {
 	in, life, err := os.Pipe()
 	if err != nil {

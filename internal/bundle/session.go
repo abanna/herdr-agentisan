@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -37,6 +38,7 @@ type Session struct {
 	ctx     context.Context //nolint:containedctx // the one deadline of the session's life
 	cmd     *exec.Cmd
 	guard   *exec.Cmd
+	permit  *os.File
 	life    *os.File
 	in, out *os.File
 	rd      *bufio.Reader
@@ -66,14 +68,22 @@ func Open(ctx context.Context, l Launch) (*Session, error) {
 		_, _ = inR.Close(), inW.Close()
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	guard, life, err := startSupervisor(ctx)
+	gate, permit, err := os.Pipe()
 	if err != nil {
 		_, _, _, _ = inR.Close(), inW.Close(), outR.Close(), outW.Close()
 		return nil, startFailure(ctx, err)
 	}
-	s := &Session{ctx: ctx, guard: guard, life: life, in: inW, out: outR, rd: bufio.NewReaderSize(outR, maxReply), exited: make(chan struct{})}
+	defer func() { _ = gate.Close() }()
+	guard, life, err := startSupervisor(ctx)
+	if err != nil {
+		_, _, _, _, _ = inR.Close(), inW.Close(), outR.Close(), outW.Close(), permit.Close()
+		return nil, startFailure(ctx, err)
+	}
+	s := &Session{ctx: ctx, guard: guard, permit: permit, life: life, in: inW, out: outR, rd: bufio.NewReaderSize(outR, maxReply), exited: make(chan struct{})}
 	stop := context.AfterFunc(ctx, s.kill)
-	cmd := exec.CommandContext(ctx, l.Argv[0], l.Argv[1:]...) // #nosec G204 -- argv is Locate's, or a test's
+	args := append([]string{"-c", launchGate, "bundle-launcher"}, l.Argv...)
+	cmd := exec.CommandContext(ctx, "/bin/sh", args...) // #nosec G204 G702 -- fixed script execs the verified argv as separate arguments
+	cmd.ExtraFiles = []*os.File{gate}
 	s.cmd = cmd
 	// Session cancellation must outlive exec's context watcher.
 	cmd.Cancel = nil
@@ -95,7 +105,10 @@ func Open(ctx context.Context, l Launch) (*Session, error) {
 	if ctx.Err() != nil {
 		// Start may join the group after the cancellation signal. The guard is still unreaped.
 		_ = syscall.Kill(-guard.Process.Pid, syscall.SIGKILL)
+	} else {
+		_, _ = io.WriteString(permit, "\n")
 	}
+	_ = permit.Close()
 	go func() {
 		defer stop()
 		s.waitErr = cmd.Wait()
@@ -313,7 +326,7 @@ func (s *Session) fail() {
 // kill signals the group and closes both MCP pipes to free blocked I/O.
 func (s *Session) kill() {
 	s.once.Do(func() {
-		_ = s.life.Close()
+		_, _ = s.permit.Close(), s.life.Close()
 		if err := syscall.Kill(-s.guard.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 			s.killErr = fmt.Errorf("kill the server's process group: %w", err)
 		}
