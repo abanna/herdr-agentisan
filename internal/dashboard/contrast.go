@@ -100,7 +100,7 @@ func makeRenderTheme(indexed bool, background color.Color, light bool) renderThe
 		button:     palette[colAccent].paint(side, indexed),
 	}
 	barLuminance := relativeLuminance(theme.bar)
-	for role := colText; role < colSelectionFill; role++ {
+	for role := range colSelectionFill {
 		c := palette[role]
 		preferred, alternate := c.paint(side, indexed), c.paint(other, indexed)
 		theme.terminal[role] = readableInk(preferred, alternate, luminance, indexed)

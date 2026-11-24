@@ -111,7 +111,7 @@ func PalettePaints(background color.Color, indexed bool) (bar color.Color, termi
 	theme := makeRenderTheme(indexed, background, false)
 	terminal = make([]color.Color, colSelectionFill)
 	selected = make([]color.Color, colSelectionFill)
-	for role := colText; role < colSelectionFill; role++ {
+	for role := range colSelectionFill {
 		style := lipgloss.NewStyle().Foreground(role)
 		terminal[role] = theme.style(style).GetForeground()
 		selected[role] = theme.style(style.Background(colSelectionFill)).GetForeground()
