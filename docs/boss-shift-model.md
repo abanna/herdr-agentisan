@@ -75,8 +75,10 @@ in `GO-CUED` (a failed prompt reply can be ambiguous). `SHIFT_MODEL_SEEN` no lon
 The owner accepted one window: a `/model` switch, or a `/clear` (a new session
 id in the same process), after the candidate's last statusline report and before
 `takeover` is not seen, so the check can still close the outgoing boss's pane.
-It lasts up to one refresh (60 s here), or 180 s if reports stall; after the
-next report every check refuses `wrong_session`. Verification, close and rename
+It lasts until a report of the new session is the last one written (a refresh,
+60 s here; 180 s if reports stall), after which every check refuses
+`wrong_session`. A report of the old session still in flight can be written
+after it, because herdr keeps the last write, and reopens the window. Verification, close and rename
 are separate herdr calls, and a pane can change between the terminal check and
 the close. The session proof assumes the statusline's `session_id` equals
 `--session-id` (herdr's own `agent_session` does); if it differs, every check
