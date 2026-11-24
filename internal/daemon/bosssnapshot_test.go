@@ -406,6 +406,13 @@ func TestBossSnapshotRefusesFormerBossAfterPlacement(t *testing.T) {
 		"complete poll":            swapBoss,
 		"degraded poll":            func(h *teamHerdr) { h.agentsErr = true; swapBoss(h) },
 		"poll that built no model": func(h *teamHerdr) { h.workspacesErr = true },
+		"moved into another team's boss place": func(h *teamHerdr) { // same pane, terminal and tab: only the project differs
+			h.tabs = append(slices.DeleteFunc(slices.Clone(h.tabs), func(tab map[string]any) bool { return tab["tab_id"] == "w14:t1" }), tabOf("w14:t1", "w20", "be-boss"))
+			h.panes = slices.Clone(h.panes)
+			i := slices.IndexFunc(h.panes, func(p map[string]any) bool { return p["pane_id"] == "w14:p0" })
+			h.panes[i] = maps.Clone(h.panes[i])
+			h.panes[i]["workspace_id"] = "w20"
+		},
 		"pane id reissued": func(h *teamHerdr) { // the caller's terminal left, the replacement's took its id
 			h.panes = slices.Clone(h.panes)
 			i := slices.IndexFunc(h.panes, func(p map[string]any) bool { return p["pane_id"] == "w14:p0" })
@@ -436,7 +443,8 @@ func TestBossSnapshotRefusesFormerBossAfterPlacement(t *testing.T) {
 			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancel()
 			got := make(chan error, 1)
-			go func() { _, err := daemon.Workforce(ctx, sock, bossSnapshotOp, struct{}{}); got <- err }()
+			var served string // the client asks again after a refusal, and the moved pane is beta's boss by then
+			go func() { s, err := daemon.BossSnapshotOf(ctx, sock); served = s.Team; got <- err }()
 			select {
 			case <-paused:
 			case err := <-got:
@@ -450,12 +458,16 @@ func TestBossSnapshotRefusesFormerBossAfterPlacement(t *testing.T) {
 			require.Eventually(t, func() bool { // placement has moved on
 				asked, stop := context.WithTimeout(t.Context(), 300*time.Millisecond) // not_ready is asked again
 				defer stop()
-				_, err := daemon.Workforce(asked, sock, daemon.OpBoardRead, daemon.BoardReadRequest{})
-				return err != nil
+				now, err := daemon.BossSnapshotOf(asked, sock)
+				return err != nil || now.Team != "alpha"
 			}, ready, 10*time.Millisecond)
 			polled(t, h.srv, 2) // and the poll has published it
 			release.Do(func() { close(resume) })
-			assert.Contains(t, []string{"not_ready", "not_allowed"}, refusedWith(t, <-got), "never served")
+			err := <-got
+			assert.NotEqual(t, "alpha", served, "never served")
+			if err != nil {
+				assert.Contains(t, []string{"not_ready", "not_allowed"}, refusedWith(t, err))
+			}
 		})
 	}
 }

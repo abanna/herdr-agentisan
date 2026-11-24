@@ -401,7 +401,7 @@ func TestPlaceBoardCaller(t *testing.T) {
 		peer daemon.Peer
 		want daemon.BoardCaller
 	}{
-		"a command the boss runs":       {me(101), theBoss},
+		"a command the boss runs":       {me(101), daemon.BoardCaller{Project: "ha", Reader: store.ReaderBoss, Pane: "w1:pB", Tab: "t1"}},
 		"the dashboard in the boss tab": {me(200), daemon.BoardCaller{Project: "ha", Reader: store.ReaderUser, Pane: "w1:pD"}},
 		"a dashboard in the boss place": {me(700), daemon.BoardCaller{Project: "ha", Reader: store.ReaderUser, Pane: "w1:pS"}},
 	}
