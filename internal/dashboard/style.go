@@ -2,7 +2,6 @@ package dashboard
 
 import (
 	"image/color"
-	"math"
 	"slices"
 	"strings"
 	"unicode"
@@ -13,8 +12,10 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 )
 
+type colourRole uint8
+
 const (
-	colText = iota
+	colText colourRole = iota
 	colDim
 	colGreen
 	colYellow
@@ -22,62 +23,63 @@ const (
 	colRed
 	colCyan
 	colAccent
+	colSelectionFill
+	colButtonText
+	colourRoles
 )
 
-// A themed colour renders as dark's RGB by default. The other styles supply
-// the light palette or main's styles at 16 and 256 colours.
-type themedColor struct {
-	color.Color
-	light  color.Color
-	legacy color.Color
+// RGBA provides the default RGB for a role. The renderer resolves its
+// actual paint against the terminal profile and the surface it is drawn on.
+func (r colourRole) RGBA() (uint32, uint32, uint32, uint32) {
+	return palette[r].rgb[darkPalette].RGBA()
 }
 
-func themeColor(dark, light, legacy string) themedColor {
-	c := themedColor{Color: lipgloss.Color(dark), light: lipgloss.Color(light)}
+type paletteSide uint8
+
+const (
+	darkPalette paletteSide = iota
+	lightPalette
+)
+
+type themedColor struct {
+	rgb                 [2]color.Color
+	indexed             [2]ansi.IndexedColor
+	legacy              color.Color
+	lightSelectionIndex ansi.IndexedColor
+}
+
+func themeColor(dark, light, legacy string, darkIndex, lightIndex, lightSelectionIndex ansi.IndexedColor) themedColor {
+	c := themedColor{
+		rgb:                 [2]color.Color{lipgloss.Color(dark), lipgloss.Color(light)},
+		indexed:             [2]ansi.IndexedColor{darkIndex, lightIndex},
+		lightSelectionIndex: lightSelectionIndex,
+	}
 	if legacy != "" {
 		c.legacy = lipgloss.Color(legacy)
 	}
 	return c
 }
 
-var palette = [...]themedColor{
-	colText:   themeColor("#eef2ff", "#17233b", ""),
-	colDim:    themeColor("#becbe3", "#3c4c69", "#6c7086"),
-	colGreen:  themeColor("#8ae99f", "#14532d", "#50fa7b"),
-	colYellow: themeColor("#f3de82", "#644600", "#f1fa8c"),
-	colOrange: themeColor("#ffba83", "#783713", "#ffb86c"),
-	colRed:    themeColor("#ff989f", "#870000", "#ff5555"),
-	colCyan:   themeColor("#9ee6fa", "#125363", "#8be9fd"),
-	colAccent: themeColor("#c8b5ff", "#513b81", "#bd93f9"),
+// Indexed paints are hand-picked xterm colours. A zero selected index
+// inherits the light ink. The legacy column is the original ANSI16 paint.
+var palette = [colourRoles]themedColor{
+	colText:          themeColor("#eef2ff", "#17233b", "", 255, 17, 0),
+	colDim:           themeColor("#becbe3", "#3c4c69", "#6c7086", 153, 239, 0),
+	colGreen:         themeColor("#8ae99f", "#14532d", "#50fa7b", 120, 22, 0),
+	colYellow:        themeColor("#f3de82", "#644600", "#f1fa8c", 222, 58, 0),
+	colOrange:        themeColor("#ffba83", "#783713", "#ffb86c", 216, 94, 52),
+	colRed:           themeColor("#ff989f", "#870000", "#ff5555", 210, 88, 0),
+	colCyan:          themeColor("#9ee6fa", "#125363", "#8be9fd", 159, 23, 0),
+	colAccent:        themeColor("#c8b5ff", "#513b81", "#bd93f9", 189, 54, 0),
+	colSelectionFill: themeColor("#36476b", "#b6c7ec", "", 20, 189, 0),
+	colButtonText:    themeColor("#282a36", "#ffffff", "#282a36", 235, 231, 0),
 }
 
-// prefersLightPalette chooses the higher WCAG contrast for ordinary text.
-// A nil background or a tie selects dark even after a light reply.
-func prefersLightPalette(background color.Color) bool {
-	if background == nil {
-		return false
+func (c themedColor) paint(side paletteSide, indexed bool) color.Color {
+	if indexed {
+		return c.indexed[side]
 	}
-	text := palette[colText]
-	return lightTextHasHigherContrast(relativeLuminance(background), relativeLuminance(text.Color), relativeLuminance(text.light))
-}
-
-func lightTextHasHigherContrast(background, darkText, lightText float64) bool {
-	contrast := func(foreground float64) float64 {
-		return (max(foreground, background) + 0.05) / (min(foreground, background) + 0.05)
-	}
-	return contrast(lightText) > contrast(darkText)
-}
-
-func relativeLuminance(c color.Color) float64 {
-	r, g, b, _ := c.RGBA()
-	linear := func(channel uint32) float64 {
-		srgb := float64(channel) / 65535
-		if srgb <= 0.04045 {
-			return srgb / 12.92
-		}
-		return math.Pow((srgb+0.055)/1.055, 2.4)
-	}
-	return 0.2126*linear(r) + 0.7152*linear(g) + 0.0722*linear(b)
+	return c.rgb[side]
 }
 
 const selectionPointer = "▸"
@@ -90,55 +92,40 @@ const (
 	selectionReverse
 )
 
-var (
-	selectionBackground = themeColor("#36476b", "#b6c7ec", "")
-	buttonForeground    = themeColor("#282a36", "#ffffff", "#282a36")
-)
-
-func lightStyle(st lipgloss.Style) lipgloss.Style {
-	if fg, ok := st.GetForeground().(themedColor); ok {
-		st = st.Foreground(fg.light)
-	}
-	if bg, ok := st.GetBackground().(themedColor); ok {
-		st = st.Background(bg.light)
-	}
-	return st
-}
-
-// ansiStyle restores main's styles before downsampling to indexed colours.
+// ansiStyle restores the legacy palette before ANSI16 downsampling.
 func ansiStyle(st lipgloss.Style) lipgloss.Style {
-	if fg, ok := st.GetForeground().(themedColor); ok {
-		if fg.legacy == nil {
-			st = st.UnsetForeground()
+	if fg, ok := st.GetForeground().(colourRole); ok {
+		if c := palette[fg].legacy; c != nil {
+			st = st.Foreground(c)
 		} else {
-			st = st.Foreground(fg.legacy)
+			st = st.UnsetForeground()
 		}
 		// Main draws the italic secondary style for stale stages with faint.
-		if fg == palette[colDim] && st.GetItalic() {
+		if fg == colDim && st.GetItalic() {
 			st = st.Faint(true)
 		}
 	}
-	if bg, ok := st.GetBackground().(themedColor); ok && bg.legacy != nil {
-		st = st.Background(bg.legacy)
+	if bg, ok := st.GetBackground().(colourRole); ok && palette[bg].legacy != nil {
+		st = st.Background(palette[bg].legacy)
 	}
 	return st
 }
 
 var (
-	plainStyle  = lipgloss.NewStyle().Foreground(palette[colText])
-	dimStyle    = lipgloss.NewStyle().Foreground(palette[colDim])
+	plainStyle  = lipgloss.NewStyle().Foreground(colText)
+	dimStyle    = lipgloss.NewStyle().Foreground(colDim)
 	boldStyle   = plainStyle.Bold(true)
-	accentStyle = lipgloss.NewStyle().Foreground(palette[colAccent])
-	errorStyle  = lipgloss.NewStyle().Foreground(palette[colRed])
-	noteStyle   = lipgloss.NewStyle().Foreground(palette[colYellow])
-	greenStyle  = lipgloss.NewStyle().Foreground(palette[colGreen])
-	orangeStyle = lipgloss.NewStyle().Foreground(palette[colOrange])
+	accentStyle = lipgloss.NewStyle().Foreground(colAccent)
+	errorStyle  = lipgloss.NewStyle().Foreground(colRed)
+	noteStyle   = lipgloss.NewStyle().Foreground(colYellow)
+	greenStyle  = lipgloss.NewStyle().Foreground(colGreen)
+	orangeStyle = lipgloss.NewStyle().Foreground(colOrange)
 	// buttonStyle uses the accent as the button fill.
-	buttonStyle = lipgloss.NewStyle().Bold(true).Foreground(buttonForeground).Background(palette[colAccent])
+	buttonStyle = lipgloss.NewStyle().Bold(true).Foreground(colButtonText).Background(colAccent)
 	// stageReadyStyle and stageRedStyle are a stage's READY and RED, v12's
 	// bold green and bold red.
-	stageReadyStyle = lipgloss.NewStyle().Bold(true).Foreground(palette[colGreen])
-	stageRedStyle   = lipgloss.NewStyle().Bold(true).Foreground(palette[colRed])
+	stageReadyStyle = lipgloss.NewStyle().Bold(true).Foreground(colGreen)
+	stageRedStyle   = lipgloss.NewStyle().Bold(true).Foreground(colRed)
 	// Stale stages (ADR-001 A42) use secondary text and italic. The age
 	// still identifies a stale stage when text attributes are unavailable.
 	staleStyle   = dimStyle.Italic(true)
@@ -148,7 +135,7 @@ var (
 // highlight gives each cell of a selected line the same background.
 func highlight(body line) {
 	for i := range body {
-		body[i].style = body[i].style.Background(selectionBackground)
+		body[i].style = body[i].style.Background(colSelectionFill)
 	}
 }
 
@@ -232,13 +219,13 @@ func DefaultThresholds() Thresholds {
 func (t Thresholds) colour(ctx int) color.Color {
 	switch {
 	case ctx >= t.Ceiling:
-		return palette[colRed]
+		return colRed
 	case ctx >= t.Hard:
-		return palette[colOrange]
+		return colOrange
 	case ctx >= t.Soft:
-		return palette[colYellow]
+		return colYellow
 	default:
-		return palette[colGreen]
+		return colGreen
 	}
 }
 
@@ -347,15 +334,15 @@ func rowLabel(a snapshot.Agent) string {
 func statusStyle(s snapshot.Status) lipgloss.Style {
 	switch s {
 	case snapshot.StatusWorking:
-		return lipgloss.NewStyle().Foreground(palette[colGreen])
+		return lipgloss.NewStyle().Foreground(colGreen)
 	case snapshot.StatusIdle:
-		return lipgloss.NewStyle().Foreground(palette[colYellow])
+		return lipgloss.NewStyle().Foreground(colYellow)
 	case snapshot.StatusBlocked:
-		return lipgloss.NewStyle().Foreground(palette[colRed])
+		return lipgloss.NewStyle().Foreground(colRed)
 	case snapshot.StatusDone:
 		return dimStyle
 	case snapshot.StatusReady:
-		return lipgloss.NewStyle().Foreground(palette[colCyan])
+		return lipgloss.NewStyle().Foreground(colCyan)
 	default:
 		return plainStyle
 	}

@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"image/color"
 	"io"
 	"strings"
 	"time"
@@ -181,14 +182,14 @@ type Model struct {
 	// that was drawn.
 	scroll int
 
-	clock           time.Time
-	width, height   int
-	profile         colorprofile.Profile
-	lightBackground bool
-	help            bool
-	sourceErr       error
-	focusErr        error
-	btopErr         error
+	clock         time.Time
+	width, height int
+	profile       colorprofile.Profile
+	background    color.Color
+	help          bool
+	sourceErr     error
+	focusErr      error
+	btopErr       error
 	// noTeam is set while the source says there is no team here
 	// (ErrNoTeamHere): no board is drawn then, not the last one.
 	noTeam error
@@ -266,7 +267,7 @@ func (m Model) Init() tea.Cmd {
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.BackgroundColorMsg:
-		m.lightBackground = prefersLightPalette(msg.Color)
+		m.background = msg.Color
 		return m, nil
 	case tea.ColorProfileMsg:
 		m.profile = msg.Profile
@@ -437,7 +438,7 @@ func (m Model) click(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 // mouse clicks and wheel events.
 func (m Model) View() tea.View {
 	opts := m.cfg.Options
-	opts.LightBackground = m.lightBackground
+	opts.background = m.background
 	if opts.Profile == colorprofile.Unknown {
 		opts.Profile = m.profile
 	}

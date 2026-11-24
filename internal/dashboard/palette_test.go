@@ -112,61 +112,6 @@ func TestModelUsesTerminalBackground(t *testing.T) {
 	require.Contains(t, m.View().Content, "38;2;190;203;227", "dark after a dark report")
 }
 
-func TestTerminalBackgroundPalette(t *testing.T) {
-	t.Parallel()
-
-	for _, tc := range []struct {
-		background string
-		light      bool
-		reason     string
-	}{
-		{background: "#0000ff"},
-		{background: "#ff0000", light: true, reason: "pure red gives 3.92:1 with the light palette and 3.58:1 with the dark palette"},
-		{background: "#ffffff", light: true},
-		{background: "#eaeaea", light: true},
-		{background: "#fbf1c7", light: true},
-		{background: "#1e1e2e"},
-	} {
-		t.Run(tc.background, func(t *testing.T) {
-			m := dashboard.New(t.Context(), dashboard.Config{})
-			m, _ = update(t, m, tea.BackgroundColorMsg{Color: lipgloss.Color(tc.background)})
-			opts := fullColour
-			opts.LightBackground = tc.light
-			require.Equal(t, dashboard.Render(m.Frame(), m.Width(), m.Height(), opts), m.View().Content, tc.reason)
-		})
-	}
-}
-
-func TestTerminalBackgroundChoosesHigherContrast(t *testing.T) {
-	t.Parallel()
-
-	m := dashboard.New(t.Context(), dashboard.Config{Options: fullColour})
-	m, _ = update(t, m, tea.WindowSizeMsg{Width: 40, Height: 4})
-	darkFrame := m.View().Content
-	lightFrame := dashboard.Render(m.Frame(), m.Width(), m.Height(), lightColour())
-	require.NotEqual(t, darkFrame, lightFrame)
-	darkText := dashboard.PaletteForBackground(false)[dashboard.PaletteText]
-	lightText := dashboard.PaletteForBackground(true)[dashboard.PaletteText]
-	channels := [...]uint8{0, 17, 34, 51, 68, 85, 102, 119, 136, 153, 170, 187, 204, 221, 238, 255}
-	for _, r := range channels {
-		for _, g := range channels {
-			for _, b := range channels {
-				background := color.RGBA{R: r, G: g, B: b, A: 255}
-				m, _ = update(t, m, tea.BackgroundColorMsg{Color: background})
-				chosen, other := contrastRatio(darkText, background), contrastRatio(lightText, background)
-				switch got := m.View().Content; got {
-				case lightFrame:
-					chosen, other = other, chosen
-				case darkFrame:
-				default:
-					t.Fatalf("unexpected palette on #%02x%02x%02x: %q", r, g, b, got)
-				}
-				require.GreaterOrEqualf(t, chosen, other, "ordinary text on #%02x%02x%02x", r, g, b)
-			}
-		}
-	}
-}
-
 func TestTerminalBackgroundContrastTieKeepsDark(t *testing.T) {
 	t.Parallel()
 

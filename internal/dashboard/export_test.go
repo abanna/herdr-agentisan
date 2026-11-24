@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 )
 
@@ -60,23 +62,25 @@ func ModelLabel(a snapshot.Agent) string {
 }
 
 const (
-	PaletteText      = colText
-	PaletteSecondary = colDim
-	PaletteGreen     = colGreen
-	PaletteYellow    = colYellow
-	PaletteOrange    = colOrange
-	PaletteRed       = colRed
-	PaletteCyan      = colCyan
+	PaletteText      = int(colText)
+	PaletteSecondary = int(colDim)
+	PaletteGreen     = int(colGreen)
+	PaletteYellow    = int(colYellow)
+	PaletteOrange    = int(colOrange)
+	PaletteRed       = int(colRed)
+	PaletteCyan      = int(colCyan)
+	PaletteAccent    = int(colAccent)
 )
 
 // PaletteForBackground returns the text colours drawn on the terminal and bar.
 func PaletteForBackground(light bool) []color.Color {
-	text := make([]color.Color, len(palette))
-	for i, fg := range palette {
-		text[i] = fg.Color
-		if light {
-			text[i] = fg.light
-		}
+	side := darkPalette
+	if light {
+		side = lightPalette
+	}
+	text := make([]color.Color, colSelectionFill)
+	for i := range text {
+		text[i] = palette[i].paint(side, false)
 	}
 	return text
 }
@@ -89,12 +93,31 @@ func LightTextHasHigherContrast(background, darkText, lightText float64) bool {
 // SelectionColours returns the bar fill and button colours used by the renderer.
 func SelectionColours(light bool) (bar, buttonInk, buttonFill color.Color) {
 	if light {
-		return selectionBackground.light, buttonForeground.light, palette[colAccent].light
+		return palette[colSelectionFill].rgb[lightPalette], palette[colButtonText].rgb[lightPalette], palette[colAccent].rgb[lightPalette]
 	}
-	return selectionBackground.Color, buttonForeground.Color, palette[colAccent].Color
+	return palette[colSelectionFill].rgb[darkPalette], palette[colButtonText].rgb[darkPalette], palette[colAccent].rgb[darkPalette]
 }
 
 // ProjectColour is the configured project accent drawn over the terminal.
 func ProjectColour(light bool, hex string) color.Color {
-	return projectColour(&snapshot.Project{Color: hex}, light)
+	theme := makeRenderTheme(false, nil, light)
+	return projectColour(&snapshot.Project{Color: hex}, &theme)
 }
+
+// PalettePaints exposes the resolved colours the renderer uses for both
+// surfaces. The sweep can exercise all roles without rebuilding a frame
+// for each selectable row on each reported background.
+func PalettePaints(background color.Color, indexed bool) (bar color.Color, terminal, selected []color.Color) {
+	theme := makeRenderTheme(indexed, background, false)
+	terminal = make([]color.Color, colSelectionFill)
+	selected = make([]color.Color, colSelectionFill)
+	for role := colText; role < colSelectionFill; role++ {
+		style := lipgloss.NewStyle().Foreground(role)
+		terminal[role] = theme.style(style).GetForeground()
+		selected[role] = theme.style(style.Background(colSelectionFill)).GetForeground()
+	}
+	return theme.bar, terminal, selected
+}
+
+// ReadableInk exercises a pair of palette shades against a surface.
+var ReadableInk = readableInk

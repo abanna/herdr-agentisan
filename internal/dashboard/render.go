@@ -78,7 +78,7 @@ const (
 )
 
 // Options tune the renderer. The zero value renders with DefaultThresholds
-// and TrueColor, leaving it to bubbletea to downsample for the terminal.
+// and TrueColor. The live model supplies the terminal profile and background.
 type Options struct {
 	// Thresholds colour ctx. The zero value means DefaultThresholds.
 	Thresholds Thresholds
@@ -86,8 +86,9 @@ type Options struct {
 	// colour and attributes alike, which is what golden frames want; ASCII
 	// keeps attributes. Both use a selection pointer. Unknown means TrueColor.
 	Profile colorprofile.Profile
-	// LightBackground selects the TrueColor palette for a light terminal background.
+	// LightBackground selects the light palette when no background was reported.
 	LightBackground bool
+	background      color.Color
 }
 
 func (o Options) thresholds() Thresholds {
@@ -160,22 +161,20 @@ func Render(f Frame, w, h int, opts Options) string {
 	th := opts.thresholds()
 	selection := selectionBar
 	var style func(lipgloss.Style) lipgloss.Style
-	light := false
+	var theme *renderTheme
 	switch opts.Profile {
-	case colorprofile.ANSI, colorprofile.ANSI256:
+	case colorprofile.ANSI:
 		selection, style = selectionReverse, ansiStyle
 	case colorprofile.ASCII, colorprofile.NoTTY:
 		selection = selectionMark
 	default:
-		light = opts.LightBackground
-		if light {
-			style = lightStyle
-		}
+		chosen := makeRenderTheme(opts.Profile == colorprofile.ANSI256, opts.background, opts.LightBackground)
+		theme, style = &chosen, chosen.style
 	}
 	l := plan(f, w, h, selection == selectionReverse)
 
 	canvas := make([]line, h)
-	l.drawHeader(canvas, f, th, light)
+	l.drawHeader(canvas, f, th, theme)
 	switch {
 	case l.avail == 0:
 	case l.board != nil:
@@ -224,9 +223,9 @@ func Render(f Frame, w, h int, opts Options) string {
 	return downsample(b.String(), opts.Profile)
 }
 
-// downsample rewrites a TrueColor frame for profile p.
+// downsample handles the profiles that still need colours or attributes removed.
 func downsample(s string, p colorprofile.Profile) string {
-	if p == colorprofile.TrueColor || p == colorprofile.Unknown {
+	if p == colorprofile.TrueColor || p == colorprofile.Unknown || p == colorprofile.ANSI256 {
 		return s
 	}
 	var b strings.Builder
@@ -484,13 +483,13 @@ func boxed(body line, inner int, border lipgloss.Style) line {
 }
 
 // drawHeader draws the project line and the boss line, boxed or bare.
-func (l layout) drawHeader(canvas []line, f Frame, th Thresholds, light bool) {
+func (l layout) drawHeader(canvas []line, f Frame, th Thresholds, theme *renderTheme) {
 	var project *snapshot.Project
 	if f.Snapshot != nil {
 		project = f.Snapshot.Project
 	}
 	border := dimStyle
-	accent := projectColour(project, light)
+	accent := projectColour(project, theme)
 	if accent != nil {
 		border = lipgloss.NewStyle().Foreground(accent)
 	}
@@ -548,24 +547,6 @@ func boardBadge(p *snapshot.Project) string {
 		return ""
 	}
 	return "board " + strconv.Itoa(p.BoardUnread)
-}
-
-// projectColour preserves the configured hue. On light backgrounds it
-// caps the channels proportionally so even a near-white accent stays legible.
-func projectColour(p *snapshot.Project, light bool) color.Color {
-	if p == nil || !snapshot.ValidColor(p.Color) {
-		return nil
-	}
-	c := lipgloss.Color(p.Color)
-	if light {
-		r, g, b, _ := c.RGBA()
-		const maxChannel = 0x68
-		peak := max(r, g, b)
-		if peak > maxChannel*0x101 {
-			return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", r*maxChannel/peak, g*maxChannel/peak, b*maxChannel/peak))
-		}
-	}
-	return c
 }
 
 // prDetail is how much of each PR the project line shows.
