@@ -361,12 +361,22 @@ func TestShiftAbortQueuedBehindATakeoverClosesNothing(t *testing.T) {
 
 func TestShiftOpenClosesItsPaneWhenTheShiftEndedDuringTheStart(t *testing.T) {
 	t.Parallel()
-	s := setupShiftScript(t)
 	hook := `touch "$SHIFT_ROOT/pane-get-fails"; bash "$SHIFT_ROOT/shift.sh" abort >/dev/null 2>&1; rm "$SHIFT_ROOT/pane-get-fails"`
-	out, err := s.invoke("old", "verified", "open", "ON_START="+hook)
-	require.Error(t, err)
-	require.Contains(t, out, "ended while Claude started")
-	require.Equal(t, "new\n", s.read("close"))
+	for _, fail := range []string{"0", "1"} { // the launch reply may be lost
+		s := setupShiftScript(t)
+		out, err := s.invoke("old", "verified", "open", "ON_START="+hook, "START_FAIL="+fail)
+		require.Error(t, err)
+		require.Contains(t, out, "ended while Claude started", "start failing: "+fail)
+		require.Equal(t, "new\n", s.read("close"))
+	}
+}
+
+// A late open, whose shift was promoted while it waited, must not close the new boss.
+func TestShiftOpenLeavesAPromotedShiftsPaneAlone(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	require.NoError(t, s.runEnv("open", `ON_START=rm -f "$SHIFT_ROOT/current"`))
+	require.NoFileExists(t, s.path("close"))
 }
 
 func TestShiftTakeoverProvesTheCandidateAfterLookingUpTheOldPane(t *testing.T) {
@@ -560,7 +570,7 @@ case "$1 $2" in
                      echo "{\"result\":{\"pane\":{\"pane_id\":\"new\",\"terminal_id\":\"${NEW_TERMINAL:-split-terminal}\"}}}" ;;
                 *) exit 1 ;;
               esac ;;
-  "agent start") printf '%s\n' "$*" >> "$SHIFT_ROOT/starts"; echo "starting candidate" >&2; eval "$ON_START" ;;
+  "agent start") printf '%s\n' "$*" >> "$SHIFT_ROOT/starts"; echo "starting candidate" >&2; eval "$ON_START"; [ "${START_FAIL:-0}" = 0 ] ;;
   "agent prompt") [ "${FAIL_PROMPT:-0}" = 0 ] || exit 9
                   echo "$(grep -c '^model_pid=100$' "$SHIFT_ROOT/current/state") $*" >> "$SHIFT_ROOT/cues" ;;
   "pane close") echo "$3" >> "$SHIFT_ROOT/close" ;;
