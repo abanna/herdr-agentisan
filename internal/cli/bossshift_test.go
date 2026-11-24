@@ -345,6 +345,42 @@ func TestShiftAbortWaitsForARunningBrief(t *testing.T) {
 	require.Eventually(t, func() bool { _, err := os.Lstat(s.path("last-aborted")); return err == nil }, 10*time.Second, 50*time.Millisecond)
 }
 
+func TestShiftAbortQueuedBehindATakeoverClosesNothing(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	require.NoError(t, s.run("old", "verified", "open"))
+	require.NoError(t, s.run("old", "verified", "brief"))
+	s.account()
+	require.NoError(t, s.run("old", "verified", "go"))
+	abort := `[[ " $* " != *" --pid 0 "* ]] && { bash "$SHIFT_ROOT/shift.sh" abort 9>&- >"$SHIFT_ROOT/abort.out" 2>&1 & /bin/sleep 0.5; }`
+	_, err := s.invoke("new", "verified", "takeover", "ON_CHECK="+abort)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { b, _ := os.ReadFile(s.path("abort.out")); return len(b) > 0 }, 10*time.Second, 50*time.Millisecond)
+	require.Equal(t, "old\n", s.read("close"), "only the old pane was closed")
+}
+
+func TestShiftOpenClosesItsPaneWhenTheShiftEndedDuringTheStart(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	hook := `touch "$SHIFT_ROOT/pane-get-fails"; bash "$SHIFT_ROOT/shift.sh" abort >/dev/null 2>&1; rm "$SHIFT_ROOT/pane-get-fails"`
+	out, err := s.invoke("old", "verified", "open", "ON_START="+hook)
+	require.Error(t, err)
+	require.Contains(t, out, "ended while Claude started")
+	require.Equal(t, "new\n", s.read("close"))
+}
+
+func TestShiftTakeoverProvesTheCandidateAfterLookingUpTheOldPane(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	require.NoError(t, s.run("old", "verified", "open"))
+	require.NoError(t, s.run("old", "verified", "brief"))
+	s.account()
+	require.NoError(t, s.run("old", "verified", "go"))
+	_, err := s.invoke("new", "verified", "takeover", `ON_GET_OLD=touch "$SHIFT_ROOT/dead"`)
+	require.Error(t, err)
+	require.NoFileExists(t, s.path("close"))
+}
+
 // The stand-ins are written once, by TestMain: one written in a parallel test can be
 // inherited, open for writing, by another test's fork (ETXTBSY, NERD-5645).
 func TestShiftStandInsAreWrittenOnce(t *testing.T) {
@@ -519,12 +555,12 @@ case "$1 $2" in
                   echo '{"result":{"pane":{"pane_id":"new","terminal_id":"split-terminal"}}}'
                 fi ;;
   "pane get") case "$3" in
-                old) echo "{\"result\":{\"pane\":{\"pane_id\":\"old\",\"terminal_id\":\"${OLD_TERMINAL:-old-terminal}\"}}}" ;;
-                new) [ "${NEW_GONE:-0}" = 0 ] || exit 1
+                old) eval "$ON_GET_OLD"; echo "{\"result\":{\"pane\":{\"pane_id\":\"old\",\"terminal_id\":\"${OLD_TERMINAL:-old-terminal}\"}}}" ;;
+                new) [ "${NEW_GONE:-0}" = 0 ] && [ ! -e "$SHIFT_ROOT/pane-get-fails" ] || exit 1
                      echo "{\"result\":{\"pane\":{\"pane_id\":\"new\",\"terminal_id\":\"${NEW_TERMINAL:-split-terminal}\"}}}" ;;
                 *) exit 1 ;;
               esac ;;
-  "agent start") printf '%s\n' "$*" >> "$SHIFT_ROOT/starts"; echo "starting candidate" >&2 ;;
+  "agent start") printf '%s\n' "$*" >> "$SHIFT_ROOT/starts"; echo "starting candidate" >&2; eval "$ON_START" ;;
   "agent prompt") [ "${FAIL_PROMPT:-0}" = 0 ] || exit 9
                   echo "$(grep -c '^model_pid=100$' "$SHIFT_ROOT/current/state") $*" >> "$SHIFT_ROOT/cues" ;;
   "pane close") echo "$3" >> "$SHIFT_ROOT/close" ;;
@@ -538,6 +574,7 @@ esac
 printf '%s\n' "$*" >> "$SHIFT_ROOT/calls"
 eval "$ON_CHECK"
 verdict=$MODEL_VERDICT
+[ ! -e "$SHIFT_ROOT/dead" ] || verdict=claude_unavailable
 [[ " $* " != *" --pid 0 "* ]] || verdict=${IDENTIFY_VERDICT:-identified}
 printf '{"reason":"%s","pid":%s,"start":200}\n' "$verdict" "${PLUGIN_PID:-100}"
 [[ "$verdict" = verified || "$verdict" = identified ]] || { echo "probe refused" >&2; exit 1; }

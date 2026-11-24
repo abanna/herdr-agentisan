@@ -43,13 +43,14 @@ printf '%s  %s\n' a9d92216ec0324c87372ed9fb38579568a57dcf72460d4e9366098abc3d384
   write into its replacement's folder. It records the old terminal, launch time
   and session id, then splits, saves the candidate's pane and terminal, and
   starts Claude with that id. It reads no model. If the shift ended during the
-  split (`current` gone, or `ABORTED` in the folder) it closes the new pane and
-  stops.
+  split or the start (`current` gone, or `ABORTED` in the folder) it closes the
+  new pane and stops.
 - `brief` saves the Claude's pid and start once, then proves it and its model
   on every run, and only then sends the instructions.
-- `go` and `takeover` prove the same again. `takeover` closes the old pane only
-  while it holds the terminal recorded at `open`; `abort` does the same for the
-  candidate's.
+- `go` and `takeover` prove the same again. `takeover` looks up the old pane's
+  terminal first, proves the candidate last, and closes the pane only while it
+  holds the terminal recorded at `open`; `abort` does the same for the
+  candidate's, and only for a shift that has not ended.
 - `status` shows the record and the verdict; it writes nothing.
 
 ## By hand
