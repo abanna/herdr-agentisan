@@ -108,7 +108,7 @@ type Notice struct {
 func workerNotice(project string, w team.Worker, kind Kind, text string) Notice {
 	return Notice{
 		Project: project, Subject: w.Pane.ID, Worker: WorkerName(w), Kind: kind, Text: text,
-		scope: muteScope{bound: w.Bound, generation: w.Generation},
+		scope: scopeOf(w),
 	}
 }
 

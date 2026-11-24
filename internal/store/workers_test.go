@@ -682,3 +682,41 @@ func TestWorkerWritesRefuseWhatTheyCannotRecord(t *testing.T) {
 	_, err = s.WorkerRow(context.Background(), "x-qa-1")
 	require.ErrorIs(t, err, store.ErrStore)
 }
+
+// TestLiveWorkerGeneration: the generation of a live row, and whether a
+// terminal is its pending handoff's replacement, from one read (NERD-5730).
+func TestLiveWorkerGeneration(t *testing.T) {
+	t.Parallel()
+	s := open(t, dbPath(t))
+	ctx := t.Context()
+	seedWorker(t, s, "w", "w14:p2", 3)
+
+	gen, replacement, err := s.LiveWorkerGeneration(ctx, "w", terminal("w14:p7"))
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), gen)
+	assert.False(t, replacement, "no handoff")
+
+	h, err := s.BeginHandoff(ctx, "w", "w14:p7", terminal("w14:p7"), t1)
+	require.NoError(t, err)
+	for terminalID, want := range map[string]bool{terminal("w14:p7"): true, terminal("w14:p8"): false, "": false} {
+		_, replacement, err = s.LiveWorkerGeneration(ctx, "w", terminalID)
+		require.NoError(t, err)
+		assert.Equal(t, want, replacement, "pending, terminal %q", terminalID)
+	}
+
+	require.NoError(t, s.FailHandoff(ctx, h, t1))
+	_, replacement, _ = s.LiveWorkerGeneration(ctx, "w", terminal("w14:p7"))
+	assert.False(t, replacement, "a failed handoff proves nothing")
+
+	h, err = s.BeginHandoff(ctx, "w", "w14:p7", terminal("w14:p7"), t1)
+	require.NoError(t, err)
+	require.NoError(t, s.CompleteHandoff(ctx, h, t1))
+	gen, replacement, err = s.LiveWorkerGeneration(ctx, "w", terminal("w14:p7"))
+	require.NoError(t, err)
+	assert.Equal(t, int64(3), gen, "the ack keeps the generation")
+	assert.False(t, replacement, "a completed handoff is no longer pending")
+
+	retire(t, s, "w")
+	_, _, err = s.LiveWorkerGeneration(ctx, "w", terminal("w14:p7"))
+	assert.ErrorIs(t, err, store.ErrNoWorker)
+}

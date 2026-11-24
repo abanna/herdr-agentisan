@@ -30,7 +30,7 @@ type MuteRequest struct {
 	For    time.Duration `json:"for,omitempty"`
 }
 
-// UnmuteRequest is notices.unmute's args.
+// UnmuteRequest is notices.unmute's args: the worker as mute selects it.
 type UnmuteRequest struct {
 	Worker string `json:"worker"`
 }
@@ -68,7 +68,8 @@ func (o Options) noticeOps(in *inbox, mutes *notice.Mutes) map[string]op {
 			if err := decodeArgs(args, &req); err != nil {
 				return nil, err
 			}
-			return UnmuteResult{Worker: req.Worker, Ended: mutes.Unmute(req.Worker, o.Now())}, nil
+			m, _ := in.view() // no model, no refusal: the stored mutes are searched by name
+			return UnmuteResult{Worker: req.Worker, Ended: mutes.Unmute(m, req.Worker, o.Now())}, nil
 		}},
 		OpNoticesList: {run: func(_ context.Context, args json.RawMessage) (any, error) {
 			if err := decodeArgs(args, &struct{}{}); err != nil {

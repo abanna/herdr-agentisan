@@ -35,12 +35,46 @@ func TestRetireClearsTheBindingMute(t *testing.T) {
 	s, _ := serveMuteWorkers(t, th, dir)
 	muteForThreeHours(t, s, muteWorker)
 	muteForThreeHours(t, s, "ha-coder-2")
+	// The poll waits mid-cycle, so it cannot see the closed pane and clear the
+	// mute before retire does: this test is the retire-first order. The
+	// poll-first order is TestRetireAfterThePollConfirmedLoss.
+	holdMutePoll(t, th, "pane.report_metadata", nil, nil)
 
 	got := noticeWorkforce(t, s, daemon.OpWorkerRetire, workforce.RetireRequest{Target: muteOldPane})
 	assert.JSONEq(t, `{"id":"ha-coder-1","pane_id":"w14:p2","changed":true,"outcome":"retired","mute_cleared":true}`, string(got))
 	assert.Equal(t, []string{"ha-coder-2"}, listedMutes(t, s))
 	got = noticeWorkforce(t, s, daemon.OpWorkerRetire, workforce.RetireRequest{Target: muteWorker})
 	assert.JSONEq(t, `{"id":"ha-coder-1","pane_id":"w14:p2","changed":false,"outcome":"already_retired"}`, string(got))
+}
+
+// TestRetireAfterThePollConfirmedLoss is the poll-first order of
+// TestRetireClearsTheBindingMute: the poll marks the closed pane's row lost
+// and clears its mute, then retire ends the row. Retire's own clear finds
+// nothing, so `mute_cleared` is absent: it reports only what retire cleared.
+func TestRetireAfterThePollConfirmedLoss(t *testing.T) {
+	t.Parallel()
+	th, _, dir := haTeam(t)
+	s, logs := serveMuteWorkers(t, th, dir)
+	muteForThreeHours(t, s, muteWorker)
+	require.NoError(t, (herdr.Client{SocketPath: th.path}).ClosePane(t.Context(), muteOldPane))
+	require.Eventually(t, func() bool {
+		r, err := rowOf(t, dir, th, muteWorker)
+		return err == nil && r.Status == store.StatusLost
+	}, ready, 5*time.Millisecond)
+	require.Empty(t, listedMutes(t, s), "the poll confirmed loss and cleared the mute")
+
+	var got map[string]any
+	require.NoError(t, json.Unmarshal(noticeWorkforce(t, s, daemon.OpWorkerRetire, workforce.RetireRequest{Target: muteWorker}), &got))
+	assert.Equal(t, true, got["changed"], "retire still ends the lost row")
+	assert.NotContains(t, got, "mute_cleared", "retire cleared nothing, the poll had")
+	assert.Equal(t, store.StatusRetired, row(t, dir, th, muteWorker).Status)
+	assert.Empty(t, listedMutes(t, s))
+
+	noticeWorkforce(t, s, daemon.OpWorkerSpawn, workforce.SpawnRequest{Selector: workforce.Selector{Project: "ha"}, Group: "coder", Count: 1})
+	polled(t, th.srv, 2)
+	th.setPane(muteNewPane, "agent_status", "blocked")
+	polled(t, th.srv, 2)
+	waitLine(t, logs, "ha-coder-1 is blocked")
 }
 
 // TestReusedWorkerBindingStartsUnmuted covers an ID recycled after a confirmed loss (NERD-5730).
@@ -114,6 +148,8 @@ func TestMuteFollowsTheWorkerRowThroughHandoff(t *testing.T) {
 	assert.NotContains(t, string(closed), "mute_cleared")
 	assert.Equal(t, []string{muteWorker}, listedMutes(t, s), "closing the old pane preserves the row mute")
 
+	// Retire-first again: the poll waits, so it cannot mark the closed pane's row lost first.
+	holdMutePoll(t, th, "pane.report_metadata", nil, nil)
 	got := noticeWorkforce(t, s, daemon.OpWorkerRetire, workforce.RetireRequest{Target: muteWorker})
 	assert.JSONEq(t, `{"id":"ha-coder-1","pane_id":"w14:p3","changed":true,"outcome":"retired","mute_cleared":true}`, string(got))
 	assert.Empty(t, listedMutes(t, s))
@@ -232,6 +268,9 @@ func TestMuteThroughPendingHandoff(t *testing.T) {
 			polled(t, th.srv, 2)
 			assert.Equal(t, []string{muteWorker}, listedMutes(t, s))
 			assert.NotContains(t, strings.Join(noticeLines(logs), "\n"), "ha-coder-1 is blocked")
+			if tc == "renew" {
+				assert.NotContains(t, strings.Join(noticeLines(logs), "\n"), "left the team", "the old pane's Gone stays muted through the handoff")
+			}
 		})
 	}
 }
@@ -450,4 +489,96 @@ func muteWorkerHerdr(th *teamHerdr, normal herdrtest.Handler, r herdrtest.Reques
 		return normal(r)
 	}
 	return herdrtest.Reply{Result: result}
+}
+
+const muteBoundPane = "w14:p4"
+
+// addBoundNamesake adds the pane of a row that owns the logical id name while
+// the agent in it has another name, beside the unbound pane that carries name.
+func addBoundNamesake(t *testing.T, th *teamHerdr, dir, name string) {
+	t.Helper()
+	th.mu.Lock()
+	th.tabs = append(slices.Clone(th.tabs), map[string]any{"tab_id": "w14:t4", "workspace_id": "w14", "label": "ha-coder-3"})
+	th.panes = append(slices.Clone(th.panes), map[string]any{
+		"pane_id": muteBoundPane, "terminal_id": "term_" + muteBoundPane, "workspace_id": "w14", "tab_id": "w14:t4",
+		"agent": "claude", "agent_status": "idle", "tokens": map[string]string{"stage": "bound pane"},
+	})
+	th.agents = append(slices.Clone(th.agents), muteAgent(muteBoundPane, "session-x"))
+	th.mu.Unlock()
+	execDB(t, dir, th, `INSERT INTO workers (logical_id, project, grp, pane_id, generation, status, created_at, terminal_id)
+VALUES (?, 'ha', 'coder', ?, 4, 'active', 0, ?)`, name, muteBoundPane, "term_"+muteBoundPane)
+}
+
+// TestMutesOfANamesakeAndABoundRowAreIndependent covers the third review's
+// first P1 over the socket: an unbound agent muted under a name, then a bound
+// row under the same logical id, in either order of unmute and mute.
+func TestMutesOfANamesakeAndABoundRowAreIndependent(t *testing.T) {
+	t.Parallel()
+	const name = "ha-coder-2"
+	for _, unmuteFirst := range []bool{true, false} {
+		t.Run(map[bool]string{true: "unmute_first", false: "mute_first"}[unmuteFirst], func(t *testing.T) {
+			th, _, dir := haTeam(t)
+			addMutePane(th, name, true)
+			th.setPane(muteNewPane, "tokens", map[string]string{"stage": "unbound pane"})
+			s, logs := serveMuteWorkers(t, th, dir)
+			muteForThreeHours(t, s, name)
+			addBoundNamesake(t, th, dir, name)
+			polled(t, th.srv, 2)
+			unmute := func() string {
+				return string(noticeWorkforce(t, s, daemon.OpNoticesUnmute, daemon.UnmuteRequest{Worker: name}))
+			}
+			if unmuteFirst {
+				assert.JSONEq(t, `{"worker":"ha-coder-2","ended":false}`, unmute(), "the bound row holds the id and has no mute")
+				assert.Equal(t, []string{name}, listedMutes(t, s), "the pane's mute is untouched")
+			}
+			muteForThreeHours(t, s, name)
+			assert.Equal(t, []string{name, name}, listedMutes(t, s), "list shows both")
+			th.setPane(muteNewPane, "agent_status", "blocked")
+			th.setPane(muteBoundPane, "agent_status", "blocked")
+			polled(t, th.srv, 2)
+			assert.NotContains(t, noticeLines(logs), name+" is blocked · unbound pane", "the pane is still muted")
+			assert.NotContains(t, noticeLines(logs), name+" is blocked · bound pane")
+
+			assert.JSONEq(t, `{"worker":"ha-coder-2","ended":true}`, unmute(), "the bound row's mute ends")
+			assert.Equal(t, []string{name}, listedMutes(t, s))
+			th.setPane(muteNewPane, "agent_status", "idle")
+			th.setPane(muteBoundPane, "agent_status", "idle")
+			polled(t, th.srv, 2)
+			th.setPane(muteNewPane, "agent_status", "blocked")
+			th.setPane(muteBoundPane, "agent_status", "blocked")
+			waitLine(t, logs, name+" is blocked · bound pane")
+			assert.NotContains(t, noticeLines(logs), name+" is blocked · unbound pane", "the pane's mute outlived the row's")
+		})
+	}
+}
+
+// TestMuteAnUnboundPaneBesideABoundWorker: naming an unbound agent while
+// another worker is bound mutes that agent, not the row, and refuses nothing.
+func TestMuteAnUnboundPaneBesideABoundWorker(t *testing.T) {
+	t.Parallel()
+	th, _, dir := haTeam(t)
+	addMutePane(th, "ha-coder-2", true)
+	th.setPane(muteNewPane, "tokens", map[string]string{"stage": "scratch"})
+	th.setPane(muteOldPane, "tokens", map[string]string{"stage": "boundrow"})
+	s, logs := serveMuteWorkers(t, th, dir)
+	muteForThreeHours(t, s, "ha-coder-2")
+	assert.Equal(t, []string{"ha-coder-2"}, listedMutes(t, s))
+	th.setPane(muteNewPane, "agent_status", "blocked")
+	th.setPane(muteOldPane, "agent_status", "blocked")
+	polled(t, th.srv, 3)
+	assert.NotContains(t, noticeLines(logs), "ha-coder-2 is blocked · scratch", "the unbound pane is muted")
+	assert.Contains(t, noticeLines(logs), "ha-coder-1 is blocked · boundrow", "the bound row is untouched")
+}
+
+// TestConfirmedLossOfAMutedWorkerDeliversGone: the poll that confirms a muted
+// worker lost clears its mute before it builds that poll's notices, so the
+// worker's departure is told, as at retire.
+func TestConfirmedLossOfAMutedWorkerDeliversGone(t *testing.T) {
+	t.Parallel()
+	th, _, dir := haTeam(t)
+	s, logs := serveMuteWorkers(t, th, dir)
+	muteForThreeHours(t, s, muteWorker)
+	require.NoError(t, (herdr.Client{SocketPath: th.path}).ClosePane(t.Context(), muteOldPane))
+	waitLine(t, logs, "ha-coder-1 left the team")
+	assert.Empty(t, listedMutes(t, s))
 }
