@@ -1,35 +1,31 @@
 # Boss shift model check
 
-NERD-5262 adds a model gate to the interim team script. The gate reads
-the candidate's Claude pane, ties the report to the recorded launch time
-and current Claude process, and requires a report less than 180 seconds
-old. The only alias is `fable`, which accepts versioned Fable IDs including
-their `[1m]` variants. Other model values must match the reported ID
-exactly. A refusal exits nonzero with a JSON verdict and a hint on stderr.
+NERD-5262 adds a model gate to the interim team script. `shift.sh open`
+starts the candidate with its own `--session-id`. `shift.sh brief` pins the
+Claude that runs with that id, once. `shift.sh go` and `shift.sh takeover`
+ask the plugin whether that same process reports the requested model. Nothing
+in the script waits for a report: when a check is refused, fix the cause and
+run the command again.
 
 ```sh
 herdr-agentisan boss shift check-model --pane "$pane" --terminal "$terminal" \
   --name "$candidate" --model fable --launched-at "$launch_ms" \
-  --pid "$claude_pid" --start "$claude_raw_start" --pinned-at "$pin_ms"
+  --session-id "$uuid" [--pid "$claude_pid" --start "$claude_raw_start"]
 ```
 
-An initial call omits the three process flags or supplies all as zero.
-Open pins the first Claude it observes with a nonzero `pid` and `start`.
-Take `--pinned-at` in Unix milliseconds after the observation. Pass all
-three values on subsequent checks. The process may start at most one
-second before the recorded launch, allowing for clock rounding.
-Verification requires a report strictly more than six seconds after
-the pin, allowing an in-flight report from the previous process to
-finish. Inspect `requested_model`, `observed_model` and `reason` to
-diagnose a refusal.
+Without `--pid` and `--start` the pane's one foreground Claude must carry
+`--session-id <uuid>` (or `--session-id=<uuid>`) in its arguments; the reply is
+`identified`, with that process's `pid` and `start` (the OS's raw start unit).
+With them the call proves that same process is alive in the recorded terminal
+and its pane reports the model in a report newer than the launch and the
+process start and under 180 seconds old. The only alias is `fable`, which
+accepts versioned Fable IDs including `[1m]`; other values must match exactly.
+A refusal exits nonzero with a JSON verdict and a hint on stderr.
 
 ## Install between shifts
 
-Install a build with `boss shift check-model` and finish or abort any
-open shift before changing the script. The adapter needs the split reply's
-terminal ID and the candidate record it creates at open. Verify the exact
-preimage SHA-256, then dry run and apply this patch to the team's existing
-script. Run from the matching plugin checkout.
+Finish or abort any open shift first. Verify the exact preimage SHA-256, then
+dry run and apply the patch, from the matching plugin checkout.
 
 ```sh
 script=~/.local/share/ha-team/boss-shift/shift.sh
@@ -39,26 +35,44 @@ printf '%s  %s\n' a9d92216ec0324c87372ed9fb38579568a57dcf72460d4e9366098abc3d384
   patch --batch --fuzz=0 "$script" < docs/boss-shift-v1.patch
 ```
 
-Use a shell timeout of at least 300 s for `shift.sh open`. After recording
-the split, open allows up to 290 s for startup and model checks. It retries
-transient failures while waiting for the candidate's statusline to refresh.
+## What each command does
 
-If open reaches its deadline or the caller's shell kills it, run
-`shift.sh status` to see whether the pin was saved. With a saved pin,
-continue the handoff. `shift.sh go` rechecks the pin and report.
-If the pin is missing, abort and open again.
-Ignore the old `SHIFT_MODEL_SEEN` instruction. If a post-GO check
-fails, restore verified proof before retrying takeover.
-If GO was recorded but cueing failed, rerun `shift.sh go` from the
-outgoing pane to recheck the candidate and resend the cue. The script keeps
-the original GO and records a successful cue in `GO-CUED`. A failed
-prompt response can be ambiguous about whether the cue arrived.
+- `open` records the shift first (both terminals, the launch time, a fresh
+  session id), then splits, then starts Claude with that id. It still peeks at
+  the model the candidate reports, as advice only.
+- `brief` names the Claude and saves its pid and start, then sends the first
+  instructions. It never repins. If Claude is still starting it sends nothing:
+  run it again.
+- `go` and `takeover` check that process and its model before they act.
+  `takeover` closes the old pane only while it still holds its recorded terminal.
+- `status` shows the record and the plugin's verdict and writes nothing.
+- `abort` closes the candidate's pane only while it still holds the recorded
+  terminal; otherwise it says so and still ends the shift.
 
-Takeover automatically closes the old pane after the model check passes.
-If someone switches the candidate's model with `/model` after its last
-statusline report and before takeover, the check can still see the old
-model and close the outgoing boss's pane. The window lasts up to one
-refresh (60 s on this team), or up to 180 s if reports stall.
-Keep nested agents out of the candidate pane because the token belongs
-to that pane. Effort is a launch argument.
-Verification, close and rename use separate herdr calls.
+## By hand
+
+- **A lost split reply.** The record exists before the split, so a failed or
+  lost split leaves a record with no pane. `status` says so and `abort`
+  closes nothing. Run `herdr pane list`, close any new pane yourself, then
+  `abort`. A kill in the instant between creating the pane and saving its id
+  needs the same cleanup.
+- **An identity refusal** (`candidate_changed`). The pane no longer runs the
+  Claude that was launched: abort and open again. If `abort` says it did not
+  close the pane, that id belongs to something else now; leave it.
+- **A missing or stale report.** `go` refuses with the reason. Wait for the
+  next statusline report, fix the hook, or abort.
+- **A brief while Claude still starts.** It refuses; run it again.
+
+If GO was recorded but its cue failed, run `shift.sh go` again: it rechecks,
+keeps the original GO and records a delivered cue in `GO-CUED`. A failed prompt
+reply can be ambiguous about delivery. `SHIFT_MODEL_SEEN` no longer does anything.
+
+## Known limits
+
+The owner accepted one window: if someone switches the candidate with `/model`
+after its last statusline report and before `takeover`, the check can still see
+the old model and close the outgoing boss's pane. It lasts up to one refresh
+(60 s on this team), or 180 s if reports stall. Verification, close and rename
+are separate herdr calls, and a pane can change between the terminal check and
+the close. Keep nested agents out of the candidate pane: the token belongs to
+the pane. Effort is a launch argument.

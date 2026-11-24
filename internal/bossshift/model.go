@@ -17,13 +17,14 @@ import (
 // ErrModelProof means the current candidate did not prove the requested model.
 var ErrModelProof = errors.New("boss shift model unverified")
 
-// Candidate pins the pane and terminal from the split. After the first process
-// read, PID and Start pin that Claude. PinnedAt records the pin in Unix milliseconds.
+// Candidate pins the pane and terminal from the split, and the launch's own
+// --session-id. Without PID and Start the call names the Claude started with
+// that id; with them it proves that same process still runs the model.
 type Candidate struct {
-	Pane, Terminal, Name, Model string
-	LaunchedAt, PinnedAt        int64
-	PID                         uint32
-	Start                       uint64
+	Pane, Terminal, Name, Model, SessionID string
+	LaunchedAt                             int64 // Unix milliseconds
+	PID                                    uint32
+	Start                                  uint64
 }
 
 // ModelVerdict reports the observation and any process identity independently
@@ -59,9 +60,8 @@ func CheckModel(ctx context.Context, c herdr.Client, target Candidate) (ModelVer
 func checkModel(ctx context.Context, c herdr.Client, target Candidate, stat report.StatFunc, wall report.StartedAtFunc, clock func() time.Time) (ModelVerdict, error) {
 	v := ModelVerdict{Requested: target.Model}
 	launch := time.UnixMilli(target.LaunchedAt)
-	if target.Pane == "" || target.Terminal == "" || target.Name == "" || report.ValidModel(target.Model) == "" ||
-		target.LaunchedAt <= 0 || (target.PID == 0) != (target.Start == 0) ||
-		(target.PID == 0) != (target.PinnedAt == 0) || target.PinnedAt != 0 && target.PinnedAt < target.LaunchedAt {
+	if target.Pane == "" || target.Terminal == "" || target.Name == "" || target.SessionID == "" ||
+		report.ValidModel(target.Model) == "" || target.LaunchedAt <= 0 || (target.PID == 0) != (target.Start == 0) {
 		return v.refuse("invalid_candidate")
 	}
 	ctx, cancel := context.WithTimeout(ctx, herdr.CallTimeout)
@@ -81,12 +81,18 @@ func checkModel(ctx context.Context, c herdr.Client, target Candidate, stat repo
 	if err != nil {
 		return v.unavailable(err)
 	}
-	pid := claudePID(info.ForegroundProcesses)
+	claude := soleClaude(info.ForegroundProcesses)
+	pid := claude.PID
 	if info.PaneID != target.Pane {
 		return v.refuse("candidate_changed")
 	}
 	if pid == 0 || stat == nil || wall == nil {
 		return v.refuse("claude_unavailable")
+	}
+	// The launch's own id says which Claude this is; PID and Start, kept from
+	// the first call, say it is still that process.
+	if !hasSessionID(claude.Argv, target.SessionID) {
+		return v.refuse("candidate_changed")
 	}
 	proc, err := stat(int(pid)) // #nosec G115 -- OS PID fits in int
 	if err != nil || proc.Dead || proc.Start == 0 {
@@ -98,9 +104,6 @@ func checkModel(ctx context.Context, c herdr.Client, target Candidate, stat repo
 	started, err := wall(proc.Start)
 	if err != nil || started.IsZero() {
 		return v.refuse("claude_unavailable")
-	}
-	if started.Before(launch.Add(-time.Second)) {
-		return v.refuse("candidate_changed")
 	}
 	pane, err := c.GetPane(ctx, target.Pane)
 	if err != nil {
@@ -115,6 +118,10 @@ func checkModel(ctx context.Context, c herdr.Client, target Candidate, stat repo
 	}
 
 	v.PID, v.Start = pid, proc.Start
+	if target.PID == 0 {
+		v.Reason = "identified"
+		return v, nil
+	}
 	v.Observed = report.ValidModel(pane.Tokens[report.ModelKey])
 	if v.Observed == "" {
 		return v.refuse("missing_model")
@@ -129,14 +136,6 @@ func checkModel(ctx context.Context, c herdr.Client, target Candidate, stat repo
 	if stamp.Before(launch) || stamp.Before(started.Truncate(time.Millisecond)) || now.Sub(stamp) >= report.CtxTTL {
 		return v.refuse("stale_report")
 	}
-	if target.PID == 0 {
-		return v.refuse("awaiting_pin")
-	}
-	// Allow an in-flight predecessor report to finish, plus the second
-	// by which the process start can round down (NERD-5262).
-	if !stamp.After(time.UnixMilli(target.PinnedAt).Add(herdr.CallTimeout + time.Second)) {
-		return v.refuse("report_before_pin")
-	}
 	fableAlias := target.Model == "fable" && fableID.MatchString(v.Observed)
 	if target.Model != v.Observed && !fableAlias {
 		return v.refuse("wrong_model")
@@ -145,16 +144,28 @@ func checkModel(ctx context.Context, c herdr.Client, target Candidate, stat repo
 	return v, nil
 }
 
-func claudePID(procs []herdr.Process) uint32 {
-	var pid uint32
+// soleClaude is the one Claude among the pane's foreground processes, or the
+// zero Process when there is none or more than one.
+func soleClaude(procs []herdr.Process) herdr.Process {
+	var found herdr.Process
 	for _, p := range procs {
 		if p.PID == 0 || len(p.Argv) == 0 || filepath.Base(p.Argv[0]) != claudeProgram {
 			continue
 		}
-		if pid != 0 {
-			return 0
+		if found.PID != 0 {
+			return herdr.Process{}
 		}
-		pid = p.PID
+		found = p
 	}
-	return pid
+	return found
+}
+
+// hasSessionID reports whether argv passes id as --session-id, in either form.
+func hasSessionID(argv []string, id string) bool {
+	for i, arg := range argv {
+		if arg == "--session-id="+id || arg == "--session-id" && i+1 < len(argv) && argv[i+1] == id {
+			return true
+		}
+	}
+	return false
 }

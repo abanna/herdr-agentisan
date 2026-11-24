@@ -93,34 +93,58 @@ func TestCheckModelRejectsZombieAtEitherRead(t *testing.T) {
 	}
 }
 
-func TestCheckModelDoesNotVerifyRetainedReportOnFirstPin(t *testing.T) {
+// The first call names the Claude the launch id belongs to, before any report.
+func TestCheckModelIdentifiesTheLaunchedClaude(t *testing.T) {
 	t.Parallel()
 	fixture := newModelFixture()
-	fixture.target.PID, fixture.target.Start, fixture.target.PinnedAt = 0, 0, 0
-	// The replacement has a rounded-down start older than the report its
-	// predecessor left. The token also postdates the pane's launch.
-	fixture.stamp = fixture.now.Add(-150 * time.Millisecond)
-	fixture.wall = func(uint64) (time.Time, error) { return fixture.now.Add(-650 * time.Millisecond), nil }
+	fixture.target.PID, fixture.target.Start = 0, 0
+	fixture.noTokens = true
 	verdict, err := fixture.check(t)
-	require.ErrorIs(t, err, bossshift.ErrModelProof)
+	require.NoError(t, err)
+	require.Equal(t, "identified", verdict.Reason)
 	require.Equal(t, uint32(100), verdict.PID)
 	require.Equal(t, uint64(200), verdict.Start)
 }
 
-func TestCheckModelRequiresReportAfterPinMargin(t *testing.T) {
+// The launch id must be the value of --session-id, in either form.
+func TestCheckModelRequiresTheLaunchSessionID(t *testing.T) {
 	t.Parallel()
-	fixture := newModelFixture()
-	pin := fixture.now.Add(-7 * time.Second)
-	fixture.target.PinnedAt = pin.UnixMilli()
-	fixture.stamp = pin.Add(6 * time.Second)
-	verdict, err := fixture.check(t)
-	require.ErrorIs(t, err, bossshift.ErrModelProof)
-	require.Equal(t, "report_before_pin", verdict.Reason)
-
-	fixture.stamp = fixture.stamp.Add(time.Millisecond)
-	verdict, err = fixture.check(t)
-	require.NoError(t, err)
-	require.Equal(t, "verified", verdict.Reason)
+	tests := []struct {
+		name   string
+		argv   []string
+		reason string
+	}{
+		{"space form", []string{"claude", "--session-id", "launch-1"}, "verified"},
+		{"equals form", []string{"claude", "--session-id=launch-1"}, "verified"},
+		{"no id", []string{"claude", "--model", "fable"}, "candidate_changed"},
+		{"another id", []string{"claude", "--session-id", "launch-2"}, "candidate_changed"},
+		{"the id as another flag's value", []string{"claude", "--name", "launch-1"}, "candidate_changed"},
+		{"the id with nothing after the flag", []string{"claude", "--session-id"}, "candidate_changed"},
+		{"a longer id", []string{"claude", "--session-id=launch-12"}, "candidate_changed"},
+	}
+	for _, tc := range tests {
+		for _, pinned := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s pinned=%t", tc.name, pinned), func(t *testing.T) {
+				t.Parallel()
+				fixture := newModelFixture()
+				fixture.foreground[0].Argv = tc.argv
+				want := tc.reason
+				if !pinned {
+					fixture.target.PID, fixture.target.Start = 0, 0
+					if want == "verified" {
+						want = "identified"
+					}
+				}
+				verdict, err := fixture.check(t)
+				require.Equal(t, want, verdict.Reason)
+				if want == "candidate_changed" {
+					require.ErrorIs(t, err, bossshift.ErrModelProof)
+				} else {
+					require.NoError(t, err)
+				}
+			})
+		}
+	}
 }
 
 // NERD-5262: vary one source of proof while the remaining reads agree.
@@ -135,7 +159,7 @@ func TestCheckModelRefusesBrokenProof(t *testing.T) {
 		}},
 		{"exited_Claude", "claude_unavailable", func(f *modelFixture) {
 			f.foreground = nil
-			f.target.PID, f.target.Start, f.target.PinnedAt = 0, 0, 0
+			f.target.PID, f.target.Start = 0, 0
 		}},
 		{"agent_is_not_Claude", "claude_unavailable", func(f *modelFixture) { f.agent.Agent = "codex" }},
 		{"pane_agent_is_not_Claude", "candidate_changed", func(f *modelFixture) { f.paneAgent = "codex" }},
@@ -151,12 +175,7 @@ func TestCheckModelRefusesBrokenProof(t *testing.T) {
 			f.wall = func(uint64) (time.Time, error) { return time.Time{}, fs.ErrPermission }
 		}},
 		{"pid_without_start", "invalid_candidate", func(f *modelFixture) { f.target.Start = 0 }},
-		{"pid_without_pin_time", "invalid_candidate", func(f *modelFixture) { f.target.PinnedAt = 0 }},
-		{"process_predates_launch", "candidate_changed", func(f *modelFixture) {
-			f.wall = func(uint64) (time.Time, error) {
-				return time.UnixMilli(f.target.LaunchedAt).Add(-time.Second - time.Millisecond), nil
-			}
-		}},
+		{"no_launch_id", "invalid_candidate", func(f *modelFixture) { f.target.SessionID = "" }},
 		{"zero_launch", "invalid_candidate", func(f *modelFixture) { f.target.LaunchedAt = 0 }},
 		{"different_agent_name", "candidate_changed", func(f *modelFixture) { f.agent.Name = "stranger" }},
 		{"different_agent_terminal", "candidate_changed", func(f *modelFixture) { f.agent.TerminalID = "stranger" }},
@@ -180,6 +199,7 @@ type modelFixture struct {
 	stamp                   time.Time
 	agent                   herdr.Agent
 	paneTerminal, paneAgent string
+	noTokens                bool
 	processPane             string
 	foreground              []herdr.Process
 	stat                    report.StatFunc
@@ -193,12 +213,12 @@ func newModelFixture() modelFixture {
 	return modelFixture{
 		target: bossshift.Candidate{
 			Pane: "p", Terminal: "term", Name: "next", Model: "fable",
-			LaunchedAt: launched.UnixMilli(), PinnedAt: launched.Add(time.Second).UnixMilli(), PID: pid, Start: start,
+			LaunchedAt: launched.UnixMilli(), SessionID: "launch-1", PID: pid, Start: start,
 		},
 		now: now, stamp: now,
 		agent:        herdr.Agent{PaneID: "p", TerminalID: "term", Name: "next", Agent: "claude"},
 		paneTerminal: "term", paneAgent: "claude", processPane: "p",
-		foreground: []herdr.Process{{PID: pid, Argv: []string{"claude"}}},
+		foreground: []herdr.Process{{PID: pid, Argv: []string{"claude", "--session-id", "launch-1"}}},
 		stat:       func(int) (report.Stat, error) { return report.Stat{Start: start}, nil },
 		wall:       func(uint64) (time.Time, error) { return launched.Add(time.Second), nil },
 	}
@@ -217,6 +237,9 @@ func (f modelFixture) check(t *testing.T) (bossshift.ModelVerdict, error) {
 			pane := herdr.PaneInfo{PaneID: f.target.Pane, TerminalID: f.paneTerminal, Agent: f.paneAgent, Tokens: map[string]string{
 				report.ModelKey: f.target.Model, report.ModelAtKey: strconv.FormatInt(f.stamp.UnixMilli(), 10),
 			}}
+			if f.noTokens {
+				pane.Tokens = nil
+			}
 			return herdrtest.Reply{Result: map[string]any{"type": "pane_info", "pane": pane}}
 		default:
 			return herdrtest.Reply{}

@@ -18,15 +18,13 @@ func newBossCmd() *cobra.Command {
 }
 
 var shiftModelHints = map[string]string{
-	"invalid_candidate":     "check the launch time and supply all three process pin fields together",
+	"invalid_candidate":     "check the launch time and session id, and give --pid and --start together",
 	"candidate_unavailable": "check the herdr connection and confirm the candidate pane is still open",
 	"candidate_changed":     "abort and open again with the intended candidate",
-	"claude_unavailable":    "wait for Claude to start or inspect the pane for an exited session",
-	"missing_model":         "check the candidate's statusline hook and wait for a report",
+	"claude_unavailable":    "wait for Claude to start and run it again, or inspect the pane for an exited session",
+	"missing_model":         "the candidate has reported no model: wait for a statusline report, fix its hook, or abort",
 	"invalid_report_time":   "check the host clock and wait for a fresh statusline report",
-	"stale_report":          "check the candidate's statusline hook and wait for it to refresh",
-	"awaiting_pin":          "wait for shift.sh open to record the candidate; if interrupted, abort and open again",
-	"report_before_pin":     "wait for the candidate's next statusline report",
+	"stale_report":          "the report is old: wait for a fresh one, fix the statusline hook, or abort",
 	"wrong_model":           "select the requested model with /model in the candidate pane",
 }
 
@@ -59,8 +57,8 @@ func newShiftModelCmd() *cobra.Command {
 	f.StringVar(&target.Name, "name", "", "temporary agent name")
 	f.StringVar(&target.Model, "model", "", "requested Claude model")
 	f.Int64Var(&target.LaunchedAt, "launched-at", 0, "recorded launch in Unix milliseconds")
-	f.Uint32Var(&target.PID, "pid", 0, "recorded Claude PID, with --start")
-	f.Int64Var(&target.PinnedAt, "pinned-at", 0, "recorded process pin in Unix milliseconds")
+	f.Uint32Var(&target.PID, "pid", 0, "recorded Claude PID, with --start; omit both to name the launched Claude")
+	f.StringVar(&target.SessionID, "session-id", "", "the --session-id the candidate was launched with")
 	f.Uint64Var(&target.Start, "start", 0, "recorded raw process start, with --pid")
 	return c
 }
