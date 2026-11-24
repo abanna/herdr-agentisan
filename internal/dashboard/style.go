@@ -70,8 +70,8 @@ func themeColor(dark, light, legacy string, darkIndex, lightIndex, lightSelectio
 // stays at least 0.060 apart in OKLab from every other hue ink on every
 // background (TestDashboardContrastSweep). Red has 52, green 157 and 193,
 // yellow 228 and 229. Orange and cyan have none: their lighter slots sit
-// beside yellow, red and white. A hue with no slot that helps falls to the
-// neutral.
+// beside yellow, red and white. At 256 colours a hue with no slot that
+// helps falls to the neutral; at TrueColor it keeps main's ink.
 var palette = [colourRoles]themedColor{
 	colText:          themeColor("#eef2ff", "#17233b", "", 255, 234, 0),
 	colDim:           themeColor("#becbe3", "#3c4c69", "#6c7086", 153, 239, 0),
