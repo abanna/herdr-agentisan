@@ -157,7 +157,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 	tp := teamPoll{
 		cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, idle: idle, starts: starts, cache: cache, header: header,
 		models: newLaunchModels(), descriptions: newGroupDescriptions(o.Team.ConfigDir),
-		slots: o.newSlotCounter(), bind: &binder{ready: ready},
+		slots: o.newSlotCounter(), bind: &binder{ready: ready, mutes: n.batch.Mutes},
 		notices: n,
 	}
 	onServer := o.onServer(ident)

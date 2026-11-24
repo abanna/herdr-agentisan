@@ -50,6 +50,8 @@ type RetireResult struct {
 	// rotation is abandoned, and the worker stays on its own pane with its
 	// inbox released (A33 part 2a).
 	HandoffFailed string `json:"handoff_failed,omitempty"`
+	// MuteCleared is set when retiring the row ended an active notice mute.
+	MuteCleared bool `json:"mute_cleared,omitempty"`
 }
 
 // target is a resolved retire target: a pane, the terminal it showed, and
@@ -140,6 +142,9 @@ func (s *Service) finish(ctx context.Context, tg target, gone bool) (RetireResul
 	}
 	if replaced {
 		res.HandoffFailed = h.LogicalID
+	}
+	if tg.row != nil && s.ClearWorkerMute != nil {
+		res.MuteCleared = s.ClearWorkerMute(*tg.row)
 	}
 	return res, nil
 }

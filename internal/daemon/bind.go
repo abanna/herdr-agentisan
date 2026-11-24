@@ -9,6 +9,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
 )
@@ -20,6 +21,7 @@ type binder struct {
 	// terminal a live handoff renewed is not yet re-keyed, and would read
 	// as a pane no row binds.
 	ready *atomic.Bool
+	mutes *notice.Mutes
 	// warnedNoTerminal is set once a pane listed with no terminal id has
 	// been logged; herdr 0.9.3 lists every pane with one.
 	warnedNoTerminal bool
@@ -141,6 +143,7 @@ func (o Options) reconcileRow(ctx context.Context, c herdr.Client, pp paneProces
 		return wrote, nil
 	}
 	if o.wrote(ctx, log, st.MarkWorkerLost(ctx, r), "mark lost") {
+		b.mutes.ClearWorker(r.LogicalID, r.Generation, o.Now())
 		log.Warn().Str("pane", r.PaneID).
 			Msg("team poll: worker lost; no pane is proven to hold it, so it binds none until the boss retires it or spawns its id again")
 		wrote = true

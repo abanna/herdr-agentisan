@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/notice"
+	"github.com/abanna/herdr-agentisan/internal/store"
 )
 
 // The notices ops (A44): the boss mutes a worker's notices for a while,
@@ -18,8 +19,7 @@ const (
 	OpNoticesList   = "notices.list"
 )
 
-// NoticesBudget bounds a notices op, which reads and changes only the
-// daemon's memory.
+// NoticesBudget bounds a notices op, including the mute's worker row check.
 const NoticesBudget = 5 * time.Second
 
 // MuteRequest is notices.mute's args: the worker by the name its notices
@@ -51,7 +51,7 @@ type MutesResult struct {
 // (not_ready).
 func (o Options) noticeOps(in *inbox, mutes *notice.Mutes) map[string]op {
 	ops := map[string]op{
-		OpNoticesMute: {run: func(_ context.Context, args json.RawMessage) (any, error) {
+		OpNoticesMute: {run: func(ctx context.Context, args json.RawMessage) (any, error) {
 			var req MuteRequest
 			if err := decodeArgs(args, &req); err != nil {
 				return nil, err
@@ -60,7 +60,7 @@ func (o Options) noticeOps(in *inbox, mutes *notice.Mutes) map[string]op {
 			if m == nil {
 				return nil, fmt.Errorf("%w: the team poll has no model to find %q in", ErrNotReady, req.Worker)
 			}
-			return mutes.Mute(*m, req.Worker, req.For, o.Now())
+			return mutes.Mute(ctx, *m, req.Worker, req.For, o.Now())
 		}},
 		OpNoticesUnmute: {run: func(_ context.Context, args json.RawMessage) (any, error) {
 			var req UnmuteRequest
@@ -82,6 +82,21 @@ func (o Options) noticeOps(in *inbox, mutes *notice.Mutes) map[string]op {
 		ops[name] = op
 	}
 	return ops
+}
+
+// newNoticeMutes checks the row selected by the model against state.db.
+// A handoff can rebind the terminal while keeping the same generation.
+func newNoticeMutes(st *store.Store) *notice.Mutes {
+	return notice.NewMutes(func(ctx context.Context, worker string, generation int64) (bool, error) {
+		row, err := st.WorkerRow(ctx, worker)
+		if errors.Is(err, store.ErrNoWorker) {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("read worker row: %w", err)
+		}
+		return row.Generation == generation && row.RetiredAt.IsZero() && row.Status != store.StatusLost, nil
+	})
 }
 
 // noticeCode is the refusal code for a notices op's error.

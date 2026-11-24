@@ -15,7 +15,6 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
-	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/preflight"
 	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/store"
@@ -306,9 +305,12 @@ func Run(ctx context.Context, o Options) (err error) {
 	ready := &atomic.Bool{} // shared: the poll's first reconcile opens the workforce ops (A35)
 	in := newInbox()        // shared: the poll feeds the dispatcher, and send wakes it
 	// Shared: the notices ops set them, and the poll's notices obey them (A44).
-	mutes := notice.NewMutes()
+	mutes := newNoticeMutes(st)
 	var ops map[string]op
 	if svc := o.newWorkforce(st, ident, idle, starts, paths.Dir); svc != nil {
+		svc.ClearWorkerMute = func(row store.Worker) bool {
+			return mutes.ClearWorker(row.LogicalID, row.Generation, o.Now())
+		}
 		ops = workforceOps(svc, ready, o.queued(in), o.marked)
 		maps.Copy(ops, o.noticeOps(in, mutes))
 		maps.Copy(ops, o.newBoardOps(st, in.view))

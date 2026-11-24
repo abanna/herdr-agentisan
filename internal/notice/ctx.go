@@ -116,11 +116,11 @@ func (w *CtxWatch) observe(project, group string, boss bool, wk team.Worker, see
 // carries no Worker, so no mute silences it.
 func (c Crossing) Notice(alerted bool) Notice {
 	kind := map[team.Level]Kind{team.LevelSoft: CtxSoft, team.LevelHard: CtxHard, team.LevelCeiling: CtxCeiling}[c.Level]
-	n := Notice{Project: c.Project, Subject: c.Worker.Pane.ID, Kind: kind, Text: ctxText(c, alerted)}
-	if !c.Boss {
-		n.Worker = WorkerName(c.Worker)
+	text := ctxText(c, alerted)
+	if c.Boss {
+		return Notice{Project: c.Project, Subject: c.Worker.Pane.ID, Kind: kind, Text: text}
 	}
-	return n
+	return workerNotice(c.Project, c.Worker, kind, text)
 }
 
 // Alert is the toast that alerts the user to c, a ceiling (D7), with the

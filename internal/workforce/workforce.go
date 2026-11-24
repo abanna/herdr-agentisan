@@ -156,6 +156,9 @@ type Service struct {
 	// through (A33); nil records nothing. The daemon sends it as a workflow
 	// event.
 	HandoffSteps func(context.Context, HandoffStep)
+	// ClearWorkerMute clears an ended row's mute and reports whether it was
+	// active (NERD-5730). Nil has no mute storage to update.
+	ClearWorkerMute func(store.Worker) bool
 	// Dashboard is the plugin pane team up opens as a team's dashboard; zero
 	// opens none (A18, A23).
 	Dashboard DashboardPane

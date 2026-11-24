@@ -307,8 +307,8 @@ func TestBatcherBodyNeverOverTheCap(t *testing.T) {
 // notice is told; the ceiling goes all the same.
 func TestBatcherDropsAMutedWorker(t *testing.T) {
 	t.Parallel()
-	mutes := notice.NewMutes()
-	_, err := mutes.Mute(muteTeam(), "c2", time.Minute, t0)
+	mutes := notice.NewMutes(nil)
+	_, err := mutes.Mute(t.Context(), muteTeam(), "c2", time.Minute, t0)
 	require.NoError(t, err)
 	b := notice.NewBatcher(notice.Configs{Default: notice.DefaultConfig()})
 	b.Mutes = mutes

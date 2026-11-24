@@ -476,7 +476,11 @@ func (s *Service) failAll(ctx context.Context, ws []opened) []error {
 	var wg sync.WaitGroup
 	for i, w := range ws {
 		wg.Go(func() {
-			failed := ignoreGone(s.Store.SetWorkerStatus(ctx, w.row(), store.StatusFailed, s.now()))
+			row := w.row()
+			failed := ignoreGone(s.Store.SetWorkerStatus(ctx, row, store.StatusFailed, s.now()))
+			if failed == nil && s.ClearWorkerMute != nil {
+				s.ClearWorkerMute(row)
+			}
 			errs[i] = errors.Join(failed, s.closeQuietly(ctx, w.paneID, w.terminalID))
 		})
 	}

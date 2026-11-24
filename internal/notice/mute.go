@@ -1,6 +1,7 @@
 package notice
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"maps"
@@ -38,43 +39,84 @@ type Mute struct {
 // ops change them while the team poll reads them, so they are safe for
 // concurrent use. A nil Mutes mutes no one.
 type Mutes struct {
-	mu    sync.Mutex
-	until map[string]time.Time
+	mu      sync.Mutex
+	entries map[string]muteEntry
+	live    func(context.Context, string, int64) (bool, error)
 }
 
-// NewMutes is a Mutes with no one muted.
-func NewMutes() *Mutes {
-	return &Mutes{until: map[string]time.Time{}}
+// A logical ID and its generation identify the row of a bound worker
+// (NERD-5730). An unbound worker's mute uses only its provisional name.
+type muteScope struct {
+	bound      bool
+	generation int64
+}
+
+type muteEntry struct {
+	scope muteScope
+	until time.Time
+}
+
+// NewMutes is a Mutes with no one muted. When supplied, live verifies that
+// the logical ID still has the generation selected by the poll model.
+func NewMutes(live func(context.Context, string, int64) (bool, error)) *Mutes {
+	return &Mutes{entries: map[string]muteEntry{}, live: live}
 }
 
 // Mute mutes worker from now for d, DefaultMute when d is 0. worker is the
 // WorkerName of a worker in one of m's groups: a name no worker has is
 // ErrUnknownWorker, so a typo is never a mute that silences nothing.
 // Muting a worker again sets its end anew.
-func (s *Mutes) Mute(m team.Model, worker string, d time.Duration, now time.Time) (Mute, error) {
+func (s *Mutes) Mute(ctx context.Context, m team.Model, worker string, d time.Duration, now time.Time) (Mute, error) {
 	switch {
 	case d == 0:
 		d = DefaultMute
 	case d < 0 || d > MaxMute:
 		return Mute{}, fmt.Errorf("%w: got %s", ErrMuteLength, d)
 	}
-	if !slices.ContainsFunc(groupWorkers(m), func(p placed) bool { return WorkerName(p.worker) == worker }) {
+	workers := groupWorkers(m)
+	i := slices.IndexFunc(workers, func(p placed) bool { return WorkerName(p.worker) == worker })
+	if i < 0 {
 		return Mute{}, fmt.Errorf("%w: %q", ErrUnknownWorker, worker)
 	}
+	w := workers[i].worker
+	scope := muteScope{bound: w.Bound, generation: w.Generation}
 	until := now.Add(d)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.until[worker] = until
+	// Retire and confirmed loss clear the mute after changing the row, under
+	// this same lock. Check here so an old model cannot restore their mute.
+	if scope.bound && s.live != nil {
+		live, err := s.live(ctx, worker, scope.generation)
+		if err != nil {
+			return Mute{}, fmt.Errorf("check mute for worker %q: %w", worker, err)
+		}
+		if !live {
+			return Mute{}, fmt.Errorf("%w: %q", ErrUnknownWorker, worker)
+		}
+	}
+	s.entries[worker] = muteEntry{scope: scope, until: until}
 	return Mute{Worker: worker, Until: until}, nil
+}
+
+// ClearWorker clears this generation's mute and reports whether it was active.
+func (s *Mutes) ClearWorker(worker string, generation int64, now time.Time) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := s.entries[worker]
+	if m.scope != (muteScope{bound: true, generation: generation}) {
+		return false
+	}
+	delete(s.entries, worker)
+	return now.Before(m.until)
 }
 
 // Unmute ends worker's mute, and reports whether one was in force at now.
 func (s *Mutes) Unmute(worker string, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	until, ok := s.until[worker]
-	delete(s.until, worker)
-	return ok && now.Before(until)
+	m, ok := s.entries[worker]
+	delete(s.entries, worker)
+	return ok && now.Before(m.until)
 }
 
 // List is every mute in force at now, by worker name; it forgets those
@@ -83,11 +125,11 @@ func (s *Mutes) List(now time.Time) []Mute {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := []Mute{}
-	for _, w := range slices.Sorted(maps.Keys(s.until)) {
-		if until := s.until[w]; now.Before(until) {
-			out = append(out, Mute{Worker: w, Until: until})
+	for _, w := range slices.Sorted(maps.Keys(s.entries)) {
+		if m := s.entries[w]; now.Before(m.until) {
+			out = append(out, Mute{Worker: w, Until: m.until})
 		} else {
-			delete(s.until, w)
+			delete(s.entries, w)
 		}
 	}
 	return out
@@ -101,6 +143,6 @@ func (s *Mutes) Muted(n Notice, now time.Time) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	until, ok := s.until[n.Worker]
-	return ok && now.Before(until)
+	m, ok := s.entries[n.Worker]
+	return ok && m.scope == n.scope && now.Before(m.until)
 }

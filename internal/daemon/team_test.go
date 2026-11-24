@@ -51,6 +51,8 @@ type teamHerdr struct {
 	procs map[string][]map[string]any
 	// onCall, when set, runs before each request is answered.
 	onCall func(method string)
+	// other handles worker operations when a test supplies them.
+	other herdrtest.Handler
 	// prompt, when set, answers agent.prompt (messages_test.go).
 	prompt herdrtest.Handler
 	// toast, when set, answers notification.show, which is otherwise
@@ -185,6 +187,12 @@ func (th *teamHerdr) serveTeam(normal herdrtest.Handler) herdrtest.Handler {
 				return toast(r)
 			}
 			return herdrtest.Reply{Result: map[string]any{"type": "notification_show", "shown": true, "reason": ""}}
+		}
+		th.mu.Lock()
+		other := th.other
+		th.mu.Unlock()
+		if other != nil {
+			return other(r)
 		}
 		return normal(r)
 	}

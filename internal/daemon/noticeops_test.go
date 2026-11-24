@@ -31,7 +31,7 @@ func TestNoticeOps(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 22, 21, 0, 0, 0, time.UTC)
 	o := daemon.Options{Now: func() time.Time { return now }}
-	mutes := notice.NewMutes()
+	mutes := notice.NewMutes(nil)
 	op := func(m *team.Model, name, args string) (any, string, error) {
 		return daemon.NoticeOp(o, m, mutes, name, json.RawMessage(args))
 	}
@@ -85,7 +85,7 @@ func TestNoticeOps(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			s := notice.NewMutes()
+			s := notice.NewMutes(nil)
 			_, code, err := daemon.NoticeOp(o, tc.model, s, tc.name, json.RawMessage(tc.args))
 			require.Error(t, err)
 			if tc.want != nil {

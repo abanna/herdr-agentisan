@@ -8,7 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/notice"
+	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
 )
 
@@ -42,11 +44,12 @@ func TestMuteLasts(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			s := notice.NewMutes()
-			got, err := s.Mute(muteTeam(), "ha-coder-1", tc.d, t0)
+			s := notice.NewMutes(nil)
+			got, err := s.Mute(t.Context(), muteTeam(), "ha-coder-1", tc.d, t0)
 			require.NoError(t, err)
 			assert.Equal(t, notice.Mute{Worker: "ha-coder-1", Until: t0.Add(tc.want)}, got)
-			n := about("ha-coder-1", notice.Blocked)
+			w := muteTeam().Projects[0].Groups[0].Workers[0]
+			n := (notice.Crossing{Project: "ha", Worker: w, Level: team.LevelSoft}).Notice(false)
 			assert.True(t, s.Muted(n, t0), "from the start")
 			assert.True(t, s.Muted(n, t0.Add(tc.want-time.Nanosecond)), "until a tick before its end")
 			assert.False(t, s.Muted(n, t0.Add(tc.want)), "not at its end")
@@ -77,8 +80,8 @@ func TestMuteRefuses(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			s := notice.NewMutes()
-			_, err := s.Mute(muteTeam(), tc.worker, tc.d, t0)
+			s := notice.NewMutes(nil)
+			_, err := s.Mute(t.Context(), muteTeam(), tc.worker, tc.d, t0)
 			require.ErrorIs(t, err, tc.want)
 			assert.Empty(t, s.List(t0), "no one is muted")
 		})
@@ -93,14 +96,14 @@ func TestMuteTakesEveryName(t *testing.T) {
 	m.Projects = append(m.Projects, team.Project{Name: "skills", Groups: []team.Group{{Name: "qa", Workers: []team.Worker{
 		agentPane("w2:p1", "sk-qa-1", team.StatusIdle), agentPane("w2:p2", "エージェント", team.StatusIdle), agentPane("w2:p3", "c\n3", team.StatusIdle),
 	}}}})
-	s := notice.NewMutes()
+	s := notice.NewMutes(nil)
 	for _, w := range []string{"ha-coder-1", "c2", "w1:p3", "sk-qa-1", "エージェント", "c\n3"} {
-		_, err := s.Mute(m, w, 0, t0)
+		_, err := s.Mute(t.Context(), m, w, 0, t0)
 		require.NoError(t, err, w)
 	}
 	assert.Len(t, s.List(t0), 6)
 	for _, w := range []string{"c 3", "c3", "エージェント ", "HA-CODER-1"} {
-		_, err := s.Mute(m, w, 0, t0)
+		_, err := s.Mute(t.Context(), m, w, 0, t0)
 		require.ErrorIs(t, err, notice.ErrUnknownWorker, "%q: a name is matched byte for byte, as herdr reports it", w)
 	}
 	assert.True(t, s.Muted(notice.Notice{Worker: "c\n3", Kind: notice.Blocked}, t0), "a notice names it as herdr does")
@@ -111,8 +114,8 @@ func TestMuteTakesEveryName(t *testing.T) {
 // another worker or about no worker. A nil Mutes mutes no one.
 func TestMutedKinds(t *testing.T) {
 	t.Parallel()
-	s := notice.NewMutes()
-	_, err := s.Mute(muteTeam(), "c2", 0, t0)
+	s := notice.NewMutes(nil)
+	_, err := s.Mute(t.Context(), muteTeam(), "c2", 0, t0)
 	require.NoError(t, err)
 	for _, k := range notice.Kinds {
 		assert.Equal(t, k != notice.CtxCeiling, s.Muted(about("c2", k), t0), "%s", k)
@@ -127,15 +130,15 @@ func TestMutedKinds(t *testing.T) {
 // worker with none, or whose mute ended, is no refusal.
 func TestUnmute(t *testing.T) {
 	t.Parallel()
-	s := notice.NewMutes()
-	_, err := s.Mute(muteTeam(), "c2", time.Minute, t0)
+	s := notice.NewMutes(nil)
+	_, err := s.Mute(t.Context(), muteTeam(), "c2", time.Minute, t0)
 	require.NoError(t, err)
 	assert.True(t, s.Unmute("c2", t0.Add(time.Second)))
 	assert.False(t, s.Muted(about("c2", notice.Blocked), t0.Add(time.Second)))
 	assert.False(t, s.Unmute("c2", t0.Add(time.Second)), "none left")
 	assert.False(t, s.Unmute("nobody", t0))
 
-	_, err = s.Mute(muteTeam(), "c2", time.Minute, t0)
+	_, err = s.Mute(t.Context(), muteTeam(), "c2", time.Minute, t0)
 	require.NoError(t, err)
 	assert.False(t, s.Unmute("c2", t0.Add(time.Minute)), "one that ended was not in force")
 }
@@ -144,10 +147,10 @@ func TestUnmute(t *testing.T) {
 // or longer.
 func TestMuteAgainSetsItsEnd(t *testing.T) {
 	t.Parallel()
-	s := notice.NewMutes()
-	_, err := s.Mute(muteTeam(), "c2", time.Hour, t0)
+	s := notice.NewMutes(nil)
+	_, err := s.Mute(t.Context(), muteTeam(), "c2", time.Hour, t0)
 	require.NoError(t, err)
-	_, err = s.Mute(muteTeam(), "c2", time.Minute, t0)
+	_, err = s.Mute(t.Context(), muteTeam(), "c2", time.Minute, t0)
 	require.NoError(t, err)
 	assert.False(t, s.Muted(about("c2", notice.Blocked), t0.Add(time.Minute)))
 	assert.Equal(t, []notice.Mute{}, s.List(t0.Add(time.Minute)))
@@ -157,10 +160,10 @@ func TestMuteAgainSetsItsEnd(t *testing.T) {
 // forgotten; none is an empty list, never null.
 func TestMuteList(t *testing.T) {
 	t.Parallel()
-	s := notice.NewMutes()
+	s := notice.NewMutes(nil)
 	assert.Equal(t, []notice.Mute{}, s.List(t0))
 	for w, d := range map[string]time.Duration{"w1:p3": time.Hour, "c2": time.Minute, "ha-coder-1": 2 * time.Hour} {
-		_, err := s.Mute(muteTeam(), w, d, t0)
+		_, err := s.Mute(t.Context(), muteTeam(), w, d, t0)
 		require.NoError(t, err)
 	}
 	assert.Equal(t, []notice.Mute{
@@ -179,13 +182,13 @@ func TestMuteList(t *testing.T) {
 // the daemon does (run with -race).
 func TestMutesAreSafeAcrossGoroutines(t *testing.T) {
 	t.Parallel()
-	s := notice.NewMutes()
+	s := notice.NewMutes(nil)
 	m := muteTeam()
 	var wg sync.WaitGroup
 	for range 4 {
 		wg.Go(func() {
 			for range 100 {
-				_, _ = s.Mute(m, "c2", time.Minute, t0)
+				_, _ = s.Mute(t.Context(), m, "c2", time.Minute, t0)
 				s.Unmute("c2", t0)
 			}
 		})
@@ -197,7 +200,41 @@ func TestMutesAreSafeAcrossGoroutines(t *testing.T) {
 		})
 	}
 	wg.Wait()
-	_, err := s.Mute(m, "c2", time.Minute, t0)
+	_, err := s.Mute(t.Context(), m, "c2", time.Minute, t0)
 	require.NoError(t, err)
 	assert.True(t, s.Muted(about("c2", notice.Blocked), t0))
+}
+
+// TestMuteMatchesOnlyTheWorkerGeneration isolates row identity from cleanup (NERD-5730).
+func TestMuteMatchesOnlyTheWorkerGeneration(t *testing.T) {
+	t.Parallel()
+	const id = "ha-coder-1"
+	model := func(terminal, status string, generation int64) team.Model {
+		return team.Build(team.Layout{
+			Workspaces: []herdr.WorkspaceInfo{{WorkspaceID: "w1", Label: "ha"}},
+			Tabs:       []herdr.TabInfo{{TabID: "w1:t1", WorkspaceID: "w1", Label: id}},
+			Panes:      []herdr.PaneInfo{{PaneID: "w1:p1", WorkspaceID: "w1", TabID: "w1:t1", TerminalID: terminal, Agent: "claude", AgentStatus: status}},
+		}, team.Tabs{Project: "ha", Short: "ha"}, []store.Worker{{LogicalID: id, TerminalID: terminal, Generation: generation}})
+	}
+	s := notice.NewMutes(nil)
+	_, err := s.Mute(t.Context(), model("old", "idle", 0), id, 0, t0)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		terminal   string
+		generation int64
+		muted      bool
+	}{
+		{terminal: "rotated", generation: 0, muted: true},
+		{terminal: "reused", generation: 1, muted: false},
+	} {
+		w := notice.NewWatch()
+		w.Observe(model(tc.terminal, "idle", tc.generation), nil, true)
+		got := w.Observe(model(tc.terminal, "blocked", tc.generation), nil, true)
+		require.Len(t, got, 1)
+		assert.Equal(t, tc.muted, s.Muted(got[0], t0), tc.terminal)
+	}
+	fresh, err := s.Mute(t.Context(), model("reused", "idle", 1), id, 0, t0)
+	require.NoError(t, err)
+	assert.False(t, s.ClearWorker(id, 0, t0), "a late clear cannot remove the next generation's mute")
+	assert.Equal(t, []notice.Mute{fresh}, s.List(t0))
 }

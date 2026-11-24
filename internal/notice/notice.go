@@ -9,6 +9,8 @@ import (
 	"context"
 	"slices"
 	"time"
+
+	"github.com/abanna/herdr-agentisan/internal/team"
 )
 
 // Kind is what a notice reports. The names are the configuration's
@@ -87,6 +89,7 @@ type Notice struct {
 	// (WorkerName); "" for a notice about no worker, which no mute silences.
 	Worker string
 	Kind   Kind
+	scope  muteScope
 	// Text is the line itself.
 	Text string
 	// Ack, when set, runs once the notice is settled: kept in the message
@@ -99,6 +102,14 @@ type Notice struct {
 	// in an earlier message that a later append to that message, still
 	// queued, cuts is not told again; the header counts it.
 	Ack func()
+}
+
+// workerNotice carries the worker's mute scope as observed with the notice.
+func workerNotice(project string, w team.Worker, kind Kind, text string) Notice {
+	return Notice{
+		Project: project, Subject: w.Pane.ID, Worker: WorkerName(w), Kind: kind, Text: text,
+		scope: muteScope{bound: w.Bound, generation: w.Generation},
+	}
 }
 
 // Config is how one team's boss is told.

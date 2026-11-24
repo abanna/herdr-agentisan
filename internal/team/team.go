@@ -96,6 +96,9 @@ type Worker struct {
 	// provisional id only lasts as long as the pane's.
 	ID    string
 	Bound bool
+	// Generation identifies this worker row across pane changes (NERD-5730).
+	// It is meaningful only for a bound worker.
+	Generation int64
 	// Target is where the worker sits; zero for the boss.
 	Target Target
 	Pane   Pane
@@ -212,7 +215,7 @@ func (rs Resolvers) Resolve(l Layout) Resolution {
 // team with a site is in the model even with no pane placed in it. A row
 // binds the pane herdr lists with its terminal, never the pane at its pane
 // id, which herdr can reissue (A35); a lost row, or one with no terminal,
-// binds none. The join gives ids only; where a worker sits is the
+// binds none. The join gives ids and generations. Where a worker sits is the
 // resolver's, so a bound pane moved into another group's tab is counted
 // where it is. A row whose terminal herdr no longer lists has no current
 // pane and is not in the model. When two rows bind one terminal, the lowest
@@ -221,7 +224,7 @@ func (rs Resolvers) Resolve(l Layout) Resolution {
 // agent.list's names join by pane id the same way: an empty name names
 // nothing, and when it lists one pane twice the lowest name takes it.
 func Build(l Layout, r Resolver, workers []store.Worker) Model {
-	ids := Bindings(workers)
+	bindings := workerBindings(workers)
 	names := agentNames(l.Agents)
 
 	projects := map[string]*Project{}
@@ -244,7 +247,7 @@ func Build(l Layout, r Resolver, workers []store.Worker) Model {
 		pr := project(pl.Project)
 		ws := make([]Worker, 0, len(pl.Panes))
 		for _, p := range pl.Panes {
-			ws = append(ws, worker(p, pl.Target, ids, names))
+			ws = append(ws, worker(p, pl.Target, bindings, names))
 		}
 		if pl.Boss {
 			pr.Boss = append(pr.Boss, ws...)
@@ -282,16 +285,30 @@ func Build(l Layout, r Resolver, workers []store.Worker) Model {
 // binds it, as Build joins them: a lost row, or one with no terminal, binds
 // none, and when two rows bind one terminal the lowest logical id takes it.
 func Bindings(workers []store.Worker) map[string]string {
-	ids := map[string]string{}
+	bindings := workerBindings(workers)
+	ids := make(map[string]string, len(bindings))
+	for terminal, row := range bindings {
+		ids[terminal] = row.id
+	}
+	return ids
+}
+
+type binding struct {
+	id         string
+	generation int64
+}
+
+func workerBindings(workers []store.Worker) map[string]binding {
+	out := map[string]binding{}
 	for _, w := range workers {
 		if w.TerminalID == "" || w.Status == store.StatusLost {
 			continue
 		}
-		if id, taken := ids[w.TerminalID]; !taken || w.LogicalID < id {
-			ids[w.TerminalID] = w.LogicalID
+		if row, taken := out[w.TerminalID]; !taken || w.LogicalID < row.id {
+			out[w.TerminalID] = binding{id: w.LogicalID, generation: w.Generation}
 		}
 	}
-	return ids
+	return out
 }
 
 // agentNames gives each pane agent.list's name for its agent: an empty name
@@ -306,16 +323,16 @@ func agentNames(agents []herdr.AgentInfo) map[string]string {
 	return names
 }
 
-// worker is pane p at t, with the logical id ids gives its terminal.
-func worker(p herdr.PaneInfo, t Target, ids, names map[string]string) Worker {
+// worker is pane p at t, with the row bound to its terminal if one exists.
+func worker(p herdr.PaneInfo, t Target, bindings map[string]binding, names map[string]string) Worker {
 	w := Worker{ID: p.PaneID, Target: t, Pane: Pane{
 		ID: p.PaneID, Name: names[p.PaneID], Label: p.Label, Agent: p.Agent,
 		Status: statusOf(p.AgentStatus), Handoff: p.Tokens[HandoffKey] != "",
 		Ctx: ctxOf(p), Item: p.Tokens[report.ItemKey], Stage: p.Tokens[report.StageKey],
 		TabID: p.TabID, TerminalID: p.TerminalID,
 	}}
-	if id, ok := ids[p.TerminalID]; ok {
-		w.ID, w.Bound = id, true
+	if row, ok := bindings[p.TerminalID]; ok {
+		w.ID, w.Bound, w.Generation = row.id, true, row.generation
 	}
 	if at, ok := report.ParseStageAt(p.Tokens[report.StageAtKey]); ok {
 		w.Pane.StageAt = at
