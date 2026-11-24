@@ -437,6 +437,7 @@ type shape struct {
 	elem     *shape
 	required []string
 	time     bool
+	nonNull  bool
 }
 
 var (
@@ -489,6 +490,9 @@ func walk(dec *json.Decoder, s *shape) error {
 	tok, err := dec.Token()
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if s != nil && s.nonNull && tok == nil {
+		return fmt.Errorf("%w: null scalar", ErrInvalid)
 	}
 	if s != nil && s.time {
 		if str, ok := tok.(string); (ok && !rfc3339.MatchString(str)) || (!ok && tok != nil) {

@@ -198,7 +198,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   caller placed by the kernel's peer credentials (`peer_linux.go`,
   `peer_darwin.go`) and its process ancestry; `board.seen` moves only the
   caller's own read mark, forward and never past the newest post, and each
-  snapshot carries the user's unread count, when there is one. It keeps
+  snapshot carries the user's unread count, when there is one.
+  `boss.snapshot` (NERD-5748) shares board caller placement, accepts only
+  the boss place, and reads the named poll's own-team projection and one
+  atomic board metadata result without advancing marks or ending waits. It keeps
   herdr's agent view on the focused team, which focus events and the poll
   feed it, and clears it outside every team and on a clean stop (`view.go`,
   the A28 addendum, A49).
@@ -445,6 +448,8 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   The daemon's `snapshot` op serves it; `FileSource` reads a fixture.
   Its optional `project.board_unread` is the user's unread count (A60),
   omitted at zero; post text never goes in a snapshot.
+  `herdr-agentisan boss snapshot [--json]` uses the separate strict
+  boss snapshot v1 contract in `bosssnapshot.go`; its text shows source ages.
 - `internal/dashboard/` — the bubbletea team dashboard and its pure renderer:
   a header box, then the groups stacked as boxes with one dense line per
   agent, in the snapshot's group order, scrolling to keep the selection in

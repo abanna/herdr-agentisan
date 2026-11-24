@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
@@ -67,8 +68,9 @@ type teams struct {
 // snapshotCache is the snapshot op's state: the last poll's teams, each
 // snapshot encoded once, so the op answers without calling herdr (D3).
 type snapshotCache struct {
-	mu  sync.Mutex
-	cur *teams
+	mu   sync.Mutex
+	cur  *teams
+	boss atomic.Pointer[bossPoll]
 }
 
 // store serves every team in m from now on, each snapshot built at at with

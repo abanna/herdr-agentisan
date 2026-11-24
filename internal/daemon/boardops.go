@@ -356,12 +356,11 @@ type paneProber interface {
 	PaneProcessInfo(ctx context.Context, paneID string) (herdr.ProcessInfo, error)
 }
 
-// newBoardOps are the board ops on st, each caller placed in the team
-// poll's last model (view) by its processes, as herdr's client and the
-// OS's process table tell them (A60).
-func (o Options) newBoardOps(st *store.Store, view func() (*team.Model, map[string]string)) map[string]op {
+// boardPlacer places read callers using the team poll's latest model and
+// the daemon's server-pinned herdr client.
+func (o Options) boardPlacer(view func() (*team.Model, map[string]string)) placer {
 	c, _ := o.Herdr.(herdr.Client)
-	return boardOps(st, placeBoardCaller(view, c, report.SystemStat(), os.Getuid()))
+	return placeBoardCaller(view, c, report.SystemStat(), os.Getuid())
 }
 
 // placeBoardCaller places a caller (A60): in a team's boss place, for a tabs

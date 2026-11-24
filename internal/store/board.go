@@ -353,15 +353,14 @@ type querier interface {
 // boardState is where reader stands on project's board, read through q.
 func boardState(ctx context.Context, q querier, project, reader string) (BoardState, error) {
 	var st BoardState
-	err := q.QueryRowContext(ctx, `SELECT
-		coalesce((SELECT max(seq) FROM board_posts WHERE project = ?1), 0),
-		coalesce((SELECT seq FROM board_marks WHERE project = ?1 AND reader = ?2), 0)`, project, reader).Scan(&st.Newest, &st.Mark)
+	err := q.QueryRowContext(ctx, `WITH mark(seq) AS (
+		SELECT coalesce((SELECT seq FROM board_marks WHERE project = ?1 AND reader = ?2), 0)
+	)
+	SELECT coalesce((SELECT max(seq) FROM board_posts WHERE project = ?1), 0), mark.seq,
+		(SELECT count(*) FROM board_posts WHERE project = ?1 AND seq > mark.seq)
+	FROM mark`, project, reader).Scan(&st.Newest, &st.Mark, &st.Unread)
 	if err != nil {
 		return BoardState{}, fmt.Errorf("%w: read %q's board: %w", ErrStore, project, err)
-	}
-	err = q.QueryRowContext(ctx, "SELECT count(*) FROM board_posts WHERE project = ? AND seq > ?", project, st.Mark).Scan(&st.Unread)
-	if err != nil {
-		return BoardState{}, fmt.Errorf("%w: count %q's unread posts: %w", ErrStore, project, err)
 	}
 	return st, nil
 }

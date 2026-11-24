@@ -307,6 +307,9 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 		if err := tp.cache.store(m, now, tp.stages, tp.idle, fill); err != nil {
 			o.Logger.Error().Err(err).Msg("team poll: cache the snapshots; a team too large to serve keeps its last one")
 		}
+		if rowsErr == nil {
+			o.publishBossPoll(tp.cache, m, rows, now, tp.idle, started)
+		}
 	}
 	for _, t := range team.Tokens(m) {
 		// Once ctx ends, each push fails before it dials.

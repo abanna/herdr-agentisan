@@ -634,8 +634,11 @@ func TestManifestMatchesTheBinary(t *testing.T) {
 	assert.Contains(t, string(taskfile), "-o {{.BINARY_DIR}}/herdr-agentisan ./cmd/herdr-agentisan")
 
 	// Every argv herdr runs of this binary: the actions, the startup hooks
-	// and the panes that run it (btop's runs btop).
-	argvs := map[string][]string{}
+	// and the panes that run it (btop's runs btop). Also check the boss's
+	// CLI-only snapshot entry point.
+	argvs := map[string][]string{
+		"boss snapshot (NERD-5748)": {m.BuildOutput(), "boss", "snapshot"},
+	}
 	for _, a := range m.Actions {
 		argvs["action "+a.ID] = a.Command
 	}
