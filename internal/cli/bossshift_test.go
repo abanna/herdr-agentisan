@@ -30,8 +30,8 @@ func TestBossModelReadbackRejectsLaunchFallbackAndStaleToken(t *testing.T) {
 	require.NoError(t, err)
 	started, err := wall(proc.Start)
 	require.NoError(t, err)
-	launch := started.UnixMilli()
-	time.Sleep(time.Until(started.Add(7 * time.Second))) // The test process models the pinned Claude.
+	startedMS := started.UnixMilli()
+	launch := startedMS - 60_000
 	fresh := time.Now().UnixMilli()
 	tests := []struct {
 		name, model, requested, terminal, reason string
@@ -39,8 +39,8 @@ func TestBossModelReadbackRejectsLaunchFallbackAndStaleToken(t *testing.T) {
 		pin                                      uint64
 	}{
 		{"argv only", "", "fable", "term", "missing_model", 0, launch, 0},
-		{"before launch", "fable", "fable", "term", "stale_report", launch, launch + 1, 0},
-		{"before Claude", "fable", "fable", "term", "stale_report", launch - 1, launch - 2, 0},
+		{"before launch", "fable", "fable", "term", "stale_report", startedMS, startedMS + 1, 0},
+		{"before Claude", "fable", "fable", "term", "stale_report", startedMS - 1, launch, 0},
 		{"future", "fable", "fable", "term", "invalid_report_time", fresh + 60000, launch, 0},
 		{"first observation", "fable", "fable", "term", "awaiting_pin", fresh, launch, 0},
 		{"wrong terminal", "fable", "fable", "different", "candidate_changed", fresh, launch, 0},
@@ -163,7 +163,7 @@ func TestShiftScriptWaitsForPostPinRefresh(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 52, strings.Count(s.read("calls"), shiftCheck))
 	require.Equal(t, strings.Repeat("2\n", 51), s.read("sleeps"))
-	require.Equal(t, 1, strings.Count(out, "waiting up to about a minute"))
+	require.Equal(t, 1, strings.Count(out, "run this with a shell timeout of at least"))
 	require.NotContains(t, out, "probe refused")
 }
 
@@ -173,7 +173,34 @@ func TestShiftScriptExplainsRetryableExhaustion(t *testing.T) {
 	out, err := s.invoke("old", "report_before_pin", "open")
 	require.Error(t, err)
 	require.Equal(t, 50, strings.Count(s.read("calls"), shiftCheck))
-	require.Contains(t, out, "wait up to 60 s, run shift.sh status; abort only on wrong_model or candidate_changed")
+	require.Contains(t, out, "shift.sh go verifies again")
+	const advice = "run this with a shell timeout of at least 300 s"
+	require.Contains(t, out, advice)
+	require.Less(t, strings.Index(out, advice), strings.Index(out, "starting candidate"))
+	require.Contains(t, s.read("shift.sh"), "at least 300 s")
+	guide, err := os.ReadFile(filepath.Join("..", "..", "docs", "boss-shift-model.md"))
+	require.NoError(t, err)
+	require.Contains(t, string(guide), "at least 300 s")
+}
+
+func TestShiftScriptOpenDeadline(t *testing.T) {
+	t.Parallel()
+	for verdict, hint := range map[string]string{
+		"claude_unavailable": "Claude is not running; abort and open again",
+		"no_pin":             "no candidate process pin; abort and open again",
+		"report_before_pin":  "shift.sh go verifies again",
+	} {
+		t.Run(verdict, func(t *testing.T) {
+			t.Parallel()
+			s := setupShiftScript(t)
+			s.write("clock", "sleep() { command sleep \"$@\"; SECONDS=$((SECONDS+$1)); }\n")
+			out, err := s.invoke("old", verdict, "open", "SHIFT_OPEN_DEADLINE=7", "BASH_ENV="+s.path("clock"))
+			require.Error(t, err)
+			require.LessOrEqual(t, strings.Count(s.read("calls"), shiftCheck), 4)
+			require.Contains(t, out, hint)
+			require.Contains(t, out, "run this with a shell timeout of at least 17 s")
+		})
+	}
 }
 
 func TestShiftScriptWithholdsCloseAfterGoOnModelRefusal(t *testing.T) {
@@ -342,7 +369,7 @@ case "$1 $2" in
                 else
                   echo '{"result":{"pane":{"pane_id":"new","terminal_id":"split-terminal"}}}'
                 fi ;;
-  "agent start") ;;
+  "agent start") echo "starting candidate" >&2 ;;
   "agent prompt") [ "${FAIL_PROMPT:-0}" = 0 ] || exit 9
                   echo "$*" >> "$SHIFT_ROOT/cues" ;;
   "pane close") echo "$3" >> "$SHIFT_ROOT/close" ;;
@@ -354,6 +381,10 @@ esac
 [ "$4" != --help ] || { printf "%s\n" "--pinned-at"; exit 0; }
 verdict=$MODEL_VERDICT
 pid=100 start=200
+if [ "$verdict" = claude_unavailable ]; then
+  if [ -e "$SHIFT_ROOT/calls" ]; then pid=0 start=0; else verdict=awaiting_pin; fi
+fi
+if [ "$verdict" = no_pin ]; then verdict=missing_model; pid=0 start=0; fi
 if [ "$verdict" = missing_once ]; then
   if [ -e "$SHIFT_ROOT/calls" ]; then verdict=verified; else verdict=missing_model; fi
 fi
