@@ -155,6 +155,11 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   `docs/config/claude-hooks.example.json` and
   `docs/config/codex-turn-hooks.example.toml`). They read `HERDR_PANE_ID`, a
   pane-shell variable, which is why it is not in `plugin.Env`.
+- `internal/bossshift/` — the interim boss shift model gate (NERD-5262).
+  `boss shift check-model` reads a fresh Claude model on the recorded
+  terminal and returns a JSON verdict, with the observed process identity
+  for the caller to pin. The team script calls it at open, GO and takeover
+  through the adapter in `docs/boss-shift-model.md`.
 - `internal/codexhooks/` — installing the `ctx` Codex hooks (ADR-001 A43):
   `codex hooks` writes them into `$CODEX_HOME/hooks.json`, after every entry
   already there, which it keeps as written, and never edits `config.toml` or
