@@ -21,6 +21,7 @@ func startSupervisor(ctx context.Context) (*exec.Cmd, *os.File, error) {
 	defer func() { _ = in.Close() }()
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", watchLifeline)
 	cmd.Cancel = nil
+	cmd.Env = []string{}
 	cmd.Stdin = in
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	ready, err := cmd.StdoutPipe()
