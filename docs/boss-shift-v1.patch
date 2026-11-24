@@ -28,18 +28,19 @@
 +    [ -n "$2" ] && [ "$({ herdr pane get "$1" 2>/dev/null | field result.pane.terminal_id 2>/dev/null; } || true)" = "$2" ] &&
 +      herdr pane close "$1" >/dev/null
 +}
-@@ -50,2 +71,4 @@
+@@ -50,7 +71,15 @@
 -    who=$(herdr agent get "$BOSS" | field result.agent.pane_id)
 -    [ "$who" = "$old" ] || die "agent $BOSS is on pane '$who', and I am on '$old': refusing"
-+    help=$("$PLUGIN" boss shift check-model --help 2>/dev/null) && [[ "$help" == *"--session-id"* ]] ||
-+      die "install a herdr-agentisan build with boss shift check-model, or set SHIFT_PLUGIN to its path"
-+    me=$(herdr agent get "$BOSS"); who=$(field result.agent.pane_id <<< "$me"); oldterm=$(field result.agent.terminal_id <<< "$me")
-+    [ "$who" = "$old" ] && [ -n "$oldterm" ] || die "agent $BOSS is on pane '$who' (terminal '$oldterm'), and I am on '$old': refusing"
-@@ -53,4 +76,10 @@
+-    dir=$ROOT/$(date +%Y%m%d-%H%M%S); mkdir -p "$dir"
 -    new=$(herdr pane split "$old" --direction right --no-focus --cwd "$REPO" | field result.pane.pane_id)
 -    [ -n "$new" ] || die "the split returned no pane id"
 -    printf 'old=%s\nnew=%s\nboss=%s\nnext=%s\nopened=%s\nmodel=%s\neffort=%s\n' "$old" "$new" "$BOSS" "$NEXT" "$(date +%H:%M:%S)" "$MODEL" "$EFFORT" > "$dir/state"
 -    ln -s "$dir" "$CUR"
++    help=$("$PLUGIN" boss shift check-model --help 2>/dev/null) && [[ "$help" == *"--session-id"* ]] ||
++      die "install a herdr-agentisan build with boss shift check-model, or set SHIFT_PLUGIN to its path"
++    me=$(herdr agent get "$BOSS"); who=$(field result.agent.pane_id <<< "$me"); oldterm=$(field result.agent.terminal_id <<< "$me")
++    [ "$who" = "$old" ] && [ -n "$oldterm" ] || die "agent $BOSS is on pane '$who' (terminal '$oldterm'), and I am on '$old': refusing"
++    mkdir -p "$ROOT"; dir=$(mktemp -d "$ROOT/$(date +%Y%m%d-%H%M%S)-XXXXXX")
 +    session=$(python3 -c 'import uuid;print(uuid.uuid4())')
 +    ln -sn "$dir" "$CUR" || die "another open took the shift ($(readlink "$CUR")); nothing written"
 +    # the record comes before the split, so a lost split reply still leaves one: status and abort say what to do
@@ -49,7 +50,7 @@
 +    new=$(field result.pane.pane_id <<< "$split" 2>/dev/null || true); terminal=$(field result.pane.terminal_id <<< "$split" 2>/dev/null || true)
 +    printf 'new=%s\nterminal=%s\n' "$new" "$terminal" >> "$dir/state"
 +    [ -n "$new" ] && [ -n "$terminal" ] || die "the split returned no pane or terminal id: close the new pane (${new:-unknown}) by hand, then run: shift.sh abort"
-+    [ "$(readlink "$CUR")" = "$dir" ] || { close_checked "$new" "$terminal"; die "the shift ended during the split; closed the new pane $new if it was the candidate's"; }
++    { [ "$(readlink "$CUR")" = "$dir" ] && [ ! -e "$dir/ABORTED" ]; } || { close_checked "$new" "$terminal"; die "the shift ended during the split; closed the new pane $new if it was the candidate's"; }
 @@ -58 +87 @@
 -    herdr agent start "$NEXT" --kind claude --pane "$new" --timeout 90000 -- --name "$NEXT" --model "$MODEL" --effort "$EFFORT" >/dev/null \
 +    herdr agent start "$NEXT" --kind claude --pane "$new" --timeout 90000 -- --name "$NEXT" --model "$MODEL" --effort "$EFFORT" --session-id "$session" >/dev/null \
@@ -78,7 +79,7 @@
 -    herdr agent prompt "$(val next)" "From the outgoing boss: GO. You have the picture. Run: $here/shift.sh takeover" >/dev/null
 +    [ ! -e "$CUR/GO-CUED" ] || die "GO is already recorded and the candidate cued (run: shift.sh status)"
 +    candidate_ready || die "the candidate is not verified; nothing was sent"
-+    [ -e "$CUR/GO" ] || { date +%H:%M:%S > "$CUR/GO.tmp" && mv "$CUR/GO.tmp" "$CUR/GO"; }
++    [ -e "$CUR/GO" ] || { date +%H:%M:%S > "$CUR/GO.tmp" && mv "$CUR/GO.tmp" "$CUR/GO"; } || die "GO could not be written; nothing was sent"
 +    herdr agent prompt "$(val next)" "From the outgoing boss: GO. You have the picture. Run: $here/shift.sh takeover" >/dev/null ||
 +      die "GO is recorded but the cue failed: run shift.sh go again"
 +    touch "$CUR/GO-CUED"

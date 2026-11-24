@@ -182,12 +182,32 @@ func TestShiftOpenRefusesAnOutgoingAgentWithoutATerminal(t *testing.T) {
 
 func TestShiftOpenStopsWhenTheShiftEndsDuringTheSplit(t *testing.T) {
 	t.Parallel()
+	// An abort that has removed current, and one that has written ABORTED but not yet moved current.
+	for name, hook := range map[string]string{"current removed": `rm "$SHIFT_ROOT/current"`, "ABORTED written": `touch "$SHIFT_ROOT/current/ABORTED"`} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := setupShiftScript(t)
+			out, err := s.invoke("old", "verified", "open", "ON_SPLIT="+hook)
+			require.Error(t, err)
+			require.Contains(t, out, "ended during the split")
+			require.NoFileExists(t, s.path("starts"))
+			require.Equal(t, "new\n", s.read("close"), "the pane the split made is closed")
+		})
+	}
+}
+
+// An aborted open whose split replies late must not touch the shift that replaced it,
+// even when the abort and the reopen happen in the same second.
+func TestShiftOpenOfAnAbortedShiftNeverTouchesItsReplacement(t *testing.T) {
+	t.Parallel()
 	s := setupShiftScript(t)
-	out, err := s.invoke("old", "verified", "open", `ON_SPLIT=rm "$SHIFT_ROOT/current"`)
+	reopen := `[ -e "$SHIFT_ROOT/nested" ] || { touch "$SHIFT_ROOT/nested"; bash "$SHIFT_ROOT/shift.sh" abort; bash "$SHIFT_ROOT/shift.sh" open; } >/dev/null 2>&1`
+	_, err := s.invoke("old", "verified", "open", "ON_SPLIT="+reopen)
 	require.Error(t, err)
-	require.Contains(t, out, "ended during the split")
-	require.NoFileExists(t, s.path("starts"))
-	require.Equal(t, "new\n", s.read("close"), "the pane the split made is closed")
+	require.Equal(t, 1, strings.Count(s.read("starts"), "agent start"), "only the replacement launches Claude")
+	replacement, err := os.Readlink(s.path("current"))
+	require.NoError(t, err)
+	require.Regexp(t, `/20261124-000000-[A-Za-z0-9]{6}$`, replacement)
 }
 
 func TestShiftOpenLeavesAnActiveShiftsRecordAlone(t *testing.T) {
@@ -288,6 +308,21 @@ func TestShiftGoWritesOnlyAfterAPinnedProof(t *testing.T) {
 	require.Contains(t, calls, "--pid 100 --start 200")
 	require.NotContains(t, calls, "pinned-at")
 	require.Error(t, s.run("old", "verified", "go"), "a recorded GO cannot be repeated")
+}
+
+func TestShiftGoNeverCuesWithoutAWrittenGO(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	require.NoError(t, s.run("old", "verified", "open"))
+	require.NoError(t, s.run("old", "verified", "brief"))
+	s.account()
+	require.NoError(t, os.Mkdir(s.path("current/GO.tmp"), 0o700), "GO.tmp cannot be written")
+	out, err := s.invoke("old", "verified", "go")
+	require.Error(t, err)
+	require.Contains(t, out, "GO could not be written")
+	require.Zero(t, strings.Count(s.read("cues"), "takeover"))
+	require.NoFileExists(t, s.path("current/GO"))
+	require.NoFileExists(t, s.path("current/GO-CUED"))
 }
 
 func TestShiftGoRetriesAFailedCue(t *testing.T) {

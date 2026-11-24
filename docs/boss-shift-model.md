@@ -38,10 +38,13 @@ printf '%s  %s\n' a9d92216ec0324c87372ed9fb38579568a57dcf72460d4e9366098abc3d384
 
 ## What each command does
 
-- `open` claims the shift, records the old terminal, launch time and session
-  id, then splits, saves the candidate's pane and terminal, and starts Claude
-  with that id. It reads no model. If the shift ended during the split, it
-  closes the new pane and stops.
+- `open` makes a shift folder of its own, `<root>/YYYYMMDD-HHMMSS-XXXXXX`, and
+  claims it by making `current` a link to it, so an aborted open can never
+  write into its replacement's folder. It records the old terminal, launch time
+  and session id, then splits, saves the candidate's pane and terminal, and
+  starts Claude with that id. It reads no model. If the shift ended during the
+  split (`current` gone, or `ABORTED` in the folder) it closes the new pane and
+  stops.
 - `brief` saves the Claude's pid and start once, then proves it and its model
   on every run, and only then sends the instructions.
 - `go` and `takeover` prove the same again. `takeover` closes the old pane only
@@ -61,9 +64,9 @@ printf '%s  %s\n' a9d92216ec0324c87372ed9fb38579568a57dcf72460d4e9366098abc3d384
 - **A missing, stale or foreign report.** Wait for the next statusline report,
   fix the hook, or abort. A refused `brief` sent nothing: run it again.
 
-If GO was recorded but its cue failed, run `go` again: it rechecks, keeps the
-GO and records a delivered cue in `GO-CUED` (a failed prompt reply can be
-ambiguous). `SHIFT_MODEL_SEEN` no longer does anything.
+If `go` cannot write GO it stops before any cue. If GO was recorded but its cue
+failed, run `go` again: it rechecks, keeps the GO and records a delivered cue
+in `GO-CUED` (a failed prompt reply can be ambiguous). `SHIFT_MODEL_SEEN` no longer does anything.
 
 ## Known limits
 
