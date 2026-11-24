@@ -20,13 +20,16 @@ func (s BossSnapshot) WriteText(w io.Writer) error {
 		out = fmt.Appendf(out, " · mark %d · newest %d · unread %d", *s.Board.Mark, *s.Board.Newest, *s.Board.Unread)
 	}
 	out = append(out, '\n')
-	if s.Boss == nil {
-		out = append(out, "Boss unknown\n"...)
-	} else {
+	switch {
+	case s.Boss != nil:
 		out = append(out, "Boss "...)
 		out = appendBossRow(out, s.Boss.BossRow)
 		out = appendBossTime(out, " started=", s.Boss.StartedAt)
 		out = append(out, '\n')
+	case s.MissingBossName != nil:
+		out = fmt.Appendf(out, "Boss unknown (no agent named %s)\n", *s.MissingBossName)
+	default:
+		out = append(out, "Boss unknown\n"...)
 	}
 
 	textOmitted := 0

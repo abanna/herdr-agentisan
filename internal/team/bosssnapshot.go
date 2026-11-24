@@ -11,13 +11,17 @@ import (
 // BossSnapshot projects one team's named poll after GateCtx for NERD-5748.
 func BossSnapshot(p Project, at time.Time, idle *IdleClock, started map[string]time.Time, rows map[string]store.Worker) snapshot.BossSnapshot {
 	out := snapshot.BossSnapshot{V: snapshot.BossVersion, Team: p.Name, Groups: []snapshot.BossGroup{}}
+	bossName := p.Short + "-boss"
 	var boss Pane
 	matches := 0
 	for _, w := range p.Boss {
-		if w.Pane.Name == p.Short+"-boss" {
+		if w.Pane.Name == bossName {
 			boss = w.Pane
 			matches++
 		}
+	}
+	if matches == 0 {
+		out.MissingBossName = &bossName
 	}
 	if matches == 1 && bossField(boss.ID) != nil {
 		start := started[boss.ID]

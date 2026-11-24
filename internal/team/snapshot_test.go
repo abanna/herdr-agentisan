@@ -6,6 +6,7 @@ import (
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
+	"github.com/abanna/herdr-agentisan/internal/store"
 	"github.com/abanna/herdr-agentisan/internal/team"
 )
 
@@ -495,6 +497,20 @@ func groupNames(s snapshot.Snapshot) []string {
 // team model's working order (team.TypeOrder); another resolver gives its
 // own, and the builder hard-codes none. Names match exactly, as the
 // resolver matches them.
+func TestBossSnapshotOmitsMismatchedBindingAndOversizedStage(t *testing.T) {
+	t.Parallel()
+	pane := team.Pane{ID: "pane", TerminalID: "current", Stage: strings.Repeat("s", snapshot.MaxBossFieldBytes+1), StageAt: at}
+	worker := team.Worker{ID: "al-coder-1", Bound: true, Pane: pane}
+	project := team.Project{Name: "alpha", Short: "al", Groups: []team.Group{{Name: "coder", Workers: []team.Worker{worker}}}}
+	rows := map[string]store.Worker{worker.ID: {Project: project.Name, TerminalID: "previous", Generation: 2}}
+	got := team.BossSnapshot(project, at, nil, nil, rows).Groups[0].Workers[0]
+	assert.Nil(t, got.ID)
+	assert.Nil(t, got.Generation)
+	assert.Nil(t, got.Stage)
+	assert.Nil(t, got.StageAt)
+	assert.False(t, got.StageStale)
+}
+
 func TestSnapshotGroupOrder(t *testing.T) {
 	t.Parallel()
 

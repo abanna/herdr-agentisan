@@ -16,7 +16,6 @@ import (
 
 const (
 	opBossSnapshot  = "boss.snapshot"
-	bossBudget      = 4 * time.Second
 	bossBoardBudget = time.Second
 	bossPollMaxAge  = 3
 )
@@ -28,23 +27,22 @@ type bossPoll struct {
 	teams map[string]snapshot.BossSnapshot
 }
 
-func (o Options) publishBossPoll(cache *snapshotCache, m team.Model, rows []store.Worker, at time.Time, idle *team.IdleClock, started map[string]time.Time) {
+func publishBossPoll(cache *snapshotCache, m team.Model, rows []store.Worker, at, observed time.Time, idle *team.IdleClock, started map[string]time.Time) {
 	bindings := make(map[string]store.Worker, len(rows))
 	for _, r := range rows {
 		bindings[r.LogicalID] = r
 	}
-	next := &bossPoll{teams: make(map[string]snapshot.BossSnapshot, len(m.Projects))}
+	next := &bossPoll{at: observed.UTC(), teams: make(map[string]snapshot.BossSnapshot, len(m.Projects))}
 	for _, p := range m.Projects {
 		next.teams[p.Name] = team.BossSnapshot(p, at, idle, started, bindings)
 	}
-	next.at = o.Now().UTC()
 	cache.boss.Store(next)
 }
 
 // bossSnapshotOp reuses board placement and restricts the read to the boss
 // role. It has no board wait registry and reads only metadata (NERD-5748).
 func (o Options) bossSnapshotOp(st *store.Store, cache *snapshotCache, place placer) op {
-	return op{budget: fixed(bossBudget), run: func(ctx context.Context, args json.RawMessage) (any, error) {
+	return op{budget: opBudgets[opBossSnapshot], run: func(ctx context.Context, args json.RawMessage) (any, error) {
 		if len(args) > 0 {
 			var obj map[string]json.RawMessage
 			if json.Unmarshal(args, &obj) != nil || obj == nil || len(obj) != 0 {
@@ -115,9 +113,9 @@ func bossRefusal(code string) *workforce.RefusalError {
 	return &workforce.RefusalError{Code: code, Message: message}
 }
 
-// BossSnapshotOf asks once for the caller's boss snapshot and decodes v1.
+// BossSnapshotOf requests the caller's boss snapshot and decodes v1.
 func BossSnapshotOf(ctx context.Context, socket string) (snapshot.BossSnapshot, error) {
-	raw, err := call(ctx, socket, opBossSnapshot)
+	raw, err := Workforce(ctx, socket, opBossSnapshot, struct{}{})
 	switch {
 	case errors.Is(err, ErrUnavailable):
 		return snapshot.BossSnapshot{}, ErrUnavailable

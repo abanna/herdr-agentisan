@@ -82,6 +82,8 @@ var opBudgets = map[string]func(json.RawMessage) time.Duration{
 	OpBoardRead: fixed(BoardBudget),
 	OpBoardSeen: fixed(BoardBudget),
 	OpBoardWait: boardWaitBudget,
+	// Boss snapshot uses the same placement budget.
+	opBossSnapshot: fixed(BoardBudget),
 }
 
 func fixed(d time.Duration) func(json.RawMessage) time.Duration {

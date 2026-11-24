@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -98,6 +100,56 @@ func TestBossSnapshotPlacesCandidateInOwnTeam(t *testing.T) {
 	_, err := daemon.Workforce(t.Context(), sock, bossSnapshotOp, struct{}{})
 	assert.Equal(t, "herdr_failed", refusedWith(t, err))
 	assert.NotContains(t, err.Error(), "busy")
+}
+
+func TestBossSnapshotSharesSlowBoardPlacement(t *testing.T) {
+	t.Parallel()
+	h := shiftHerdr(t)
+	// Beta is probed after the two alpha boss panes and the agentisan boss.
+	shiftCaller(h, "w20:p0")
+	sock := startShift(t, h, shiftOpts(t, h))
+	served(t, sock, anySnapshot)
+	h.mu.Lock()
+	h.onCall = func(method string) {
+		if method == "pane.process_info" {
+			time.Sleep(1500 * time.Millisecond)
+		}
+	}
+	h.mu.Unlock()
+	_, err := daemon.Workforce(t.Context(), sock, daemon.OpBoardRead, daemon.BoardReadRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, "beta", shiftRead(t, sock).Team)
+}
+
+func TestBossSnapshotAsOfPrecedesStatusFlip(t *testing.T) {
+	t.Parallel()
+	h := shiftHerdr(t)
+	shiftCaller(h, "w14:p0")
+	o := shiftOpts(t, h)
+	o.Poll = time.Hour
+	var clock atomic.Int64
+	o.Now = func() time.Time { return boardNow.Add(time.Duration(clock.Load())) }
+	h.mu.Lock()
+	h.onCall = func(method string) {
+		if method == "agent.list" {
+			h.mu.Lock()
+			h.panes = slices.Clone(h.panes)
+			i := slices.IndexFunc(h.panes, func(p map[string]any) bool { return p["pane_id"] == "w14:p3" })
+			h.panes[i] = tabPane("w14:p3", "w14", "w14:t3", "claude", "idle", nil)
+			h.mu.Unlock()
+			clock.Store(int64(time.Second))
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	h.mu.Unlock()
+	sock := startShift(t, h, o)
+	raw, err := daemon.Workforce(t.Context(), sock, bossSnapshotOp, struct{}{})
+	require.NoError(t, err)
+	var got snapshot.BossSnapshot
+	require.NoError(t, json.Unmarshal(raw, &got))
+	assert.Equal(t, snapshot.StatusWorking, got.Groups[0].Workers[0].Status)
+	assert.Equal(t, &boardNow, got.TeamPoll.AsOf, "poll as_of must precede the status flip")
+	assert.Equal(t, new(boardNow.Add(time.Second)), got.Board.AsOf, "board as_of comes from its own read")
 }
 
 func TestBossSnapshotPreservesMarksAndWaits(t *testing.T) {
@@ -270,4 +322,24 @@ func TestBossSnapshotFreshnessAndProjection(t *testing.T) {
 	h.mu.Unlock()
 	polled(t, h.srv, 2)
 	assert.Nil(t, shiftRead(t, sock).Boss, "two panes claim the canonical name")
+
+	h.mu.Lock()
+	h.panes = slices.DeleteFunc(slices.Clone(h.panes), func(p map[string]any) bool { return p["pane_id"] == "w14:p1" })
+	h.agents = slices.DeleteFunc(slices.Clone(h.agents), func(a map[string]any) bool { return a["name"] == "al-boss" })
+	h.mu.Unlock()
+	polled(t, h.srv, 2)
+	got = shiftRead(t, sock)
+	assert.Nil(t, got.Boss, "the sole candidate is not the canonical boss")
+	var out strings.Builder
+	require.NoError(t, got.WriteText(&out))
+	assert.Equal(t, "Boss unknown (no agent named al-boss)", strings.SplitN(out.String(), "\n", 5)[3])
+
+	db, err := sql.Open("sqlite", state.DB)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	_, err = db.ExecContext(t.Context(), "ALTER TABLE workers RENAME TO unavailable_workers")
+	require.NoError(t, err)
+	clock.Add(1)
+	polled(t, h.srv, 2)
+	assert.Equal(t, got.TeamPoll.AsOf, shiftRead(t, sock).TeamPoll.AsOf, "failed worker read keeps the last successful poll")
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"maps"
 	"math"
+	"regexp"
 	"slices"
 	"time"
 	"unicode/utf8"
@@ -38,14 +39,15 @@ type BossSource struct {
 
 // BossSnapshot is the v1 read of the caller's own team.
 type BossSnapshot struct {
-	V              int         `json:"v"`
-	Team           string      `json:"team"`
-	At             time.Time   `json:"at"`
-	TeamPoll       BossSource  `json:"team_poll"`
-	Boss           *BossMember `json:"boss"`
-	Groups         []BossGroup `json:"groups"`
-	WorkersOmitted int         `json:"workers_omitted"`
-	Board          BossBoard   `json:"board"`
+	V               int         `json:"v"`
+	Team            string      `json:"team"`
+	At              time.Time   `json:"at"`
+	TeamPoll        BossSource  `json:"team_poll"`
+	Boss            *BossMember `json:"boss"`
+	MissingBossName *string     `json:"missing_boss_name"` // Set when no agent claims the canonical name.
+	Groups          []BossGroup `json:"groups"`
+	WorkersOmitted  int         `json:"workers_omitted"`
+	Board           BossBoard   `json:"board"`
 }
 
 // BossRow is the live pane metadata common to the boss and workers.
@@ -97,6 +99,7 @@ func (s BossSnapshot) Validate() error {
 	if !boundedBossString(s.Team, 2*MaxBossFieldBytes) || s.At.IsZero() ||
 		s.TeamPoll.AsOf == nil || s.TeamPoll.AsOf.IsZero() ||
 		(s.TeamPoll.State != Fresh && s.TeamPoll.State != Stale) ||
+		s.MissingBossName != nil && (s.Boss != nil || !bossNamePattern.MatchString(*s.MissingBossName)) ||
 		s.Groups == nil || len(s.Groups) > MaxBossWorkers || s.WorkersOmitted < 0 || s.WorkersOmitted > math.MaxInt-MaxBossWorkers || !s.Board.valid() {
 		return ErrInvalid
 	}
@@ -150,15 +153,17 @@ func bossObject(keys map[string]*shape) *shape {
 }
 
 var (
-	bossScalar = &shape{nonNull: true}
-	bossFields = map[string]*shape{
+	bossNamePattern = regexp.MustCompile(`^[a-z][a-z0-9]{0,7}-boss$`)
+	bossScalar      = &shape{nonNull: true}
+	bossFields      = map[string]*shape{
 		"pane_id": nil, nameKey: nil, "agent": nil, "status": nil, "item": nil, "stage": nil,
 		"stage_at": timeShape, "stage_stale": bossScalar, "idle_since": timeShape, "ctx": nil,
 	}
 	bossSnapshotShape = bossObject(map[string]*shape{
 		"v": nil, "team": nil, "at": timeShape,
-		"team_poll": bossObject(map[string]*shape{"as_of": timeShape, "state": nil}),
-		"boss":      bossObject(union(bossFields, map[string]*shape{"started_at": timeShape})),
+		"team_poll":         bossObject(map[string]*shape{"as_of": timeShape, "state": nil}),
+		"boss":              bossObject(union(bossFields, map[string]*shape{"started_at": timeShape})),
+		"missing_boss_name": nil,
 		"groups": {elem: bossObject(map[string]*shape{
 			nameKey: nil, "workers": {elem: bossObject(union(bossFields, map[string]*shape{"id": nil, "generation": nil}))},
 		})},

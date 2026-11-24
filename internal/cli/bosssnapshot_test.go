@@ -13,7 +13,7 @@ import (
 // NERD-5748: the two output formats make the same selector-free request.
 func TestBossSnapshotCLI(t *testing.T) {
 	t.Parallel()
-	const reply = `{"v":1,"team":"alpha","at":"2026-11-24T09:00:02Z","team_poll":{"state":"fresh","as_of":"2026-11-24T09:00:00Z"},"boss":null,"groups":[{"name":"coder","workers":[{"id":null,"generation":null,"pane_id":"p1","name":"a\n\u001b[31m\u202eb","agent":"claude","status":"working","item":null,"stage":null,"stage_at":null,"stage_stale":false,"idle_since":null,"ctx":0}]}],"workers_omitted":0,"board":{"state":"fresh","as_of":"2026-11-24T09:00:02Z","mark":0,"newest":0,"unread":0}}`
+	const reply = `{"v":1,"team":"alpha","at":"2026-11-24T09:00:02Z","team_poll":{"state":"fresh","as_of":"2026-11-24T09:00:00Z"},"boss":null,"missing_boss_name":null,"groups":[{"name":"coder","workers":[{"id":null,"generation":null,"pane_id":"p1","name":"a\n\u001b[31m\u202eb","agent":"claude","status":"working","item":null,"stage":null,"stage_at":null,"stage_stale":false,"idle_since":null,"ctx":0}]}],"workers_omitted":0,"board":{"state":"fresh","as_of":"2026-11-24T09:00:02Z","mark":0,"newest":0,"unread":0}}`
 	for _, format := range []string{"text", "json", "refused", "malformed"} {
 		t.Run(format, func(t *testing.T) {
 			e := newDaemonEnvWith(t, failingHerdr)

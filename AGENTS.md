@@ -199,9 +199,9 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   `peer_darwin.go`) and its process ancestry; `board.seen` moves only the
   caller's own read mark, forward and never past the newest post, and each
   snapshot carries the user's unread count, when there is one.
-  `boss.snapshot` (NERD-5748) shares board caller placement, accepts only
-  the boss place, and reads the named poll's own-team projection and one
-  atomic board metadata result without advancing marks or ending waits. It keeps
+  `boss.snapshot` (NERD-5748) reads the team's poll and atomic board
+  metadata from the boss place. It leaves marks and waits alone and gates
+  ctx by the start of the pane's cached agent process. The daemon keeps
   herdr's agent view on the focused team, which focus events and the poll
   feed it, and clears it outside every team and on a clean stop (`view.go`,
   the A28 addendum, A49).
