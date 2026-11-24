@@ -113,12 +113,14 @@ func TestRunSelectsPaletteFromTerminal(t *testing.T) {
 	for _, tc := range []struct {
 		name, reply, want string
 		fromLight, split  bool
+		indexed           bool
 	}{
 		{name: "no answer", want: darkText},
 		{name: "dark", reply: "1e1e/1e1e/2e2e", want: darkText},
 		{name: "light", reply: "ffff/ffff/ffff", want: lightText},
 		{name: "near black with 16-bit channels", reply: "00ee/00ee/00ee", want: darkText, fromLight: true},
 		{name: "fragmented 16-bit reply", reply: "00ee/00ee/00ee", want: darkText, fromLight: true, split: true},
+		{name: "indexed near black", reply: "00ee/00ee/00ee", want: "38;5;255", indexed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			master, slave := openPTY(t, 120, 40)
@@ -127,6 +129,9 @@ func TestRunSelectsPaletteFromTerminal(t *testing.T) {
 			cfg := config(&script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "full"))}}, nil)
 			cfg.Options = dashboard.Options{}
 			env := tea.WithEnvironment([]string{"TERM=xterm-256color", "COLORTERM=truecolor"})
+			if tc.indexed {
+				env = tea.WithEnvironment([]string{"TERM=xterm-256color"})
+			}
 			var input io.Reader = slave
 			if tc.split {
 				input = bytewisePTY{slave}
@@ -134,9 +139,11 @@ func TestRunSelectsPaletteFromTerminal(t *testing.T) {
 			done := make(chan error, 1)
 			go func() { done <- dashboard.Run(t.Context(), cfg, input, slave, env) }()
 
-			require.Eventually(t, func() bool {
-				return strings.Contains(out.String(), darkText)
-			}, 5*time.Second, 10*time.Millisecond, "the first frame uses dark before a reply")
+			if !tc.indexed {
+				require.Eventually(t, func() bool {
+					return strings.Contains(out.String(), darkText)
+				}, 5*time.Second, 10*time.Millisecond, "the first frame uses dark before a reply")
+			}
 			require.Eventually(t, func() bool {
 				return strings.Contains(out.String(), ansi.RequestBackgroundColor)
 			}, 5*time.Second, 10*time.Millisecond, "request the terminal background")

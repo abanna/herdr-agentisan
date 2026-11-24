@@ -495,6 +495,18 @@ func TestDashboardContrastSweep(t *testing.T) {
 			worseThanMain := make(map[string]int)
 			checkedSGR := make(map[string]bool)
 			seen := 0
+			stages := [...]string{"ready", "queued", "blocked", "reviewing"}
+			group := dashboard.Frame{
+				Snapshot:  &snapshot.Snapshot{V: 1, Team: "crew", Groups: []snapshot.Group{{Name: "agents"}}},
+				Selection: dashboard.Selection{Group: -1}, Now: at, Group: "agents",
+			}
+			for i, stage := range stages {
+				group.Snapshot.Groups[0].Agents = append(group.Snapshot.Groups[0].Agents, snapshot.Agent{
+					Name: fmt.Sprintf("worker-%d", i+1), Status: snapshot.StatusWorking,
+					Stage: strings.Repeat("x", 180) + " " + stage,
+				})
+			}
+			var groupSameSlot [len(stages)][len(stages)]int
 			check := func(role string, ink, bg color.Color) {
 				t.Helper()
 				require.NotNil(t, ink, role)
@@ -603,6 +615,25 @@ func TestDashboardContrastSweep(t *testing.T) {
 								}
 							}
 						}
+						if p == colorprofile.ANSI256 {
+							out := dashboard.Render(group, 80, 40, dashboard.Options{Profile: p, Background: bg})
+							inks := make([]color.Color, 0, len(stages))
+							for line := range strings.Lines(out) {
+								if strings.Contains(line, "xxx") && strings.Contains(line, "…") {
+									ink := paintedCell(t, line, "xxx").ink
+									require.IsType(t, ansi.IndexedColor(0), ink)
+									inks = append(inks, ink)
+								}
+							}
+							require.Len(t, inks, len(stages), "each agent has a clipped stage")
+							for i, a := range inks {
+								for j, b := range inks[:i] {
+									if a == b {
+										groupSameSlot[i][j]++
+									}
+								}
+							}
+						}
 						seen++
 					}
 				}
@@ -633,6 +664,15 @@ func TestDashboardContrastSweep(t *testing.T) {
 			if p == colorprofile.ANSI256 {
 				for pair, want := range sameStageInk {
 					require.Equalf(t, want, sameSlot[pair], "%s stage inks", pair)
+				}
+				// Group view uses plain text for an ordinary stage. Its three
+				// hue cues have the same counts as in the overview.
+				wantGroup := [len(stages)][len(stages)]int{{}, {1861}, {913, 802}, {530, 419, 600}}
+				for i, stage := range stages {
+					for j, other := range stages[:i] {
+						t.Logf("group view: %s and %s draw the same ink: %d/%d", stage, other, groupSameSlot[i][j], seen)
+						assert.Equalf(t, wantGroup[i][j], groupSameSlot[i][j], "group view %s/%s", stage, other)
+					}
 				}
 				// A ladder slot must stay tellable from every other hue ink on
 				// its background; a hue with no such slot keeps the neutral.
