@@ -36,8 +36,15 @@ func TestRecallSources(t *testing.T) {
 		"two directories in order": {file: "[recall]\nmemory_dirs = [\"/b\", \"/a\"]\n" + app, want: recall.Sources{MemoryDirs: []string{"/b", "/a"}}},
 		"a project selected":       {file: "[recall]\nmemory_dirs = [\"/m\"]\n" + app, project: "app", want: recall.Sources{MemoryDirs: []string{"/m"}}},
 		"bullet files, sorted by prefix": {
-			file: "[recall.bullet_files]\nstd = \"/s/STANDING.md\"\nrul = \"~/r.md\"\n" + app, home: home,
-			want: recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: filepath.Join(home, "r.md")}, {Prefix: "std", Path: "/s/STANDING.md"}}},
+			file: "[recall.bullet_files]\nstd = \"/s/STANDING.md\"\nzzz = \"/z\"\nrul = \"~/r.md\"\nmmm = \"/m\"\naaa = \"/a\"\nbbb = \"/b\"\n" + app, home: home,
+			want: recall.Sources{Bullets: []recall.Bullets{
+				{Prefix: "aaa", Path: "/a"},
+				{Prefix: "bbb", Path: "/b"},
+				{Prefix: "mmm", Path: "/m"},
+				{Prefix: "rul", Path: filepath.Join(home, "r.md")},
+				{Prefix: "std", Path: "/s/STANDING.md"},
+				{Prefix: "zzz", Path: "/z"},
+			}},
 		},
 		"~/ with no HOME":          {file: "[recall]\nmemory_dirs = [\"~/m\"]\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"HOME"}},
 		"a relative directory":     {file: "[recall]\nmemory_dirs = [\"m\"]\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"recall.memory_dirs", "shared", "absolute"}},
