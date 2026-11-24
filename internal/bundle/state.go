@@ -22,6 +22,26 @@ type State struct {
 	StateFile string
 }
 
+// ReadInstalledState discovers, starts, reads and closes the bundle session.
+func ReadInstalledState(ctx context.Context, locate func() (Launch, error), workDir string) (State, error) {
+	return ResolveWithin(ctx, func() (st State, err error) {
+		launch, err := locate()
+		if err != nil {
+			return State{}, err
+		}
+		s, err := Open(ctx, launch)
+		if err != nil {
+			return State{}, err
+		}
+		defer func() {
+			if closeErr := s.Close(); err == nil {
+				err = closeErr
+			}
+		}()
+		return ReadState(s, workDir)
+	})
+}
+
 // ReadState reads a canonical worktree at or under the repo through convergence.read_state.
 func ReadState(s *Session, workDir string) (State, error) {
 	if s.failed != nil {
@@ -89,7 +109,7 @@ func contain(repo, workDir string) (string, error) {
 	return real, nil
 }
 
-// ResolveWithin bounds the wait for a read-only lookup, which may finish after cancellation.
+// ResolveWithin bounds the wait for work whose callback owns any late cleanup.
 func ResolveWithin[T any](ctx context.Context, resolve func() (T, error)) (T, error) {
 	var value T
 	var err error

@@ -17,6 +17,7 @@ type Launch struct {
 	Dir           string
 	Env           []string // nil inherits the caller's environment
 	ClientVersion string
+	start         func(*exec.Cmd) error
 }
 
 // Locate finds the installed bundle and uv. For reads, --no-project skips

@@ -55,7 +55,7 @@ func newStageReadCmd() *cobra.Command {
 			"start-up, the handshake and the read; when it ends the server's process group\n" +
 			"is killed. Any failure of the bundle is an error and exit 1.",
 		Args: cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) (err error) {
+		RunE: func(cmd *cobra.Command, _ []string) error {
 			if repo == "" || workDir == "" {
 				return fmt.Errorf("stage read: %w", ErrNeedsFlags)
 			}
@@ -65,20 +65,7 @@ func newStageReadCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), budget)
 			defer cancel()
 			locate := bundleLocatorFrom(ctx)
-			launch, err := bundle.ResolveWithin(ctx, func() (bundle.Launch, error) { return locate(repo, config.Version) })
-			if err != nil {
-				return fmt.Errorf("stage read: %w", err)
-			}
-			s, err := bundle.Open(ctx, launch)
-			if err != nil {
-				return fmt.Errorf("stage read: %w", err)
-			}
-			defer func() {
-				if cerr := s.Close(); cerr != nil && err == nil {
-					err = fmt.Errorf("stage read: %w", cerr)
-				}
-			}()
-			st, err := bundle.ReadState(s, workDir)
+			st, err := bundle.ReadInstalledState(ctx, func() (bundle.Launch, error) { return locate(repo, config.Version) }, workDir)
 			if err != nil {
 				return fmt.Errorf("stage read: %w", err)
 			}

@@ -29,12 +29,12 @@ func startSupervisor(ctx context.Context) (*exec.Cmd, *os.File, error) {
 		return nil, nil, fmt.Errorf("create the supervisor ready pipe: %w", err)
 	}
 	defer func() { _ = ready.Close() }()
+	stop := context.AfterFunc(ctx, func() { _, _ = life.Close(), ready.Close() })
+	defer stop()
 	if err := cmd.Start(); err != nil {
 		_ = life.Close()
 		return nil, nil, fmt.Errorf("start the supervisor: %w", err)
 	}
-	stop := context.AfterFunc(ctx, func() { _ = ready.Close() })
-	defer stop()
 	var signal [1]byte
 	if _, err := io.ReadFull(ready, signal[:]); err != nil {
 		_ = life.Close()

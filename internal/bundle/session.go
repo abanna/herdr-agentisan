@@ -51,6 +51,9 @@ type Session struct {
 // Open starts and handshakes with the server. The context bounds the session.
 // Cancellation or a failed Open tears down the server group.
 func Open(ctx context.Context, l Launch) (*Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, startFailure(ctx, err)
+	}
 	if len(l.Argv) == 0 {
 		return nil, fmt.Errorf("%w: no command to start", ErrUnavailable)
 	}
@@ -69,6 +72,7 @@ func Open(ctx context.Context, l Launch) (*Session, error) {
 		return nil, startFailure(ctx, err)
 	}
 	s := &Session{ctx: ctx, guard: guard, life: life, in: inW, out: outR, rd: bufio.NewReaderSize(outR, maxReply), exited: make(chan struct{})}
+	stop := context.AfterFunc(ctx, s.kill)
 	cmd := exec.CommandContext(ctx, l.Argv[0], l.Argv[1:]...) // #nosec G204 -- argv is Locate's, or a test's
 	s.cmd = cmd
 	// Session cancellation must outlive exec's context watcher.
@@ -76,14 +80,22 @@ func Open(ctx context.Context, l Launch) (*Session, error) {
 	cmd.Dir, cmd.Env = l.Dir, l.Env
 	cmd.Stdin, cmd.Stdout = inR, outW
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: guard.Process.Pid}
-	startErr := cmd.Start()
+	start := l.start
+	if start == nil {
+		start = (*exec.Cmd).Start
+	}
+	startErr := start(cmd)
 	_, _ = inR.Close(), outW.Close() // the server's ends; ours are in and out
 	if startErr != nil {
-		_, _, _ = inW.Close(), outR.Close(), life.Close()
+		stop()
+		s.kill()
 		_ = guard.Wait()
 		return nil, startFailure(ctx, fmt.Errorf("start %s: %w", l.Argv[0], startErr))
 	}
-	stop := context.AfterFunc(ctx, s.kill)
+	if ctx.Err() != nil {
+		// Start may join the group after the cancellation signal. The guard is still unreaped.
+		_ = syscall.Kill(-guard.Process.Pid, syscall.SIGKILL)
+	}
 	go func() {
 		defer stop()
 		s.waitErr = cmd.Wait()
@@ -301,10 +313,11 @@ func (s *Session) fail() {
 // kill signals the group and closes both MCP pipes to free blocked I/O.
 func (s *Session) kill() {
 	s.once.Do(func() {
+		_ = s.life.Close()
 		if err := syscall.Kill(-s.guard.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 			s.killErr = fmt.Errorf("kill the server's process group: %w", err)
 		}
-		_, _, _ = s.in.Close(), s.out.Close(), s.life.Close()
+		_, _ = s.in.Close(), s.out.Close()
 	})
 }
 
