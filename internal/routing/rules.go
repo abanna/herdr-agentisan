@@ -16,8 +16,8 @@ import (
 	"sync"
 )
 
-// v1JSON is the user's routing rules v1 (2026-10-10), byte for byte as the
-// user gave them: the rules are the spec.
+// v1JSON is the user's routing rules v1. The rules are the spec and ship
+// byte for byte.
 //
 //go:embed rules/jev-routing-v1.json
 var v1JSON []byte

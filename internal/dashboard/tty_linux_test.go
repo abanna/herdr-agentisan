@@ -96,16 +96,29 @@ func TestRunDetectsNoColorSelection(t *testing.T) {
 	}
 }
 
+// bytewisePTY forces fragmented input while keeping the PTY's descriptor.
+type bytewisePTY struct{ *os.File }
+
+func (pty bytewisePTY) Read(p []byte) (int, error) {
+	return pty.File.Read(p[:min(len(p), 1)])
+}
+
 func TestRunSelectsPaletteFromTerminal(t *testing.T) {
 	t.Parallel()
 
-	const darkText = "38;2;238;242;255"
+	const (
+		darkText  = "38;2;238;242;255"
+		lightText = "38;2;23;35;59"
+	)
 	for _, tc := range []struct {
 		name, reply, want string
+		fromLight, split  bool
 	}{
 		{name: "no answer", want: darkText},
 		{name: "dark", reply: "1e1e/1e1e/2e2e", want: darkText},
-		{name: "light", reply: "ffff/ffff/ffff", want: "38;2;23;35;59"},
+		{name: "light", reply: "ffff/ffff/ffff", want: lightText},
+		{name: "near black with 16-bit channels", reply: "00ee/00ee/00ee", want: darkText, fromLight: true},
+		{name: "fragmented 16-bit reply", reply: "00ee/00ee/00ee", want: darkText, fromLight: true, split: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			master, slave := openPTY(t, 120, 40)
@@ -114,8 +127,12 @@ func TestRunSelectsPaletteFromTerminal(t *testing.T) {
 			cfg := config(&script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "full"))}}, nil)
 			cfg.Options = dashboard.Options{}
 			env := tea.WithEnvironment([]string{"TERM=xterm-256color", "COLORTERM=truecolor"})
+			var input io.Reader = slave
+			if tc.split {
+				input = bytewisePTY{slave}
+			}
 			done := make(chan error, 1)
-			go func() { done <- dashboard.Run(t.Context(), cfg, slave, slave, env) }()
+			go func() { done <- dashboard.Run(t.Context(), cfg, input, slave, env) }()
 
 			require.Eventually(t, func() bool {
 				return strings.Contains(out.String(), darkText)
@@ -123,12 +140,21 @@ func TestRunSelectsPaletteFromTerminal(t *testing.T) {
 			require.Eventually(t, func() bool {
 				return strings.Contains(out.String(), ansi.RequestBackgroundColor)
 			}, 5*time.Second, 10*time.Millisecond, "request the terminal background")
+			start := 0
+			if tc.fromLight {
+				_, err := io.WriteString(master, "\x1b]11;rgb:ffff/ffff/ffff\a")
+				require.NoError(t, err)
+				require.Eventually(t, func() bool {
+					return strings.Contains(out.String(), lightText)
+				}, 5*time.Second, 10*time.Millisecond, "establish the light palette before the regression reply")
+				start = len(out.String())
+			}
 			if tc.reply != "" {
 				_, err := fmt.Fprintf(master, "\x1b]11;rgb:%s\x1b\\", tc.reply)
 				require.NoError(t, err)
 			}
 			require.Eventually(t, func() bool {
-				return strings.Contains(out.String(), tc.want)
+				return strings.Contains(out.String()[start:], tc.want)
 			}, 5*time.Second, 10*time.Millisecond, "use the palette for the terminal background")
 			_, err := master.Write([]byte("q"))
 			require.NoError(t, err)

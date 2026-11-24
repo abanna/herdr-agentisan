@@ -170,7 +170,7 @@ func TestNewChecksTheDeployment(t *testing.T) {
 		"a context suffix":                  {Bindings: map[string]routing.Facts{"claude_strong": {ModelID: new("claude-opus-5-5[1m]")}}},
 		"every effort codex takes":          {Bindings: map[string]routing.Facts{"codex_strong": {Efforts: []string{"minimal", "low", "medium", "high", "xhigh"}}}},
 		"every effort claude takes":         {Bindings: map[string]routing.Facts{"claude_mid": {Efforts: []string{"low", "medium", "high", "xhigh", "max"}}}},
-		"a premium choice for the debugger": {Overrides: map[string]routing.RoleOverride{"alex_debugger": {"codex_premium"}}},
+		"a premium choice for the debugger": {Overrides: map[string]routing.RoleOverride{"alex_debugger": {"claude_premium"}}},
 	} {
 		_, err := routing.New(routing.V1(), d)
 		require.NoError(t, err, name)

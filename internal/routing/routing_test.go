@@ -16,9 +16,9 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/routing"
 )
 
-// rulesSHA256 is the sha256 of the user's rules v1 as given (2026-10-10). A
+// rulesSHA256 is the sha256 of the user's approved rules v1. A
 // change to the rules changes it, deliberately: the rules are the spec.
-const rulesSHA256 = "2f94988c3aaa7a5e601a0b9e152cb9037a1346743efe1913f9bd4e2b1c95c6fd"
+const rulesSHA256 = "9a2accdea2e138e034ed862166389e73ee82dcae73d6e38c7faf509e7032decb"
 
 // rulesFile is the embedded rules, as committed.
 const rulesFile = "rules/jev-routing-v1.json"
@@ -36,7 +36,7 @@ func policy(t *testing.T, d routing.Deployment) routing.Policy {
 //go:fix inline
 
 // TestV1IsTheUsersRules: the embedded rules are the user's file byte for
-// byte, and decode to its seven bindings and seven roles.
+// byte, and decode to its eight bindings and seven roles.
 func TestV1IsTheUsersRules(t *testing.T) {
 	t.Parallel()
 	raw, err := os.ReadFile(rulesFile)
@@ -47,9 +47,112 @@ func TestV1IsTheUsersRules(t *testing.T) {
 	r := routing.V1()
 	assert.Equal(t, 1, r.SchemaVersion)
 	assert.Equal(t, "draft_unvalidated", r.Status)
-	assert.Equal(t, []string{"claude_mid", "claude_premium", "claude_small", "claude_strong", "codex_premium", "codex_small", "codex_strong"}, r.BindingNames())
+	assert.Equal(t, []string{"claude_mid", "claude_premium", "claude_small", "claude_strong", "codex_premium", "codex_small", "codex_strong", "codex_terra"}, r.BindingNames())
 	assert.Equal(t, []string{"alex_debugger", "boss", "clerk", "code_review", "coder", "pre_check", "researcher"}, r.RoleNames())
 	assert.Equal(t, []string{routing.Claude, routing.Codex, ""}, []string{r.Provider("claude_mid"), r.Provider("codex_premium"), r.Provider("claude_huge")})
+}
+
+func TestCodexBindingModels(t *testing.T) {
+	t.Parallel()
+	doc := rulesDoc(t)
+	bindings := at(doc, "bindings")
+	for _, tc := range []struct {
+		name, model, alias string
+		efforts            []any
+	}{
+		{"codex_strong", "gpt-6.2-sol", "Sol 6.2", []any{"medium", "high", "xhigh"}},
+		{"codex_premium", "gpt-6.2-astra", "Astra 6.2", []any{"high", "xhigh"}},
+		{"codex_terra", "gpt-6.1-terra", "Terra 6.1", []any{"low"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			require.Contains(t, bindings, tc.name)
+			b := at(bindings, tc.name)
+			assert.Equal(t, tc.model, b["model_id"])
+			assert.Equal(t, tc.alias, b["alias"])
+			assert.Equal(t, tc.efforts, b["efforts"])
+		})
+	}
+}
+
+func TestAstraRequiresOwnerDebuggerOverride(t *testing.T) {
+	t.Parallel()
+	r := routing.V1()
+	p := policy(t, routing.Deployment{Enabled: true})
+	for _, role := range r.RoleNames() {
+		if role != "alex_debugger" {
+			assert.ErrorIs(t, r.CheckOverrides(role, routing.RoleOverride{"codex_premium"}), routing.ErrOverrideRefused, role)
+		}
+		for _, model := range []string{"codex_premium", "gpt-6.2-astra"} {
+			_, err := p.Resolve(routing.Request{Role: role, Provider: routing.Codex, Model: model}, now)
+			assert.ErrorIs(t, err, routing.ErrOverrideRefused, "%s with --model %s", role, model)
+		}
+	}
+}
+
+func TestNewPreservesDebuggerAstraOverrideWithRoutingOffAndOn(t *testing.T) {
+	t.Parallel()
+	for name, enabled := range map[string]bool{"routing off": false, "routing on": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p, err := routing.New(routing.V1(), routing.Deployment{
+				Enabled:   enabled,
+				Overrides: map[string]routing.RoleOverride{"alex_debugger": {"codex_premium"}},
+			})
+			require.NoError(t, err)
+			assert.Equal(t, enabled, p.Enabled())
+			assert.Equal(t, "codex_premium", p.UserOverride("alex_debugger", routing.Codex))
+		})
+	}
+}
+
+func TestExplicitSmallModel(t *testing.T) {
+	t.Parallel()
+	p := policy(t, routing.Deployment{Enabled: true})
+	for _, tc := range []struct {
+		role, provider, binding, model string
+	}{
+		{"coder", routing.Claude, "claude_small", "claude-haiku-5-5"},
+		{"coder", routing.Codex, "codex_terra", "gpt-6.1-terra"},
+		{"researcher", routing.Claude, "claude_small", "claude-haiku-5-5"},
+		{"researcher", routing.Codex, "codex_small", "gpt-6-luna"},
+		{"researcher", routing.Codex, "codex_terra", "gpt-6.1-terra"},
+		{"clerk", routing.Codex, "codex_terra", "gpt-6.1-terra"},
+	} {
+		d, err := p.Resolve(routing.Request{Role: tc.role, Provider: tc.provider, Model: tc.binding, Task: &routing.Task{
+			LookupStatus: routing.LookupFound, WorkerAssignment: "A small bounded job",
+		}}, now)
+		require.NoError(t, err, "%s/%s", tc.role, tc.binding)
+		assert.Equal(t, tc.model, d.ModelID)
+		assert.Equal(t, "low", d.Effort)
+		assert.Equal(t, &routing.Override{By: "boss", Binding: tc.binding}, d.Override)
+		assert.False(t, d.AsksJev())
+	}
+}
+
+func TestSmallModelOverrideRefused(t *testing.T) {
+	t.Parallel()
+	p := policy(t, routing.Deployment{Enabled: true})
+	for _, tc := range []struct {
+		provider, model string
+		groups          []string
+	}{
+		{routing.Claude, "claude-haiku-5-5", []string{"precheck", "qa", "review", "debugger", "boss"}},
+		{routing.Codex, "gpt-6.1-terra", []string{"precheck", "qa", "review", "debugger", "boss"}},
+		{routing.Codex, "gpt-6-luna", []string{"precheck", "qa", "review", "debugger", "boss", "coder"}},
+	} {
+		for _, group := range tc.groups {
+			t.Run(group+"/"+tc.model, func(t *testing.T) {
+				t.Parallel()
+				role, err := routing.RoleFor(group)
+				require.NoError(t, err)
+				_, err = p.Resolve(routing.Request{
+					Role: role, Provider: tc.provider, Model: tc.model, Effort: "low",
+				}, now)
+				require.ErrorIs(t, err, routing.ErrOverrideRefused)
+			})
+		}
+	}
 }
 
 // TestRoleFor: each worker type of the team model has its role, qa
@@ -87,16 +190,16 @@ func TestEveryRoleAndProviderResolvesToItsDefault(t *testing.T) {
 	}{
 		{"boss", routing.Claude, "claude_strong", "claude-opus-5-5", "high", routing.SelectExplicit},
 		{"coder", routing.Claude, "claude_mid", "claude-sonnet-5-5", "high", routing.SelectJevComplexity},
-		{"coder", routing.Codex, "codex_strong", "gpt-6.1-sol", "high", routing.SelectJevComplexity},
+		{"coder", routing.Codex, "codex_strong", "gpt-6.2-sol", "medium", routing.SelectJevComplexity},
 		{"clerk", routing.Claude, "claude_small", "claude-haiku-5-5", "low", routing.SelectFixed},
 		{"clerk", routing.Codex, "codex_small", "gpt-6-luna", "low", routing.SelectFixed},
-		{"researcher", routing.Claude, "claude_small", "claude-haiku-5-5", "low", routing.SelectFixed},
-		{"researcher", routing.Codex, "codex_small", "gpt-6-luna", "low", routing.SelectFixed},
+		{"researcher", routing.Claude, "claude_mid", "claude-sonnet-5-5", "high", routing.SelectFixed},
+		{"researcher", routing.Codex, "codex_strong", "gpt-6.2-sol", "medium", routing.SelectFixed},
 		{"pre_check", routing.Claude, "claude_mid", "claude-sonnet-5-5", "high", routing.SelectFixed},
-		{"pre_check", routing.Codex, "codex_strong", "gpt-6.1-sol", "high", routing.SelectFixed},
-		{"code_review", routing.Codex, "codex_strong", "gpt-6.1-sol", "high", routing.SelectFixed},
+		{"pre_check", routing.Codex, "codex_strong", "gpt-6.2-sol", "high", routing.SelectFixed},
+		{"code_review", routing.Codex, "codex_strong", "gpt-6.2-sol", "high", routing.SelectFixed},
 		{"alex_debugger", routing.Claude, "claude_strong", "claude-opus-5-5", "high", routing.SelectExplicit},
-		{"alex_debugger", routing.Codex, "codex_strong", "gpt-6.1-sol", "high", routing.SelectExplicit},
+		{"alex_debugger", routing.Codex, "codex_strong", "gpt-6.2-sol", "high", routing.SelectExplicit},
 	}
 	for _, tc := range tests {
 		d, err := p.Resolve(routing.Request{Role: tc.role, Provider: tc.provider}, now)
@@ -123,6 +226,30 @@ func TestEveryRoleAndProviderResolvesToItsDefault(t *testing.T) {
 	assert.True(t, d.Applied, "a decision is applied once the user turns routing on")
 }
 
+func TestCoderDefaultEffortFollowsConfiguredBindingOrder(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		provider, binding, model, wantEffort string
+		efforts                              []string
+	}{
+		{routing.Codex, "codex_strong", "gpt-6.2-sol", "high", []string{"high", "medium", "xhigh"}},
+		{routing.Claude, "claude_mid", "claude-sonnet-5-5", "medium", []string{"medium", "high"}},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			t.Parallel()
+			p := policy(t, routing.Deployment{
+				Enabled:  true,
+				Bindings: map[string]routing.Facts{tc.binding: {Efforts: tc.efforts}},
+			})
+			d, err := p.Resolve(routing.Request{Role: "coder", Provider: tc.provider}, now)
+			require.NoError(t, err)
+			assert.Equal(t, tc.model, d.ModelID)
+			assert.Equal(t, tc.wantEffort, d.Effort)
+			assert.Equal(t, routing.ReasonTaskNotFound, d.FallbackReason)
+		})
+	}
+}
+
 // TestResolveOverrides: the boss's --model names an allowed binding by name
 // or model id, --effort picks among the binding's efforts, and the user's
 // override, the only way to a premium binding, stands over the boss's.
@@ -140,7 +267,7 @@ func TestResolveOverrides(t *testing.T) {
 			override: routing.Override{Binding: "claude_strong", By: "boss"},
 		},
 		"the boss names a model id": {
-			req: routing.Request{Role: "coder", Provider: routing.Codex, Model: "gpt-6.1-sol"}, binding: "codex_strong", model: "gpt-6.1-sol", effort: "high",
+			req: routing.Request{Role: "coder", Provider: routing.Codex, Model: "gpt-6.2-sol"}, binding: "codex_strong", model: "gpt-6.2-sol", effort: "medium",
 			override: routing.Override{Binding: "codex_strong", By: "boss"},
 		},
 		"the boss names a binding and an effort": {
@@ -148,7 +275,7 @@ func TestResolveOverrides(t *testing.T) {
 			override: routing.Override{Binding: "claude_strong", By: "boss", Effort: "xhigh"},
 		},
 		"the boss names only an effort, and the coder keeps its reason": {
-			req: routing.Request{Role: "coder", Provider: routing.Codex, Effort: "xhigh"}, binding: "codex_strong", model: "gpt-6.1-sol", effort: "xhigh",
+			req: routing.Request{Role: "coder", Provider: routing.Codex, Effort: "xhigh"}, binding: "codex_strong", model: "gpt-6.2-sol", effort: "xhigh",
 			override: routing.Override{Effort: "xhigh"}, reason: routing.ReasonTaskNotFound,
 		},
 		"the user's premium override": {
@@ -193,11 +320,10 @@ func TestResolveRefuses(t *testing.T) {
 		"a provider's case variant":                 {req: routing.Request{Role: "coder", Provider: "Claude"}, wantErr: routing.ErrProviderMismatch},
 		"an effort's case variant":                  {req: routing.Request{Role: "coder", Provider: routing.Claude, Effort: "HIGH"}, wantErr: routing.ErrOverrideRefused},
 		"a provider that is neither":                {req: routing.Request{Role: "coder", Provider: "aider"}, wantErr: routing.ErrProviderMismatch},
-		"a premium binding from the boss":           {req: routing.Request{Role: "alex_debugger", Provider: routing.Codex, Model: "codex_premium"}, wantErr: routing.ErrOverrideRefused, wantIn: "only the user chooses"},
+		"a premium binding from the boss":           {req: routing.Request{Role: "alex_debugger", Provider: routing.Claude, Model: "claude_premium"}, wantErr: routing.ErrOverrideRefused, wantIn: "only the user chooses"},
 		"a premium model id from the boss":          {req: routing.Request{Role: "alex_debugger", Provider: routing.Claude, Model: "claude-fable-5-1"}, wantErr: routing.ErrOverrideRefused, wantIn: "only the user chooses"},
-		"a codex premium model id from the boss":    {req: routing.Request{Role: "alex_debugger", Provider: routing.Codex, Model: "gpt-6-astra"}, wantErr: routing.ErrOverrideRefused, wantIn: "only the user chooses"},
 		"a binding the role does not allow":         {req: routing.Request{Role: "clerk", Provider: routing.Claude, Model: "claude_strong"}, wantErr: routing.ErrOverrideRefused, wantIn: "claude_small, codex_small"},
-		"a model id the role does not allow":        {req: routing.Request{Role: "clerk", Provider: routing.Claude, Model: "claude-sonnet-5-5"}, wantErr: routing.ErrOverrideRefused, wantIn: "claude_small, codex_small"},
+		"a model id the role does not allow":        {req: routing.Request{Role: "clerk", Provider: routing.Claude, Model: "claude-opus-5-5"}, wantErr: routing.ErrOverrideRefused, wantIn: "claude_small, codex_small"},
 		"a model id the boss's role does not allow": {req: routing.Request{Role: "boss", Provider: routing.Claude, Model: "claude-haiku-5-5"}, wantErr: routing.ErrOverrideRefused, wantIn: "claude_strong, codex_strong"},
 		"an alias, not a model id":                  {req: routing.Request{Role: "coder", Provider: routing.Claude, Model: "Opus 5.5"}, wantErr: routing.ErrOverrideRefused},
 		"a short name":                              {req: routing.Request{Role: "coder", Provider: routing.Claude, Model: "opus"}, wantErr: routing.ErrOverrideRefused},

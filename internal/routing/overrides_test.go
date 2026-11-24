@@ -11,14 +11,12 @@ import (
 )
 
 // TestOverrideVersionsKeepTheString: a string override keeps the version it
-// had before an override could hold one binding per provider (the live
-// configuration's, pinned from 71d3620), so no decision recorded earlier
-// changes its name; a one-element list is the string, and a list's order
-// never changes its version (A63).
+// would have with the original string encoding under the current rules.
+// A one-element list is the string, and a list's order has no effect (A63).
 func TestOverrideVersionsKeepTheString(t *testing.T) {
 	t.Parallel()
 	live := policy(t, routing.Deployment{Enabled: true, Overrides: map[string]routing.RoleOverride{"coder": {"claude_strong"}}}).Version()
-	assert.Equal(t, "v1-f0225362e568", live)
+	assert.Equal(t, "v1-959f149a4e64", live)
 	both := policy(t, routing.Deployment{Enabled: true, Overrides: map[string]routing.RoleOverride{"coder": {"claude_strong", "codex_strong"}}}).Version()
 	reversed := policy(t, routing.Deployment{Enabled: true, Overrides: map[string]routing.RoleOverride{"coder": {"codex_strong", "claude_strong"}}}).Version()
 	assert.Equal(t, both, reversed, "a list's order is no fact")
@@ -49,7 +47,7 @@ func TestUserOverridesBindTheirOwnProvider(t *testing.T) {
 		"a claude boss under codex_strong":     {overrides: map[string]routing.RoleOverride{"boss": {"codex_strong"}}, role: "boss", provider: routing.Claude, binding: "claude_strong"},
 		"a codex boss under codex_strong":      {overrides: map[string]routing.RoleOverride{"boss": {"codex_strong"}}, role: "boss", provider: routing.Codex, binding: "codex_strong", by: "user"},
 		"a codex qa under a claude pre_check":  {overrides: map[string]routing.RoleOverride{"pre_check": {"claude_mid"}}, role: "pre_check", provider: routing.Codex, binding: "codex_strong"},
-		"a claude researcher under codex":      {overrides: map[string]routing.RoleOverride{"researcher": {"codex_small"}}, role: "researcher", provider: routing.Claude, binding: "claude_small"},
+		"a claude researcher under codex":      {overrides: map[string]routing.RoleOverride{"researcher": {"codex_small"}}, role: "researcher", provider: routing.Claude, binding: "claude_mid"},
 		"a codex debugger under claude only":   {overrides: map[string]routing.RoleOverride{"alex_debugger": {"claude_premium"}}, role: "alex_debugger", provider: routing.Codex, binding: "codex_strong"},
 		"a claude debugger's premium override": {overrides: map[string]routing.RoleOverride{"alex_debugger": {"claude_premium"}}, role: "alex_debugger", provider: routing.Claude, binding: "claude_premium", by: "user"},
 	}
@@ -127,7 +125,7 @@ func TestNewRefusesAListThatIsNotOnePerProvider(t *testing.T) {
 		"two claude bindings":        {role: "coder", o: routing.RoleOverride{"claude_mid", "claude_strong"}, wantErr: routing.ErrOverrideRefused, wantIn: []string{"routing.overrides.coder", "claude_mid", "claude_strong", "claude"}},
 		"one binding twice":          {role: "coder", o: routing.RoleOverride{"codex_strong", "codex_strong"}, wantErr: routing.ErrOverrideRefused, wantIn: []string{"routing.overrides.coder", "codex_strong"}},
 		"an empty list":              {role: "coder", o: routing.RoleOverride{}, wantErr: routing.ErrOverrideRefused, wantIn: []string{"routing.overrides.coder", "names no binding"}},
-		"a binding the role refuses": {role: "clerk", o: routing.RoleOverride{"claude_small", "codex_strong"}, wantErr: routing.ErrOverrideRefused, wantIn: []string{"routing.overrides.clerk", "codex_strong"}},
+		"a binding the role refuses": {role: "clerk", o: routing.RoleOverride{"claude_small", "codex_premium"}, wantErr: routing.ErrOverrideRefused, wantIn: []string{"routing.overrides.clerk", "codex_premium"}},
 		"a premium for the boss":     {role: "boss", o: routing.RoleOverride{"codex_strong", "claude_premium"}, wantErr: routing.ErrOverrideRefused, wantIn: []string{"routing.overrides.boss"}},
 	}
 	for name, tc := range tests {

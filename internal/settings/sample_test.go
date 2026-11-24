@@ -101,9 +101,9 @@ func TestSampleConfigResolves(t *testing.T) {
 			assert.Equal(t, "sonnet", agentFor(t, *p, "precheck").Model)
 			assert.Equal(t, []string{"codex", "--no-daemon", "--sandbox", "read-only"}, agentFor(t, *p, "review").Command)
 			// A62: [agent.codex], a group on codex, and models that fit.
-			assert.Equal(t, settings.Agent{Command: []string{"codex", "--no-daemon"}, Model: "gpt-6.1-sol"}, p.Providers["codex"])
+			assert.Equal(t, settings.Agent{Command: []string{"codex", "--no-daemon"}, Model: "gpt-6.2-sol"}, p.Providers["codex"])
 			if name == "agentisan" {
-				assert.Equal(t, settings.Agent{Command: []string{"codex", "--no-daemon"}, Model: "gpt-6.1-sol"}, agentFor(t, *p, "research"))
+				assert.Equal(t, settings.Agent{Command: []string{"codex", "--no-daemon"}, Model: "gpt-6.2-sol"}, agentFor(t, *p, "research"))
 			}
 			require.NoError(t, p.CheckModelProviders())
 			assert.Equal(t, settings.Spawn{ShellPrompt: `❯\s*$`, ShellReadyAfter: settings.DefaultShellReadyAfter}, p.Spawn)
@@ -125,7 +125,7 @@ func TestSampleCodexGroupResolves(t *testing.T) {
 	t.Parallel()
 	sample, err := os.ReadFile(samplePath)
 	require.NoError(t, err)
-	block := "# [groups.qa]\n# agent = { command = [\"codex\"], model = \"gpt-6.1-sol\" }\n"
+	block := "# [groups.qa]\n# agent = { command = [\"codex\"], model = \"gpt-6.2-sol\" }\n"
 	require.Equal(t, 1, strings.Count(string(sample), block), "the sample's commented Codex group")
 	on := strings.Replace(string(sample), block, strings.ReplaceAll(block, "# ", ""), 1)
 
@@ -143,8 +143,8 @@ func TestSampleCodexGroupResolves(t *testing.T) {
 		got, err := settings.Load(settings.LoadOptions{ConfigDir: dir, LookupEnv: envOf(map[string]string{"HOME": home}), Stat: stat, Project: project})
 		require.NoError(t, err, project)
 		require.NotNil(t, got.Profile, project)
-		assert.Equal(t, settings.Agent{Command: []string{"codex"}, Model: "gpt-6.1-sol"}, agentFor(t, *got.Profile, "qa"), project)
+		assert.Equal(t, settings.Agent{Command: []string{"codex"}, Model: "gpt-6.2-sol"}, agentFor(t, *got.Profile, "qa"), project)
 	}
 	assert.Equal(t, settings.SandboxFullAccess, settings.SandboxFor("qa"), "the sample's comment says qa runs with full access")
-	assert.Contains(t, string(sample), "#   codex --no-daemon --sandbox "+settings.SandboxFor("qa")+" --model gpt-6.1-sol\n", "the launch the comment shows")
+	assert.Contains(t, string(sample), "#   codex --no-daemon --sandbox "+settings.SandboxFor("qa")+" --model gpt-6.2-sol\n", "the launch the comment shows")
 }
