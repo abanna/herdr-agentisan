@@ -728,8 +728,10 @@ func Run(ctx context.Context, cfg Config, in io.Reader, out io.Writer, opts ...t
 	if cfg.Source == nil {
 		return ErrNoSource
 	}
+	input, stopInput := normalizeTerminalInput(ctx, in)
+	defer stopInput()
 	base := []tea.ProgramOption{
-		tea.WithContext(ctx), tea.WithInput(normalizeTerminalInput(in)), tea.WithOutput(out),
+		tea.WithContext(ctx), tea.WithInput(input), tea.WithOutput(out),
 		// Only the size of output that is not a terminal: bubbletea asks a
 		// terminal for its real size and uses that instead. Without it, a
 		// pipe gets a 0x0 screen and nothing is drawn.

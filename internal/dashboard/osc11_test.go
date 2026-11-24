@@ -1,9 +1,12 @@
 package dashboard
 
 import (
+	"io"
 	"strings"
 	"testing"
 	"testing/iotest"
+	"testing/synctest"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -24,12 +27,14 @@ func TestOSC11InputNormalization(t *testing.T) {
 		{"aborted reply followed by a fresh reply", "\x1b]11;rgb:1/\x1b]11;rgb:abc/ff/0\a", "\x1b]11;rgb:1/\x1b]11;#abff00\a"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, reader := range []*osc11Reader{
-				{source: strings.NewReader(tc.input)},
-				{source: iotest.OneByteReader(strings.NewReader(tc.input))},
-				{source: iotest.DataErrReader(strings.NewReader(tc.input))},
+			for _, reader := range []io.Reader{
+				strings.NewReader(tc.input),
+				iotest.OneByteReader(strings.NewReader(tc.input)),
+				iotest.DataErrReader(strings.NewReader(tc.input)),
 			} {
-				require.NoError(t, iotest.TestReader(reader, []byte(tc.want)))
+				input, stop := normalizeTerminalInput(t.Context(), reader)
+				t.Cleanup(stop)
+				require.NoError(t, iotest.TestReader(input, []byte(tc.want)))
 			}
 		})
 	}
@@ -39,10 +44,49 @@ func TestOSC11InputPassesEscapeImmediately(t *testing.T) {
 	t.Parallel()
 
 	for _, key := range []string{"\x1b", "\x1b]"} {
-		reader := normalizeTerminalInput(iotest.TimeoutReader(strings.NewReader(key)))
+		reader, stop := normalizeTerminalInput(t.Context(), iotest.TimeoutReader(strings.NewReader(key)))
+		t.Cleanup(stop)
 		var buf [64]byte
 		n, err := reader.Read(buf[:])
 		require.NoError(t, err)
 		require.Equal(t, key, string(buf[:n]), "return before requesting more input")
+	}
+}
+
+func TestOSC11InputFlushesUnfinishedReplyOnDeadline(t *testing.T) {
+	for _, tc := range []struct {
+		name, held, want string
+	}{
+		{"truncated payload", "rgb:00ee/", "\x9d11;rgb:00ee/\x18"},
+		{"truncated terminator", "rgb:00ee/00ee/00ee\x1b", "\x9d11;rgb:00ee/00ee/00ee\x18\x1b"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				raw, terminal := io.Pipe()
+				defer raw.Close()
+				defer terminal.Close()
+				reader, stop := normalizeTerminalInput(t.Context(), raw)
+				defer stop()
+
+				go func() { _, _ = io.WriteString(terminal, osc11Prefix+tc.held) }()
+				buf := make([]byte, len(osc11Prefix))
+				_, err := io.ReadFull(reader, buf)
+				require.NoError(t, err)
+				require.Equal(t, osc11Prefix, string(buf))
+
+				start := time.Now()
+				buf = make([]byte, len(tc.want))
+				_, err = io.ReadFull(reader, buf)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, string(buf))
+				require.Equal(t, 50*time.Millisecond, time.Since(start))
+
+				go func() { _, _ = io.WriteString(terminal, "q") }()
+				var key [1]byte
+				_, err = io.ReadFull(reader, key[:])
+				require.NoError(t, err)
+				require.Equal(t, byte('q'), key[0])
+			})
+		})
 	}
 }
