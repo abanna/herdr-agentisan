@@ -138,12 +138,10 @@ func (s *Mutes) Mute(ctx context.Context, m team.Model, worker string, d time.Du
 	return Mute{Worker: worker, Pane: e.pane, Until: until}, nil
 }
 
-// Hold keeps a bound row's mute from silencing any notice, and refuses a new
-// mute of the row, until release (NERD-5730): a retire holds it while it closes
-// the pane and ends the row, so a poll that sees either tells the worker's
-// departure with nothing to drop it, and no mute set meanwhile outlives the row.
-// A retire that fails releases it and the mute stands; one that succeeds
-// clears the mute (ClearWorker) first.
+// Hold lets a bound row's Gone notice through its mute, and refuses a new
+// mute of the row, until release (NERD-5730): a retire holds it while it ends
+// the row, so no poll drops the departure and no mute outlives the row. A
+// retire that fails releases it and the mute stands.
 func (s *Mutes) Hold(worker string, generation int64) (release func()) {
 	k := muteScope{bound: true, name: worker, generation: generation}
 	s.mu.Lock()
@@ -170,29 +168,25 @@ func (s *Mutes) ClearWorker(worker string, generation int64, now time.Time) bool
 	return ok && now.Before(m.until)
 }
 
-// Unmute ends the mute worker selects in m, as Mute selects it (the bound
-// row wins), and reports whether one was in force at now. It also ends every
-// unbound mute under that name whose terminal no unbound worker of m carries:
-// a closed pane's, or one that is now a row's, which nothing else could end.
-// A namesake still in m keeps its own. With no model there is nothing to
-// select from, so the caller refuses. A worker with none is no refusal.
+// Unmute ends the mute worker selects in m, as Mute selects it, and reports
+// whether one was in force at now. A name a bound row has, in m or live, ends
+// the row's mute and the unbound mutes under it whose pane no unbound worker of
+// m carries; a namesake still in m keeps its own. Any other name ends every
+// unbound mute under it, so none is left that no name can end (a pane renamed
+// since, the second of two namesakes). A worker with none is no refusal.
 func (s *Mutes) Unmute(ctx context.Context, m team.Model, worker string, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	named := func(keep func(muteScope) bool) []muteScope {
 		return slices.DeleteFunc(slices.Collect(maps.Keys(s.entries)), func(k muteScope) bool { return k.name != worker || !keep(k) })
 	}
-	keys := named(func(k muteScope) bool { return k.bound })
-	if w, found := selectWorker(m, worker); found && !w.Bound {
-		if _, held := s.entries[scopeOf(w)]; held && !s.rowHolds(ctx, worker, w) {
-			keys = []muteScope{scopeOf(w)}
-		}
-	}
+	sel, found := selectWorker(m, worker)
+	row := (found && sel.Bound) || s.rowHolds(ctx, worker, sel)
 	carried := map[string]bool{}
 	for _, p := range groupWorkers(m) {
 		carried[p.worker.Pane.TerminalID] = carried[p.worker.Pane.TerminalID] || !p.worker.Bound
 	}
-	keys = append(keys, named(func(k muteScope) bool { return !k.bound && !carried[k.terminal] })...)
+	keys := named(func(k muteScope) bool { return k.bound || !row || !carried[k.terminal] })
 	var inForce bool
 	for _, k := range keys {
 		inForce = inForce || now.Before(s.entries[k].until)
@@ -255,5 +249,5 @@ func (s *Mutes) Muted(n Notice, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m, ok := s.entries[n.scope]
-	return ok && !s.ending[n.scope] && now.Before(m.until)
+	return ok && (n.Kind != Gone || !s.ending[n.scope]) && now.Before(m.until)
 }

@@ -88,6 +88,9 @@ func TestRetireHoldsTheMuteWhileItCloses(t *testing.T) {
 	th, _, dir := haTeam(t)
 	s, logs := serveMuteWorkers(t, th, dir)
 	muteForThreeHours(t, s, muteWorker)
+	// The poll waits mid-cycle, so it cannot mark the row lost between the
+	// close and retire's end of the row, which would clear the mute first.
+	releasePoll := holdMutePoll(t, th, "pane.report_metadata", nil, nil)
 	var got json.RawMessage
 	var retireErr error
 	done := make(chan struct{})
@@ -105,7 +108,25 @@ func TestRetireHoldsTheMuteWhileItCloses(t *testing.T) {
 	require.NoError(t, retireErr)
 	assert.JSONEq(t, `{"id":"ha-coder-1","pane_id":"w14:p2","changed":true,"outcome":"retired","mute_cleared":true}`, string(got))
 	assert.Empty(t, listedMutes(t, s))
+	releasePoll()
 	waitLine(t, logs, "ha-coder-1 left the team (pane w14:p2)")
+}
+
+// TestMutedDepartureSurvivesAnAbandonedHandoff (NERD-5730, sixth review): the
+// outgoing pane closes while its handoff is pending, so no departure is told
+// under the mute; abandoning the handoff confirms the loss, which tells it.
+func TestMutedDepartureSurvivesAnAbandonedHandoff(t *testing.T) {
+	t.Parallel()
+	th, _, dir := haTeam(t)
+	addMutePane(th, "ha-coder-2", true)
+	s, logs := serveMuteWorkers(t, th, dir)
+	muteForThreeHours(t, s, muteWorker)
+	startMuteHandoff(t, th, dir, "term_"+muteNewPane)
+	polled(t, th.srv, 2)
+	assert.NotContains(t, strings.Join(noticeLines(logs), "\n"), "left the team")
+	noticeWorkforce(t, s, daemon.OpWorkerRetire, workforce.RetireRequest{Target: muteNewPane})
+	waitLine(t, logs, "ha-coder-1 left the team (pane w14:p2)")
+	assert.Empty(t, listedMutes(t, s))
 }
 
 // TestMutedDepartureSurvivesAFailedAgentList: a poll that cannot list the

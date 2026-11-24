@@ -25,7 +25,7 @@ type Watch struct {
 	agents []placed
 	// hold keeps a departure for the next call (Hold); kept are the panes it
 	// kept, which stay in agents until a call tells them.
-	hold bool
+	hold func(paneID string) bool
 	kept []placed
 	// untold holds the panes that turned blocked at a call whose agent.list
 	// failed, which could not judge them to run an agent, while they stay
@@ -59,11 +59,11 @@ func NewWatch() *Watch {
 	return &Watch{untold: map[string]bool{}, turns: map[string]*uint64{}, unknown: map[string]bool{}, known: map[string]bool{}, fresh: map[string]int{}}
 }
 
-// Hold makes the calls that follow tell no departure of a pane that has left:
-// the pane stays known, and the first call without the hold tells it. A poll
-// that did not reconcile holds, so a mute its reconcile would have cleared
-// does not drop the departure (NERD-5730).
-func (w *Watch) Hold(hold bool) { w.hold = hold }
+// Hold makes the calls that follow tell no departure of a pane it names: the
+// pane stays known until a call without the hold tells it. The poll holds
+// panes whose worker's loss is undecided, so the mute that loss clears does
+// not drop the departure (NERD-5730).
+func (w *Watch) Hold(hold func(paneID string) bool) { w.hold = hold }
 
 // Observe is what changed from the last model observed to m, as notices:
 //   - the first call only takes m as its baseline, and is one Started
@@ -219,7 +219,7 @@ func (w *Watch) statuses(prev, m team.Model, now []placed, named bool) []Notice 
 		id := a.worker.Pane.ID
 		isShell, there := shell[id]
 		switch {
-		case !there && w.hold:
+		case !there && w.hold != nil && w.hold(a.worker.Pane.ID):
 			w.kept = append(w.kept, a)
 		case !there:
 			out = append(out, workerNotice(a.project, a.worker, Gone, goneText(a.worker)))

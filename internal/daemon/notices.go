@@ -88,9 +88,9 @@ func noticeConfig(c settings.NoticeConfig) notice.Config {
 }
 
 // observe takes one poll's model and, when agent.list answered it (named),
-// its agents. A poll that did not reconcile (reconciled false) tells no departure.
-func (n *notices) observe(m team.Model, agents []herdr.AgentInfo, named, reconciled bool, now time.Time) {
-	n.watch.Hold(!reconciled)
+// its agents. It tells no departure of a pane hold names.
+func (n *notices) observe(m team.Model, agents []herdr.AgentInfo, named bool, hold func(string) bool, now time.Time) {
+	n.watch.Hold(hold)
 	n.batch.Add(now, n.watch.Observe(m, agents, named))
 }
 

@@ -372,6 +372,23 @@ func TestUnmuteEndsAnUnboundMuteWhoseTerminalIsNoUnboundWorkers(t *testing.T) {
 		assert.True(t, s.Unmute(t.Context(), teamOf(boss, row), "c2", t0), "the entry no longer silences anything and ends")
 		assert.Empty(t, s.List(t0))
 	})
+	t.Run("the pane was renamed", func(t *testing.T) {
+		t.Parallel()
+		s := notice.NewMutes(nil)
+		muteAs(t, s, first)
+		renamed := first
+		renamed.Pane.Name = "c3"
+		assert.True(t, s.Unmute(t.Context(), teamOf(boss, renamed), "c2", t0), "its mute ends by the name it was set under")
+		assert.Empty(t, s.List(t0))
+	})
+	t.Run("two live namesakes, both muted", func(t *testing.T) {
+		t.Parallel()
+		s := notice.NewMutes(nil)
+		muteAs(t, s, first)
+		muteAs(t, s, second)
+		assert.True(t, s.Unmute(t.Context(), teamOf(boss, first, second), "c2", t0))
+		assert.Empty(t, s.List(t0), "no mute is left that no name can end")
+	})
 	t.Run("a namesake still in the model keeps its mute", func(t *testing.T) {
 		t.Parallel()
 		s := notice.NewMutes(nil)
@@ -382,22 +399,24 @@ func TestUnmuteEndsAnUnboundMuteWhoseTerminalIsNoUnboundWorkers(t *testing.T) {
 	})
 }
 
-// TestHoldSilencesNothingAndRefusesAMute: a retiring row's mute, held, silences
-// no notice and no new mute is taken for the row, so none outlives it
-// (NERD-5730, fifth review); the hold's release gives the mute back.
-func TestHoldSilencesNothingAndRefusesAMute(t *testing.T) {
+// TestHoldLetsOnlyTheDepartureThrough: a held mute lets its row's Gone notice
+// through, silences every other and takes no new mute (NERD-5730).
+func TestHoldLetsOnlyTheDepartureThrough(t *testing.T) {
 	t.Parallel()
 	_, both, bound, _ := namesakes()
+	gone := softNotice(bound)
+	gone.Kind = notice.Gone
 	s := notice.NewMutes(nil)
 	_, err := s.Mute(t.Context(), both, "ha-qa-1", time.Hour, t0)
 	require.NoError(t, err)
 	release := s.Hold("ha-qa-1", 4)
-	assert.False(t, s.Muted(softNotice(bound), t0))
+	assert.False(t, s.Muted(gone, t0), "the departure is told")
+	assert.True(t, s.Muted(softNotice(bound), t0), "anything else stays muted, the retire may fail")
 	_, err = s.Mute(t.Context(), both, "ha-qa-1", time.Hour, t0)
 	require.ErrorIs(t, err, notice.ErrUnknownWorker)
 	assert.Len(t, s.List(t0), 1, "the mute is held, not cleared")
 	release()
-	assert.True(t, s.Muted(softNotice(bound), t0))
+	assert.True(t, s.Muted(gone, t0))
 	_, err = s.Mute(t.Context(), both, "ha-qa-1", time.Hour, t0)
 	require.NoError(t, err)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -286,9 +287,15 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	// A pane's rest is pane.list's status, so a failed agent list does not
 	// stop the idle clock, nor the notices of a status change.
 	tp.idle.Observe(m, now)
-	// Without the reconcile no loss is confirmed and no mute cleared, so a
-	// departure is told by the next poll that has (NERD-5730).
-	tp.notices.observe(m, agents, agentsErr == nil, reconciled, now)
+	// A departure waits while its loss is undecided: no reconcile this poll,
+	// or a live row whose pane is gone (a pending handoff, an unproven shell).
+	undecided := map[string]bool{}
+	for _, r := range rows {
+		if r.Status == store.StatusActive && !slices.ContainsFunc(panes, func(p herdr.PaneInfo) bool { return p.PaneID == r.PaneID }) {
+			undecided[r.PaneID] = true
+		}
+	}
+	tp.notices.observe(m, agents, agentsErr == nil, func(id string) bool { return !reconciled || undecided[id] }, now)
 	o.observeCtx(ctx, c, tp.notices, m, now)
 	if agentsErr == nil {
 		tp.stages.Observe(m, now)
