@@ -332,9 +332,10 @@ func runReport(ctx context.Context, stdin string, args ...string) (string, error
 }
 
 // stampedCtx checks a report's ctx_at, the command's own clock's stamp,
-// between before and now (A61), and returns the params without it, for the
-// rest to be compared exactly.
-func stampedCtx(t *testing.T, params []byte, before time.Time) string {
+// between before and now (A61), and returns the params without it and
+// without its ctx_owner, which it returns beside them: the agents of the
+// process table the command ran in, for the rest to be compared exactly.
+func stampedCtx(t *testing.T, params []byte, before time.Time) (rest, owner string) {
 	t.Helper()
 	var m map[string]any
 	require.NoError(t, json.Unmarshal(params, &m))
@@ -344,10 +345,12 @@ func stampedCtx(t *testing.T, params []byte, before time.Time) string {
 	require.True(t, ok, "ctx_at is Unix milliseconds: %q", raw)
 	assert.False(t, at.Before(before.Truncate(time.Millisecond)), "stamped during the report")
 	assert.False(t, at.After(time.Now()), "stamped during the report")
+	owner, _ = tokens[report.CtxOwnerKey].(string)
 	delete(tokens, report.CtxAtKey)
+	delete(tokens, report.CtxOwnerKey)
 	out, err := json.Marshal(m)
 	require.NoError(t, err)
-	return string(out)
+	return string(out), owner
 }
 
 const statusline426 = `{"model":{"display_name":"Opus"},"context_window":{"used_percentage":42.6}}`
@@ -366,7 +369,12 @@ func TestReportStatuslinePushesCtx(t *testing.T) {
 	require.Len(t, reqs, 2, "check the pane runs this process, then report")
 	assert.Equal(t, "pane.process_info", reqs[0].Method)
 	assert.Equal(t, "pane.report_metadata", reqs[1].Method)
-	assert.JSONEq(t, `{"pane_id":"w14:p1","source":"agentisan","tokens":{"ctx":"43"},"ttl_ms":180000}`, stampedCtx(t, reqs[1].Params, before))
+	rest, owner := stampedCtx(t, reqs[1].Params, before)
+	assert.JSONEq(t, `{"pane_id":"w14:p1","source":"agentisan","tokens":{"ctx":"43"},"ttl_ms":180000}`, rest)
+	if owner != "" {
+		_, ok := report.ParseCtxOwner(owner)
+		assert.True(t, ok, "ctx_owner is a value the daemon reads: %q", owner)
+	}
 	assert.Contains(t, logs.String(), `"ctx":43`)
 }
 

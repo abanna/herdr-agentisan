@@ -470,7 +470,7 @@ func TestCodexPushesTheTokenContract(t *testing.T) {
 	event := func(name string) func(string) string {
 		return func(path string) string { return eventHook(path, name) }
 	}
-	withModel := `{"ctx":"5","ctx_at":"1761066000900","model":"gpt-5","model_at":"1761066000900"}`
+	withModel := `{"ctx":"5","ctx_at":"1761066000900","ctx_owner":"900:500,899:500","model":"gpt-5","model_at":"1761066000900"}`
 	for name, tc := range map[string]struct {
 		payload func(path string) string
 		model   string
@@ -480,7 +480,7 @@ func TestCodexPushesTheTokenContract(t *testing.T) {
 		"Stop":                 {payload: event("Stop"), model: "gpt-5", tokens: withModel},
 		"PostCompact":          {payload: event("PostCompact"), model: "gpt-5", tokens: withModel},
 		"no event":             {payload: event(""), model: "gpt-5", tokens: withModel},
-		"a SessionEnd payload": {payload: sessionEnd, tokens: `{"ctx":"5","ctx_at":"1761066000900"}`},
+		"a SessionEnd payload": {payload: sessionEnd, tokens: `{"ctx":"5","ctx_at":"1761066000900","ctx_owner":"900:500,899:500"}`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

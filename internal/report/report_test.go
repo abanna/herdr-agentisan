@@ -239,7 +239,7 @@ func TestStatuslinePushesTheTokenContract(t *testing.T) {
 	reqs := srv.Requests()
 	require.Len(t, reqs, 1)
 	assert.Equal(t, "pane.report_metadata", reqs[0].Method)
-	assert.JSONEq(t, `{"pane_id":"w14:p1","source":"agentisan","tokens":{"ctx":"43","ctx_at":"1761066000900"},"ttl_ms":180000}`, string(reqs[0].Params))
+	assert.JSONEq(t, `{"pane_id":"w14:p1","source":"agentisan","tokens":{"ctx":"43","ctx_at":"1761066000900","ctx_owner":""},"ttl_ms":180000}`, string(reqs[0].Params))
 }
 
 // failReader fails the test if anything reads it: outside a pane the

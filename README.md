@@ -53,8 +53,9 @@ pinned in `go.mod` under the `tool` directive — nothing to install globally.
 
 Each Claude agent pushes its own context use to its pane as the `ctx` token:
 a bare integer from 0 to 100, source `agentisan`, with a 180 s TTL, and when
-it reported it as `ctx_at`, so an agent restarted in the pane never shows the
-last one's (ADR-001 A61). In the
+it reported it as `ctx_at`, with the agent process that wrote it as
+`ctx_owner`, so an agent restarted in the pane never shows the last one's
+(ADR-001 A61). In the
 same report it pushes the model it runs, the statusline's `model.id`, as the
 `model` token, with `model_at` (ADR-001 A56), so the dashboard's model column
 follows a `/model` switch. After

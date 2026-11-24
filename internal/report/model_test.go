@@ -148,7 +148,7 @@ func TestStatuslinePushesTheModel(t *testing.T) {
 		"beside ctx": {
 			in:     `{"model":{"id":"claude-opus-5-5","display_name":"Opus"},"context_window":{"used_percentage":42.6}}`,
 			want:   report.Result{Ctx: 43, HasCtx: true, Model: "claude-opus-5-5", PaneID: "w14:p1"},
-			tokens: `{"ctx":"43","ctx_at":"1761066000900","model":"claude-opus-5-5","model_at":"1761066000900"}`,
+			tokens: `{"ctx":"43","ctx_at":"1761066000900","ctx_owner":"","model":"claude-opus-5-5","model_at":"1761066000900"}`,
 		},
 		"alone": {
 			in:     `{"model":{"id":"claude-sonnet-5-5","display_name":"Sonnet"}}`,

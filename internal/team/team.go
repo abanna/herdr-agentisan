@@ -127,6 +127,10 @@ type Pane struct {
 	// CtxAt is when the ctx was reported, from its ctx_at token (A61); zero
 	// when absent, not a value the report writes, or with no agent.
 	CtxAt time.Time
+	// CtxOwner are the processes that wrote the ctx, from its ctx_owner
+	// token (A61); none when absent, not a value the report writes, or with
+	// no agent.
+	CtxOwner []report.Proc
 	// StageAt is when the stage was last reported, from its stage_at token
 	// (A42); zero when absent or not a time report.ParseStageAt reads.
 	StageAt time.Time
@@ -322,6 +326,7 @@ func worker(p herdr.PaneInfo, t Target, ids, names map[string]string) Worker {
 	}
 	w.Pane.Model, w.Pane.ModelAt = reportedModel(p)
 	w.Pane.CtxAt = ctxAtOf(p)
+	w.Pane.CtxOwner = ctxOwnerOf(p)
 	return w
 }
 

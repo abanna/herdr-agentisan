@@ -523,15 +523,14 @@ func TestLaunchModelsBudgetResumesWithADeferredPane(t *testing.T) {
 		foreground[n] = n
 	}
 	const active = "w1:p7"
-	oldStamp := time.Unix(9, 0)
-	panes[6].Tokens = map[string]string{report.CtxKey: "20", report.CtxAtKey: report.FormatModelAt(oldStamp)}
+	before := team.Pane{Ctx: "20", CtxOwner: []report.Proc{{PID: 7, Start: 7}}}
 	poll := func() map[string]team.CtxGate {
 		t.Helper()
 		_, err := lm.Refresh(t.Context(), c, panes, pt.startTime, t0, zerolog.Nop())
 		require.NoError(t, err)
 		return lm.CtxGates(panes)
 	}
-	assert.Equal(t, "20", poll()[active].Ctx(team.Pane{Ctx: "20", CtxAt: oldStamp}))
+	assert.Equal(t, "20", poll()[active].Ctx(before))
 
 	// Six formerly verified agents still appear in pane.list, but their
 	// shells now own the foreground. Each miss consumes 180 ms of budget.
@@ -544,16 +543,15 @@ func TestLaunchModelsBudgetResumesWithADeferredPane(t *testing.T) {
 	exit(pt, 7)
 	pt.set(8, 8)
 	foreground[8] = 8
-	newStamp := time.Unix(10, 0)
-	panes[6].Tokens[report.CtxKey] = "80"
-	panes[6].Tokens[report.CtxAtKey] = report.FormatModelAt(newStamp)
 	c.Dialed = func() error {
 		clk.advance(180 * time.Millisecond)
 		return nil
 	}
 
-	fresh := team.Pane{Ctx: "80", CtxAt: newStamp}
-	assert.Empty(t, poll()[active].Ctx(fresh), "the final pane was deferred by the budget")
+	fresh := team.Pane{Ctx: "80", CtxOwner: []report.Proc{{PID: 8, Start: 8}}}
+	deferred := poll()[active]
+	assert.Empty(t, deferred.Ctx(before), "the final pane was deferred by the budget: nothing proves the old agent's ctx")
+	assert.Empty(t, deferred.Ctx(fresh), "nor the restarted agent's, not yet verified")
 	assert.Equal(t, 1, processAsks(ph.srv)[active], "no additional ask on the overrun poll")
 	assert.Equal(t, "80", poll()[active].Ctx(fresh), "the next budget reaches the restarted agent")
 	assert.Equal(t, 2, processAsks(ph.srv)[active], "the deferred pane gets a probe")
@@ -610,11 +608,9 @@ func TestLaunchModelsGivesAPartialProbeAFullBudget(t *testing.T) {
 		require.NoError(t, err)
 		return lm.CtxGates(panes)[active]
 	}
-	oldStamp := time.Unix(6, 0)
-	panes[1].Tokens = map[string]string{report.CtxKey: "20", report.CtxAtKey: report.FormatModelAt(oldStamp)}
 	gate := poll()
 	require.False(t, gate.Start.IsZero(), "the process must already be known")
-	require.Equal(t, "20", gate.Ctx(team.Pane{Ctx: "20", CtxAt: oldStamp}))
+	require.Equal(t, "20", gate.Ctx(team.Pane{Ctx: "20", CtxOwner: []report.Proc{{PID: 2, Start: 2}}}))
 
 	// Stable list order S1, A, S2, S3. The suspended processes stay alive
 	// with their original starts. The second probe of a poll cannot finish.
@@ -627,8 +623,6 @@ func TestLaunchModelsGivesAPartialProbeAFullBudget(t *testing.T) {
 	pt.set(5, 5)
 	foreground[5] = 5
 	ph.set(active, agentProc(5, "codex"))
-	newStamp := time.Unix(7, 0)
-	panes[1].Tokens = map[string]string{report.CtxKey: "80", report.CtxAtKey: report.FormatModelAt(newStamp)}
 	c.Dialed = func() error {
 		clk.advance(600 * time.Millisecond)
 		if clk.Now().Sub(pollStart) >= daemon.ModelBudget {
@@ -636,11 +630,74 @@ func TestLaunchModelsGivesAPartialProbeAFullBudget(t *testing.T) {
 		}
 		return nil
 	}
-	fresh := team.Pane{Ctx: "80", CtxAt: newStamp}
+	fresh := team.Pane{Ctx: "80", CtxOwner: []report.Proc{{PID: 5, Start: 5}}}
 	assert.Empty(t, poll().Ctx(fresh), "the first budget times out the running agent")
 	for range 4 {
 		assert.Equal(t, "80", poll().Ctx(fresh), "the next budget starts with the partial probe")
 	}
+}
+
+// A cold rejection, then another job's report: B is listed but loses the
+// foreground before the kernel read; A, the agent that had the pane, returns.
+// C wrote the 80% and is in neither poll. Review of 9e535d8, P1 1.
+func TestLaunchModelsColdRetryNeverAdoptsAnotherJobsReport(t *testing.T) {
+	t.Parallel()
+	ph := newProcHerdr(t)
+	lm := daemon.NewLaunchModels()
+	c := herdr.Client{SocketPath: ph.srv.Path}
+	pt := &procs{start: map[int]uint64{1: 1, 3: 3}}
+	foreground := map[int]int{1: 1, 3: 1} // A's group is in front, B's is not
+	lm.SetProcessStat(func(pid int) (report.Stat, error) {
+		start, err := pt.startTime(pid)
+		return report.Stat{Start: start, Pgrp: pid, Tpgid: foreground[pid]}, err
+	})
+	panes := []herdr.PaneInfo{agentPane("w1:p1", "t1", "codex")}
+	reportedByC := team.Pane{Ctx: "80", CtxAt: time.Unix(25, 0), CtxOwner: []report.Proc{{PID: 2, Start: 2}}}
+	poll := func(pid int) string {
+		t.Helper()
+		ph.set(panes[0].PaneID, agentProc(pid, "codex"))
+		_, err := lm.Refresh(t.Context(), c, panes, pt.startTime, t0, zerolog.Nop())
+		require.NoError(t, err)
+		return lm.CtxGates(panes)[panes[0].PaneID].Ctx(reportedByC)
+	}
+	assert.Empty(t, poll(3), "cold rejection of B")
+	assert.Empty(t, poll(1), "A is verified, and C's 80% is not A's")
+	assert.Equal(t, "80", lm.CtxGates(panes)[panes[0].PaneID].Ctx(team.Pane{Ctx: "80", CtxOwner: []report.Proc{{PID: 1, Start: 1}}}), "A's own is")
+}
+
+// The budget runs out on another pane's re-probe, so a pane whose agent was
+// never probed is deferred while it still holds an earlier agent's ctx.
+// Review of 9e535d8, P1 2.
+func TestLaunchModelsDeferredPaneNeverShowsAnEarlierAgentsCtx(t *testing.T) {
+	t.Parallel()
+	ph := newProcHerdr(t)
+	lm := daemon.NewLaunchModels()
+	clk := &clock{now: t0}
+	lm.SetClock(clk.Now)
+	c := herdr.Client{SocketPath: ph.srv.Path}
+	pt := &procs{start: map[int]uint64{1: 1, 9: 20, 100: 100}}
+	foreground := map[int]int{1: 1, 9: 9, 100: 100}
+	lm.SetProcessStat(func(pid int) (report.Stat, error) {
+		start, err := pt.startTime(pid)
+		return report.Stat{Start: start, Pgrp: pid, Tpgid: foreground[pid]}, err
+	})
+	x, y := agentPane("w1:p1", "t1", "codex"), agentPane("w1:p2", "t2", "codex")
+	ph.set(x.PaneID, agentProc(1, "codex"))
+	ph.set(y.PaneID, agentProc(9, "codex"))
+	c.Dialed = func() error { clk.advance(daemon.ModelBudget); return nil }
+	_, err := lm.Refresh(t.Context(), c, []herdr.PaneInfo{x}, pt.startTime, t0, zerolog.Nop())
+	require.NoError(t, err)
+
+	// X's cached agent leaves the foreground: its re-probe takes the budget.
+	ph.set(x.PaneID, agentProc(100, "/bin/sh"))
+	foreground[1] = 100
+	panes := []herdr.PaneInfo{x, y}
+	_, err = lm.Refresh(t.Context(), c, panes, pt.startTime, t0, zerolog.Nop())
+	require.NoError(t, err)
+	// Y holds an earlier Codex's 80%, written before Y's agent started.
+	earlier := team.Pane{Ctx: "80", CtxAt: time.Unix(5, 0), CtxOwner: []report.Proc{{PID: 4, Start: 4}}}
+	assert.Empty(t, lm.CtxGates(panes)[y.PaneID].Ctx(earlier))
+	assert.Zero(t, processAsks(ph.srv)[y.PaneID], "Y was not asked in time")
 }
 
 // budgetDial is a client of ph whose first dial spends the whole budget by

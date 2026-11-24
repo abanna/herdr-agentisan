@@ -1,6 +1,7 @@
 package team
 
 import (
+	"slices"
 	"sync"
 	"time"
 
@@ -8,32 +9,39 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/report"
 )
 
-// CtxGate qualifies a pane's report against the last verified foreground
-// start. RequireFresh covers a lost or replaced process. After is the last
-// stamp observed before a replacement, which its own report must exceed.
-// Retained is a stamp already qualified for this exact foreground process.
+// CtxGate is what the poll verified about a pane's foreground agent. Agent
+// is that process, zero when none was verified, and Start its wall-clock
+// start (A47), zero when unknown.
 type CtxGate struct {
-	Start, After, Retained time.Time
-	RequireFresh           bool
+	Start time.Time
+	Agent report.Proc
 }
 
-// Allows checks a report's stamp, keeping A61's legacy initial fallback.
-func (g CtxGate) Allows(at time.Time) bool {
-	if !at.IsZero() && at.Equal(g.Retained) {
-		return true
-	}
-	if g.RequireFresh && (g.Start.IsZero() || !at.After(g.After)) {
-		return false
-	}
-	return g.Start.IsZero() || at.IsZero() || !at.Before(g.Start)
-}
-
-// Ctx returns p's report when its stamp qualifies.
+// Ctx returns p's report when it is the current agent's (A61). A report
+// that names its writing processes (ctx_owner) counts only while Agent is
+// one of them, so with no verified agent it is unknown. One that names none
+// is an older build's: CurrentCtx's timestamp rule.
 func (g CtxGate) Ctx(p Pane) string {
-	if g.Allows(p.CtxAt) {
-		return p.Ctx
+	if len(p.CtxOwner) > 0 {
+		if g.Agent.PID != 0 && slices.Contains(p.CtxOwner, g.Agent) {
+			return p.Ctx
+		}
+		return ""
 	}
-	return ""
+	return CurrentCtx(p, g.Start)
+}
+
+// CurrentCtx is the rule for a ctx that names no writer (ADR-001 A61): p's
+// ctx unless its ctx_at is earlier than start, when its pane's agent process
+// started, since an agent before it in the pane left it, as a Codex's ctx
+// lives 24 h. A pane whose start is unknown (zero) keeps it, as A56 keeps a
+// reported model. So does a ctx with no ctx_at, unlike A56's model, which
+// counts only with its model_at: a build before A61 wrote ctx with none.
+func CurrentCtx(p Pane, start time.Time) string {
+	if !start.IsZero() && !p.CtxAt.IsZero() && p.CtxAt.Before(start) {
+		return ""
+	}
+	return p.Ctx
 }
 
 // GateCtx applies each team's ctx gates before the poll's readers see it.
@@ -50,6 +58,17 @@ func GateCtx(m *Model, gates map[string]CtxGate) {
 			gate(m.Projects[i].Groups[j].Workers)
 		}
 	}
+}
+
+// ctxOwnerOf is the processes p's ctx_owner token names; none when it is
+// absent, not a value the report writes, or when herdr detects no agent in p,
+// as for ctxOf.
+func ctxOwnerOf(p herdr.PaneInfo) []report.Proc {
+	if p.Agent == "" {
+		return nil
+	}
+	owner, _ := report.ParseCtxOwner(p.Tokens[report.CtxOwnerKey])
+	return owner
 }
 
 // ctxAtOf is when p's ctx was reported, from its ctx_at token (A61); zero

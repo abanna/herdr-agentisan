@@ -31,7 +31,6 @@ const (
 type launchModels struct {
 	byPane map[string]launchModel
 	stat   report.StatFunc
-	ctxs   map[string]processCtx
 	// failed holds each pane whose last ask failed, so that is logged once.
 	failed map[string]bool
 	// overran is set while the budget runs out before every pane is asked,
@@ -53,24 +52,17 @@ type launchModel struct {
 	timed bool
 	// notForeground marks a listed process the kernel ruled out.
 	notForeground bool
+	// lostSince is when the pane's agent was last verified or ruled out and
+	// nothing has replaced it: a miss is asked again at every poll for
+	// ModelRetry from then, so the replacement's ctx is not held back by a
+	// cached miss. Zero for any other entry.
+	lostSince time.Time
 	// startedAt is start on the wall clock, once a poll has put it there
 	// (A47).
 	startedAt time.Time
 	model     string
 	// asked is when the pane was asked.
 	asked time.Time
-}
-
-// processCtx retains the foreground history needed to qualify the pane's
-// latest report when a process returns to the foreground.
-type processCtx struct {
-	terminal   string
-	agent      report.Proc
-	owner      report.Proc
-	reported   time.Time
-	after      time.Time
-	replaced   bool
-	awaitStart bool // a cold probe found a process outside the foreground
 }
 
 func newLaunchModels(stat report.StatFunc) *launchModels {
@@ -123,8 +115,8 @@ func agentPanes(m team.Model, panes []herdr.PaneInfo) []herdr.PaneInfo {
 // another fresh probe gets the next first slot. A probe that already had the
 // first slot yields to skipped panes. An initial miss retries after ModelRetry.
 //
-// A failed ask leaves its pane no model, keeps nothing and is asked again at
-// the next poll; it is logged once until an ask succeeds, unless the pane
+// A failed ask leaves its pane no model, keeps nothing but that its agent was
+// lost, and is asked again at the next poll; it is logged once until an ask succeeds, unless the pane
 // had closed since the list. Entries of panes not in panes are dropped. It
 // returns ErrHerdrGone, and asks nothing more, once a call finds the socket
 // no longer names the daemon's server.
@@ -157,7 +149,14 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 			}
 			continue
 		}
+		// A pane whose agent was lost keeps that until an ask finds its
+		// replacement, whether the ask fails, is cut off or is left out.
+		prev := lm.byPane[p.PaneID]
 		delete(lm.byPane, p.PaneID)
+		if prev.terminal == p.TerminalID && (prev.pid != 0 || !prev.lostSince.IsZero()) {
+			lm.byPane[p.PaneID] = launchModel{terminal: p.TerminalID, agent: p.Agent, asked: now, lostSince: cmp.Or(prev.lostSince, now)}
+		}
+		since := lm.byPane[p.PaneID].lostSince
 		// A reply the poll already holds costs no call, so the budget does
 		// not leave it out, and its failure is not the budget's.
 		_, held := pp[p.PaneID]
@@ -190,12 +189,13 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 		}
 		delete(lm.failed, p.PaneID)
 		e := read(info, p, startTime, now)
-		// A lost foreground agent makes ctx unknown. Retry an unresolved
-		// replacement next poll so the 60 s miss cache cannot prolong it.
-		prior := lm.ctxs[p.PaneID]
-		if e.pid != 0 || prior.terminal != p.TerminalID || prior.agent.PID == 0 && !prior.awaitStart {
-			lm.byPane[p.PaneID] = e
+		if e.pid == 0 {
+			e.lostSince = since
+			if e.notForeground {
+				e.lostSince = cmp.Or(since, now)
+			}
 		}
+		lm.byPane[p.PaneID] = e
 		if e.model != "" {
 			out[p.PaneID] = e.model
 		}
@@ -271,62 +271,20 @@ func (lm *launchModels) started(wall func(start uint64) (time.Time, error)) map[
 	return out
 }
 
-// ctxGates joins the current starts with the last observed report for each
-// terminal, including when it briefly shows a shell. A replacement must
-// have its own stamp even when the wall-clock start overlaps the old report.
+// ctxGates are each pane's verified foreground agent and its start, for
+// team.CtxGate. A pane whose agent was not verified this poll, a miss or a
+// probe the budget left out, has none, so a ctx that names its writer is
+// unknown there until it is.
 func (lm *launchModels) ctxGates(panes []herdr.PaneInfo, started map[string]time.Time) map[string]team.CtxGate {
-	next := make(map[string]processCtx)
-	gates := make(map[string]team.CtxGate)
+	gates := make(map[string]team.CtxGate, len(panes))
 	for _, p := range panes {
-		id := p.PaneID
-		prior := lm.ctxs[id]
-		if prior.terminal != p.TerminalID {
-			prior = processCtx{terminal: p.TerminalID}
+		g := team.CtxGate{Start: started[p.PaneID]}
+		if e := lm.byPane[p.PaneID]; e.timed && e.pid != 0 {
+			g.Agent = report.Proc{PID: int(e.pid), Start: e.start}
 		}
-		e := lm.byPane[id]
-		start := started[id]
-		prior.awaitStart = prior.awaitStart || prior.agent.PID == 0 && e.notForeground
-		if !e.timed || prior.awaitStart && start.IsZero() {
-			if prior.agent.PID != 0 || prior.awaitStart {
-				next[id], gates[id] = prior, team.CtxGate{RequireFresh: true}
-			}
-			continue
-		}
-		agent := report.Proc{PID: int(e.pid), Start: e.start}
-		if prior.agent.PID != 0 && agent != prior.agent {
-			prior.after, prior.replaced = prior.reported, true
-		}
-		if prior.awaitStart {
-			prior.replaced, prior.awaitStart = true, false
-		}
-		gate := team.CtxGate{Start: start, After: prior.after, RequireFresh: prior.replaced}
-		if agent == prior.owner {
-			gate.Retained = prior.reported
-		}
-		prior.agent = agent
-		prior.observeReport(p.Tokens, gate)
-		next[id], gates[id] = prior, gate
+		gates[p.PaneID] = g
 	}
-	lm.ctxs = next
 	return gates
-}
-
-// observeReport binds a qualifying stamp once. A stamp the current process
-// cannot have written establishes no ownership for another process.
-func (p *processCtx) observeReport(tokens map[string]string, gate team.CtxGate) {
-	at, ok := report.ParseCtxAt(tokens[report.CtxAtKey])
-	if !ok || at.Before(p.reported) {
-		return
-	}
-	if at.After(p.reported) {
-		p.reported, p.owner = at, report.Proc{}
-	}
-	if p.owner.PID != 0 || gate.Start.IsZero() || !gate.Allows(at) {
-		return
-	}
-	if _, ok := team.ParseCtx(tokens[report.CtxKey]); ok {
-		p.owner = p.agent
-	}
 }
 
 // holds reports whether e is still pane p's: the same terminal and agent,
@@ -336,7 +294,7 @@ func (e launchModel) holds(p herdr.PaneInfo, startTime func(pid int) (uint64, er
 		return false
 	}
 	if e.pid == 0 {
-		return !e.notForeground && now.Sub(e.asked) < ModelRetry
+		return (e.lostSince.IsZero() || now.Sub(e.lostSince) >= ModelRetry) && now.Sub(e.asked) < ModelRetry
 	}
 	if startTime == nil {
 		return true

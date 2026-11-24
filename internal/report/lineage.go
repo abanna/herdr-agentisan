@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -268,4 +269,71 @@ func SystemStat() StatFunc {
 func SystemCmdline() CmdlineFunc {
 	_, cmdline := systemReaders()
 	return cmdline
+}
+
+// MaxOwnerProcs bounds the processes a ctx_owner names: a node launcher, its
+// native child and one more, 74 characters at the widest (darwin's
+// microsecond starts), inside herdr's 80 for a token value.
+const MaxOwnerProcs = 3
+
+// IsAgentArgv reports whether argv runs Claude or Codex: argv[0] named
+// claude or codex, or node running codex or codex.js. It is the agent the
+// daemon finds in a pane's foreground job (team.LaunchModel).
+func IsAgentArgv(argv []string) bool {
+	return isCodex(argv) || len(argv) > 0 && filepath.Base(argv[0]) == "claude"
+}
+
+// AgentProcs are the processes of l, nearest first and at most MaxOwnerProcs,
+// whose arguments are an agent's (IsAgentArgv) and which are still the
+// process the lineage read: the agent that runs the reporting command. A
+// lineage that cannot read arguments names none.
+func (l *Lineage) AgentProcs() []Proc {
+	if l == nil || l.stat == nil || l.cmdline == nil {
+		return nil
+	}
+	var out []Proc
+	for _, p := range l.Procs {
+		if len(out) == MaxOwnerProcs {
+			break
+		}
+		argv, err := l.cmdline(p.PID)
+		if err != nil || !IsAgentArgv(argv) {
+			continue
+		}
+		if s, err := l.stat(p.PID); err == nil && s.Start == p.Start {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// FormatCtxOwner is ps as a ctx_owner value: "pid:start" in decimal, comma
+// separated; "" for none, which clears the token.
+func FormatCtxOwner(ps []Proc) string {
+	parts := make([]string, 0, len(ps))
+	for _, p := range ps {
+		parts = append(parts, strconv.Itoa(p.PID)+":"+strconv.FormatUint(p.Start, 10))
+	}
+	return strings.Join(parts, ",")
+}
+
+// ParseCtxOwner reads a ctx_owner value as FormatCtxOwner writes it: one to
+// MaxOwnerProcs positive pid:start pairs in canonical decimal. Anything else
+// is no owner, and the ctx is read as one an older build wrote.
+func ParseCtxOwner(v string) ([]Proc, bool) {
+	fields := strings.Split(v, ",")
+	if v == "" || len(fields) > MaxOwnerProcs {
+		return nil, false
+	}
+	out := make([]Proc, 0, len(fields))
+	for _, f := range fields {
+		pid, start, ok := strings.Cut(f, ":")
+		n, err := strconv.Atoi(pid)
+		s, err2 := strconv.ParseUint(start, 10, 64)
+		if !ok || err != nil || err2 != nil || n <= 0 || s == 0 || strconv.Itoa(n) != pid || strconv.FormatUint(s, 10) != start {
+			return nil, false
+		}
+		out = append(out, Proc{PID: n, Start: s})
+	}
+	return out, true
 }

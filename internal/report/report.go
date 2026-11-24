@@ -47,6 +47,12 @@ const (
 	// reader can tell the current agent's ctx from one an agent before it in
 	// the pane left (A61): model_at dates only a report with a model.
 	CtxAtKey = "ctx_at"
+	// CtxOwnerKey is the pane token naming the agent process that wrote the
+	// ctx: ParseCtxOwner's list of pid:start, set in every report that sets
+	// ctx and cleared by one that cannot name its agent. The daemon shows a
+	// ctx only while the pane's verified foreground agent is among them, so
+	// a ctx another agent left never counts for this one.
+	CtxOwnerKey = "ctx_owner"
 	// MaxStatuslineBytes bounds the statusline JSON read from stdin. Claude
 	// sends a few kilobytes; the cap stops a runaway writer from growing the
 	// buffer without limit.
@@ -340,6 +346,8 @@ func push(ctx context.Context, rep Reporter, pane Pane, rd Reading, ttl time.Dur
 	if rd.HasCtx {
 		tokens[CtxKey] = strconv.Itoa(rd.Ctx)
 		tokens[CtxAtKey] = FormatModelAt(pane.now())
+		// An empty value clears a previous report's owner.
+		tokens[CtxOwnerKey] = FormatCtxOwner(pane.Lineage.AgentProcs())
 	}
 	if rd.Model != "" {
 		tokens[ModelKey] = rd.Model
