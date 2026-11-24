@@ -152,7 +152,7 @@ func bossObject(keys map[string]*shape) *shape {
 var (
 	bossScalar = &shape{nonNull: true}
 	bossFields = map[string]*shape{
-		"pane_id": nil, "name": nil, agentKey: nil, "status": nil, "item": nil, "stage": nil,
+		"pane_id": nil, nameKey: nil, "agent": nil, "status": nil, "item": nil, "stage": nil,
 		"stage_at": timeShape, "stage_stale": bossScalar, "idle_since": timeShape, "ctx": nil,
 	}
 	bossSnapshotShape = bossObject(map[string]*shape{
@@ -160,7 +160,7 @@ var (
 		"team_poll": bossObject(map[string]*shape{"as_of": timeShape, "state": nil}),
 		"boss":      bossObject(union(bossFields, map[string]*shape{"started_at": timeShape})),
 		"groups": {elem: bossObject(map[string]*shape{
-			"name": nil, "workers": {elem: bossObject(union(bossFields, map[string]*shape{"id": nil, "generation": nil}))},
+			nameKey: nil, "workers": {elem: bossObject(union(bossFields, map[string]*shape{"id": nil, "generation": nil}))},
 		})},
 		"workers_omitted": bossScalar,
 		"board": bossObject(map[string]*shape{

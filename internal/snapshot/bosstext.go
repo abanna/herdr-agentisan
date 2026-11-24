@@ -25,7 +25,7 @@ func (s BossSnapshot) WriteText(w io.Writer) error {
 	} else {
 		out = append(out, "Boss "...)
 		out = appendBossRow(out, s.Boss.BossRow)
-		out = appendBossTime(out, "started", s.Boss.StartedAt)
+		out = appendBossTime(out, " started=", s.Boss.StartedAt)
 		out = append(out, '\n')
 	}
 
@@ -75,11 +75,11 @@ func bossText(s string) string {
 func appendBossRow(out []byte, r BossRow) []byte {
 	out = fmt.Appendf(out, "%s %s pane=%s", bossText(r.Name), r.Status, bossText(r.PaneID))
 	for _, f := range []struct {
-		key   string
-		value *string
-	}{{agentKey, r.Agent}, {"item", r.Item}, {"stage", r.Stage}} {
+		prefix string
+		value  *string
+	}{{" agent=", r.Agent}, {" item=", r.Item}, {" stage=", r.Stage}} {
 		if f.value != nil {
-			out = fmt.Appendf(out, " %s=%s", f.key, bossText(*f.value))
+			out = fmt.Appendf(out, "%s%s", f.prefix, bossText(*f.value))
 		}
 	}
 	if r.Ctx == nil {
@@ -90,13 +90,13 @@ func appendBossRow(out []byte, r BossRow) []byte {
 	if r.StageStale {
 		out = append(out, " stage_stale"...)
 	}
-	out = appendBossTime(out, "stage_at", r.StageAt)
-	return appendBossTime(out, "idle_since", r.IdleSince)
+	out = appendBossTime(out, " stage_at=", r.StageAt)
+	return appendBossTime(out, " idle_since=", r.IdleSince)
 }
 
-func appendBossTime(out []byte, key string, at *time.Time) []byte {
+func appendBossTime(out []byte, prefix string, at *time.Time) []byte {
 	if at != nil {
-		return fmt.Appendf(out, " %s=%s", key, at.Format(time.RFC3339))
+		return fmt.Appendf(out, "%s%s", prefix, at.Format(time.RFC3339))
 	}
 	return out
 }

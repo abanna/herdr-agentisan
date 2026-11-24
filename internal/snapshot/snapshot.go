@@ -38,7 +38,7 @@ const MaxBytes = 4 << 20
 // MaxCtx is the largest ctx value: ctx is a percentage of the context window.
 const MaxCtx = 100
 
-const agentKey = "agent"
+const nameKey = "name"
 
 // Sentinel errors. Callers branch on these with errors.Is.
 var (
@@ -445,13 +445,13 @@ type shape struct {
 var (
 	timeShape = &shape{time: true}
 	agentKeys = map[string]*shape{
-		"name": nil, "unnamed": nil, "shell": nil, "pane_id": nil, "tab_id": nil, "status": nil, agentKey: nil, "model": nil, "ctx": nil, "item": nil, "stage": nil,
+		nameKey: nil, "unnamed": nil, "shell": nil, "pane_id": nil, "tab_id": nil, "status": nil, "agent": nil, "model": nil, "ctx": nil, "item": nil, "stage": nil,
 		"stage_started_at": timeShape, "idle_since": timeShape, "stage_at": timeShape, "stage_stale": nil,
 	}
 	agentShape = &shape{keys: agentKeys}
 	bossShape  = &shape{keys: union(agentKeys, map[string]*shape{"watchers": nil, "started_at": timeShape})}
 	groupShape = &shape{keys: map[string]*shape{
-		"name": nil, "description": nil, "agents": {elem: agentShape},
+		nameKey: nil, "description": nil, "agents": {elem: agentShape},
 	}}
 	prShape      = &shape{keys: map[string]*shape{"number": nil, "ci": nil, "codex": nil, "merge": nil}}
 	slotsShape   = &shape{keys: map[string]*shape{"used": nil, "total": nil, "held": nil}, required: []string{"used", "total"}}
