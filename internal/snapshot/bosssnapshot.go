@@ -11,6 +11,8 @@ import (
 	"slices"
 	"time"
 	"unicode/utf8"
+
+	"github.com/abanna/herdr-agentisan/internal/report"
 )
 
 // Boss snapshot bounds (NERD-5748), independent of the dashboard contract.
@@ -127,12 +129,12 @@ func boundedBossString(s string, limit int) bool {
 }
 
 func (r BossRow) valid() bool {
-	for _, s := range []*string{r.Agent, r.Item, r.Stage} {
+	for _, s := range []*string{r.Agent, r.Item} {
 		if s != nil && !boundedBossString(*s, MaxBossFieldBytes) {
 			return false
 		}
 	}
-	return boundedBossString(r.Name, MaxBossFieldBytes) && boundedBossString(r.PaneID, MaxBossFieldBytes) &&
+	return (r.Stage == nil || report.CheckValue(*r.Stage) == nil) && boundedBossString(r.Name, MaxBossFieldBytes) && boundedBossString(r.PaneID, MaxBossFieldBytes) &&
 		r.Status.Valid() && (r.Ctx == nil || *r.Ctx >= 0 && *r.Ctx <= MaxCtx)
 }
 

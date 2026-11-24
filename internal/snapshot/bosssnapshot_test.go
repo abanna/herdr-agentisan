@@ -22,6 +22,8 @@ func TestBossSnapshotJSONStrict(t *testing.T) {
 	raw, err := json.Marshal(got)
 	require.NoError(t, err)
 	assert.JSONEq(t, bossJSON, string(raw))
+	_, err = snapshot.DecodeBoss(strings.NewReader(strings.Replace(bossJSON, `"stage":null`, `"stage":"`+strings.Repeat("調", 80)+`"`, 1)))
+	require.NoError(t, err, "240 bytes, but 80 characters as the reporter bounds a stage")
 	worker := bossJSON[strings.Index(bossJSON, `{"id":`) : strings.Index(bossJSON, `}]}`)+1]
 	for _, tc := range []struct{ name, from, to string }{
 		{"invalid missing boss name", `"missing_boss_name":null`, `"missing_boss_name":"al-boss\n"`},
@@ -40,6 +42,7 @@ func TestBossSnapshotJSONStrict(t *testing.T) {
 		{"time value", `T09:00:03Z`, `T09:60:03Z`},
 		{"UTF-8", `"w"`, "\"\xff\""},
 		{"field length", `"w"`, "\"" + strings.Repeat("a", 257) + "\""},
+		{"stage length", `"stage":null`, `"stage":"` + strings.Repeat("a", 81) + `"`},
 		{"context", `"ctx":0`, `"ctx":101`},
 		{"binding", `"generation":null`, `"generation":1`},
 		{"worker cap", worker, strings.Repeat(worker+",", 128) + worker},

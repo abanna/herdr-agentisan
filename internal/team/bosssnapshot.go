@@ -4,6 +4,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/store"
 )
@@ -65,7 +66,10 @@ func bossRow(p Pane, at, start time.Time, idle *IdleClock) snapshot.BossRow {
 	if start.IsZero() || p.CtxAt.IsZero() || p.CtxAt.After(at) {
 		a.Ctx = nil
 	}
-	stage := bossField(a.Stage)
+	var stage *string
+	if report.CheckValue(a.Stage) == nil {
+		stage = &a.Stage
+	}
 	if stage == nil {
 		a.StageAt, a.StageStale = nil, false
 	}

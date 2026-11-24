@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
@@ -23,8 +24,9 @@ const (
 // bossPoll is published as a whole after a named, reconciled poll. Readers
 // copy a single team's snapshot and attach its current board metadata.
 type bossPoll struct {
-	at    time.Time
-	teams map[string]snapshot.BossSnapshot
+	at     time.Time
+	teams  map[string]snapshot.BossSnapshot
+	bosses map[string][]string // each team's boss places in this projection (A60)
 }
 
 func publishBossPoll(cache *snapshotCache, m team.Model, rows []store.Worker, at, observed time.Time, idle *team.IdleClock, started map[string]time.Time) {
@@ -32,9 +34,12 @@ func publishBossPoll(cache *snapshotCache, m team.Model, rows []store.Worker, at
 	for _, r := range rows {
 		bindings[r.LogicalID] = r
 	}
-	next := &bossPoll{at: observed.UTC(), teams: make(map[string]snapshot.BossSnapshot, len(m.Projects))}
+	next := &bossPoll{at: observed.UTC(), teams: make(map[string]snapshot.BossSnapshot, len(m.Projects)), bosses: map[string][]string{}}
 	for _, p := range m.Projects {
 		next.teams[p.Name] = team.BossSnapshot(p, at, idle, started, bindings)
+		for _, b := range p.Boss {
+			next.bosses[p.Name] = append(next.bosses[p.Name], b.Pane.ID)
+		}
 	}
 	cache.boss.Store(next)
 }
@@ -67,15 +72,19 @@ func (o Options) bossSnapshotOp(st *store.Store, cache *snapshotCache, place pla
 		if !ok {
 			return nil, bossRefusal(codeNotReady)
 		}
+		if !slices.Contains(poll.bosses[who.Project], who.Pane) {
+			return nil, bossRefusal(codeNotAllowed)
+		}
 
 		read, cancel := context.WithTimeout(ctx, bossBoardBudget)
 		defer cancel()
+		asOf := o.Now().UTC() // before the read, so no later post is older
 		board, err := st.BoardStatus(read, who.Project, store.ReaderBoss)
 		out.At = o.Now().UTC()
 		out.Board.State = snapshot.Unavailable
 		if err == nil {
 			out.Board = snapshot.BossBoard{
-				BossSource: snapshot.BossSource{AsOf: &out.At, State: snapshot.Fresh},
+				BossSource: snapshot.BossSource{AsOf: &asOf, State: snapshot.Fresh},
 				Mark:       &board.Mark, Newest: &board.Newest, Unread: &board.Unread,
 			}
 		}

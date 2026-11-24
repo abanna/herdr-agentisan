@@ -131,7 +131,7 @@ func TestBossSnapshotAsOfPrecedesStatusFlip(t *testing.T) {
 	o.Now = func() time.Time { return boardNow.Add(time.Duration(clock.Load())) }
 	h.mu.Lock()
 	h.onCall = func(method string) {
-		if method == "agent.list" {
+		if method == "workspace.list" || method == "agent.list" {
 			h.mu.Lock()
 			h.panes = slices.Clone(h.panes)
 			i := slices.IndexFunc(h.panes, func(p map[string]any) bool { return p["pane_id"] == "w14:p3" })
@@ -342,4 +342,63 @@ func TestBossSnapshotFreshnessAndProjection(t *testing.T) {
 	clock.Add(1)
 	polled(t, h.srv, 2)
 	assert.Equal(t, got.TeamPoll.AsOf, shiftRead(t, sock).TeamPoll.AsOf, "failed worker read keeps the last successful poll")
+}
+
+// NERD-5748: a post committed as the clock is read is counted or later than as_of.
+func TestBossSnapshotBoardAsOfPrecedesItsRead(t *testing.T) {
+	t.Parallel()
+	h := shiftHerdr(t)
+	shiftCaller(h, "w14:p0")
+	o := shiftOpts(t, h)
+	o.Poll = time.Hour
+	state := paths(t, o.StateDir, h.fakeHerdr)
+	require.NoError(t, os.MkdirAll(state.Dir, 0o700))
+	st, err := store.Open(t.Context(), state.DB)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+	var armed atomic.Bool
+	o.Now = func() time.Time {
+		if armed.CompareAndSwap(true, false) {
+			boardPost(t, st, "alpha", "committed as the clock is read")
+			return boardNow.Add(time.Second)
+		}
+		return boardNow
+	}
+	sock := startShift(t, h, o)
+	shiftRead(t, sock)
+	armed.Store(true)
+	got := shiftRead(t, sock).Board
+	assert.False(t, armed.Load(), "the hook committed the post")
+	assert.True(t, *got.Unread > 0 || !got.AsOf.After(boardNow), "unread=%d as_of=%s", *got.Unread, got.AsOf)
+}
+
+// NERD-5748: a pane placed by the previous poll's model is refused by the new projection.
+func TestBossSnapshotRefusesFormerBossDuringPublish(t *testing.T) {
+	t.Parallel()
+	h := shiftHerdr(t)
+	shiftCaller(h, "w14:p0")
+	sock := startShift(t, h, shiftOpts(t, h))
+	shiftRead(t, sock)
+	published, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	var armed, sawTabs atomic.Bool
+	h.mu.Lock()
+	h.tabs = append(slices.DeleteFunc(slices.Clone(h.tabs), func(tab map[string]any) bool { return tab["tab_id"] == "w14:t1" || tab["tab_id"] == "w14:t4" }),
+		tabOf("w14:t1", "w14", "al-coder-2"), tabOf("w14:t4", "w14", "al-boss"))
+	h.onCall = func(method string) {
+		sawTabs.CompareAndSwap(false, method == "tab.list" && armed.Load())
+		if method == "workspace.report_metadata" && sawTabs.Load() && armed.CompareAndSwap(true, false) {
+			close(published)
+			<-release
+		}
+	}
+	armed.Store(true)
+	h.mu.Unlock()
+	select {
+	case <-published:
+		_, err := daemon.BossSnapshotOf(t.Context(), sock)
+		assert.Equal(t, "not_allowed", refusedWith(t, err))
+	case <-time.After(ready):
+		t.Fatal("poll never reached metadata publication")
+	}
 }

@@ -1,6 +1,7 @@
 package cli_test
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -53,4 +54,8 @@ func TestBossSnapshotCLI(t *testing.T) {
 	}
 	_, _, err := runOut(t, newDaemonEnvWith(t, failingHerdr).lookup(nil), "boss", "snapshot", "--project", "beta")
 	require.ErrorContains(t, err, "unknown flag")
+	e := newDaemonEnvWith(t, failingHerdr) // --state-dir beats the environment's (A51)
+	fakeDaemon(t, e, `{"ok":false,"error":{"code":"not_allowed","message":"boss only"}}`)
+	_, _, err = runOut(t, e.lookup(map[string]string{"HERDR_PLUGIN_STATE_DIR": filepath.Join(t.TempDir(), "wrong")}), "boss", "snapshot", "--state-dir", e.stateDir)
+	assert.ErrorContains(t, err, "not_allowed")
 }

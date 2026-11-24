@@ -12,6 +12,7 @@ import (
 // newBossCmd registers the caller-scoped shift snapshot (NERD-5748).
 func newBossCmd() *cobra.Command {
 	var asJSON bool
+	var flags opFlags
 	snapshotCmd := &cobra.Command{
 		Use:   "snapshot",
 		Short: "Show your team's workers and board counts for shift change",
@@ -20,7 +21,7 @@ func newBossCmd() *cobra.Command {
 			ctx := cmd.Context()
 			lookup := lookupEnvFrom(ctx)
 			socket, _ := lookup("HERDR_SOCKET_PATH")
-			dir, _ := plugin.StateDir("", lookup)
+			dir, _ := plugin.StateDir(flags.stateDir, lookup)
 			paths, err := daemon.PathsFor(dir, socket)
 			if err != nil {
 				return fmt.Errorf("%w: check herdr and plugin state paths", daemon.ErrUnavailable)
@@ -32,6 +33,7 @@ func newBossCmd() *cobra.Command {
 			return render(cmd.OutOrStdout(), asJSON, s, s.WriteText)
 		},
 	}
+	flags.add(snapshotCmd, false)
 	addJSONFlag(snapshotCmd, &asJSON)
 	c := &cobra.Command{Use: "boss", Short: "Commands for the team's boss"}
 	c.AddCommand(snapshotCmd)
