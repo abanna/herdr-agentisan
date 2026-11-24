@@ -223,6 +223,8 @@ func (w *Watch) statuses(prev, m team.Model, now []placed, named bool) []Notice 
 			w.kept = append(w.kept, a)
 		case !there:
 			out = append(out, workerNotice(a.project, a.worker, Gone, goneText(a.worker)))
+		case isShell && named && w.hold != nil && w.hold(id):
+			w.kept = append(w.kept, a)
 		case isShell && named:
 			// An agent that exits leaves its pane a shell: the worker has
 			// left the team as surely as if the pane had closed, whether or

@@ -288,10 +288,11 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	// stop the idle clock, nor the notices of a status change.
 	tp.idle.Observe(m, now)
 	// A departure waits while its loss is undecided: no reconcile this poll,
-	// or a live row whose pane is gone (a pending handoff, an unproven shell).
+	// or a live row whose pane is gone (a pending handoff, an unproven shell)
+	// or whose mute is in force, the exit of its agent included.
 	undecided := map[string]bool{}
 	for _, r := range rows {
-		if r.Status == store.StatusActive && !slices.ContainsFunc(panes, func(p herdr.PaneInfo) bool { return p.PaneID == r.PaneID }) {
+		if r.Status == store.StatusActive && (tp.notices.batch.Mutes.Active(r.LogicalID, r.Generation, now) || !slices.ContainsFunc(panes, func(p herdr.PaneInfo) bool { return p.PaneID == r.PaneID })) {
 			undecided[r.PaneID] = true
 		}
 	}

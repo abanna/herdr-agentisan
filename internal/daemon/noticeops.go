@@ -9,7 +9,6 @@ import (
 
 	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/store"
-	"github.com/abanna/herdr-agentisan/internal/team"
 )
 
 // The notices ops (A44): the boss mutes a worker's notices for a while,
@@ -30,7 +29,7 @@ type MuteRequest struct {
 	For    time.Duration `json:"for,omitempty"`
 }
 
-// UnmuteRequest is notices.unmute's args: the worker as mute selects it.
+// UnmuteRequest is notices.unmute's args.
 type UnmuteRequest struct {
 	Worker string `json:"worker"`
 }
@@ -47,9 +46,9 @@ type MutesResult struct {
 	Mutes []notice.Mute `json:"mutes"`
 }
 
-// noticeOps are the notices ops on mutes. A mute, and its end, name a worker
-// of the model the team poll last gave in, so each waits for a poll that built
-// one (not_ready), the first's or the one after a failed list.
+// noticeOps are the notices ops on mutes. A mute names a worker of the model
+// the team poll last gave in, so it waits for a poll that built one
+// (not_ready), the first's or the one after a failed list.
 func (o Options) noticeOps(in *inbox, mutes *notice.Mutes) map[string]op {
 	ops := map[string]op{
 		OpNoticesMute: {run: func(ctx context.Context, args json.RawMessage) (any, error) {
@@ -63,16 +62,12 @@ func (o Options) noticeOps(in *inbox, mutes *notice.Mutes) map[string]op {
 			}
 			return mutes.Mute(ctx, *m, req.Worker, req.For, o.Now())
 		}},
-		OpNoticesUnmute: {run: func(ctx context.Context, args json.RawMessage) (any, error) {
+		OpNoticesUnmute: {run: func(_ context.Context, args json.RawMessage) (any, error) {
 			var req UnmuteRequest
 			if err := decodeArgs(args, &req); err != nil {
 				return nil, err
 			}
-			m, _ := in.view()
-			if m == nil {
-				return nil, fmt.Errorf("%w: the team poll has no model to find %q in", ErrNotReady, req.Worker)
-			}
-			return UnmuteResult{Worker: req.Worker, Ended: mutes.Unmute(ctx, *m, req.Worker, o.Now())}, nil
+			return UnmuteResult{Worker: req.Worker, Ended: mutes.Unmute(req.Worker, o.Now())}, nil
 		}},
 		OpNoticesList: {run: func(_ context.Context, args json.RawMessage) (any, error) {
 			if err := decodeArgs(args, &struct{}{}); err != nil {
@@ -90,23 +85,17 @@ func (o Options) noticeOps(in *inbox, mutes *notice.Mutes) map[string]op {
 }
 
 // newNoticeMutes checks the selection from the poll against state.db
-// (NERD-5730). The terminal proves an unbound pane is the pending replacement.
+// (NERD-5730): a mute is for the row's current generation only.
 func newNoticeMutes(st *store.Store) *notice.Mutes {
-	return notice.NewMutes(func(ctx context.Context, worker string, w team.Worker) (int64, bool, error) {
-		generation, replacement, err := st.LiveWorkerGeneration(ctx, worker, w.Pane.TerminalID)
+	return notice.NewMutes(func(ctx context.Context, worker string) (int64, error) {
+		generation, err := st.LiveWorkerGeneration(ctx, worker)
 		switch {
-		case errors.Is(err, store.ErrNoWorker) && !w.Bound:
-			return 0, false, nil
 		case errors.Is(err, store.ErrNoWorker):
-			return 0, false, notice.ErrUnknownWorker
+			return 0, notice.ErrUnknownWorker
 		case err != nil:
-			return 0, false, fmt.Errorf("read mute binding: %w", err)
-		case w.Bound && generation == w.Generation, !w.Bound && replacement:
-			return generation, true, nil
-		default:
-			// The cached selection cannot mute a different live binding.
-			return 0, false, notice.ErrUnknownWorker
+			return 0, fmt.Errorf("read mute binding: %w", err)
 		}
+		return generation, nil
 	})
 }
 

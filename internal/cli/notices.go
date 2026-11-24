@@ -26,8 +26,8 @@ func newNoticesMuteCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "mute <worker>",
 		Short: "Drop a worker's notices to its boss for a while, never its context ceiling",
-		Long: "Drops every notice about the worker, named as its notices name it (its logical\n" +
-			"id, else its agent's name, else its pane id), until the mute ends: the context\n" +
+		Long: "Drops every notice about the worker bound to a row, named by its logical id,\n" +
+			"until the mute ends: only a bound worker can be muted. The context\n" +
 			"ceiling always goes. The daemon holds mutes in memory, so a restart ends them.",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {

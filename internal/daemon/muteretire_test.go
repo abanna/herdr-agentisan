@@ -3,10 +3,10 @@ package daemon_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -333,32 +333,28 @@ func TestStaleUnboundPaneCannotMuteAReusedWorkerID(t *testing.T) {
 	assert.Contains(t, noticeLines(logs), "ha-coder-1 is blocked")
 }
 
+// TestMuteThroughPendingHandoff: the row's mute follows it through a handoff.
+// While the handoff is pending the replacement is an unbound pane, which no
+// mute can name; after the ack it is the row's pane again, still muted.
 func TestMuteThroughPendingHandoff(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []string{"renew", "first_mute"} {
-		t.Run(tc, func(t *testing.T) {
-			th, _, dir := haTeam(t)
-			addMutePane(th, "ha-coder-2", true)
-			th.setPane(muteNewPane, "tokens", map[string]string{"item": "NERD-5730", "stage": "verify"})
-			s, logs := serveMuteWorkers(t, th, dir)
-			if tc == "renew" {
-				muteForThreeHours(t, s, muteWorker)
-			}
-			startMuteHandoff(t, th, dir, "term_"+muteNewPane)
-			muteForThreeHours(t, s, muteWorker)
-			noticeWorkforce(t, s, daemon.OpHandoffAck, workforce.HandoffAckRequest{Target: muteNewPane})
-			require.Equal(t, muteNewPane, row(t, dir, th, muteWorker).Pane)
-			polled(t, th.srv, 2)
+	th, _, dir := haTeam(t)
+	addMutePane(th, "ha-coder-2", true)
+	th.setPane(muteNewPane, "tokens", map[string]string{"item": "NERD-5730", "stage": "verify"})
+	s, logs := serveMuteWorkers(t, th, dir)
+	muteForThreeHours(t, s, muteWorker)
+	startMuteHandoff(t, th, dir, "term_"+muteNewPane)
+	_, err := daemon.Workforce(t.Context(), s, daemon.OpNoticesMute, daemon.MuteRequest{Worker: muteWorker})
+	assertUnknownMuteWorker(t, err)
+	noticeWorkforce(t, s, daemon.OpHandoffAck, workforce.HandoffAckRequest{Target: muteNewPane})
+	require.Equal(t, muteNewPane, row(t, dir, th, muteWorker).Pane)
+	polled(t, th.srv, 2)
 
-			th.setPane(muteNewPane, "agent_status", "blocked")
-			polled(t, th.srv, 2)
-			assert.Equal(t, []string{muteWorker}, listedMutes(t, s))
-			assert.NotContains(t, strings.Join(noticeLines(logs), "\n"), "ha-coder-1 is blocked")
-			if tc == "renew" {
-				assert.NotContains(t, strings.Join(noticeLines(logs), "\n"), "left the team", "the old pane's Gone stays muted through the handoff")
-			}
-		})
-	}
+	th.setPane(muteNewPane, "agent_status", "blocked")
+	polled(t, th.srv, 2)
+	assert.Equal(t, []string{muteWorker}, listedMutes(t, s))
+	assert.NotContains(t, strings.Join(noticeLines(logs), "\n"), "ha-coder-1 is blocked")
+	assert.NotContains(t, strings.Join(noticeLines(logs), "\n"), "left the team", "the old pane's Gone stays muted through the handoff")
 }
 
 // The pending handoff prevents a lost transition when the outgoing pane closes.
@@ -371,19 +367,6 @@ func startMuteHandoff(t *testing.T, th *teamHerdr, dir, replacementTerminal stri
 	require.NoError(t, (herdr.Client{SocketPath: th.path}).ClosePane(t.Context(), muteOldPane))
 	th.setAgents(muteAgent("w14:p1", "ha-boss"), muteAgent(muteNewPane, muteWorker))
 	polled(t, th.srv, 2)
-}
-
-func TestUnrelatedUnboundPaneCannotMuteALiveWorkerID(t *testing.T) {
-	t.Parallel()
-	th, _, dir := haTeam(t)
-	addMutePane(th, "ha-coder-2", true)
-	s, _ := serveMuteWorkers(t, th, dir)
-	// Same name and even the same pane ID as the recorded replacement, but
-	// a different terminal, so this layout does not prove the replacement.
-	startMuteHandoff(t, th, dir, "original-replacement-terminal")
-	_, err := daemon.Workforce(t.Context(), s, daemon.OpNoticesMute, daemon.MuteRequest{Worker: muteWorker})
-	assertUnknownMuteWorker(t, err)
-	assert.Empty(t, listedMutes(t, s))
 }
 
 func TestMutePrefersBoundWorkerOverEarlierUnboundNamesake(t *testing.T) {
@@ -577,121 +560,6 @@ func muteWorkerHerdr(th *teamHerdr, normal herdrtest.Handler, r herdrtest.Reques
 	return herdrtest.Reply{Result: result}
 }
 
-const muteBoundPane = "w14:p4"
-
-// addBoundNamesake adds the pane of a row that owns the logical id name while
-// the agent in it has another name, beside the unbound pane that carries name.
-func addBoundNamesake(t *testing.T, th *teamHerdr, dir, name string) {
-	t.Helper()
-	th.mu.Lock()
-	th.tabs = append(slices.Clone(th.tabs), map[string]any{"tab_id": "w14:t4", "workspace_id": "w14", "label": "ha-coder-3"})
-	th.panes = append(slices.Clone(th.panes), map[string]any{
-		"pane_id": muteBoundPane, "terminal_id": "term_" + muteBoundPane, "workspace_id": "w14", "tab_id": "w14:t4",
-		"agent": "claude", "agent_status": "idle", "tokens": map[string]string{"stage": "bound pane"},
-	})
-	th.agents = append(slices.Clone(th.agents), muteAgent(muteBoundPane, "session-x"))
-	th.mu.Unlock()
-	execDB(t, dir, th, `INSERT INTO workers (logical_id, project, grp, pane_id, generation, status, created_at, terminal_id)
-VALUES (?, 'ha', 'coder', ?, 4, 'active', 0, ?)`, name, muteBoundPane, "term_"+muteBoundPane)
-}
-
-// TestMutesOfANamesakeAndABoundRowAreIndependent covers the third review's
-// first P1 over the socket: an unbound agent muted under a name, then a bound
-// row under the same logical id, in either order of unmute and mute.
-func TestMutesOfANamesakeAndABoundRowAreIndependent(t *testing.T) {
-	t.Parallel()
-	const name = "ha-coder-2"
-	for _, unmuteFirst := range []bool{true, false} {
-		t.Run(map[bool]string{true: "unmute_first", false: "mute_first"}[unmuteFirst], func(t *testing.T) {
-			th, _, dir := haTeam(t)
-			addMutePane(th, name, true)
-			th.setPane(muteNewPane, "tokens", map[string]string{"stage": "unbound pane"})
-			s, logs := serveMuteWorkers(t, th, dir)
-			muteForThreeHours(t, s, name)
-			addBoundNamesake(t, th, dir, name)
-			polled(t, th.srv, 2)
-			unmute := func() string {
-				return string(noticeWorkforce(t, s, daemon.OpNoticesUnmute, daemon.UnmuteRequest{Worker: name}))
-			}
-			if unmuteFirst {
-				assert.JSONEq(t, `{"worker":"ha-coder-2","ended":false}`, unmute(), "the bound row holds the id and has no mute")
-				assert.Equal(t, []string{name}, listedMutes(t, s), "the pane's mute is untouched")
-			}
-			muteForThreeHours(t, s, name)
-			assert.Equal(t, []string{name, name}, listedMutes(t, s), "list shows both")
-			th.setPane(muteNewPane, "agent_status", "blocked")
-			th.setPane(muteBoundPane, "agent_status", "blocked")
-			polled(t, th.srv, 2)
-			assert.NotContains(t, noticeLines(logs), name+" is blocked · unbound pane", "the pane is still muted")
-			assert.NotContains(t, noticeLines(logs), name+" is blocked · bound pane")
-
-			assert.JSONEq(t, `{"worker":"ha-coder-2","ended":true}`, unmute(), "the bound row's mute ends")
-			assert.Equal(t, []string{name}, listedMutes(t, s))
-			th.setPane(muteNewPane, "agent_status", "idle")
-			th.setPane(muteBoundPane, "agent_status", "idle")
-			polled(t, th.srv, 2)
-			th.setPane(muteNewPane, "agent_status", "blocked")
-			th.setPane(muteBoundPane, "agent_status", "blocked")
-			waitLine(t, logs, name+" is blocked · bound pane")
-			assert.NotContains(t, noticeLines(logs), name+" is blocked · unbound pane", "the pane's mute outlived the row's")
-		})
-	}
-}
-
-// TestUnmuteWithNoModelIsNotReady covers the fourth review's first P1: a
-// failed poll leaves no model, and unmute answers not_ready, as mute does,
-// instead of ending the mute of an unbound namesake of a bound row.
-func TestUnmuteWithNoModelIsNotReady(t *testing.T) {
-	t.Parallel()
-	const name = "ha-coder-2"
-	th, _, dir := haTeam(t)
-	addMutePane(th, name, true)
-	th.setPane(muteNewPane, "tokens", map[string]string{"stage": "unbound pane"})
-	s, logs := serveMuteWorkers(t, th, dir)
-	muteForThreeHours(t, s, name)
-	addBoundNamesake(t, th, dir, name)
-	polled(t, th.srv, 2)
-
-	th.mu.Lock()
-	th.panesErr = true
-	th.mu.Unlock()
-	require.Eventually(t, func() bool {
-		// Workforce asks again on not_ready for 10 s; a deadline of the caller's own returns the refusal.
-		ctx, stop := context.WithTimeout(t.Context(), 500*time.Millisecond)
-		defer stop()
-		_, err := daemon.Workforce(ctx, s, daemon.OpNoticesUnmute, daemon.UnmuteRequest{Worker: name})
-		var refusal *daemon.RequestError
-		return errors.As(err, &refusal) && refusal.Code == "not_ready"
-	}, ready, 5*time.Millisecond, "the failed poll left no model")
-	assert.Equal(t, []string{name}, listedMutes(t, s), "the unbound pane's mute is untouched")
-
-	th.mu.Lock()
-	th.panesErr = false
-	th.mu.Unlock()
-	polled(t, th.srv, 2)
-	th.setPane(muteNewPane, "agent_status", "blocked")
-	polled(t, th.srv, 2)
-	assert.NotContains(t, noticeLines(logs), name+" is blocked · unbound pane", "still muted")
-}
-
-// TestMuteAnUnboundPaneBesideABoundWorker: naming an unbound agent while
-// another worker is bound mutes that agent, not the row, and refuses nothing.
-func TestMuteAnUnboundPaneBesideABoundWorker(t *testing.T) {
-	t.Parallel()
-	th, _, dir := haTeam(t)
-	addMutePane(th, "ha-coder-2", true)
-	th.setPane(muteNewPane, "tokens", map[string]string{"stage": "scratch"})
-	th.setPane(muteOldPane, "tokens", map[string]string{"stage": "boundrow"})
-	s, logs := serveMuteWorkers(t, th, dir)
-	muteForThreeHours(t, s, "ha-coder-2")
-	assert.Equal(t, []string{"ha-coder-2"}, listedMutes(t, s))
-	th.setPane(muteNewPane, "agent_status", "blocked")
-	th.setPane(muteOldPane, "agent_status", "blocked")
-	polled(t, th.srv, 3)
-	assert.NotContains(t, noticeLines(logs), "ha-coder-2 is blocked · scratch", "the unbound pane is muted")
-	assert.Contains(t, noticeLines(logs), "ha-coder-1 is blocked · boundrow", "the bound row is untouched")
-}
-
 // TestConfirmedLossOfAMutedWorkerDeliversGone: the poll that confirms a muted
 // worker lost clears its mute before it builds that poll's notices, so the
 // worker's departure is told, as at retire.
@@ -703,4 +571,61 @@ func TestConfirmedLossOfAMutedWorkerDeliversGone(t *testing.T) {
 	closeBetweenPolls(t, th)
 	waitLine(t, logs, "ha-coder-1 left the team")
 	assert.Empty(t, listedMutes(t, s))
+}
+
+// TestRetireDoesNotReleaseABlockedNoticeSampledUnderTheMute (NERD-5730,
+// seventh review): a poll samples the muted worker blocked and waits for its
+// panes' processes; retire ends the row meanwhile. The notice the poll then
+// batches was sampled under the mute, so it stays dropped; only Gone passes.
+func TestRetireDoesNotReleaseABlockedNoticeSampledUnderTheMute(t *testing.T) {
+	t.Parallel()
+	th, _, dir := haTeam(t)
+	s, logs := serveMuteWorkers(t, th, dir)
+	muteForThreeHours(t, s, muteWorker)
+	var after atomic.Int64
+	release := holdMutePoll(t, th, "pane.process_info", func() bool { return after.Load() > 0 && int64(lists(th.srv)) > after.Load() }, func() {
+		th.setPane(muteOldPane, "agent_status", "blocked")
+		after.Store(int64(lists(th.srv)))
+	})
+	noticeWorkforce(t, s, daemon.OpWorkerRetire, workforce.RetireRequest{Target: muteWorker})
+	release()
+	waitLine(t, logs, "ha-coder-1 left the team (pane w14:p2)")
+	assert.NotContains(t, strings.Join(noticeLines(logs), "\n"), "ha-coder-1 is blocked")
+}
+
+// TestMutedExitStillTellsTheDepartureAtLoss (NERD-5730, seventh review): the
+// muted worker's agent exits to a shell, which the mute would drop for good;
+// the departure waits, and is told when the pane closes and the loss is confirmed.
+func TestMutedExitStillTellsTheDepartureAtLoss(t *testing.T) {
+	t.Parallel()
+	th, _, dir := haTeam(t)
+	s, logs := serveMuteWorkers(t, th, dir)
+	muteForThreeHours(t, s, muteWorker)
+	th.setPane(muteOldPane, "agent", nil)
+	th.setPane(muteOldPane, "agent_status", "unknown")
+	th.mu.Lock()
+	th.agents = slices.DeleteFunc(slices.Clone(th.agents), func(a map[string]any) bool { return a["pane_id"] == muteOldPane })
+	th.mu.Unlock()
+	polled(t, th.srv, 2)
+	assert.NotContains(t, strings.Join(noticeLines(logs), "\n"), "agent exited", "muted")
+	closeBetweenPolls(t, th)
+	waitLine(t, logs, "ha-coder-1 left the team (pane w14:p2)")
+	assert.Empty(t, listedMutes(t, s))
+}
+
+// TestAnUnboundPaneCannotBeMuted: only a bound worker's row can be muted (the
+// owner's ruling, NERD-5730). Muting an unbound agent, by its name or its pane
+// id, is refused with a message that says so, and its notices still come.
+func TestAnUnboundPaneCannotBeMuted(t *testing.T) {
+	t.Parallel()
+	th, _, dir := haTeam(t)
+	addMutePane(th, "ha-coder-2", true)
+	th.setPane(muteNewPane, "tokens", map[string]string{"stage": "scratch"})
+	s, logs := serveMuteWorkers(t, th, dir)
+	_, err := daemon.Workforce(t.Context(), s, daemon.OpNoticesMute, daemon.MuteRequest{Worker: "ha-coder-2"})
+	assertUnknownMuteWorker(t, err)
+	assert.ErrorContains(t, err, "only a worker bound to a row can be muted")
+	assert.Empty(t, listedMutes(t, s))
+	th.setPane(muteNewPane, "agent_status", "blocked")
+	waitLine(t, logs, "ha-coder-2 is blocked · scratch")
 }

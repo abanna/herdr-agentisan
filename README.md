@@ -487,10 +487,10 @@ herdr-agentisan notices list
 herdr-agentisan notices unmute ha-coder-2
 ```
 
-A mute drops every notice about the worker, named as its notices name it,
+A mute drops every notice about the bound worker with that logical id,
 except its context ceiling. The daemon holds mutes in memory, so a restart
 ends them. Each command prints one JSON object and exits 1 when refused,
-such as `unknown_worker` for a name no team's worker has.
+such as `unknown_worker` for a name no bound worker has, an unbound agent's included.
 
 ### Rotation notices
 

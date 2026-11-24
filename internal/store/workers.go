@@ -456,26 +456,19 @@ func (s *Store) OtherProjectsIDs(ctx context.Context, project string) ([]string,
 	return out, nil
 }
 
-// LiveWorkerGeneration returns the current generation and whether terminal
-// is its pending handoff's replacement (NERD-5730). Both come from one
-// read, so a concurrent ack cannot combine answers from two bindings.
-// ErrNoWorker means no live, non-lost row exists for logicalID.
-func (s *Store) LiveWorkerGeneration(ctx context.Context, logicalID, terminal string) (int64, bool, error) {
+// LiveWorkerGeneration returns the current generation of logicalID's row
+// (NERD-5730). ErrNoWorker means no live, non-lost row exists for it.
+func (s *Store) LiveWorkerGeneration(ctx context.Context, logicalID string) (int64, error) {
 	var generation int64
-	var replacement bool
-	err := s.db.QueryRowContext(ctx, `SELECT w.generation, EXISTS (
-	SELECT 1 FROM handoffs AS h WHERE h.logical_id = w.logical_id AND h.generation = w.generation
-	AND h.state = 'pending' AND h.new_terminal_id = ?2 AND ?2 <> ''
-)
-FROM workers AS w WHERE w.logical_id = ?1 AND w.retired_at IS NULL AND w.status <> ?3`,
-		logicalID, terminal, StatusLost).Scan(&generation, &replacement)
+	err := s.db.QueryRowContext(ctx, `SELECT generation FROM workers
+WHERE logical_id = ?1 AND retired_at IS NULL AND status <> ?2`, logicalID, StatusLost).Scan(&generation)
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
-		return 0, false, fmt.Errorf("%w: %s", ErrNoWorker, logicalID)
+		return 0, fmt.Errorf("%w: %s", ErrNoWorker, logicalID)
 	case err != nil:
-		return 0, false, fmt.Errorf("%w: read live worker %s: %w", ErrStore, logicalID, err)
+		return 0, fmt.Errorf("%w: read live worker %s: %w", ErrStore, logicalID, err)
 	}
-	return generation, replacement, nil
+	return generation, nil
 }
 
 // WorkerRow returns the row for logicalID, retired or not. ErrNoWorker means
