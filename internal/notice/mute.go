@@ -149,27 +149,28 @@ func (s *Mutes) ClearWorker(worker string, generation int64, now time.Time) bool
 }
 
 // Unmute ends the mute worker selects in m, as Mute selects it (the bound
-// row wins), and reports whether one was in force at now. With no model, or
-// when m has no such worker, it ends the mute stored under that name: the
-// row's, else the unbound agents'. A worker with none is no refusal.
-func (s *Mutes) Unmute(m *team.Model, worker string, now time.Time) bool {
+// row wins), and reports whether one was in force at now. It also ends every
+// unbound mute under that name whose terminal no unbound worker of m carries:
+// a closed pane's, or one that is now a row's, which nothing else could end.
+// A namesake still in m keeps its own. With no model there is nothing to
+// select from, so the caller refuses. A worker with none is no refusal.
+func (s *Mutes) Unmute(m team.Model, worker string, now time.Time) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	named := func(bound bool) []muteScope {
-		return slices.DeleteFunc(slices.Collect(maps.Keys(s.entries)), func(k muteScope) bool { return k.bound != bound || k.name != worker })
+	named := func(keep func(muteScope) bool) []muteScope {
+		return slices.DeleteFunc(slices.Collect(maps.Keys(s.entries)), func(k muteScope) bool { return k.name != worker || !keep(k) })
 	}
-	keys := named(true)
-	var w team.Worker
-	var found bool
-	if m != nil {
-		w, found = selectWorker(*m, worker)
+	keys := named(func(k muteScope) bool { return k.bound })
+	if w, found := selectWorker(m, worker); found && !w.Bound {
+		if _, held := s.entries[scopeOf(w)]; held {
+			keys = []muteScope{scopeOf(w)}
+		}
 	}
-	switch _, held := s.entries[scopeOf(w)]; {
-	case found && !w.Bound && held:
-		keys = []muteScope{scopeOf(w)}
-	case !found && len(keys) == 0:
-		keys = named(false)
+	carried := map[string]bool{}
+	for _, p := range groupWorkers(m) {
+		carried[p.worker.Pane.TerminalID] = carried[p.worker.Pane.TerminalID] || !p.worker.Bound
 	}
+	keys = append(keys, named(func(k muteScope) bool { return !k.bound && !carried[k.terminal] })...)
 	var inForce bool
 	for _, k := range keys {
 		inForce = inForce || now.Before(s.entries[k].until)

@@ -136,6 +136,14 @@ func (s *Service) finish(ctx context.Context, tg target, gone bool) (RetireResul
 		}
 		s.handoffStep(ctx, HandoffStep{ID: h.LogicalID, Project: h.Project, Group: h.Group, PaneID: tg.paneID, OldPane: h.OldPane, Step: StepFailed})
 	}
+	// The mute ends before the pane closes and the row ends, so a poll that
+	// sees either builds the worker's Gone notice with no mute to drop it
+	// (NERD-5730). The cost: a retire that then fails leaves a live worker,
+	// unmuted, and the boss mutes it again.
+	var cleared bool
+	if tg.row != nil && s.ClearWorkerMute != nil {
+		cleared = s.ClearWorkerMute(*tg.row)
+	}
 	res, err := s.retireTarget(ctx, tg, gone, replaced)
 	if err != nil {
 		return RetireResult{}, err
@@ -143,9 +151,7 @@ func (s *Service) finish(ctx context.Context, tg target, gone bool) (RetireResul
 	if replaced {
 		res.HandoffFailed = h.LogicalID
 	}
-	if tg.row != nil && s.ClearWorkerMute != nil {
-		res.MuteCleared = s.ClearWorkerMute(*tg.row)
-	}
+	res.MuteCleared = cleared
 	return res, nil
 }
 

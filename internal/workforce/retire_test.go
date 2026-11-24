@@ -2,6 +2,7 @@ package workforce_test
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"sync/atomic"
 	"testing"
@@ -106,6 +107,41 @@ func TestRetire(t *testing.T) {
 	f.h.mu.Lock()
 	assert.NotNil(t, f.h.pane(f.boss), "the boss's pane is still open")
 	f.h.mu.Unlock()
+}
+
+// TestRetireClearsTheMuteBeforeItClosesThePane (NERD-5730): the worker's mute
+// ends while its pane is open and its row active, so a poll that sees the
+// closed pane, or the ended row, builds the worker's Gone notice with no mute
+// in the way. The cost is a close that fails: the worker is still there, with
+// its mute already cleared.
+func TestRetireClearsTheMuteBeforeItClosesThePane(t *testing.T) {
+	t.Parallel()
+	for _, closeFails := range []bool{false, true} {
+		t.Run(map[bool]string{false: "close_works", true: "close_fails"}[closeFails], func(t *testing.T) {
+			t.Parallel()
+			f := newFixture(t, teamConfig)
+			w := f.worker(t, "ha-coder-1", "coder")
+			var at []string
+			f.svc.ClearWorkerMute = func(row store.Worker) bool {
+				at = append(at, fmt.Sprintf("%d closes, %s", len(f.h.params("pane.close")), f.row(t, row.LogicalID).Status))
+				return true
+			}
+			if closeFails {
+				f.h.fail["pane.close"] = "server_unavailable"
+			}
+
+			res, err := f.svc.Retire(t.Context(), workforce.RetireRequest{Target: w.ID})
+			assert.Equal(t, []string{"0 closes, " + store.StatusActive}, at, "cleared once, before the close, with the row active")
+			if closeFails {
+				require.ErrorIs(t, err, workforce.ErrHerdr)
+				assert.Equal(t, store.StatusActive, f.row(t, w.ID).Status, "the worker is still there, unmuted")
+				return
+			}
+			require.NoError(t, err)
+			assert.True(t, res.MuteCleared)
+			assert.Equal(t, store.StatusRetired, f.row(t, w.ID).Status)
+		})
+	}
 }
 
 // TestRetireTrustsTheRowOverTheTab: a live row decides which pane is its

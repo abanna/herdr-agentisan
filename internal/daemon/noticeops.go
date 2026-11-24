@@ -47,9 +47,9 @@ type MutesResult struct {
 	Mutes []notice.Mute `json:"mutes"`
 }
 
-// noticeOps are the notices ops on mutes. A mute names a worker of the
-// model the team poll last gave in, so it waits for the first poll's
-// (not_ready).
+// noticeOps are the notices ops on mutes. A mute, and its end, name a worker
+// of the model the team poll last gave in, so each waits for a poll that built
+// one (not_ready), the first's or the one after a failed list.
 func (o Options) noticeOps(in *inbox, mutes *notice.Mutes) map[string]op {
 	ops := map[string]op{
 		OpNoticesMute: {run: func(ctx context.Context, args json.RawMessage) (any, error) {
@@ -68,8 +68,11 @@ func (o Options) noticeOps(in *inbox, mutes *notice.Mutes) map[string]op {
 			if err := decodeArgs(args, &req); err != nil {
 				return nil, err
 			}
-			m, _ := in.view() // no model, no refusal: the stored mutes are searched by name
-			return UnmuteResult{Worker: req.Worker, Ended: mutes.Unmute(m, req.Worker, o.Now())}, nil
+			m, _ := in.view()
+			if m == nil {
+				return nil, fmt.Errorf("%w: the team poll has no model to find %q in", ErrNotReady, req.Worker)
+			}
+			return UnmuteResult{Worker: req.Worker, Ended: mutes.Unmute(*m, req.Worker, o.Now())}, nil
 		}},
 		OpNoticesList: {run: func(_ context.Context, args json.RawMessage) (any, error) {
 			if err := decodeArgs(args, &struct{}{}); err != nil {

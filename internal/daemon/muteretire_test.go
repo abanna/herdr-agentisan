@@ -3,6 +3,7 @@ package daemon_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"sync"
@@ -56,12 +57,12 @@ func TestRetireAfterThePollConfirmedLoss(t *testing.T) {
 	th, _, dir := haTeam(t)
 	s, logs := serveMuteWorkers(t, th, dir)
 	muteForThreeHours(t, s, muteWorker)
-	require.NoError(t, (herdr.Client{SocketPath: th.path}).ClosePane(t.Context(), muteOldPane))
-	require.Eventually(t, func() bool {
-		r, err := rowOf(t, dir, th, muteWorker)
-		return err == nil && r.Status == store.StatusLost
-	}, ready, 5*time.Millisecond)
-	require.Empty(t, listedMutes(t, s), "the poll confirmed loss and cleared the mute")
+	closeBetweenPolls(t, th)
+	// The list, not the row's status: the poll writes lost before it clears.
+	require.Eventually(t, func() bool { return len(listedMutes(t, s)) == 0 }, ready, 5*time.Millisecond,
+		"the poll confirmed loss and cleared the mute")
+	assert.Equal(t, store.StatusLost, row(t, dir, th, muteWorker).Status)
+	waitLine(t, logs, "ha-coder-1 left the team (pane w14:p2)")
 
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(noticeWorkforce(t, s, daemon.OpWorkerRetire, workforce.RetireRequest{Target: muteWorker}), &got))
@@ -75,6 +76,46 @@ func TestRetireAfterThePollConfirmedLoss(t *testing.T) {
 	th.setPane(muteNewPane, "agent_status", "blocked")
 	polled(t, th.srv, 2)
 	waitLine(t, logs, "ha-coder-1 is blocked")
+}
+
+// TestRetireClearsTheMuteBeforeThePaneCloses is the retire-first order of the
+// Gone notice (NERD-5730): retire is held at its pane.close, and the worker's
+// mute is already gone, so a poll that sees the closed pane, before or after
+// retire ends the row, builds the departure with no mute to drop it. The poll
+// first order is TestRetireAfterThePollConfirmedLoss.
+func TestRetireClearsTheMuteBeforeThePaneCloses(t *testing.T) {
+	t.Parallel()
+	th, _, dir := haTeam(t)
+	s, logs := serveMuteWorkers(t, th, dir)
+	muteForThreeHours(t, s, muteWorker)
+	var got json.RawMessage
+	var retireErr error
+	done := make(chan struct{})
+	release := holdMutePoll(t, th, "pane.close", nil, func() {
+		go func() {
+			defer close(done)
+			got, retireErr = daemon.Workforce(t.Context(), s, daemon.OpWorkerRetire, workforce.RetireRequest{Target: muteWorker})
+		}()
+	})
+	assert.Empty(t, listedMutes(t, s), "cleared while the pane is open")
+	assert.Equal(t, store.StatusActive, row(t, dir, th, muteWorker).Status)
+	release()
+	<-done
+	require.NoError(t, retireErr)
+	assert.JSONEq(t, `{"id":"ha-coder-1","pane_id":"w14:p2","changed":true,"outcome":"retired","mute_cleared":true}`, string(got))
+	waitLine(t, logs, "ha-coder-1 left the team (pane w14:p2)")
+}
+
+// closeBetweenPolls closes the worker's pane while a poll waits after its
+// lists, so no poll reads the panes before the close and the agents after it:
+// that one sees the agent gone from a pane still listed, and tells its
+// departure under the mute, which drops it, leaving the next poll nothing to
+// tell.
+func closeBetweenPolls(t *testing.T, th *teamHerdr) {
+	t.Helper()
+	release := holdMutePoll(t, th, "pane.report_metadata", nil, nil)
+	require.NoError(t, (herdr.Client{SocketPath: th.path}).ClosePane(t.Context(), muteOldPane))
+	release()
 }
 
 // TestReusedWorkerBindingStartsUnmuted covers an ID recycled after a confirmed loss (NERD-5730).
@@ -552,6 +593,42 @@ func TestMutesOfANamesakeAndABoundRowAreIndependent(t *testing.T) {
 	}
 }
 
+// TestUnmuteWithNoModelIsNotReady covers the fourth review's first P1: a
+// failed poll leaves no model, and unmute answers not_ready, as mute does,
+// instead of ending the mute of an unbound namesake of a bound row.
+func TestUnmuteWithNoModelIsNotReady(t *testing.T) {
+	t.Parallel()
+	const name = "ha-coder-2"
+	th, _, dir := haTeam(t)
+	addMutePane(th, name, true)
+	th.setPane(muteNewPane, "tokens", map[string]string{"stage": "unbound pane"})
+	s, logs := serveMuteWorkers(t, th, dir)
+	muteForThreeHours(t, s, name)
+	addBoundNamesake(t, th, dir, name)
+	polled(t, th.srv, 2)
+
+	th.mu.Lock()
+	th.panesErr = true
+	th.mu.Unlock()
+	require.Eventually(t, func() bool {
+		// Workforce asks again on not_ready for 10 s; a deadline of the caller's own returns the refusal.
+		ctx, stop := context.WithTimeout(t.Context(), 500*time.Millisecond)
+		defer stop()
+		_, err := daemon.Workforce(ctx, s, daemon.OpNoticesUnmute, daemon.UnmuteRequest{Worker: name})
+		var refusal *daemon.RequestError
+		return errors.As(err, &refusal) && refusal.Code == "not_ready"
+	}, ready, 5*time.Millisecond, "the failed poll left no model")
+	assert.Equal(t, []string{name}, listedMutes(t, s), "the unbound pane's mute is untouched")
+
+	th.mu.Lock()
+	th.panesErr = false
+	th.mu.Unlock()
+	polled(t, th.srv, 2)
+	th.setPane(muteNewPane, "agent_status", "blocked")
+	polled(t, th.srv, 2)
+	assert.NotContains(t, noticeLines(logs), name+" is blocked · unbound pane", "still muted")
+}
+
 // TestMuteAnUnboundPaneBesideABoundWorker: naming an unbound agent while
 // another worker is bound mutes that agent, not the row, and refuses nothing.
 func TestMuteAnUnboundPaneBesideABoundWorker(t *testing.T) {
@@ -578,7 +655,7 @@ func TestConfirmedLossOfAMutedWorkerDeliversGone(t *testing.T) {
 	th, _, dir := haTeam(t)
 	s, logs := serveMuteWorkers(t, th, dir)
 	muteForThreeHours(t, s, muteWorker)
-	require.NoError(t, (herdr.Client{SocketPath: th.path}).ClosePane(t.Context(), muteOldPane))
+	closeBetweenPolls(t, th)
 	waitLine(t, logs, "ha-coder-1 left the team")
 	assert.Empty(t, listedMutes(t, s))
 }

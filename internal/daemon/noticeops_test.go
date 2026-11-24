@@ -52,10 +52,10 @@ func TestNoticeOps(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, daemon.MutesResult{Mutes: []notice.Mute{{Worker: "ha-coder-1", Until: now.Add(10 * time.Minute)}}}, got, "list needs no model")
 
-	got, _, err = op(nil, daemon.OpNoticesUnmute, `{"worker":"ha-coder-1"}`)
+	got, _, err = op(opsTeam(), daemon.OpNoticesUnmute, `{"worker":"ha-coder-1"}`)
 	require.NoError(t, err)
-	assert.Equal(t, daemon.UnmuteResult{Worker: "ha-coder-1", Ended: true}, got, "unmute needs no model")
-	got, _, err = op(nil, daemon.OpNoticesUnmute, `{"worker":"ha-coder-1"}`)
+	assert.Equal(t, daemon.UnmuteResult{Worker: "ha-coder-1", Ended: true}, got)
+	got, _, err = op(opsTeam(), daemon.OpNoticesUnmute, `{"worker":"ha-coder-1"}`)
 	require.NoError(t, err)
 	assert.Equal(t, daemon.UnmuteResult{Worker: "ha-coder-1", Ended: false}, got)
 	got, _, err = op(nil, daemon.OpNoticesList, `{}`)
@@ -78,7 +78,8 @@ func TestNoticeOps(t *testing.T) {
 		"for as a string":         {opsTeam(), daemon.OpNoticesMute, `{"worker":"ha-coder-1","for":"1h"}`, "bad_request", nil},
 		"an arg mute takes not":   {opsTeam(), daemon.OpNoticesMute, `{"worker":"ha-coder-1","project":"ha"}`, "bad_request", nil},
 		"no model yet":            {nil, daemon.OpNoticesMute, `{"worker":"ha-coder-1"}`, "not_ready", daemon.ErrNotReady},
-		"an arg unmute takes not": {nil, daemon.OpNoticesUnmute, `{"worker":"ha-coder-1","for":1}`, "bad_request", nil},
+		"no model yet, unmute":    {nil, daemon.OpNoticesUnmute, `{"worker":"ha-coder-1"}`, "not_ready", daemon.ErrNotReady},
+		"an arg unmute takes not": {opsTeam(), daemon.OpNoticesUnmute, `{"worker":"ha-coder-1","for":1}`, "bad_request", nil},
 		"an arg list takes not":   {nil, daemon.OpNoticesList, `{"worker":"ha-coder-1"}`, "bad_request", nil},
 		"args that are no object": {nil, daemon.OpNoticesList, `[1]`, "bad_request", nil},
 	}
