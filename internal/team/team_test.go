@@ -104,7 +104,7 @@ func TestBuildTheModel(t *testing.T) {
 		Boss:       []team.Worker{{ID: "boss", Bound: true, Pane: team.Pane{ID: "wJ:p1", TabID: tab("boss"), TerminalID: "term_wJ:p1", Agent: "claude", Status: team.StatusWorking}}},
 		Groups: []team.Group{
 			{Name: "coder", Targets: []team.Target{liveTarget}, Workers: []team.Worker{
-				{ID: "ag-coder-1", Bound: true, Target: liveTarget, Pane: team.Pane{ID: "wN:p1", TabID: tab("coder-1"), TerminalID: "term_wN:p1", Agent: "claude", Status: team.StatusWorking}},
+				{ID: "ag-coder-1", Bound: true, Generation: 2, Target: liveTarget, Pane: team.Pane{ID: "wN:p1", TabID: tab("coder-1"), TerminalID: "term_wN:p1", Agent: "claude", Status: team.StatusWorking}},
 				{ID: "wN:p2", Target: liveTarget, Pane: team.Pane{ID: "wN:p2", TabID: tab("coder-2"), TerminalID: "term_wN:p2", Agent: "claude", Status: team.StatusDone, Handoff: true, Ctx: "40"}},
 				{ID: "wN:p3", Target: liveTarget, Pane: team.Pane{ID: "wN:p3", TabID: tab("coder-3"), TerminalID: "term_wN:p3", Status: team.StatusUnknown}},
 			}},
