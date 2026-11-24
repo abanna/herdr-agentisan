@@ -716,8 +716,9 @@ version a decision records; with `--project` it also refuses an override
 a worker type's spawns under either provider it may run would be refused
 for at the role's effort, such as a binding switched off in `[routing.bindings]`, and
 a model in another provider's table. Routing routes within the provider the
-worker runs, never across. The rules list Astra 6.2 as premium, with no
-eligible role.
+worker runs, never across. The rules list Astra 6.2 as premium. The owner's
+shared `[routing.overrides]` choice for `alex_debugger` is its only route.
+The debugger currently launches under Claude only.
 
 `[routing.jev]` is for Jev's complexity answer about a coder's assignment
 (ADR-001 A57): `enabled` (off by default, and Jev is asked only while

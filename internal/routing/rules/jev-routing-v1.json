@@ -27,7 +27,7 @@
       "security_output_policy": "Do not invent generic warnings. Report unresolved evidence as unresolved, not as a confirmed defect."},
     "code_review": {"allowed": ["codex_strong"], "default": "codex_strong", "default_effort": "high", "selection": "fixed",
       "findings_require": ["concrete failure scenario", "code references", "existing safeguards checked", "evidence supporting severity"], "hosted_reviewer_model_assumption": null},
-    "alex_debugger": {"allowed": ["claude_strong", "codex_strong", "claude_premium"], "defaults": {"claude": "claude_strong", "codex": "codex_strong"}, "default_effort": "high", "selection": "explicit", "premium_requires": "Alex explicit selection", "session_model_stable": true}
+    "alex_debugger": {"allowed": ["claude_strong", "codex_strong", "claude_premium", "codex_premium"], "defaults": {"claude": "claude_strong", "codex": "codex_strong"}, "default_effort": "high", "selection": "explicit", "premium_requires": "Alex explicit selection", "session_model_stable": true}
   },
   "task_packet": {
     "task_id": "opaque string or null", "task_lookup_status": "found | not_found | unavailable", "title": "string", "requirements": "bounded text", "acceptance_criteria": [],

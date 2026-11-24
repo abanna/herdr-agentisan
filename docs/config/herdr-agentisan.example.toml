@@ -279,7 +279,8 @@ locks = ["/run/user/1000/agentisan/gate.0.lock"]
 #            none, including coder, researcher, and librarian.
 #   [routing.overrides]  <role> = "<binding>": your standing choice, and the
 #            only way to a premium binding the role allows. This file only.
-#            Astra 6.2 has no eligible role.
+#            Astra 6.2 is allowed only as the owner's alex_debugger
+#            override. The debugger currently launches under Claude only.
 #            A binding binds only workers of its provider (ADR-001 A63), so
 #            coder = "claude_strong" leaves a Codex coder on codex_strong;
 #            a list sets one per provider:

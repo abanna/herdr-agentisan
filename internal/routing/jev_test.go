@@ -582,9 +582,9 @@ func TestJevLeavesEarlierVersionsAlone(t *testing.T) {
 	t.Parallel()
 	off := false
 	for want, d := range map[string]routing.Deployment{
-		"v1-510e7b9c2fbd": {},
-		"v1-566b5feb2801": {Enabled: true, Overrides: map[string]routing.RoleOverride{"coder": {"claude_strong"}}},
-		"v1-a0e08a133be9": {Enabled: true, Bindings: map[string]routing.Facts{"claude_strong": {Enabled: &off}}},
+		"v1-33e9ba2a9420": {},
+		"v1-959f149a4e64": {Enabled: true, Overrides: map[string]routing.RoleOverride{"coder": {"claude_strong"}}},
+		"v1-cfb393eb74c7": {Enabled: true, Bindings: map[string]routing.Facts{"claude_strong": {Enabled: &off}}},
 	} {
 		assert.Equal(t, want, policy(t, d).Version())
 	}

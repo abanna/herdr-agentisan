@@ -18,7 +18,7 @@ import (
 
 // rulesSHA256 is the sha256 of the user's approved rules v1. A
 // change to the rules changes it, deliberately: the rules are the spec.
-const rulesSHA256 = "b0c36a36bf805f353b375144fb693d630ae30466b09341f8f9102529c1801292"
+const rulesSHA256 = "9a2accdea2e138e034ed862166389e73ee82dcae73d6e38c7faf509e7032decb"
 
 // rulesFile is the embedded rules, as committed.
 const rulesFile = "rules/jev-routing-v1.json"
@@ -75,17 +75,34 @@ func TestCodexBindingModels(t *testing.T) {
 	}
 }
 
-func TestAstraIsUnavailable(t *testing.T) {
+func TestAstraRequiresOwnerDebuggerOverride(t *testing.T) {
 	t.Parallel()
 	r := routing.V1()
 	p := policy(t, routing.Deployment{Enabled: true})
 	for _, role := range r.RoleNames() {
-		assert.ErrorIs(t, r.CheckOverrides(role, routing.RoleOverride{"codex_premium"}), routing.ErrOverrideRefused, role)
+		if role != "alex_debugger" {
+			assert.ErrorIs(t, r.CheckOverrides(role, routing.RoleOverride{"codex_premium"}), routing.ErrOverrideRefused, role)
+		}
 		for _, model := range []string{"codex_premium", "gpt-6.2-astra"} {
 			_, err := p.Resolve(routing.Request{Role: role, Provider: routing.Codex, Model: model}, now)
-			assert.ErrorIs(t, err, routing.ErrOverrideRefused, role)
-			assert.ErrorContains(t, err, "is not a binding", role)
+			assert.ErrorIs(t, err, routing.ErrOverrideRefused, "%s with --model %s", role, model)
 		}
+	}
+}
+
+func TestNewPreservesDebuggerAstraOverrideWithRoutingOffAndOn(t *testing.T) {
+	t.Parallel()
+	for name, enabled := range map[string]bool{"routing off": false, "routing on": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			p, err := routing.New(routing.V1(), routing.Deployment{
+				Enabled:   enabled,
+				Overrides: map[string]routing.RoleOverride{"alex_debugger": {"codex_premium"}},
+			})
+			require.NoError(t, err)
+			assert.Equal(t, enabled, p.Enabled())
+			assert.Equal(t, "codex_premium", p.UserOverride("alex_debugger", routing.Codex))
+		})
 	}
 }
 

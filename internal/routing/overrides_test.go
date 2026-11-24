@@ -16,7 +16,7 @@ import (
 func TestOverrideVersionsKeepTheString(t *testing.T) {
 	t.Parallel()
 	live := policy(t, routing.Deployment{Enabled: true, Overrides: map[string]routing.RoleOverride{"coder": {"claude_strong"}}}).Version()
-	assert.Equal(t, "v1-566b5feb2801", live)
+	assert.Equal(t, "v1-959f149a4e64", live)
 	both := policy(t, routing.Deployment{Enabled: true, Overrides: map[string]routing.RoleOverride{"coder": {"claude_strong", "codex_strong"}}}).Version()
 	reversed := policy(t, routing.Deployment{Enabled: true, Overrides: map[string]routing.RoleOverride{"coder": {"codex_strong", "claude_strong"}}}).Version()
 	assert.Equal(t, both, reversed, "a list's order is no fact")

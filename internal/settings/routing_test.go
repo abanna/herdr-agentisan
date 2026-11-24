@@ -444,6 +444,35 @@ func TestCheckRoutingProviders(t *testing.T) {
 	}
 }
 
+func TestSharedDebuggerAstraOverrideLoadsWithRoutingOffAndOn(t *testing.T) {
+	t.Parallel()
+	for _, enabled := range []bool{false, true} {
+		for name, override := range map[string]string{
+			"string":      `"codex_premium"`,
+			"one binding": `["codex_premium"]`,
+			"with Fable":  `["claude_premium", "codex_premium"]`,
+			"with Opus":   `["claude_strong", "codex_premium"]`,
+		} {
+			t.Run("routing="+strconv.FormatBool(enabled)+"/"+name, func(t *testing.T) {
+				t.Parallel()
+				file := "[routing]\nenabled = " + strconv.FormatBool(enabled) +
+					"\n[routing.overrides]\nalex_debugger = " + override + "\n"
+				shared, err := loadRouting(t, file, "", nil, false)
+				require.NoError(t, err)
+				p, err := shared.Policy()
+				require.NoError(t, err)
+				assert.Equal(t, enabled, p.Enabled())
+				assert.Equal(t, "codex_premium", p.UserOverride("alex_debugger", routing.Codex))
+
+				project, err := loadRouting(t, file, "", nil, true)
+				require.NoError(t, err)
+				_, err = project.Profile.AgentFor(settings.DebuggerType, routing.Codex)
+				require.ErrorIs(t, err, settings.ErrProviderRefused)
+			})
+		}
+	}
+}
+
 // TestRoutingOverrideLists: a role's override is a binding's name or a list
 // of them, kept as written, each leaf with its layer; the policy binds each
 // to its own provider, and a single binding keeps the string form (A63).
@@ -469,7 +498,7 @@ func TestRoutingOverrideLists(t *testing.T) {
 	require.NoError(t, err)
 	lp, err := live.Policy()
 	require.NoError(t, err)
-	assert.Equal(t, "v1-566b5feb2801", lp.Version(), "the string override has its current policy version")
+	assert.Equal(t, "v1-959f149a4e64", lp.Version(), "the string override has its current policy version")
 	one, err := loadRouting(t, "[routing]\nenabled = true\n[routing.overrides]\ncoder = [\"claude_strong\"]\n", "", nil, true)
 	require.NoError(t, err)
 	op, err := one.Policy()
