@@ -2,32 +2,66 @@
 +++ shift.sh
 @@ -29,0 +30 @@
 +PLUGIN=${SHIFT_PLUGIN:-herdr-agentisan}
-@@ -39,5 +40,6 @@
+@@ -38,6 +39,33 @@
+-val(){ sed -n "s/^$1=//p" "$CUR/state" | tail -1; }
 -# model_of <agent>: the model that agent's own statusline reports on its pane
 -# (the plugin's `model` token, ADR-001 A56); empty when it has reported none.
 -model_of(){ { herdr agent get "$1" 2>/dev/null | field result.agent.tokens.model 2>/dev/null; } || true; }
 -# model_ok <reported> <wanted>: an alias ("fable") matches a full id ("claude-fable-5-2").
 -model_ok(){ case "$(printf %s "$1" | tr '[:upper:]' '[:lower:]')" in *"$(printf %s "$2" | tr '[:upper:]' '[:lower:]')"*) return 0 ;; esac; return 1; }
++val(){ sed -n "s/^$1=//p" "${2:-$CUR}/state" | tail -1; }
 +check_model(){
-+    "$PLUGIN" boss shift check-model --pane "$(val new)" --terminal "$(val terminal)" \
-+        --name "$(val next)" --model "$(val model)" --launched-at "$(val launched_at)" \
-+        --pid "$(val model_pid)" --start "$(val model_start)"
++    local pid start pinned_at
++    pid=$(val model_pid "$1"); start=$(val model_start "$1"); pinned_at=$(val model_pinned_at "$1")
++    "$PLUGIN" boss shift check-model --pane "$(val new "$1")" --terminal "$(val terminal "$1")" \
++        --name "$(val next "$1")" --model "$(val model "$1")" --launched-at "$(val launched_at "$1")" \
++        --pid "${pid:-0}" --start "${start:-0}" --pinned-at "${pinned_at:-0}"
 +}
-+candidate_ready(){ [ "$(val model_pid)" -gt 0 ] && check_model; }
-@@ -52,4 +54,8 @@
++candidate_ready(){
++    if ! [[ "$(val model_pid "$1")" =~ ^[1-9][0-9]*$ && "$(val model_pinned_at "$1")" =~ ^[1-9][0-9]*$ ]]; then
++      echo "shift: no candidate process pin; run shift.sh status, then wait for a fresh report or abort" >&2
++      return 1
++    fi
++    check_model "$1"
++}
++probe_model(){
++    (
++      flock 9 || exit 1
++      rc=0
++      verdict=$(check_model "$1") || rc=$?
++      printf '%s\n' "$verdict"
++      if [ "${verdict:+present}" = present ] && ! [[ "$(val model_pid "$1")" =~ ^[1-9][0-9]*$ ]]; then
++        pid=$(field pid <<< "$verdict") && start=$(field start <<< "$verdict") || exit 1
++        if [[ "$pid" =~ ^[1-9][0-9]*$ && "$start" =~ ^[1-9][0-9]*$ ]]; then
++          pinned_at=$(date +%s%3N) && file=$(mktemp "$1/state.XXXXXXXX") || exit 1
++          trap 'rm -f -- "$file"' EXIT
++          { cat "$1/state" && printf 'model_pid=%s\nmodel_start=%s\nmodel_pinned_at=%s\n' "$pid" "$start" "$pinned_at"; } > "$file" &&
++            mv "$file" "$1/state" || exit 1
++        fi
++      fi
++      exit "$rc"
++    ) 9>"$1/model.lock"
++}
+@@ -52,2 +80,7 @@
 -    dir=$ROOT/$(date +%Y%m%d-%H%M%S); mkdir -p "$dir"
 -    new=$(herdr pane split "$old" --direction right --no-focus --cwd "$REPO" | field result.pane.pane_id)
--    [ -n "$new" ] || die "the split returned no pane id"
--    printf 'old=%s\nnew=%s\nboss=%s\nnext=%s\nopened=%s\nmodel=%s\neffort=%s\n' "$old" "$new" "$BOSS" "$NEXT" "$(date +%H:%M:%S)" "$MODEL" "$EFFORT" > "$dir/state"
++    help=$("$PLUGIN" boss shift check-model --help 2>/dev/null) && [[ "$help" == *"--pinned-at"* ]] ||
++      die "install a herdr-agentisan build with boss shift check-model, or set SHIFT_PLUGIN to its path"
 +    mkdir -p "$ROOT"
 +    dir=$(mktemp -d "$ROOT/$(date +%Y%m%d-%H%M%S)-XXXXXXXX")
 +    split=$(herdr pane split "$old" --direction right --no-focus --cwd "$REPO")
 +    new=$(field result.pane.pane_id <<< "$split")
 +    terminal=$(field result.pane.terminal_id <<< "$split")
-+    [ -n "$new" ] && [ -n "$terminal" ] || die "the split returned no pane or terminal id"
+@@ -55 +88,7 @@
+-    printf 'old=%s\nnew=%s\nboss=%s\nnext=%s\nopened=%s\nmodel=%s\neffort=%s\n' "$old" "$new" "$BOSS" "$NEXT" "$(date +%H:%M:%S)" "$MODEL" "$EFFORT" > "$dir/state"
++    if [ -z "$terminal" ]; then
++      [ "$new" != "$old" ] || die "the split returned the outgoing pane"
++      herdr pane close "$new" >/dev/null || die "no terminal id; could not close candidate pane $new"
++      die "the split returned no terminal id; closed candidate pane $new"
++    fi
 +    launched_at=$(date +%s%3N)
-+    printf 'old=%s\nnew=%s\nboss=%s\nnext=%s\nopened=%s\nmodel=%s\neffort=%s\nterminal=%s\nlaunched_at=%s\nmodel_pid=0\nmodel_start=0\n' "$old" "$new" "$BOSS" "$NEXT" "$(date +%H:%M:%S)" "$MODEL" "$EFFORT" "$terminal" "$launched_at" > "$dir/state"
-@@ -60,8 +66,22 @@
++    printf 'old=%s\nnew=%s\nboss=%s\nnext=%s\nopened=%s\nmodel=%s\neffort=%s\nterminal=%s\nlaunched_at=%s\nmodel_pid=0\nmodel_start=0\nmodel_pinned_at=0\n' "$old" "$new" "$BOSS" "$NEXT" "$(date +%H:%M:%S)" "$MODEL" "$EFFORT" "$terminal" "$launched_at" > "$dir/state"
+@@ -60,8 +99,15 @@
 -    # what it was asked for is not what it runs: read the model back from its pane
 -    got=; for _ in $(seq 1 30); do got=$(model_of "$NEXT"); [ -n "$got" ] && break; sleep 2; done
 -    if [ -z "$got" ]; then
@@ -36,43 +70,42 @@
 -      die "the incoming boss runs on '$got', not '$MODEL' (pane $new left open; run: shift.sh abort, then open again)"
 -    fi
 -    echo "opened: incoming boss $NEXT on $new, model ${got:-not reported yet}; shift folder $dir" ;;
-+    for ((i=0; i<30; i++)); do
++    for ((i=0; i<35; i++)); do
 +      verified=0
-+      verdict=$(check_model) && verified=1
-+      if [ "$(val model_pid)" = 0 ]; then
-+        pid=$(field pid <<< "$verdict")
-+        start=$(field start <<< "$verdict")
-+        if [ "${pid:-0}" != 0 ] && [ "${start:-0}" != 0 ]; then
-+          printf 'model_pid=%s\nmodel_start=%s\n' "$pid" "$start" >> "$dir/state"
-+        fi
-+      fi
++      verdict=$(probe_model "$dir") && verified=1
 +      if [ "$verified" = 1 ]; then
 +        printf '%s\n' "$verdict"
 +        echo "opened: incoming boss $NEXT on $new; shift folder $dir"
 +        exit 0
 +      fi
 +      case $(field reason <<< "$verdict") in
-+        candidate_unavailable|claude_unavailable|missing_model|invalid_report_time|stale_report) sleep 2 ;;
++        candidate_unavailable|claude_unavailable|missing_model|invalid_report_time|stale_report|awaiting_pin|report_before_pin) sleep 2 ;;
 +        *) break ;;
 +      esac
 +    done
 +    printf '%s\n' "$verdict"
 +    die "the candidate's model is unverified; inspect status, fix the report or abort" ;;
-@@ -85,8 +105,4 @@
+@@ -85,6 +131,6 @@
 -    # no GO to a boss on the wrong model: the team is not handed to it
 -    want=$(val model); want=${want:-$MODEL}; got=$(model_of "$(val next)")
 -    if [ -z "$got" ]; then
 -      [ -n "${SHIFT_MODEL_SEEN:-}" ] || die "the incoming boss's pane reports no model, so I cannot check it is on '$want'. Look yourself ('herdr agent read $(val next)' shows the model under its prompt); if it is right, run: SHIFT_MODEL_SEEN=1 shift.sh go. GO not written."
 -    elif ! model_ok "$got" "$want"; then
 -      die "the incoming boss runs on '$got'; the boss must run on '$want'. Ask the user to switch it with /model in pane $(val new), or abort and open again. GO not written."
--    fi
++    dir=$(readlink "$CUR")
++    [ ! -e "$dir/GO-CUED" ] || die "GO already recorded and candidate cued; inspect status"
++    candidate_ready "$dir" || die "GO cue withheld; fix model proof or inspect status"
++    if [ ! -e "$dir/GO" ]; then
++      date +%H:%M:%S > "$dir/GO.tmp"
++      mv "$dir/GO.tmp" "$dir/GO"
+@@ -92,2 +138,3 @@
 -    date +%H:%M:%S > "$CUR/GO"
-+    [ ! -e "$CUR/GO" ] || die "GO already recorded; inspect status"
-+    candidate_ready || die "GO withheld; fix model proof or abort"
-+    date +%H:%M:%S > "$CUR/GO.tmp"
-+    mv "$CUR/GO.tmp" "$CUR/GO"
-@@ -104,0 +121 @@
-+    candidate_ready || die "candidate model unverified; old pane left open"
-@@ -114 +131 @@
+-    herdr agent prompt "$(val next)" "From the outgoing boss: GO. You have the picture. Run: $here/shift.sh takeover" >/dev/null
++    herdr agent prompt "$(val next)" "From the outgoing boss: GO. You have the picture. Run: $here/shift.sh takeover" >/dev/null ||
++      die "GO is recorded but the candidate cue failed; rerun shift.sh go to cue the candidate"
++    touch "$dir/GO-CUED"
+@@ -104,0 +152 @@
++    candidate_ready "$(readlink "$CUR")" || die "candidate model unverified; old pane left open"
+@@ -114 +162 @@
 -    if [ -L "$CUR" ]; then cat "$CUR/state"; echo "reported_model=$(model_of "$(val next)")"; ls "$CUR"; else echo "no shift open"; fi ;;
-+    if [ -L "$CUR" ]; then cat "$CUR/state"; check_model || true; ls "$CUR"; else echo "no shift open"; fi ;;
++    if [ -L "$CUR" ]; then dir=$(readlink "$CUR"); probe_model "$dir" || true; cat "$dir/state"; ls "$dir"; else echo "no shift open"; fi ;;

@@ -1,9 +1,11 @@
 package bossshift_test
 
 import (
+	"fmt"
 	"io/fs"
 	"strconv"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/stretchr/testify/require"
@@ -42,7 +44,7 @@ func TestCheckModelRejectsReplacementPID(t *testing.T) {
 	t.Parallel()
 	fixture := newModelFixture()
 	// Two processes may start in the same clock tick.
-	fixture.foregroundPID++
+	fixture.foreground[0].PID++
 	verdict, err := fixture.check(t)
 	require.ErrorIs(t, err, bossshift.ErrModelProof)
 	require.Equal(t, "candidate_changed", verdict.Reason)
@@ -67,14 +69,114 @@ func TestCheckModelRejectsUnreadableProcess(t *testing.T) {
 	require.Zero(t, verdict.Start)
 }
 
+// An unreaped Claude has the same start ticks as the live process (NERD-5262).
+func TestCheckModelRejectsZombieAtEitherRead(t *testing.T) {
+	t.Parallel()
+	for _, deathAt := range []int{1, 2} {
+		t.Run(strconv.Itoa(deathAt), func(t *testing.T) {
+			t.Parallel()
+			fixture := newModelFixture()
+			reads := 0
+			fixture.stat = func(pid int) (report.Stat, error) {
+				reads++
+				state := "S"
+				if reads >= deathAt {
+					state = "Z"
+				}
+				raw := fmt.Sprintf("%d (claude) %s 99 1 1 0 -1 4194304 1 0 0 0 1 2 0 0 20 0 1 0 200", pid, state)
+				return report.ProcStat(fstest.MapFS{strconv.Itoa(pid) + "/stat": {Data: []byte(raw)}})(pid)
+			}
+			_, err := fixture.check(t)
+			require.ErrorIs(t, err, bossshift.ErrModelProof)
+		})
+	}
+}
+
+func TestCheckModelDoesNotVerifyRetainedReportOnFirstPin(t *testing.T) {
+	t.Parallel()
+	fixture := newModelFixture()
+	fixture.target.PID, fixture.target.Start, fixture.target.PinnedAt = 0, 0, 0
+	// The replacement has a rounded-down start older than the report its
+	// predecessor left. The token also postdates the pane's launch.
+	fixture.stamp = fixture.now.Add(-150 * time.Millisecond)
+	fixture.wall = func(uint64) (time.Time, error) { return fixture.now.Add(-650 * time.Millisecond), nil }
+	verdict, err := fixture.check(t)
+	require.ErrorIs(t, err, bossshift.ErrModelProof)
+	require.Equal(t, uint32(100), verdict.PID)
+	require.Equal(t, uint64(200), verdict.Start)
+}
+
+func TestCheckModelRequiresReportAfterPinMargin(t *testing.T) {
+	t.Parallel()
+	fixture := newModelFixture()
+	pin := fixture.now.Add(-2 * time.Second)
+	fixture.target.PinnedAt = pin.UnixMilli()
+	fixture.stamp = pin.Add(time.Second)
+	verdict, err := fixture.check(t)
+	require.ErrorIs(t, err, bossshift.ErrModelProof)
+	require.Equal(t, "report_before_pin", verdict.Reason)
+
+	fixture.stamp = fixture.stamp.Add(time.Millisecond)
+	verdict, err = fixture.check(t)
+	require.NoError(t, err)
+	require.Equal(t, "verified", verdict.Reason)
+}
+
+// NERD-5262: vary one source of proof while the remaining reads agree.
+func TestCheckModelRefusesBrokenProof(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name, reason string
+		change       func(*modelFixture)
+	}{
+		{"two_Claude_processes", "claude_unavailable", func(f *modelFixture) {
+			f.foreground = append(f.foreground, herdr.Process{PID: 101, Argv: []string{"claude"}})
+		}},
+		{"exited_Claude", "claude_unavailable", func(f *modelFixture) {
+			f.foreground = nil
+			f.target.PID, f.target.Start, f.target.PinnedAt = 0, 0, 0
+		}},
+		{"agent_is_not_Claude", "claude_unavailable", func(f *modelFixture) { f.agent.Agent = "codex" }},
+		{"pane_agent_is_not_Claude", "candidate_changed", func(f *modelFixture) { f.paneAgent = "codex" }},
+		{"process_changes_during_read", "candidate_changed", func(f *modelFixture) {
+			start := f.target.Start
+			f.stat = func(int) (report.Stat, error) {
+				p := report.Stat{Start: start}
+				start++
+				return p, nil
+			}
+		}},
+		{"wall_clock_unreadable", "claude_unavailable", func(f *modelFixture) {
+			f.wall = func(uint64) (time.Time, error) { return time.Time{}, fs.ErrPermission }
+		}},
+		{"pid_without_start", "invalid_candidate", func(f *modelFixture) { f.target.Start = 0 }},
+		{"zero_launch", "invalid_candidate", func(f *modelFixture) { f.target.LaunchedAt = 0 }},
+		{"different_agent_name", "candidate_changed", func(f *modelFixture) { f.agent.Name = "stranger" }},
+		{"different_agent_terminal", "candidate_changed", func(f *modelFixture) { f.agent.TerminalID = "stranger" }},
+		{"different_process_info_pane", "candidate_changed", func(f *modelFixture) { f.processPane = "stranger" }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newModelFixture()
+			tc.change(&fixture)
+			verdict, err := fixture.check(t)
+			require.ErrorIs(t, err, bossshift.ErrModelProof)
+			require.Equal(t, tc.reason, verdict.Reason)
+		})
+	}
+}
+
 type modelFixture struct {
-	target        bossshift.Candidate
-	now           time.Time
-	stamp         time.Time
-	started       time.Time
-	paneTerminal  string
-	foregroundPID uint32
-	stat          report.StatFunc
+	target                  bossshift.Candidate
+	now                     time.Time
+	stamp                   time.Time
+	agent                   herdr.Agent
+	paneTerminal, paneAgent string
+	processPane             string
+	foreground              []herdr.Process
+	stat                    report.StatFunc
+	wall                    report.StartedAtFunc
 }
 
 func newModelFixture() modelFixture {
@@ -84,11 +186,14 @@ func newModelFixture() modelFixture {
 	return modelFixture{
 		target: bossshift.Candidate{
 			Pane: "p", Terminal: "term", Name: "next", Model: "fable",
-			LaunchedAt: launched.UnixMilli(), PID: pid, Start: start,
+			LaunchedAt: launched.UnixMilli(), PinnedAt: launched.Add(time.Second).UnixMilli(), PID: pid, Start: start,
 		},
-		now: now, stamp: now, started: launched.Add(time.Second),
-		paneTerminal: "term", foregroundPID: pid,
-		stat: func(int) (report.Stat, error) { return report.Stat{Start: start}, nil },
+		now: now, stamp: now,
+		agent:        herdr.Agent{PaneID: "p", TerminalID: "term", Name: "next", Agent: "claude"},
+		paneTerminal: "term", paneAgent: "claude", processPane: "p",
+		foreground: []herdr.Process{{PID: pid, Argv: []string{"claude"}}},
+		stat:       func(int) (report.Stat, error) { return report.Stat{Start: start}, nil },
+		wall:       func(uint64) (time.Time, error) { return launched.Add(time.Second), nil },
 	}
 }
 
@@ -97,15 +202,12 @@ func (f modelFixture) check(t *testing.T) (bossshift.ModelVerdict, error) {
 	srv := herdrtest.Start(t, func(req herdrtest.Request) herdrtest.Reply {
 		switch req.Method {
 		case "agent.get":
-			agent := herdr.Agent{PaneID: f.target.Pane, TerminalID: f.target.Terminal, Name: f.target.Name, Agent: "claude"}
-			return herdrtest.Reply{Result: map[string]any{"type": "agent_info", "agent": agent}}
+			return herdrtest.Reply{Result: map[string]any{"type": "agent_info", "agent": f.agent}}
 		case "pane.process_info":
-			info := herdr.ProcessInfo{PaneID: f.target.Pane, ForegroundProcesses: []herdr.Process{
-				{PID: f.foregroundPID, Argv: []string{"claude"}},
-			}}
+			info := herdr.ProcessInfo{PaneID: f.processPane, ForegroundProcesses: f.foreground}
 			return herdrtest.Reply{Result: map[string]any{"type": "pane_process_info", "process_info": info}}
 		case "pane.get":
-			pane := herdr.PaneInfo{PaneID: f.target.Pane, TerminalID: f.paneTerminal, Agent: "claude", Tokens: map[string]string{
+			pane := herdr.PaneInfo{PaneID: f.target.Pane, TerminalID: f.paneTerminal, Agent: f.paneAgent, Tokens: map[string]string{
 				report.ModelKey: f.target.Model, report.ModelAtKey: strconv.FormatInt(f.stamp.UnixMilli(), 10),
 			}}
 			return herdrtest.Reply{Result: map[string]any{"type": "pane_info", "pane": pane}}
@@ -114,5 +216,5 @@ func (f modelFixture) check(t *testing.T) (bossshift.ModelVerdict, error) {
 		}
 	})
 	return bossshift.CheckModelWithReaders(t.Context(), herdr.Client{SocketPath: srv.Path}, f.target, f.stat,
-		func(uint64) (time.Time, error) { return f.started, nil }, func() time.Time { return f.now })
+		f.wall, func() time.Time { return f.now })
 }

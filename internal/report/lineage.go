@@ -34,10 +34,11 @@ var ErrProcCmdline = errors.New("unreadable process arguments")
 // Stat is the part of a process's status a lineage needs.
 type Stat struct {
 	PPID int
+	Dead bool // The process is dead or waiting to be reaped.
 	// Start is when the process started: in clock ticks since boot on Linux,
 	// in microseconds since the epoch on darwin. A pid is reused only by a
 	// process that starts later, so a pid with the same Start at two reads is
-	// the same process, alive in between.
+	// the same process. Check Dead separately for a live process.
 	Start uint64
 }
 
@@ -212,7 +213,8 @@ func parseStat(pid int, raw []byte) (Stat, error) {
 	if err != nil {
 		return Stat{}, fmt.Errorf("%w: %d: start time %q: %w", ErrProcStat, pid, fields[19], err)
 	}
-	return Stat{PPID: ppid, Start: start}, nil
+	dead := fields[0] == "Z" || fields[0] == "X" || fields[0] == "x"
+	return Stat{PPID: ppid, Start: start, Dead: dead}, nil
 }
 
 // ProcCmdline reads argument vectors from a Linux procfs mounted at proc.

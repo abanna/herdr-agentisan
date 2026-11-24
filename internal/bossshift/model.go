@@ -18,10 +18,10 @@ import (
 var ErrModelProof = errors.New("boss shift model unverified")
 
 // Candidate pins the pane and terminal from the split. After the first process
-// read, PID and Start pin that Claude as well.
+// read, PID and Start pin that Claude. PinnedAt records the pin in Unix milliseconds.
 type Candidate struct {
 	Pane, Terminal, Name, Model string
-	LaunchedAt                  int64
+	LaunchedAt, PinnedAt        int64
 	PID                         uint32
 	Start                       uint64
 }
@@ -48,7 +48,7 @@ func (v ModelVerdict) unavailable(err error) (ModelVerdict, error) {
 	return v, fmt.Errorf("%w: %w", ErrModelProof, err)
 }
 
-var fableID = regexp.MustCompile(`^claude-fable-[0-9]+-[0-9]+(-[0-9]{8})?$`)
+var fableID = regexp.MustCompile(`^claude-fable-[0-9]+-[0-9]+(-[0-9]{8})?(\[1m\])?$`)
 
 // CheckModel reads only the named Claude's pane tokens as model evidence.
 // Launch argv and dashboard models cannot attest the model in use.
@@ -60,7 +60,8 @@ func checkModel(ctx context.Context, c herdr.Client, target Candidate, stat repo
 	v := ModelVerdict{Requested: target.Model}
 	launch := time.UnixMilli(target.LaunchedAt)
 	if target.Pane == "" || target.Terminal == "" || target.Name == "" || report.ValidModel(target.Model) == "" ||
-		target.LaunchedAt <= 0 || (target.PID == 0) != (target.Start == 0) {
+		target.LaunchedAt <= 0 || (target.PID == 0) != (target.Start == 0) ||
+		(target.PID == 0) != (target.PinnedAt == 0) || target.PinnedAt != 0 && target.PinnedAt < target.LaunchedAt {
 		return v.refuse("invalid_candidate")
 	}
 	ctx, cancel := context.WithTimeout(ctx, herdr.CallTimeout)
@@ -88,7 +89,7 @@ func checkModel(ctx context.Context, c herdr.Client, target Candidate, stat repo
 		return v.refuse("claude_unavailable")
 	}
 	proc, err := stat(int(pid)) // #nosec G115 -- OS PID fits in int
-	if err != nil || proc.Start == 0 {
+	if err != nil || proc.Dead || proc.Start == 0 {
 		return v.refuse("claude_unavailable")
 	}
 	if target.PID != 0 && (target.PID != pid || target.Start != proc.Start) {
@@ -106,7 +107,7 @@ func checkModel(ctx context.Context, c herdr.Client, target Candidate, stat repo
 		return v.refuse("candidate_changed")
 	}
 	current, err := stat(int(pid)) // #nosec G115 -- OS PID fits in int
-	if err != nil || current.Start != proc.Start {
+	if err != nil || current.Dead || current.Start != proc.Start {
 		return v.refuse("candidate_changed")
 	}
 
@@ -124,6 +125,14 @@ func checkModel(ctx context.Context, c herdr.Client, target Candidate, stat repo
 	// start at the reporter's millisecond precision (NERD-5262).
 	if stamp.Before(launch) || stamp.Before(started.Truncate(time.Millisecond)) || now.Sub(stamp) >= report.CtxTTL {
 		return v.refuse("stale_report")
+	}
+	if target.PID == 0 {
+		return v.refuse("awaiting_pin")
+	}
+	// Start time can round down by a second. Observe the candidate first,
+	// then require a report beyond the pin and the rounding window (NERD-5262).
+	if !stamp.After(time.UnixMilli(target.PinnedAt).Add(time.Second)) {
+		return v.refuse("report_before_pin")
 	}
 	fableAlias := target.Model == "fable" && fableID.MatchString(v.Observed)
 	if target.Model != v.Observed && !fableAlias {
