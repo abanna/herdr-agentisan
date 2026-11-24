@@ -348,17 +348,25 @@ func TestContextReturnsWithTheOriginalForegroundProcess(t *testing.T) {
 	foreground(2002, new(78))
 }
 
-func TestContextRestoresAReportFirstSeenDuringSuspension(t *testing.T) {
+func TestContextDoesNotAssignAnUnseenJobsReportToThePrecedingJob(t *testing.T) {
 	t.Parallel()
 	th := newTeamHerdr(t)
 	const pane = "wN:p1"
 	th.setAgents(named(pane, "pee01"))
 	th.setPane(pane, "agent", "codex")
-	th.setProcs(pane, agentProc(1002, "codex"))
-	showCtx(th, pane, "10", report.FormatModelAt(boot.Add(12*time.Second)))
+	th.setProcs(pane, agentProc(2002, "codex"))
+	showCtx(th, pane, "10", report.FormatModelAt(boot.Add(22*time.Second)))
 
 	o := teamOpts(t, shortDir(t), th, noticesConfig(t, "gap = 0\n"))
 	fg := fakeForeground(t, &o)
+	fg.Store(2002)
+	stat := o.Hooks.ProcessStat
+	o.Hooks.ProcessStat = func(pid int) (report.Stat, error) {
+		if pid == 3002 {
+			return report.Stat{Start: 3002, Pgrp: 3002, Tpgid: int(fg.Load())}, nil
+		}
+		return stat(pid)
+	}
 	var logs lockedLog
 	_, rec := ctxRun(t, o, &logs)
 	sock := socketPath(t, o.StateDir, th.path)
@@ -366,28 +374,81 @@ func TestContextRestoresAReportFirstSeenDuringSuspension(t *testing.T) {
 		ctx, _ := agentCtx(s, pane)
 		return ctx != nil && *ctx == 10
 	})
+	th.setPane(pane, "agent", nil)
+	fg.Store(4002)
+	polled(t, th.srv, 2)
 
-	// A's final stamp is available to the poll only after B takes over.
-	// Its time is within A's lifetime and precedes B's verified start.
+	// A reported 80% between observations. The next foreground agent the
+	// poll sees is C. A's stamp falls between B's and C's starts.
+	th.setProcs(pane, agentProc(3002, "codex"))
+	fg.Store(3002)
+	showCtx(th, pane, "80", report.FormatModelAt(boot.Add(25*time.Second)))
+	th.setPane(pane, "agent", "codex")
+	polled(t, th.srv, 2)
+	ctx, present := agentCtx(served(t, sock, anySnapshot), pane)
+	require.True(t, present)
+	assert.Nil(t, ctx, "C did not write this report")
+	assert.Empty(t, ctxEvents(rec))
+
 	th.setProcs(pane, agentProc(2002, "codex"))
 	fg.Store(2002)
 	polled(t, th.srv, 2)
-	showCtx(th, pane, "80", report.FormatModelAt(boot.Add(15*time.Second)))
-	polled(t, th.srv, 3)
-	ctx, present := agentCtx(served(t, sock, anySnapshot), pane)
-	require.True(t, present)
-	assert.Nil(t, ctx)
-	assert.Empty(t, ctxEvents(rec), "B never inherits A's ceiling crossing")
-
-	th.setProcs(pane, agentProc(1002, "codex"))
-	fg.Store(1002)
-	polled(t, th.srv, 3)
 	ctx, present = agentCtx(served(t, sock, anySnapshot), pane)
 	require.True(t, present)
-	assert.Equal(t, new(80), ctx, "the retained report qualifies when A returns")
-	assert.Equal(t, "ctx 80%", lastBands(t, th, pane)["ctx_hot"])
+	assert.Nil(t, ctx, "B did not write it either")
+	assert.Equal(t, "ctx  --", lastBands(t, th, pane)["ctx_ok"])
+	assert.Empty(t, ctxEvents(rec))
+	assert.Empty(t, toasts(t, th))
+
+	showCtx(th, pane, "80", report.FormatModelAt(boot.Add(35*time.Second)))
+	polled(t, th.srv, 2)
 	assert.Equal(t, []string{"wN:p1 worker ceiling 80 75 true true"}, ctxEvents(rec))
 	assert.Len(t, toasts(t, th), 1)
+}
+
+func TestContextColdForegroundRejectionWaitsForStart(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	const pane = "wN:p1"
+	th.setAgents(named(pane, "pee01"))
+	th.setPane(pane, "agent", "codex")
+	th.setProcs(pane, agentProc(2002, "codex"))
+	showCtx(th, pane, "80", report.FormatModelAt(boot.Add(15*time.Second)))
+
+	o := teamOpts(t, shortDir(t), th, noticesConfig(t, "gap = 0\n"))
+	fg := fakeForeground(t, &o)
+	// Herdr listed B, but B has lost the foreground by the kernel read.
+	fg.Store(4002)
+	var logs lockedLog
+	_, rec := ctxRun(t, o, &logs)
+	sock := socketPath(t, o.StateDir, th.path)
+	checkUnknown := func() {
+		t.Helper()
+		polled(t, th.srv, 2)
+		ctx, present := agentCtx(served(t, sock, anySnapshot), pane)
+		require.True(t, present)
+		assert.Nil(t, ctx)
+		assert.Equal(t, "ctx  --", lastBands(t, th, pane)["ctx_ok"])
+		assert.Empty(t, ctxEvents(rec))
+		assert.Empty(t, toasts(t, th))
+	}
+	checkUnknown()
+	assert.Greater(t, processAsks(th.srv)[pane], 1, "the cold rejection is retried before ModelRetry")
+
+	th.setShell(pane, 0, true)
+	fg.Store(2002)
+	checkUnknown()
+
+	th.setShell(pane, 0, false)
+	checkUnknown()
+	showCtx(th, pane, "80", "")
+	checkUnknown()
+	showCtx(th, pane, "80", report.FormatModelAt(boot.Add(35*time.Second)))
+	polled(t, th.srv, 2)
+	ctx, present := agentCtx(served(t, sock, anySnapshot), pane)
+	require.True(t, present)
+	assert.Equal(t, new(80), ctx, "B's report counts after the probe recovers")
+	assert.Equal(t, []string{"wN:p1 worker ceiling 80 75 true true"}, ctxEvents(rec))
 }
 
 func TestContextDoesNotRestoreAReportOlderThanThePreviousProcess(t *testing.T) {

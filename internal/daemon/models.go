@@ -51,6 +51,8 @@ type launchModel struct {
 	pid   uint32
 	start uint64
 	timed bool
+	// notForeground marks a listed process the kernel ruled out.
+	notForeground bool
 	// startedAt is start on the wall clock, once a poll has put it there
 	// (A47).
 	startedAt time.Time
@@ -59,20 +61,16 @@ type launchModel struct {
 	asked time.Time
 }
 
-type ctxAgent struct {
-	process   report.Proc
-	wallStart time.Time
-}
-
 // processCtx retains the foreground history needed to qualify the pane's
 // latest report when a process returns to the foreground.
 type processCtx struct {
-	terminal        string
-	agent, previous ctxAgent
-	owner           report.Proc
-	reported        time.Time
-	after           time.Time
-	replaced        bool
+	terminal   string
+	agent      report.Proc
+	owner      report.Proc
+	reported   time.Time
+	after      time.Time
+	replaced   bool
+	awaitStart bool // a cold probe found a process outside the foreground
 }
 
 func newLaunchModels(stat report.StatFunc) *launchModels {
@@ -195,7 +193,7 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 		// A lost foreground agent makes ctx unknown. Retry an unresolved
 		// replacement next poll so the 60 s miss cache cannot prolong it.
 		prior := lm.ctxs[p.PaneID]
-		if e.pid != 0 || prior.agent.process.PID == 0 || prior.terminal != p.TerminalID {
+		if e.pid != 0 || prior.terminal != p.TerminalID || prior.agent.PID == 0 && !prior.awaitStart {
 			lm.byPane[p.PaneID] = e
 		}
 		if e.model != "" {
@@ -225,7 +223,8 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 
 // read is the entry for pane p from its processes. A pane with no agent
 // process, or whose agent's start time cannot be read, as when it has just
-// exited, is a miss: no model, asked again ModelRetry later.
+// exited, is a miss. A process the kernel ruled out as foreground is
+// retried next poll.
 func read(info herdr.ProcessInfo, p herdr.PaneInfo, startTime func(pid int) (uint64, error), now time.Time) launchModel {
 	e := launchModel{terminal: p.TerminalID, agent: p.Agent, asked: now}
 	model, pid, found := team.LaunchModel(info.ForegroundProcesses)
@@ -235,6 +234,7 @@ func read(info herdr.ProcessInfo, p herdr.PaneInfo, startTime func(pid int) (uin
 	if startTime != nil {
 		start, err := startTime(int(pid))
 		if err != nil {
+			e.notForeground = errors.Is(err, errNotForeground)
 			return e
 		}
 		e.start, e.timed = start, true
@@ -284,19 +284,23 @@ func (lm *launchModels) ctxGates(panes []herdr.PaneInfo, started map[string]time
 			prior = processCtx{terminal: p.TerminalID}
 		}
 		e := lm.byPane[id]
-		if !e.timed {
-			if prior.agent.process.PID != 0 {
+		start := started[id]
+		prior.awaitStart = prior.awaitStart || prior.agent.PID == 0 && e.notForeground
+		if !e.timed || prior.awaitStart && start.IsZero() {
+			if prior.agent.PID != 0 || prior.awaitStart {
 				next[id], gates[id] = prior, team.CtxGate{RequireFresh: true}
 			}
 			continue
 		}
-		agent := ctxAgent{process: report.Proc{PID: int(e.pid), Start: e.start}, wallStart: started[id]}
-		if prior.agent.process.PID != 0 && agent.process != prior.agent.process {
-			prior.previous = prior.agent
+		agent := report.Proc{PID: int(e.pid), Start: e.start}
+		if prior.agent.PID != 0 && agent != prior.agent {
 			prior.after, prior.replaced = prior.reported, true
 		}
-		gate := team.CtxGate{Start: agent.wallStart, After: prior.after, RequireFresh: prior.replaced}
-		if agent.process == prior.owner {
+		if prior.awaitStart {
+			prior.replaced, prior.awaitStart = true, false
+		}
+		gate := team.CtxGate{Start: start, After: prior.after, RequireFresh: prior.replaced}
+		if agent == prior.owner {
 			gate.Retained = prior.reported
 		}
 		prior.agent = agent
@@ -307,9 +311,8 @@ func (lm *launchModels) ctxGates(panes []herdr.PaneInfo, started map[string]time
 	return gates
 }
 
-// observeReport binds a stamp once. A stamp first seen under a different
-// foreground job can be retained for the preceding process when it falls
-// within that process's lifetime and predates the current process.
+// observeReport binds a qualifying stamp once. A stamp the current process
+// cannot have written establishes no ownership for another process.
 func (p *processCtx) observeReport(tokens map[string]string, gate team.CtxGate) {
 	at, ok := report.ParseCtxAt(tokens[report.CtxAtKey])
 	if !ok || at.Before(p.reported) {
@@ -318,18 +321,11 @@ func (p *processCtx) observeReport(tokens map[string]string, gate team.CtxGate) 
 	if at.After(p.reported) {
 		p.reported, p.owner = at, report.Proc{}
 	}
-	if p.owner.PID != 0 || gate.Start.IsZero() {
+	if p.owner.PID != 0 || gate.Start.IsZero() || !gate.Allows(at) {
 		return
 	}
-	if _, ok := team.ParseCtx(tokens[report.CtxKey]); !ok {
-		return
-	}
-	if gate.Allows(at) {
-		p.owner = p.agent.process
-		return
-	}
-	if at.Before(gate.Start) && !p.previous.wallStart.IsZero() && !at.Before(p.previous.wallStart) {
-		p.owner = p.previous.process
+	if _, ok := team.ParseCtx(tokens[report.CtxKey]); ok {
+		p.owner = p.agent
 	}
 }
 
@@ -340,7 +336,7 @@ func (e launchModel) holds(p herdr.PaneInfo, startTime func(pid int) (uint64, er
 		return false
 	}
 	if e.pid == 0 {
-		return now.Sub(e.asked) < ModelRetry
+		return !e.notForeground && now.Sub(e.asked) < ModelRetry
 	}
 	if startTime == nil {
 		return true
