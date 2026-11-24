@@ -43,16 +43,17 @@ printf '%s  %s\n' a9d92216ec0324c87372ed9fb38579568a57dcf72460d4e9366098abc3d384
   write into its replacement's folder. It records the old terminal, launch time
   and session id, then splits, saves the candidate's pane and terminal, and
   starts Claude with that id. It reads no model. If the shift ended during the
-  split or the start (`current` gone, or `ABORTED` in the folder) it closes the
-  new pane and stops.
+  split (`current` gone, or `ABORTED`), or was aborted while Claude started, it
+  closes the new pane and stops.
 - `brief` saves the Claude's pid and start once, then proves it and its model
   on every run, and only then sends the instructions.
 - `go` and `takeover` prove the same again. `takeover` looks up the old pane's
   terminal first, proves the candidate last, and closes the pane only while it
   holds the terminal recorded at `open`; `abort` does the same for the
   candidate's, and only for a shift that has not ended.
-- `status` shows the record and the verdict; it writes nothing. The other
-  commands wait 30 s for the shift's lock, then say "the shift is busy; try again".
+- `status` shows the record and the verdict; it writes nothing. `brief`, `say`,
+  `go`, `abort` and `takeover` wait 30 s for the shift's lock, then say "the
+  shift is busy; try again"; `open` and `wait` take no lock.
 
 ## By hand
 
@@ -76,8 +77,8 @@ The owner accepted one window: a `/model` switch, or a `/clear` (a new session
 id in the same process), after the candidate's last statusline report and before
 `takeover` is not seen, so the check can still close the outgoing boss's pane.
 It lasts until a report of the new session is the last one written (a refresh,
-60 s here; 180 s if reports stall), after which every check refuses
-`wrong_session`. A report of the old session still in flight can be written
+60 s here), after which every check refuses `wrong_session`; if reports
+stall, the last one expires after 180 s and every check refuses `stale_report`. A report of the old session still in flight can be written
 after it, because herdr keeps the last write, and reopens the window. Verification, close and rename
 are separate herdr calls, and a pane can change between the terminal check and
 the close. The session proof assumes the statusline's `session_id` equals
