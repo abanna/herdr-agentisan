@@ -218,6 +218,7 @@ func TestShiftOpenLeavesAnActiveShiftsRecordAlone(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, "WINNER\n", s.read("current/state"))
 	require.NoFileExists(t, s.path("split"))
+	require.Empty(t, s.glob("20261124-000000-*"), "the loser's empty folder is removed")
 }
 
 func TestShiftOpenChecksPluginBeforeSplit(t *testing.T) {
@@ -301,6 +302,47 @@ func TestShiftBriefStaysWithItsOwnShift(t *testing.T) {
 			require.NoFileExists(t, s.path("cues"))
 		})
 	}
+}
+
+// go and takeover stay with the shift they started in: when another replaces it under them,
+// they write, cue and close nothing for the replacement.
+func TestShiftCommandsStayWithTheirOwnShift(t *testing.T) {
+	t.Parallel()
+	swap := `[[ " $* " != *" --pid 0 "* ]] && { rm -f "$SHIFT_ROOT/current"; ln -s "$SHIFT_ROOT/b" "$SHIFT_ROOT/current"; }`
+	for verb, pane := range map[string]string{"go": "old", "takeover": "new"} {
+		t.Run(verb, func(t *testing.T) {
+			t.Parallel()
+			s := setupShiftScript(t)
+			require.NoError(t, s.run("old", "verified", "open"))
+			require.NoError(t, s.run("old", "verified", "brief"))
+			s.account()
+			if verb == "takeover" {
+				require.NoError(t, s.run("old", "verified", "go"))
+			}
+			replacement := "old=old\nold_terminal=old-terminal\nboss=ha-boss\nnext=ha-boss-next\nnew=new\n"
+			require.NoError(t, os.Mkdir(s.path("b"), 0o700))
+			s.write("b/state", replacement)
+			_, err := s.invoke(pane, "verified", verb, "ON_CHECK="+swap)
+			require.Error(t, err)
+			require.Equal(t, replacement, s.read("b/state"))
+			for _, f := range []string{"b/GO", "b/GO.tmp", "b/GO-CUED", "close", "rename"} {
+				require.NoFileExists(t, s.path(f))
+			}
+		})
+	}
+}
+
+// An abort that starts while a brief holds the shift waits for it, so the cue goes to the shift
+// it was proved for: herdr resolves the prompt's target by name, when the prompt arrives.
+func TestShiftAbortWaitsForARunningBrief(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	require.NoError(t, s.run("old", "verified", "open"))
+	abort := `[[ " $* " != *" --pid 0 "* ]] && { bash "$SHIFT_ROOT/shift.sh" abort 9>&- >"$SHIFT_ROOT/abort.out" 2>&1 & /bin/sleep 0.5; }`
+	_, err := s.invoke("old", "verified", "brief", "ON_CHECK="+abort)
+	require.NoError(t, err)
+	require.Equal(t, 1, strings.Count(s.read("cues"), "INCOMING.md"))
+	require.Eventually(t, func() bool { _, err := os.Lstat(s.path("last-aborted")); return err == nil }, 10*time.Second, 50*time.Millisecond)
 }
 
 // The stand-ins are written once, by TestMain: one written in a parallel test can be

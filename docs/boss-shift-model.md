@@ -74,4 +74,8 @@ The owner accepted one window: a `/model` switch after the candidate's last
 statusline report and before `takeover` is not seen, so the check can still
 close the outgoing boss's pane. It lasts up to one refresh (60 s here), or
 180 s if reports stall. Verification, close and rename are separate herdr
-calls, and a pane can change between the terminal check and the close.
+calls, and a pane can change between the terminal check and the close. The
+session proof assumes the statusline's `session_id` equals `--session-id`
+(herdr's own `agent_session` does); if it differs, or a `/clear` gives the
+candidate a new one (unverified), every check refuses `wrong_session`: replay
+once at activation.

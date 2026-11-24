@@ -91,6 +91,7 @@ func TestCheckModelRequiresTheLaunchSessionID(t *testing.T) {
 		{"the id as another flag's value", []string{"claude", "--name", "launch-1"}, "candidate_changed", false},
 		{"the id with nothing after the flag", []string{"claude", "--session-id"}, "candidate_changed", false},
 		{"a longer id", []string{"claude", "--session-id=launch-12"}, "candidate_changed", false},
+		{"a longer id, space form", []string{"claude", "--session-id", "launch-12"}, "candidate_changed", false},
 	}
 	for _, tc := range tests {
 		for _, pinned := range []bool{true, false} {
@@ -151,6 +152,10 @@ func TestCheckModelRefusesBrokenProof(t *testing.T) {
 		}},
 		{"pid_without_start", "invalid_candidate", func(f *modelFixture) { f.target.Start = 0 }},
 		{"no_launch_id", "invalid_candidate", func(f *modelFixture) { f.target.SessionID = "" }},
+		{"another_process_named_claude_does_not_count", "candidate_changed", func(f *modelFixture) {
+			f.foreground[0].Argv = []string{"claude", "--model", "fable"}
+			f.foreground = append(f.foreground, herdr.Process{PID: 101, Argv: []string{"sh", "--session-id", "launch-1"}})
+		}},
 		{"report_from_another_session", "wrong_session", func(f *modelFixture) { f.reportSession = "launch-2" }},
 		{"report_names_no_session", "wrong_session", func(f *modelFixture) { f.reportSession = "" }},
 		{"same_pid_different_start", "candidate_changed", func(f *modelFixture) {
