@@ -113,6 +113,31 @@ func TestExplicitSmallModel(t *testing.T) {
 	}
 }
 
+func TestSmallModelOverrideRefused(t *testing.T) {
+	t.Parallel()
+	p := policy(t, routing.Deployment{Enabled: true})
+	for _, tc := range []struct {
+		provider, model string
+		groups          []string
+	}{
+		{routing.Claude, "claude-haiku-5-5", []string{"precheck", "qa", "review", "debugger", "boss"}},
+		{routing.Codex, "gpt-6.1-terra", []string{"precheck", "qa", "review", "debugger", "boss"}},
+		{routing.Codex, "gpt-6-luna", []string{"precheck", "qa", "review", "debugger", "boss", "coder"}},
+	} {
+		for _, group := range tc.groups {
+			t.Run(group+"/"+tc.model, func(t *testing.T) {
+				t.Parallel()
+				role, err := routing.RoleFor(group)
+				require.NoError(t, err)
+				_, err = p.Resolve(routing.Request{
+					Role: role, Provider: tc.provider, Model: tc.model, Effort: "low",
+				}, now)
+				require.ErrorIs(t, err, routing.ErrOverrideRefused)
+			})
+		}
+	}
+}
+
 // TestRoleFor: each worker type of the team model has its role, qa
 // pre_check's, and every role it names is one of the rules'; anything else
 // is refused.
