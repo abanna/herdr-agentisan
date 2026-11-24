@@ -135,6 +135,7 @@ type boardCaller struct {
 	Reader  string
 	Pane    string
 	Term    string
+	Tab     string
 }
 
 // placer places a board op's caller.
@@ -408,7 +409,7 @@ func placeBoardCaller(view func() (*team.Model, map[string]string), c paneProber
 				case got.in && got.dashboard:
 					return boardCaller{Project: pr.Name, Reader: store.ReaderUser, Pane: b.Pane.ID}, nil
 				case got.in:
-					return boardCaller{Project: pr.Name, Reader: store.ReaderBoss, Pane: b.Pane.ID, Term: b.Pane.TerminalID}, nil
+					return boardCaller{Project: pr.Name, Reader: store.ReaderBoss, Pane: b.Pane.ID, Term: b.Pane.TerminalID, Tab: b.Pane.TabID}, nil
 				}
 			}
 		}

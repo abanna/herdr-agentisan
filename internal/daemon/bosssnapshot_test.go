@@ -154,7 +154,7 @@ func TestBossSnapshotAsOfPrecedesStatusFlip(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &got))
 	assert.Equal(t, snapshot.StatusWorking, got.Groups[0].Workers[0].Status)
 	assert.Equal(t, &boardNow, got.TeamPoll.AsOf, "poll as_of must precede the status flip")
-	assert.Equal(t, new(boardNow.Add(time.Second)), got.Board.AsOf, "board as_of comes from its own read")
+	assert.Equal(t, new(boardNow.Add(time.Second-time.Millisecond)), got.Board.AsOf, "board as_of comes from its own read, less the clock slack")
 }
 
 func TestBossSnapshotPreservesMarksAndWaits(t *testing.T) {
@@ -326,8 +326,6 @@ func TestBossSnapshotFreshnessAndProjection(t *testing.T) {
 	assert.Equal(t, snapshot.Stale, got.TeamPoll.State)
 	assert.Equal(t, &boardNow, got.TeamPoll.AsOf)
 	assert.Equal(t, snapshot.Fresh, got.Board.State)
-	clock.Store(-1)
-	assert.Equal(t, snapshot.Stale, shiftRead(t, sock).TeamPoll.State, "clock moved back")
 	thaw.Do(func() { close(block) })
 
 	h.mu.Lock()
@@ -467,7 +465,9 @@ func TestBossSnapshotIncomingBossDuringDegradedPoll(t *testing.T) {
 	t.Parallel()
 	h := shiftHerdr(t)
 	shiftCaller(h, "w14:p0")
-	sock := startShift(t, h, shiftOpts(t, h))
+	o := shiftOpts(t, h)
+	o.Now = func() time.Time { return boardNow } // no age: only the degraded poll can make the rows stale
+	sock := startShift(t, h, o)
 	before := shiftRead(t, sock)
 	h.mu.Lock()
 	h.agentsErr = true
@@ -478,4 +478,66 @@ func TestBossSnapshotIncomingBossDuringDegradedPoll(t *testing.T) {
 	got := shiftRead(t, sock)
 	assert.Equal(t, snapshot.Stale, got.TeamPoll.State)
 	assert.Equal(t, before.Boss, got.Boss, "the rows name the old boss")
+}
+
+// NERD-5748: a pane id reissued, or its pane moved, before any poll saw it is not the boss's.
+func TestBossSnapshotRefusesPaneChangedBeforePoll(t *testing.T) {
+	t.Parallel()
+	for _, key := range []string{"terminal_id", "tab_id"} {
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+			h := shiftHerdr(t)
+			shiftCaller(h, "w14:p0")
+			o := shiftOpts(t, h)
+			o.Poll = time.Hour
+			sock := startShift(t, h, o)
+			shiftRead(t, sock)
+			h.mu.Lock()
+			h.panes = slices.Clone(h.panes)
+			i := slices.IndexFunc(h.panes, func(p map[string]any) bool { return p["pane_id"] == "w14:p0" })
+			h.panes[i] = maps.Clone(h.panes[i])
+			h.panes[i][key] = "other"
+			h.mu.Unlock()
+			_, err := daemon.Workforce(t.Context(), sock, bossSnapshotOp, struct{}{})
+			assert.Equal(t, "not_ready", refusedWith(t, err))
+		})
+	}
+}
+
+// NERD-5748: only the monotonic clock ages rows and tells that the wall clock stepped back.
+func TestBossSnapshotIgnoresWallClockSteps(t *testing.T) {
+	t.Parallel()
+	h := shiftHerdr(t)
+	shiftCaller(h, "w14:p0")
+	o := shiftOpts(t, h)
+	o.Poll = time.Hour
+	state := paths(t, o.StateDir, h.fakeHerdr)
+	require.NoError(t, os.MkdirAll(state.Dir, 0o700))
+	st, err := store.Open(t.Context(), state.DB)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, st.Close()) })
+	var wall, mono atomic.Int64
+	var armed atomic.Bool
+	o.Mono = func() time.Duration { return time.Duration(mono.Load()) }
+	o.Now = func() time.Time {
+		if wall.Load() == 0 && armed.Load() && strings.Contains(string(debug.Stack()), "bossSnapshotOp") {
+			wall.Store(int64(100 * time.Millisecond)) // as_of is sampled here, then the clock steps back 50 ms and the read ends 10 ms on
+			return boardNow.Add(100 * time.Millisecond)
+		} else if wall.Load() == int64(100*time.Millisecond) {
+			wall.Store(int64(110 * time.Millisecond))
+			mono.Store(int64(60 * time.Millisecond))
+			_, err := st.Post(t.Context(), store.BoardPost{Project: "alpha", Channel: store.ChannelTeam, Author: store.Address{Kind: store.KindWorker, ID: "ha-coder-1"}, Kind: "post", Body: "after the read", At: boardNow.Add(80 * time.Millisecond)})
+			require.NoError(t, err)
+		}
+		return boardNow.Add(time.Duration(wall.Load()))
+	}
+	sock := startShift(t, h, o)
+	shiftRead(t, sock)
+	armed.Store(true)
+	assert.Equal(t, snapshot.Unavailable, shiftRead(t, sock).Board.State, "a post stamped before as_of was committed after the read")
+	wall.Store(int64(4 * o.Poll))
+	mono.Store(int64(4 * o.Poll))
+	assert.Equal(t, snapshot.Stale, shiftRead(t, sock).TeamPoll.State)
+	wall.Store(int64(o.Poll)) // a correction of three intervals back: the rows are no younger
+	assert.Equal(t, snapshot.Stale, shiftRead(t, sock).TeamPoll.State)
 }

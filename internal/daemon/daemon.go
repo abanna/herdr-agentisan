@@ -147,6 +147,8 @@ type Options struct {
 	Now    func() time.Time
 	Logger zerolog.Logger
 	Hooks  Hooks
+	// Mono is the monotonic reading the boss snapshot's ages and read window use; nil is Now's elapsed time.
+	Mono func() time.Duration
 	// Team turns on the team poll and the $team push; nil leaves it off.
 	Team *TeamOptions
 
@@ -173,6 +175,10 @@ func (o Options) withDefaults() Options {
 	}
 	if o.Now == nil {
 		o.Now = time.Now
+	}
+	if o.Mono == nil {
+		base := o.Now() // with time.Now, Sub reads the monotonic clock: no wall step moves it
+		o.Mono = func() time.Duration { return o.Now().Sub(base) }
 	}
 	if o.Hooks.Signal == nil {
 		o.Hooks.Signal = func(pid int) error { return syscall.Kill(pid, syscall.SIGTERM) }
