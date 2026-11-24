@@ -24,6 +24,7 @@ const (
 var minVersion = [3]int{0, 19, 0}
 
 const (
+	maxReply = 4 << 20 // bytes per stdout frame, including the newline
 	// grace is how long Close waits for the server to end on its own once
 	// its stdin is closed, and waitDelay how long a failed call waits to
 	// learn how the server ended.
@@ -35,9 +36,11 @@ const (
 type Session struct {
 	ctx     context.Context //nolint:containedctx // the one deadline of the session's life
 	cmd     *exec.Cmd
+	guard   *exec.Cmd
+	life    *os.File
 	in, out *os.File
 	rd      *bufio.Reader
-	exited  chan struct{} // closed once the server is reaped
+	exited  chan struct{} // closed once both processes are reaped
 	waitErr error         // the reap's result, read after exited
 	once    sync.Once
 	killErr error
@@ -62,26 +65,46 @@ func Open(ctx context.Context, l Launch) (*Session, error) {
 		_, _ = inR.Close(), inW.Close()
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	s := &Session{ctx: ctx, in: inW, out: outR, rd: bufio.NewReaderSize(outR, 64<<10), exited: make(chan struct{})}
+	guard, life, err := startSupervisor(ctx)
+	if err != nil {
+		_, _, _, _ = inR.Close(), inW.Close(), outR.Close(), outW.Close()
+		return nil, startFailure(ctx, err)
+	}
+	s := &Session{ctx: ctx, guard: guard, life: life, in: inW, out: outR, rd: bufio.NewReaderSize(outR, maxReply), exited: make(chan struct{})}
 	cmd := exec.CommandContext(ctx, l.Argv[0], l.Argv[1:]...) // #nosec G204 -- argv is Locate's, or a test's
 	s.cmd = cmd
-	// The context's end kills the whole group, not just the leader.
-	cmd.Cancel = func() error { s.kill(); return nil }
+	// Session cancellation must outlive exec's context watcher.
+	cmd.Cancel = nil
 	cmd.Dir, cmd.Env = l.Dir, l.Env
 	cmd.Stdin, cmd.Stdout = inR, outW
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: guard.Process.Pid}
 	startErr := cmd.Start()
 	_, _ = inR.Close(), outW.Close() // the server's ends; ours are in and out
 	if startErr != nil {
-		_, _ = inW.Close(), outR.Close()
-		return nil, fmt.Errorf("%w: start %s: %w", ErrUnavailable, l.Argv[0], startErr)
+		_, _, _ = inW.Close(), outR.Close(), life.Close()
+		_ = guard.Wait()
+		return nil, startFailure(ctx, fmt.Errorf("start %s: %w", l.Argv[0], startErr))
 	}
-	go func() { s.waitErr = cmd.Wait(); close(s.exited) }()
+	stop := context.AfterFunc(ctx, s.kill)
+	go func() {
+		defer stop()
+		s.waitErr = cmd.Wait()
+		s.kill()
+		_ = guard.Wait()
+		close(s.exited)
+	}()
 	if err := s.handshake(l.ClientVersion); err != nil {
 		_ = s.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+func startFailure(ctx context.Context, err error) error {
+	if cerr := ctx.Err(); cerr != nil {
+		return fmt.Errorf("%w: %w", ErrTimeout, cerr)
+	}
+	return fmt.Errorf("%w: %w", ErrUnavailable, err)
 }
 
 func (s *Session) handshake(clientVersion string) error {
@@ -221,7 +244,7 @@ func (s *Session) rpc(method string, params any) (json.RawMessage, error) {
 	if err := s.send(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}); err != nil {
 		return nil, s.broken(err)
 	}
-	line, err := s.rd.ReadBytes('\n')
+	line, err := s.rd.ReadSlice('\n')
 	if err != nil {
 		return nil, s.broken(err)
 	}
@@ -262,12 +285,17 @@ func (s *Session) broken(err error) error {
 	if cerr := s.ctx.Err(); cerr != nil {
 		return fmt.Errorf("%w: %w", ErrTimeout, cerr)
 	}
+	if errors.Is(err, bufio.ErrBufferFull) {
+		return fmt.Errorf("%w: reply exceeds the %d MiB line limit", ErrProtocol, maxReply>>20)
+	}
 	select {
 	case <-s.exited:
-		return fmt.Errorf("%w: %w", ErrServerDied, s.waitErr)
+		if s.waitErr != nil {
+			err = s.waitErr
+		}
 	case <-time.After(waitDelay):
-		return fmt.Errorf("%w: %w", ErrServerDied, err)
 	}
+	return fmt.Errorf("%w: %w", ErrServerDied, err)
 }
 
 // fail ends the session: the group is killed and later calls fail.
@@ -282,10 +310,10 @@ func (s *Session) fail() {
 // session's pipe ends, which also frees a read or a write that is blocked.
 func (s *Session) kill() {
 	s.once.Do(func() {
-		if err := syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		if err := syscall.Kill(-s.guard.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 			s.killErr = fmt.Errorf("kill the server's process group: %w", err)
 		}
-		_, _ = s.in.Close(), s.out.Close()
+		_, _, _ = s.in.Close(), s.out.Close(), s.life.Close()
 	})
 }
 

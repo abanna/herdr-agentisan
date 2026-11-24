@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -99,8 +101,7 @@ func TestAServerThatNeverStartsIsUnavailable(t *testing.T) {
 }
 
 // TestTheContextBoundsEveryPhase: a silent start-up and a hung call both
-// end at the deadline with ErrTimeout, and the whole group is gone,
-// the child the server started included.
+// end at the deadline with ErrTimeout and the child is reaped or dead.
 func TestTheContextBoundsEveryPhase(t *testing.T) {
 	t.Parallel()
 	start := time.Now()
@@ -111,36 +112,64 @@ func TestTheContextBoundsEveryPhase(t *testing.T) {
 
 	repo, dir := workDir(t)
 	pidFile := filepath.Join(t.TempDir(), "pid")
-	s, err := openIn(t, 1500*time.Millisecond, repo, "hang_call", bundletest.PidFileEnv+"="+pidFile)
+	s, err := openIn(t, 2*time.Second, repo, "hang_call", bundletest.PidFileEnv+"="+pidFile)
 	require.NoError(t, err)
+	pid := liveChild(t, pidFile)
 	_, err = bundle.ReadState(s, dir)
 	require.ErrorIs(t, err, bundle.ErrTimeout)
-	assertGone(t, pidFile)
+	assertGone(t, pid)
 
 	_, err = bundle.ReadState(s, dir) // a failed session stays failed
 	assert.ErrorIs(t, err, bundle.ErrServerDied)
 }
 
-// assertGone waits for the pid the stand-in wrote to be dead.
-func assertGone(t *testing.T, pidFile string) {
+// liveChild proves the stand-in has a live child before the test signals it.
+func liveChild(t *testing.T, pidFile string) int {
 	t.Helper()
-	require.Eventually(t, func() bool {
-		raw, err := os.ReadFile(pidFile)
-		if err != nil {
-			return false
+	raw, err := os.ReadFile(pidFile)
+	require.NoError(t, err)
+	pid, err := strconv.Atoi(string(raw))
+	require.NoError(t, err)
+	require.Greater(t, pid, 1)
+	t.Cleanup(func() {
+		if state, err := processState(context.Background(), pid); err == nil && state != "" && !strings.HasPrefix(state, "Z") {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
-		pid, err := strconv.Atoi(string(raw))
-		return err == nil && bundletest.Dead(pid)
-	}, 5*time.Second, 20*time.Millisecond)
+	})
+	state, err := processState(t.Context(), pid)
+	require.NoError(t, err)
+	require.NotEmpty(t, state)
+	require.False(t, strings.HasPrefix(state, "Z"), "child is already a zombie")
+	return pid
 }
 
-// TestACancelledContextKillsTheGroup: the caller's cancellation is the
-// same kill.
-func TestACancelledContextKillsTheGroup(t *testing.T) {
+// processState also works on macOS. ps returns exit 1 with no output when
+// a PID is gone. Other failures must not count as a dead process.
+func processState(ctx context.Context, pid int) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "/bin/ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 && len(out) == 0 && len(exit.Stderr) == 0 {
+		return "", nil
+	}
+	return strings.TrimSpace(string(out)), err
+}
+
+func assertGone(t *testing.T, pid int) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		state, err := processState(t.Context(), pid)
+		return err == nil && (state == "" || strings.HasPrefix(state, "Z"))
+	}, 2*time.Second, 20*time.Millisecond)
+}
+
+func TestACancelledContextEndsACall(t *testing.T) {
 	t.Parallel()
 	repo, dir := workDir(t)
 	ctx, cancel := context.WithCancel(t.Context())
-	s, err := bundle.Open(ctx, bundletest.Launch(t, repo, "hang_call", bundletest.PidFileEnv+"="+filepath.Join(t.TempDir(), "pid")))
+	defer cancel()
+	s, err := bundle.Open(ctx, bundletest.Launch(t, repo, "hang_call"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = s.Close() })
 	time.AfterFunc(300*time.Millisecond, cancel)
@@ -179,12 +208,32 @@ func TestBundleErrorsMapByCode(t *testing.T) {
 	}
 }
 
-// TestAServerThatDiesMidCall: its exit and stderr tail are in the error.
 func TestAServerThatDiesMidCall(t *testing.T) {
 	t.Parallel()
-	_, err := read(t, "die_mid_call")
+	repo, dir := workDir(t)
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	s, err := openIn(t, 3*time.Second, repo, "die_mid_call", bundletest.PidFileEnv+"="+pidFile)
+	require.NoError(t, err)
+	pid := liveChild(t, pidFile)
+	_, err = bundle.ReadState(s, dir)
 	require.ErrorIs(t, err, bundle.ErrServerDied)
 	assert.Contains(t, err.Error(), "exit status 7")
+	assertGone(t, pid)
+}
+
+func TestReplyLineLimit(t *testing.T) {
+	t.Parallel()
+	_, err := read(t, "at_line_limit")
+	require.NoError(t, err)
+
+	repo, dir := workDir(t)
+	s, err := openIn(t, 3*time.Second, repo, "oversize_line")
+	require.NoError(t, err)
+	_, err = bundle.ReadState(s, dir)
+	require.ErrorIs(t, err, bundle.ErrProtocol)
+	require.ErrorContains(t, err, "4 MiB")
+	_, err = bundle.ReadState(s, dir)
+	require.ErrorIs(t, err, bundle.ErrServerDied)
 }
 
 // TestMalformedRepliesFailTheSession: not JSON, a reply to another

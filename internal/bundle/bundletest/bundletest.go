@@ -38,8 +38,10 @@ const (
 	BadEnv = "BUNDLETEST_BAD"
 	// StageEnv is the stage the read-state reply carries, when set.
 	StageEnv = "BUNDLETEST_STAGE"
-	// PidFileEnv is where "hang_call" writes a child's pid.
+	// PidFileEnv gives the file where the stand-in records its child PID.
 	PidFileEnv = "BUNDLETEST_PIDFILE"
+	// WorkDirEnv is the expected work_dir argument, if set.
+	WorkDirEnv = "BUNDLETEST_WORKDIR"
 )
 
 // Active reports whether this process is the stand-in.
@@ -47,7 +49,7 @@ func Active() bool { return os.Getenv(ModeEnv) != "" }
 
 // Main serves on stdin and stdout and exits. It never returns.
 func Main() {
-	os.Exit(serve(os.Stdin, os.Stdout, os.Stderr, os.Getenv))
+	os.Exit(serve(os.Stdin, os.Stdout, os.Getenv))
 }
 
 // Launch returns the Launch of a stand-in in mode, started in repo, with
@@ -102,11 +104,27 @@ func readState(getenv func(string) string) map[string]any {
 	return env
 }
 
-func serve(in io.Reader, out, errw io.Writer, getenv func(string) string) int {
+func serve(in io.Reader, out *os.File, getenv func(string) string) int {
 	mode := getenv(ModeEnv)
+	if mode == "sleep" {
+		time.Sleep(10 * time.Second)
+		return 0
+	}
+	if path := getenv(PidFileEnv); path != "" {
+		if err := startChild(out, path); err != nil {
+			return 8
+		}
+	}
 	enc := json.NewEncoder(out)
 	send := func(id json.RawMessage, result map[string]any) {
-		_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+		frame := map[string]any{"jsonrpc": "2.0", "id": id, "result": result}
+		if mode == "at_line_limit" && string(id) == "2" {
+			body, _ := json.Marshal(frame)
+			_, _ = out.Write(body)
+			_, _ = io.WriteString(out, strings.Repeat(" ", (4<<20)-len(body)-1)+"\n")
+			return
+		}
+		_ = enc.Encode(frame)
 	}
 	rd := bufio.NewReader(in)
 	for {
@@ -123,6 +141,9 @@ func serve(in io.Reader, out, errw io.Writer, getenv func(string) string) int {
 			Params struct {
 				Arguments struct {
 					OperationID string `json:"operation_id"`
+					Values      struct {
+						WorkDir string `json:"work_dir"`
+					} `json:"arguments"`
 				} `json:"arguments"`
 			} `json:"params"`
 		}
@@ -135,7 +156,10 @@ func serve(in io.Reader, out, errw io.Writer, getenv func(string) string) int {
 			}
 			continue
 		}
-		if code, done := call(mode, getenv, out, errw, send, req.ID, req.Params.Arguments.OperationID); done {
+		if want := getenv(WorkDirEnv); want != "" && req.Params.Arguments.Values.WorkDir != want {
+			return 9
+		}
+		if code, done := call(mode, getenv, out, send, req.ID, req.Params.Arguments.OperationID); done {
 			return code
 		}
 	}
@@ -164,7 +188,7 @@ func initialize(mode string, send func(json.RawMessage, map[string]any), id json
 	return 0, false
 }
 
-func call(mode string, getenv func(string) string, out, errw io.Writer, send func(json.RawMessage, map[string]any), id json.RawMessage, op string) (int, bool) {
+func call(mode string, getenv func(string) string, out io.Writer, send func(json.RawMessage, map[string]any), id json.RawMessage, op string) (int, bool) {
 	envelope := func(code string) map[string]any {
 		return map[string]any{"status": "error", "operation_id": op, "error": map[string]any{"code": code, "message": "text of " + code, "details": map[string]any{}}}
 	}
@@ -179,16 +203,10 @@ func call(mode string, getenv func(string) string, out, errw io.Writer, send fun
 		send(id, map[string]any{contentKey: []any{textItem("Error executing tool execute: boom")}, isErrorKey: true})
 	case "die_mid_call":
 		return 7, true
-	case "hang_call":
-		child := exec.CommandContext(context.Background(), os.Args[0]) // #nosec G204 G702 -- the test binary again
-		child.Env = append(os.Environ(), ModeEnv+"=sleep")
-		child.Stdout, child.Stderr = out.(*os.File), errw.(*os.File)
-		if child.Start() == nil {
-			_ = os.WriteFile(getenv(PidFileEnv), // #nosec G703 -- the test names the file
-				fmt.Appendf(nil, "%d", child.Process.Pid), 0o600)
-		}
+	case "oversize_line":
+		_, _ = io.WriteString(out, strings.Repeat(" ", (4<<20)+1))
 		time.Sleep(time.Hour)
-	case "sleep":
+	case "hang_call":
 		time.Sleep(time.Hour)
 	case "bad_reply":
 		bad(getenv(BadEnv), getenv, out, send, id, op)
@@ -218,11 +236,17 @@ func bad(kind string, getenv func(string) string, out io.Writer, send func(json.
 	}
 }
 
-// Dead reports whether the process pid is gone, or only a zombie.
-func Dead(pid int) bool {
-	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
-	if err != nil {
-		return true
+// startChild gives a sleeping child this server's stdout, so the pipe
+// stays open until both processes exit.
+func startChild(out *os.File, path string) error {
+	child := exec.CommandContext(context.Background(), os.Args[0]) // #nosec G204 G702 -- the test binary again
+	child.Env = append(os.Environ(), ModeEnv+"=sleep")
+	child.Stdout = out
+	if err := child.Start(); err != nil {
+		return fmt.Errorf("start the stand-in child: %w", err)
 	}
-	return strings.Contains(string(raw), ") Z ")
+	if err := os.WriteFile(path, fmt.Appendf(nil, "%d", child.Process.Pid), 0o600); err != nil { // #nosec G703 -- the test names the file
+		return fmt.Errorf("record the stand-in child: %w", err)
+	}
+	return nil
 }

@@ -53,6 +53,16 @@ func TestStageReadPrintsTheWorktreesStage(t *testing.T) {
 	assert.Equal(t, "stage verify · NERD-5790 · updated 2026-11-24T14:00:05Z\n", out)
 }
 
+func TestStageReadRefusesAWorkDirOutsideTheRepo(t *testing.T) {
+	t.Parallel()
+	repo, _ := repoAndWorkDir(t)
+	for _, dir := range []string{t.TempDir(), "."} {
+		_, err := runStageRead(t, "ok", "--repo", repo, "--work-dir", dir)
+		assert.ErrorIs(t, err, bundle.ErrRefused, dir)
+		assert.Equal(t, 1, cli.ExitCode(err))
+	}
+}
+
 // TestStageReadFailsWithTheDomainsErrors: every state of the bundle is a
 // wrapped sentinel the command returns, so the process exits 1.
 func TestStageReadFailsWithTheDomainsErrors(t *testing.T) {
