@@ -59,16 +59,20 @@ type launchModel struct {
 	asked time.Time
 }
 
-// processCtx remembers the last verified agent and which process qualified
-// the pane's latest report. The pane can retain it through a different job
-// and the original agent's return.
+type ctxAgent struct {
+	process   report.Proc
+	wallStart time.Time
+}
+
+// processCtx retains the foreground history needed to qualify the pane's
+// latest report when a process returns to the foreground.
 type processCtx struct {
-	terminal string
-	agent    report.Proc
-	owner    report.Proc
-	reported time.Time
-	after    time.Time
-	replaced bool
+	terminal        string
+	agent, previous ctxAgent
+	owner           report.Proc
+	reported        time.Time
+	after           time.Time
+	replaced        bool
 }
 
 func newLaunchModels(stat report.StatFunc) *launchModels {
@@ -117,9 +121,9 @@ func agentPanes(m team.Model, panes []herdr.PaneInfo) []herdr.PaneInfo {
 // pp, the poll's replies, so a pane whose shell the reconcile read this poll
 // is not asked again and gives its model from that reply, even once the
 // budget is spent; the asks are all within ModelBudget, and a pane the
-// budget leaves out has no model until a later poll. The next budget goes
-// first to the first skipped pane, or to the cut-off probe if none was
-// skipped. An initial miss is retried after ModelRetry.
+// budget leaves out has no model until a later poll. A probe cut off after
+// another fresh probe gets the next first slot. A probe that already had the
+// first slot yields to skipped panes. An initial miss retries after ModelRetry.
 //
 // A failed ask leaves its pane no model, keeps nothing and is asked again at
 // the next poll; it is logged once until an ask succeeds, unless the pane
@@ -142,7 +146,7 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 	out := map[string]string{}
 	listed := make(map[string]bool, len(panes))
 	left := false
-	var deferred, timedOut string
+	var firstProbe, deferred, timedOut string
 	from := max(0, slices.IndexFunc(panes, func(p herdr.PaneInfo) bool {
 		return p.PaneID == lm.nextProbe
 	}))
@@ -164,6 +168,9 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 			left = true
 			continue
 		}
+		if !held {
+			firstProbe = cmp.Or(firstProbe, p.PaneID)
+		}
 		info, err := pp.ask(ask, c, p.PaneID)
 		if errors.Is(err, ErrHerdrGone) {
 			return nil, err
@@ -171,7 +178,9 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 		if err != nil {
 			// A stopping poll logs nothing, a held reply's failure included.
 			if ctx.Err() != nil || !held && spent() {
-				timedOut = p.PaneID
+				if !held {
+					timedOut = p.PaneID
+				}
 				left = true
 				continue
 			}
@@ -186,7 +195,7 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 		// A lost foreground agent makes ctx unknown. Retry an unresolved
 		// replacement next poll so the 60 s miss cache cannot prolong it.
 		prior := lm.ctxs[p.PaneID]
-		if e.pid != 0 || prior.agent.PID == 0 || prior.terminal != p.TerminalID {
+		if e.pid != 0 || prior.agent.process.PID == 0 || prior.terminal != p.TerminalID {
 			lm.byPane[p.PaneID] = e
 		}
 		if e.model != "" {
@@ -196,7 +205,11 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 	if left && !lm.overran && ctx.Err() == nil {
 		log.Warn().Dur("budget", ModelBudget).Msg("team poll: herdr is slow; the panes not asked in time have no model until a later poll")
 	}
-	lm.overran, lm.nextProbe = left, cmp.Or(deferred, timedOut)
+	lm.overran = left
+	lm.nextProbe = cmp.Or(deferred, timedOut)
+	if timedOut != "" && timedOut != firstProbe {
+		lm.nextProbe = timedOut
+	}
 	for id := range lm.byPane {
 		if !listed[id] {
 			delete(lm.byPane, id)
@@ -272,17 +285,18 @@ func (lm *launchModels) ctxGates(panes []herdr.PaneInfo, started map[string]time
 		}
 		e := lm.byPane[id]
 		if !e.timed {
-			if prior.agent.PID != 0 {
+			if prior.agent.process.PID != 0 {
 				next[id], gates[id] = prior, team.CtxGate{RequireFresh: true}
 			}
 			continue
 		}
-		agent := report.Proc{PID: int(e.pid), Start: e.start}
-		if prior.agent.PID != 0 && agent != prior.agent {
+		agent := ctxAgent{process: report.Proc{PID: int(e.pid), Start: e.start}, wallStart: started[id]}
+		if prior.agent.process.PID != 0 && agent.process != prior.agent.process {
+			prior.previous = prior.agent
 			prior.after, prior.replaced = prior.reported, true
 		}
-		gate := team.CtxGate{Start: started[id], After: prior.after, RequireFresh: prior.replaced}
-		if agent == prior.owner {
+		gate := team.CtxGate{Start: agent.wallStart, After: prior.after, RequireFresh: prior.replaced}
+		if agent.process == prior.owner {
 			gate.Retained = prior.reported
 		}
 		prior.agent = agent
@@ -293,8 +307,9 @@ func (lm *launchModels) ctxGates(panes []herdr.PaneInfo, started map[string]time
 	return gates
 }
 
-// observeReport binds a qualifying stamp once to the verified process that
-// owned it. Seeing the same pane token under a different job cannot move it.
+// observeReport binds a stamp once. A stamp first seen under a different
+// foreground job can be retained for the preceding process when it falls
+// within that process's lifetime and predates the current process.
 func (p *processCtx) observeReport(tokens map[string]string, gate team.CtxGate) {
 	at, ok := report.ParseCtxAt(tokens[report.CtxAtKey])
 	if !ok || at.Before(p.reported) {
@@ -303,11 +318,18 @@ func (p *processCtx) observeReport(tokens map[string]string, gate team.CtxGate) 
 	if at.After(p.reported) {
 		p.reported, p.owner = at, report.Proc{}
 	}
-	if p.owner.PID != 0 || gate.Start.IsZero() || !gate.Allows(at) {
+	if p.owner.PID != 0 || gate.Start.IsZero() {
 		return
 	}
-	if _, ok := team.ParseCtx(tokens[report.CtxKey]); ok {
-		p.owner = p.agent
+	if _, ok := team.ParseCtx(tokens[report.CtxKey]); !ok {
+		return
+	}
+	if gate.Allows(at) {
+		p.owner = p.agent.process
+		return
+	}
+	if at.Before(gate.Start) && !p.previous.wallStart.IsZero() && !at.Before(p.previous.wallStart) {
+		p.owner = p.previous.process
 	}
 }
 

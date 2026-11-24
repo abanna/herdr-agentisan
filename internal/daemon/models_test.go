@@ -580,6 +580,69 @@ func TestLaunchModelsBudgetRetriesTheLastTimedOutProbe(t *testing.T) {
 	assert.Contains(t, logs.String(), `"pane":"w1:p2"`, "the last timed-out probe gets a full budget next poll")
 }
 
+func TestLaunchModelsGivesAPartialProbeAFullBudget(t *testing.T) {
+	t.Parallel()
+	ph := newProcHerdr(t)
+	lm := daemon.NewLaunchModels()
+	clk := &clock{now: t0}
+	lm.SetClock(clk.Now)
+	c := herdr.Client{SocketPath: ph.srv.Path}
+	pt := &procs{start: map[int]uint64{}}
+	foreground := map[int]int{}
+	lm.SetProcessStat(func(pid int) (report.Stat, error) {
+		start, err := pt.startTime(pid)
+		return report.Stat{Start: start, Pgrp: pid, Tpgid: foreground[pid]}, err
+	})
+	var panes []herdr.PaneInfo
+	for n := 1; n <= 4; n++ {
+		id := fmt.Sprintf("w1:p%d", n)
+		panes = append(panes, agentPane(id, id, "codex"))
+		ph.set(id, agentProc(n, "codex"))
+		pt.set(n, uint64(n))
+		foreground[n] = n
+	}
+	const active = "w1:p2"
+	var pollStart time.Time
+	poll := func() team.CtxGate {
+		t.Helper()
+		pollStart = clk.Now()
+		_, err := lm.Refresh(t.Context(), c, panes, pt.startTime, t0, zerolog.Nop())
+		require.NoError(t, err)
+		return lm.CtxGates(panes)[active]
+	}
+	oldStamp := time.Unix(6, 0)
+	panes[1].Tokens = map[string]string{report.CtxKey: "20", report.CtxAtKey: report.FormatModelAt(oldStamp)}
+	gate := poll()
+	require.False(t, gate.Start.IsZero(), "the process must already be known")
+	require.Equal(t, "20", gate.Ctx(team.Pane{Ctx: "20", CtxAt: oldStamp}))
+
+	// Stable list order S1, A, S2, S3. The suspended processes stay alive
+	// with their original starts. The second probe of a poll cannot finish.
+	for _, i := range []int{0, 2, 3} {
+		shell := 100 + i
+		ph.set(panes[i].PaneID, agentProc(shell, "/bin/sh"))
+		foreground[i+1] = shell
+	}
+	exit(pt, 2)
+	pt.set(5, 5)
+	foreground[5] = 5
+	ph.set(active, agentProc(5, "codex"))
+	newStamp := time.Unix(7, 0)
+	panes[1].Tokens = map[string]string{report.CtxKey: "80", report.CtxAtKey: report.FormatModelAt(newStamp)}
+	c.Dialed = func() error {
+		clk.advance(600 * time.Millisecond)
+		if clk.Now().Sub(pollStart) >= daemon.ModelBudget {
+			return context.DeadlineExceeded
+		}
+		return nil
+	}
+	fresh := team.Pane{Ctx: "80", CtxAt: newStamp}
+	assert.Empty(t, poll().Ctx(fresh), "the first budget times out the running agent")
+	for range 4 {
+		assert.Equal(t, "80", poll().Ctx(fresh), "the next budget starts with the partial probe")
+	}
+}
+
 // budgetDial is a client of ph whose first dial spends the whole budget by
 // clk, as an answer that comes back on the deadline does, while the ask's
 // context, on the wall clock, is a second from expiring.

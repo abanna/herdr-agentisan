@@ -243,9 +243,10 @@ func TestContextNoticeIgnoresAnUnreadBackgroundReport(t *testing.T) {
 	assert.Empty(t, ctxEvents(rec), "no old crossing to deduplicate")
 	assert.Empty(t, toasts(t, th), "no toast for the previous agent")
 
-	// The unqualified stamp must not become a retained report for the
-	// replacement if that same process later returns to the foreground.
+	// Check that B cannot claim the report on returning. Finish a poll
+	// with the token cleared before placing its actual reporter in front.
 	showCtx(th, pane, "", "")
+	polled(t, th.srv, 2)
 	th.setProcs(pane, agentProc(1002, "claude"))
 	fg.Store(1002)
 	polled(t, th.srv, 2)
@@ -345,6 +346,81 @@ func TestContextReturnsWithTheOriginalForegroundProcess(t *testing.T) {
 	foreground(2002, new(78))
 	foreground(1002, nil)
 	foreground(2002, new(78))
+}
+
+func TestContextRestoresAReportFirstSeenDuringSuspension(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	const pane = "wN:p1"
+	th.setAgents(named(pane, "pee01"))
+	th.setPane(pane, "agent", "codex")
+	th.setProcs(pane, agentProc(1002, "codex"))
+	showCtx(th, pane, "10", report.FormatModelAt(boot.Add(12*time.Second)))
+
+	o := teamOpts(t, shortDir(t), th, noticesConfig(t, "gap = 0\n"))
+	fg := fakeForeground(t, &o)
+	var logs lockedLog
+	_, rec := ctxRun(t, o, &logs)
+	sock := socketPath(t, o.StateDir, th.path)
+	served(t, sock, func(s snapshot.Snapshot) bool {
+		ctx, _ := agentCtx(s, pane)
+		return ctx != nil && *ctx == 10
+	})
+
+	// A's final stamp is available to the poll only after B takes over.
+	// Its time is within A's lifetime and precedes B's verified start.
+	th.setProcs(pane, agentProc(2002, "codex"))
+	fg.Store(2002)
+	polled(t, th.srv, 2)
+	showCtx(th, pane, "80", report.FormatModelAt(boot.Add(15*time.Second)))
+	polled(t, th.srv, 3)
+	ctx, present := agentCtx(served(t, sock, anySnapshot), pane)
+	require.True(t, present)
+	assert.Nil(t, ctx)
+	assert.Empty(t, ctxEvents(rec), "B never inherits A's ceiling crossing")
+
+	th.setProcs(pane, agentProc(1002, "codex"))
+	fg.Store(1002)
+	polled(t, th.srv, 3)
+	ctx, present = agentCtx(served(t, sock, anySnapshot), pane)
+	require.True(t, present)
+	assert.Equal(t, new(80), ctx, "the retained report qualifies when A returns")
+	assert.Equal(t, "ctx 80%", lastBands(t, th, pane)["ctx_hot"])
+	assert.Equal(t, []string{"wN:p1 worker ceiling 80 75 true true"}, ctxEvents(rec))
+	assert.Len(t, toasts(t, th), 1)
+}
+
+func TestContextDoesNotRestoreAReportOlderThanThePreviousProcess(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	const pane = "wN:p1"
+	th.setProcs(pane, agentProc(1002, "claude", "--model", "opus"))
+	showCtx(th, pane, "", "")
+	o := teamOpts(t, shortDir(t), th, liveConfig(t, ""))
+	fg := fakeForeground(t, &o)
+	serving(t, o, th.fakeHerdr)
+	sock := socketPath(t, o.StateDir, th.path)
+	served(t, sock, func(s snapshot.Snapshot) bool {
+		for _, group := range s.Groups {
+			for _, a := range group.Agents {
+				if a.PaneID == pane && a.Model == "opus" {
+					return true
+				}
+			}
+		}
+		return false
+	})
+
+	th.setProcs(pane, agentProc(2002, "claude"))
+	fg.Store(2002)
+	showCtx(th, pane, "80", report.FormatModelAt(boot.Add(5*time.Second)))
+	polled(t, th.srv, 2)
+	th.setProcs(pane, agentProc(1002, "claude"))
+	fg.Store(1002)
+	polled(t, th.srv, 2)
+	ctx, present := agentCtx(served(t, sock, anySnapshot), pane)
+	require.True(t, present)
+	assert.Nil(t, ctx, "a stamp older than both processes never qualifies")
 }
 
 // fakeForeground lets both agent PIDs survive while the foreground job
