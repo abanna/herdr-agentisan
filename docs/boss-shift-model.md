@@ -39,16 +39,14 @@ printf '%s  %s\n' a9d92216ec0324c87372ed9fb38579568a57dcf72460d4e9366098abc3d384
   patch --batch --fuzz=0 "$script" < docs/boss-shift-v1.patch
 ```
 
-Use a shell timeout of at least 300 s for `shift.sh open`. It usually
-finishes in under about 75 s, can take about 160 s with a late start,
-and ends within five minutes. Open needs a statusline refresh interval
-of about 90 s or less in the candidate's settings.
+Use a shell timeout of at least 300 s for `shift.sh open`. After recording
+the split, open allows up to 290 s for startup and model checks. It retries
+transient failures while waiting for the candidate's statusline to refresh.
 
 If open reaches its deadline or the caller's shell kills it, run
-`shift.sh status`. It shows the verdict and saved pin without writing
-shift state. If the pin
-was saved, continue the usual handoff. `shift.sh go` verifies the pin
-and report again. If the pin is missing, abort and open again.
+`shift.sh status` to see whether the pin was saved. With a saved pin,
+continue the handoff. `shift.sh go` rechecks the pin and report.
+If the pin is missing, abort and open again.
 Ignore the old `SHIFT_MODEL_SEEN` instruction. If a post-GO check
 fails, restore verified proof before retrying takeover.
 If GO was recorded but cueing failed, rerun `shift.sh go` from the

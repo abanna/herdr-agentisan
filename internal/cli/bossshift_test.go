@@ -156,24 +156,15 @@ func TestShiftScriptRetriesMissingModelWithPinnedProcess(t *testing.T) {
 		s.read("calls"))
 }
 
-func TestShiftScriptWaitsForPostPinRefresh(t *testing.T) {
+func TestShiftScriptWaitsForMissedRefresh(t *testing.T) {
 	t.Parallel()
 	s := setupShiftScript(t)
-	out, err := s.invoke("old", "slow_refresh", "open")
-	require.NoError(t, err)
-	require.Equal(t, 52, strings.Count(s.read("calls"), shiftCheck))
-	require.Equal(t, strings.Repeat("2\n", 51), s.read("sleeps"))
+	s.write("clock", virtualShiftSleep)
+	out, err := s.invoke("old", "slow_refresh", "open", "BASH_ENV="+s.path("clock"))
+	require.NoError(t, err, "the refresh at 124s is within the open deadline")
+	require.Equal(t, strings.Repeat("2\n", 62), s.read("sleeps"))
 	require.Equal(t, 1, strings.Count(out, "run this with a shell timeout of at least"))
 	require.NotContains(t, out, "probe refused")
-}
-
-func TestShiftScriptExplainsRetryableExhaustion(t *testing.T) {
-	t.Parallel()
-	s := setupShiftScript(t)
-	out, err := s.invoke("old", "report_before_pin", "open")
-	require.Error(t, err)
-	require.Equal(t, 50, strings.Count(s.read("calls"), shiftCheck))
-	require.Contains(t, out, "shift.sh go verifies again")
 	const advice = "run this with a shell timeout of at least 300 s"
 	require.Contains(t, out, advice)
 	require.Less(t, strings.Index(out, advice), strings.Index(out, "starting candidate"))
@@ -183,17 +174,36 @@ func TestShiftScriptExplainsRetryableExhaustion(t *testing.T) {
 	require.Contains(t, string(guide), "at least 300 s")
 }
 
+func TestShiftScriptRecordsSplitBeforeDeadline(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	s.write("clock", `timeout() {
+  if [[ "$4 $5 $6" == "herdr pane split" ]]; then
+    "${@:4}" >/dev/null
+    return 124
+  fi
+  command timeout "$@"
+}`)
+	out, err := s.invoke("old", "verified", "open", "SHIFT_OPEN_DEADLINE=7", "BASH_ENV="+s.path("clock"))
+	require.FileExists(t, s.path("split"))
+	require.FileExists(t, s.path("current/state"), "record the split before starting the deadline: %s", out)
+	require.NoError(t, err)
+	require.Equal(t, "split-terminal", s.state("terminal"))
+}
+
+const virtualShiftSleep = `sleep() { command sleep "$@"; SECONDS=$((SECONDS+$1)); }`
+
 func TestShiftScriptOpenDeadline(t *testing.T) {
 	t.Parallel()
 	for verdict, hint := range map[string]string{
-		"claude_unavailable": "Claude is not running; abort and open again",
-		"no_pin":             "no candidate process pin; abort and open again",
-		"report_before_pin":  "shift.sh go verifies again",
+		"candidate_unavailable": "shift.sh go verifies again",
+		"no_pin":                "no candidate process pin; abort and open again",
+		"report_before_pin":     "shift.sh go verifies again",
 	} {
 		t.Run(verdict, func(t *testing.T) {
 			t.Parallel()
 			s := setupShiftScript(t)
-			s.write("clock", "sleep() { command sleep \"$@\"; SECONDS=$((SECONDS+$1)); }\n")
+			s.write("clock", virtualShiftSleep)
 			out, err := s.invoke("old", verdict, "open", "SHIFT_OPEN_DEADLINE=7", "BASH_ENV="+s.path("clock"))
 			require.Error(t, err)
 			require.LessOrEqual(t, strings.Count(s.read("calls"), shiftCheck), 4)
@@ -381,7 +391,7 @@ esac
 [ "$4" != --help ] || { printf "%s\n" "--pinned-at"; exit 0; }
 verdict=$MODEL_VERDICT
 pid=100 start=200
-if [ "$verdict" = claude_unavailable ]; then
+if [ "$verdict" = candidate_unavailable ]; then
   if [ -e "$SHIFT_ROOT/calls" ]; then pid=0 start=0; else verdict=awaiting_pin; fi
 fi
 if [ "$verdict" = no_pin ]; then verdict=missing_model; pid=0 start=0; fi
@@ -392,9 +402,9 @@ if [ "$verdict" = slow_refresh ]; then
   probes=0
   if [ -e "$SHIFT_ROOT/calls" ]; then probes=$(wc -l < "$SHIFT_ROOT/calls"); fi
   verdict=report_before_pin
-  if (( probes < 16 )); then verdict=claude_unavailable; pid=0 start=0
-  elif (( probes == 16 )); then verdict=awaiting_pin
-  elif (( probes == 51 )); then verdict=verified
+  if (( probes == 0 )); then verdict=awaiting_pin
+  elif (( probes == 32 )); then verdict=missing_model
+  elif (( probes >= 62 )); then verdict=verified
   fi
 fi
 printf '%s\n' "$*" >> "$SHIFT_ROOT/calls"

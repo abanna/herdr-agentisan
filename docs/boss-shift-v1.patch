@@ -1,7 +1,7 @@
 --- shift.sh
 +++ shift.sh
 @@ -18,0 +19,3 @@
-+# Open usually takes under about 75 s, about 160 s with a late start, and ends within 5 minutes.
++# After recording the split, open allows up to 290 s for startup and model checks.
 +# Use a shell timeout of at least 300 s. If interrupted, check status for the saved pin.
 +# If pinned, continue the handoff and go rechecks it. Otherwise abort and open again.
 @@ -29,0 +33 @@
@@ -38,25 +38,22 @@
 +    { cat "$1/state" && printf 'model_pid=%s\nmodel_start=%s\nmodel_pinned_at=%s\n' "$pid" "$start" "$pinned_at"; } > "$file" &&
 +      mv "$file" "$1/state"
 +)
-@@ -47,0 +71,3 @@
-+    SECONDS=0
+@@ -47,0 +71,2 @@
 +    deadline=${SHIFT_OPEN_DEADLINE:-290}
 +    [[ "$deadline" =~ ^[1-9][0-9]{0,2}$ ]] && ((deadline<=290)) || die "open deadline must be 1 to 290 seconds"
-@@ -50 +76,2 @@
--    who=$(herdr agent get "$BOSS" | field result.agent.pane_id)
-+    echo "shift: usually under about 75 s, about 160 s with a late start, capped at $deadline s (under 5 minutes). Please run this with a shell timeout of at least $((deadline+10)) s." >&2
-+    who=$(open_call herdr agent get "$BOSS" | field result.agent.pane_id)
-@@ -52,2 +79,7 @@
+@@ -49,0 +75 @@
++    echo "shift: allow up to $deadline s for startup and model checks after the split is recorded. Please run this with a shell timeout of at least $((deadline+10)) s." >&2
+@@ -52,2 +78,7 @@
 -    dir=$ROOT/$(date +%Y%m%d-%H%M%S); mkdir -p "$dir"
 -    new=$(herdr pane split "$old" --direction right --no-focus --cwd "$REPO" | field result.pane.pane_id)
-+    help=$(open_call "$PLUGIN" boss shift check-model --help 2>/dev/null) && [[ "$help" == *"--pinned-at"* ]] ||
++    help=$("$PLUGIN" boss shift check-model --help 2>/dev/null) && [[ "$help" == *"--pinned-at"* ]] ||
 +      die "install a herdr-agentisan build with boss shift check-model, or set SHIFT_PLUGIN to its path"
 +    mkdir -p "$ROOT"
 +    dir=$(mktemp -d "$ROOT/$(date +%Y%m%d-%H%M%S)-XXXXXXXX")
-+    split=$(open_call herdr pane split "$old" --direction right --no-focus --cwd "$REPO")
++    split=$(herdr pane split "$old" --direction right --no-focus --cwd "$REPO")
 +    new=$(field result.pane.pane_id <<< "$split")
 +    terminal=$(field result.pane.terminal_id <<< "$split")
-@@ -55 +87,7 @@
+@@ -55 +86,7 @@
 -    printf 'old=%s\nnew=%s\nboss=%s\nnext=%s\nopened=%s\nmodel=%s\neffort=%s\n' "$old" "$new" "$BOSS" "$NEXT" "$(date +%H:%M:%S)" "$MODEL" "$EFFORT" > "$dir/state"
 +    if [ -z "$terminal" ]; then
 +      [ "$new" != "$old" ] || die "the split returned the outgoing pane"
@@ -65,20 +62,20 @@
 +    fi
 +    launched_at=$(date +%s%3N)
 +    printf 'old=%s\nnew=%s\nboss=%s\nnext=%s\nopened=%s\nmodel=%s\neffort=%s\nterminal=%s\nlaunched_at=%s\nmodel_pid=0\nmodel_start=0\nmodel_pinned_at=0\n' "$old" "$new" "$BOSS" "$NEXT" "$(date +%H:%M:%S)" "$MODEL" "$EFFORT" "$terminal" "$launched_at" > "$dir/state"
+@@ -56,0 +94 @@
++    SECONDS=0
 @@ -58 +96 @@
 -    herdr agent start "$NEXT" --kind claude --pane "$new" --timeout 90000 -- --name "$NEXT" --model "$MODEL" --effort "$EFFORT" >/dev/null \
 +    open_call herdr agent start "$NEXT" --kind claude --pane "$new" --timeout 90000 -- --name "$NEXT" --model "$MODEL" --effort "$EFFORT" >/dev/null \
-@@ -60,8 +98,29 @@
+@@ -60,6 +98,25 @@
 -    # what it was asked for is not what it runs: read the model back from its pane
 -    got=; for _ in $(seq 1 30); do got=$(model_of "$NEXT"); [ -n "$got" ] && break; sleep 2; done
 -    if [ -z "$got" ]; then
 -      echo "warning: $NEXT has reported no model yet (asked for $MODEL); 'shift.sh go' checks again and refuses a wrong one"
 -    elif ! model_ok "$got" "$MODEL"; then
 -      die "the incoming boss runs on '$got', not '$MODEL' (pane $new left open; run: shift.sh abort, then open again)"
--    fi
--    echo "opened: incoming boss $NEXT on $new, model ${got:-not reported yet}; shift folder $dir" ;;
-+    pinned=0; verdict=; reason=candidate_unavailable
-+    for ((i=0; i<50 && SECONDS<deadline; i++)); do
++    pinned=0
++    while ((SECONDS<deadline)); do
 +      rc=0; verdict=$(check_model "$dir" open_call 2>/dev/null) || rc=$?
 +      ((SECONDS<deadline)) || break
 +      if [ "$rc" = 0 ]; then
@@ -86,27 +83,27 @@
 +        echo "opened: incoming boss $NEXT on $new; shift folder $dir"
 +        exit 0
 +      fi
-+      reason=$(field reason <<< "$verdict" 2>/dev/null) || break
-+      if [ "$pinned" = 0 ] && pin_model "$dir" "$verdict"; then
-+        pinned=1
-+        i=0  # Give a late pin the full statusline refresh window.
-+      fi
++      reason=$(field reason <<< "$verdict" 2>/dev/null) || reason=
++      if [ "$pinned" = 0 ] && [ -n "$reason" ] && pin_model "$dir" "$verdict"; then pinned=1; fi
 +      case "$reason" in
-+        candidate_unavailable|claude_unavailable|missing_model|invalid_report_time|stale_report|awaiting_pin|report_before_pin)
++        ""|candidate_unavailable|claude_unavailable|missing_model|invalid_report_time|stale_report|awaiting_pin|report_before_pin)
 +          left=$((deadline-SECONDS))
-+          ((i == 49 || left<=0)) || sleep "$((left<2 ? left : 2))" ;;
++          ((left<=0)) || sleep "$((left<2 ? left : 2))" ;;
 +        *) break ;;
 +      esac
 +    done
-+    printf '%s\n' "$verdict"
-+    case "$reason" in
-+      candidate_changed) die "the candidate changed; abort and open again" ;;
-+      claude_unavailable|candidate_unavailable) die "Claude is not running; abort and open again" ;;
-+      wrong_model) die "select the requested model with /model in the candidate pane, or abort and open again" ;;
-+    esac
-+    [ "$pinned" = 1 ] || die "no candidate process pin; abort and open again"
-+    die "no eligible model report yet. Run shift.sh status. shift.sh go verifies again." ;;
-@@ -85,6 +144,6 @@
++    if ((SECONDS<deadline)); then
++      printf '%s\n' "$verdict"
++      case "$reason" in
++        candidate_changed) die "the candidate changed; abort and open again" ;;
++        wrong_model) die "select the requested model with /model in the candidate pane, or abort and open again" ;;
++        *) die "model check refused; run shift.sh status" ;;
++      esac
+@@ -67 +124,2 @@
+-    echo "opened: incoming boss $NEXT on $new, model ${got:-not reported yet}; shift folder $dir" ;;
++    [ "$pinned" = 1 ] || die "open deadline reached with no candidate process pin; abort and open again"
++    die "open deadline reached with a saved pin. Run shift.sh status. shift.sh go verifies again." ;;
+@@ -85,6 +143,6 @@
 -    # no GO to a boss on the wrong model: the team is not handed to it
 -    want=$(val model); want=${want:-$MODEL}; got=$(model_of "$(val next)")
 -    if [ -z "$got" ]; then
@@ -119,14 +116,14 @@
 +    if [ ! -e "$dir/GO" ]; then
 +      date +%H:%M:%S > "$dir/GO.tmp"
 +      mv "$dir/GO.tmp" "$dir/GO"
-@@ -92,2 +151,3 @@
+@@ -92,2 +150,3 @@
 -    date +%H:%M:%S > "$CUR/GO"
 -    herdr agent prompt "$(val next)" "From the outgoing boss: GO. You have the picture. Run: $here/shift.sh takeover" >/dev/null
 +    herdr agent prompt "$(val next)" "From the outgoing boss: GO. You have the picture. Run: $here/shift.sh takeover" >/dev/null ||
 +      die "GO is recorded but the candidate cue failed; rerun shift.sh go to cue the candidate"
 +    touch "$dir/GO-CUED"
-@@ -104,0 +165 @@
+@@ -104,0 +164 @@
 +    candidate_ready "$(readlink "$CUR")" || die "candidate model unverified; old pane left open"
-@@ -114 +175 @@
+@@ -114 +174 @@
 -    if [ -L "$CUR" ]; then cat "$CUR/state"; echo "reported_model=$(model_of "$(val next)")"; ls "$CUR"; else echo "no shift open"; fi ;;
 +    if [ -L "$CUR" ]; then dir=$(readlink "$CUR"); check_model "$dir" || true; cat "$dir/state"; ls "$dir"; else echo "no shift open"; fi ;;
