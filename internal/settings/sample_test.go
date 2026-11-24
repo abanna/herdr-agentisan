@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/abanna/herdr-agentisan/internal/recall"
 	"github.com/abanna/herdr-agentisan/internal/routing"
 	"github.com/abanna/herdr-agentisan/internal/settings"
 )
@@ -54,6 +55,13 @@ func TestSampleConfigResolves(t *testing.T) {
 	envFile, err := settings.DebuggerEnvFile(dir, envOf(map[string]string{"HOME": home}))
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(home, ".config", "herdr-agentisan", "elastic.env"), envFile, "the sample names the debugger's env file")
+	rc, err := settings.RecallSources(dir, envOf(map[string]string{"HOME": home}))
+	require.NoError(t, err)
+	assert.Equal(t, []string{filepath.Join(home, ".claude", "projects", "-home-you-repo", "memory")}, rc.MemoryDirs, "the sample names a memory directory")
+	assert.Equal(t, []recall.Bullets{
+		{Prefix: "rul", Path: filepath.Join(home, ".local", "share", "team", "rulings.md")},
+		{Prefix: "std", Path: filepath.Join(home, ".local", "share", "team", "STANDING.md")},
+	}, rc.Bullets, "the sample names two bullet files")
 	assert.False(t, all.Routing().Enabled, "the sample leaves routing off")
 	assert.Equal(t, &routing.JevFacts{}, all.Routing().Jev, "the sample leaves Jev off")
 	envFile, err = all.JevEnvFile(envOf(map[string]string{"HOME": home}))

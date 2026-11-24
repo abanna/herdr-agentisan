@@ -262,6 +262,20 @@ env_file = "~/.config/herdr-agentisan/elastic.env"
 [tests]
 locks = ["/run/user/1000/agentisan/gate.0.lock"]
 
+# The boss's rule library (NERD-5741), read by `herdr-agentisan recall list`
+# and `recall show <id>`: each *.md in a memory directory (MEMORY.md, the
+# index, aside) is one section, "mem:<name>", and each top-level "- " bullet
+# of a bullet file, with the lines under it indented by two spaces, is one,
+# "<prefix>:<hash of its first line>". The prefix is the table key: a lower-
+# case letter and up to 7 more letters or digits, never mem. Absolute paths or
+# under ~/. Shared file and --set only; a repo file may not set them.
+[recall]
+memory_dirs = ["~/.claude/projects/-home-you-repo/memory"]
+
+[recall.bullet_files]
+std = "~/.local/share/team/STANDING.md"
+rul = "~/.local/share/team/rulings.md"
+
 # Model routing (ADR-001 A50): the built-in routing rules
 # (internal/routing/rules/jev-routing-v1.json) choose each worker's model and
 # effort by its type's role; this table holds what they leave to you. Shared

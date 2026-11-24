@@ -84,6 +84,7 @@ var sharedSchema = func() *node {
 	fields["debugger"] = debuggerSchema
 	fields["notices"] = noticesSchema
 	fields["routing"] = routingSchema
+	fields["recall"] = recallSchema
 	return &node{kind: kindTable, fields: fields}
 }()
 
