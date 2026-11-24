@@ -1,10 +1,16 @@
 package dashboard
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
+	"time"
+
+	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -13,8 +19,8 @@ const (
 	maxXRGB     = len(xRGBPrefix) + 4*3 + 2 // three channels and two slashes
 )
 
-// terminalInput retains Bubble Tea's raw-mode interface. A named file also
-// retains the interface used for cancelable reads.
+// terminalInput retains Bubble Tea's raw-mode interface. The read pump
+// owns cancellation on the original input descriptor.
 type terminalInput interface {
 	io.ReadWriteCloser
 	Fd() uintptr
@@ -27,36 +33,28 @@ type osc11File struct {
 
 func (f *osc11File) Read(p []byte) (int, error) { return f.reader.Read(p) }
 
-type osc11NamedFile struct {
-	*osc11File
-	name func() string
-}
-
-func (f *osc11NamedFile) Name() string { return f.name() }
-
-func normalizeTerminalInput(in io.Reader) io.Reader {
+func normalizeTerminalInput(ctx context.Context, in io.Reader) (io.Reader, func()) {
 	if in == nil {
-		return nil
+		return nil, func() {}
 	}
-	reader := &osc11Reader{source: in}
+	source := newTerminalReads(ctx, in)
+	reader := &osc11Reader{next: source.next}
 	if terminal, ok := in.(terminalInput); ok {
-		file := &osc11File{terminalInput: terminal, reader: reader}
-		if named, ok := in.(interface{ Name() string }); ok {
-			return &osc11NamedFile{osc11File: file, name: named.Name}
-		}
-		return file
+		return &osc11File{terminalInput: terminal, reader: reader}, source.stop
 	}
-	return reader
+	return reader, source.stop
 }
 
 // osc11Reader fixes x/ansi's value-based conversion of RGB channels before
 // the decoder discards the original channel widths. The OSC introducer is
 // passed through as it arrives, including a lone Esc. Only candidate colour
-// payload bytes are held for the terminator.
+// payload bytes are held until the terminator, the byte limit, or the
+// decoder's Escape timeout measured from the complete introducer.
 type osc11Reader struct {
-	source  io.Reader
+	next    func(time.Time) terminalChunk
 	matched int
 	body    []byte
+	expires time.Time
 	pending []byte
 	readErr error
 }
@@ -76,33 +74,83 @@ func (r *osc11Reader) Read(p []byte) (int, error) {
 		return 0, err
 	}
 
-	// Leave room for the held bytes so the descriptor's poller never needs
-	// to wake again just to drain buffered output. With short buffers, keep
-	// the excess for the next Read.
-	headroom := min(len(r.body), len(p)-1)
-	out := p[:0]
-	if headroom < len(r.body) {
-		out = make([]byte, 0, len(r.body)+1)
+	for {
+		var deadline time.Time
+		if r.matched == len(osc11Prefix) {
+			deadline = r.expires
+		}
+		chunk := r.next(deadline)
+		out := p[:0]
+		if errors.Is(chunk.err, errTerminalReadTimeout) {
+			out = r.expire(out)
+			chunk.err = nil
+		} else {
+			out = r.appendChunk(out, chunk)
+		}
+		if len(out) == 0 {
+			if chunk.err == nil {
+				continue
+			}
+			return 0, chunk.err
+		}
+		n := copy(p, out)
+		if n < len(out) {
+			r.pending = out[n:]
+		}
+		// The terminal decoder discards bytes returned alongside an error.
+		r.readErr = chunk.err
+		return n, nil
 	}
-	n, err := r.source.Read(p[headroom:])
-	for _, b := range p[headroom : headroom+n] {
+}
+
+func (r *osc11Reader) appendChunk(out []byte, chunk terminalChunk) []byte {
+	if !r.expires.IsZero() && !chunk.at.Before(r.expires) {
+		out = r.expire(out)
+	}
+	for _, b := range chunk.data {
 		out = r.consume(out, b)
 	}
-	if err != nil {
-		out = append(out, r.body...)
-		r.body = r.body[:0]
-		r.matched = 0
+	if chunk.err != nil {
+		out = r.release(out)
 	}
-	if len(out) == 0 {
-		return 0, err //nolint:wrapcheck // Preserve the input reader's error, including io.EOF.
+	return out
+}
+
+// expire preserves the held bytes in a canceled OSC so a decoder that
+// already expired the introducer cannot interpret the payload as keys.
+// The single-byte OSC also works when the old introducer is still pending:
+// in that case it is payload, and CAN cancels the whole sequence.
+func (r *osc11Reader) expire(out []byte) []byte {
+	if r.matched < len(osc11Prefix) {
+		// A partial introducer has already passed through.
+		r.resetReply()
+		return out
 	}
-	n = copy(p, out)
-	if n < len(out) {
-		r.pending = out[n:]
+	body := r.body
+	escape := len(body) > 0 && body[len(body)-1] == ansi.ESC
+	if escape {
+		body = body[:len(body)-1]
 	}
-	// The terminal decoder discards bytes returned alongside an error.
-	r.readErr = err
-	return n, nil
+	out = append(out, ansi.OSC, '1', '1', ';')
+	out = append(out, body...)
+	out = append(out, ansi.CAN)
+	if escape {
+		out = append(out, ansi.ESC)
+	}
+	r.resetReply()
+	return out
+}
+
+func (r *osc11Reader) release(out []byte) []byte {
+	out = append(out, r.body...)
+	r.resetReply()
+	return out
+}
+
+func (r *osc11Reader) resetReply() {
+	r.body = r.body[:0]
+	r.matched = 0
+	r.expires = time.Time{}
 }
 
 func (r *osc11Reader) consume(out []byte, b byte) []byte {
@@ -115,8 +163,8 @@ func (r *osc11Reader) consume(out []byte, b byte) []byte {
 			r.matched = 1 // The held Esc can begin the next introducer.
 		} else {
 			switch {
-			case b == '\a':
-				return r.finish(out, body, "\a")
+			case b == ansi.BEL || b == ansi.ST:
+				return r.finish(out, body, string([]byte{b}))
 			case b == '\x1b' || xRGBByte(len(body), b):
 				r.body = append(r.body, b)
 				return out
@@ -125,6 +173,7 @@ func (r *osc11Reader) consume(out []byte, b byte) []byte {
 		}
 		out = append(out, body...)
 		r.body = r.body[:0]
+		r.expires = time.Time{}
 	}
 	switch b {
 	case osc11Prefix[r.matched]:
@@ -134,19 +183,22 @@ func (r *osc11Reader) consume(out []byte, b byte) []byte {
 	default:
 		r.matched = 0
 	}
+	r.expires = time.Time{}
+	if r.matched > 0 {
+		r.expires = time.Now().Add(uv.DefaultEscTimeout)
+	}
 	return append(out, b)
 }
 
 func xRGBByte(offset int, b byte) bool {
 	if offset < len(xRGBPrefix) {
-		return b == xRGBPrefix[offset]
+		return b|0x20 == xRGBPrefix[offset]
 	}
 	return offset < maxXRGB && strings.ContainsRune("0123456789abcdefABCDEF/", rune(b))
 }
 
 func (r *osc11Reader) finish(out, body []byte, terminator string) []byte {
-	r.body = r.body[:0]
-	r.matched = 0
+	r.resetReply()
 	if rgb, ok := parseXRGB(string(body)); ok {
 		// The hex spelling is recognized by x/ansi and is shorter than an
 		// rgb: reply even when all three input channels are one digit.
@@ -159,7 +211,7 @@ func (r *osc11Reader) finish(out, body []byte, terminator string) []byte {
 
 func parseXRGB(payload string) ([3]uint64, bool) {
 	var rgb [3]uint64
-	body, ok := strings.CutPrefix(payload, xRGBPrefix)
+	body, ok := strings.CutPrefix(strings.ToLower(payload), xRGBPrefix)
 	channels := strings.Split(body, "/")
 	if !ok || len(channels) != len(rgb) {
 		return rgb, false

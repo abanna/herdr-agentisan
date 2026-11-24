@@ -167,3 +167,49 @@ func TestRunSelectsPaletteFromTerminal(t *testing.T) {
 		})
 	}
 }
+
+func TestRunUnfinishedBackgroundReplyPreservesKeys(t *testing.T) {
+	t.Parallel()
+
+	master, slave := openPTY(t, 120, 40)
+	var out syncBuffer
+	go func() { _, _ = io.Copy(&out, master) }()
+	cfg := config(&script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "full"))}}, nil)
+	quitGroup := make(chan string, 1)
+	filter := tea.WithFilter(func(model tea.Model, msg tea.Msg) tea.Msg {
+		if key, ok := msg.(tea.KeyPressMsg); ok && key.String() == "q" {
+			quitGroup <- model.(dashboard.Model).Frame().Group
+		}
+		return msg
+	})
+	done := make(chan error, 1)
+	go func() { done <- dashboard.Run(t.Context(), cfg, slave, slave, filter) }()
+
+	require.Eventually(t, func() bool { return strings.Contains(out.String(), "pee01") }, 5*time.Second, 10*time.Millisecond)
+	_, err := io.WriteString(master, "1")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool { return strings.Contains(out.String(), "◀ back") }, 5*time.Second, 10*time.Millisecond)
+
+	_, err = io.WriteString(master, "\x1b]11;rgb:00ee/")
+	require.NoError(t, err)
+	// Give the incomplete reply and then the standalone Escape time to
+	// pass through the input decoder before sending the next key.
+	time.Sleep(200 * time.Millisecond)
+	_, err = io.WriteString(master, "\x1b")
+	require.NoError(t, err)
+	time.Sleep(200 * time.Millisecond)
+	_, err = io.WriteString(master, "q")
+	require.NoError(t, err)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+		select {
+		case group := <-quitGroup:
+			require.Empty(t, group, "Escape closed the group before q quit")
+		default:
+			t.Fatal("dashboard exited without a plain q")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("q did not quit after the unfinished OSC 11 reply")
+	}
+}
