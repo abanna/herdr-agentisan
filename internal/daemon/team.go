@@ -189,6 +189,9 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 			o.Logger.Info().Err(err).Msg("team poll stops: the daemon's herdr server is gone or was replaced")
 			return
 		}
+		if built == nil {
+			carryBossPoll(tp.cache, nil)
+		}
 		if built != nil {
 			if last != nil && o.Team.Events != nil {
 				o.Team.emitTransitions(ctx, *last, *built)
@@ -308,9 +311,11 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 		if err := tp.cache.store(m, now, tp.stages, tp.idle, fill); err != nil {
 			o.Logger.Error().Err(err).Msg("team poll: cache the snapshots; a team too large to serve keeps its last one")
 		}
-		if rowsErr == nil {
-			publishBossPoll(tp.cache, m, rows, now, observed, tp.idle, started)
-		}
+	}
+	if agentsErr == nil && rowsErr == nil {
+		publishBossPoll(tp.cache, &m, rows, now, observed, tp.idle, started)
+	} else {
+		carryBossPoll(tp.cache, &m)
 	}
 	for _, t := range team.Tokens(m) {
 		// Once ctx ends, each push fails before it dials.

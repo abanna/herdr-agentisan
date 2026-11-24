@@ -307,8 +307,9 @@ func Run(ctx context.Context, o Options) (err error) {
 	in := newInbox()        // shared: the poll feeds the dispatcher, and send wakes it
 	// Shared: the notices ops set them, and the poll's notices obey them (A44).
 	mutes := notice.NewMutes()
+	snapshots.boss.Store(&bossPoll{degraded: true}) // no poll yet: no model, no rows
 	place := o.boardPlacer(in.view)
-	ops := map[string]op{opBossSnapshot: o.bossSnapshotOp(st, snapshots, place)}
+	ops := map[string]op{opBossSnapshot: o.bossSnapshotOp(st, snapshots)}
 	if svc := o.newWorkforce(st, ident, idle, starts, paths.Dir); svc != nil {
 		maps.Copy(ops, workforceOps(svc, ready, o.queued(in), o.marked))
 		maps.Copy(ops, o.noticeOps(in, mutes))

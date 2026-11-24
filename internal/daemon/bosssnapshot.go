@@ -21,32 +21,42 @@ const (
 	bossPollMaxAge  = 3
 )
 
-// bossPoll is published as a whole after a named, reconciled poll. Readers
-// copy a single team's snapshot and attach its current board metadata.
+// bossPoll is the one state every poll publishes, one that built no model
+// too: placement and rows come from it, never from the inbox's later view.
 type bossPoll struct {
-	at     time.Time
-	teams  map[string]snapshot.BossSnapshot
-	bosses map[string][]string // each team's boss places in this projection (A60)
+	at       time.Time
+	teams    map[string]snapshot.BossSnapshot
+	model    *team.Model // the newest poll's; nil when it built none
+	degraded bool        // teams and at are the last complete poll's, carried over
 }
 
-func publishBossPoll(cache *snapshotCache, m team.Model, rows []store.Worker, at, observed time.Time, idle *team.IdleClock, started map[string]time.Time) {
+func publishBossPoll(cache *snapshotCache, m *team.Model, rows []store.Worker, at, observed time.Time, idle *team.IdleClock, started map[string]time.Time) {
 	bindings := make(map[string]store.Worker, len(rows))
 	for _, r := range rows {
 		bindings[r.LogicalID] = r
 	}
-	next := &bossPoll{at: observed.UTC(), teams: make(map[string]snapshot.BossSnapshot, len(m.Projects)), bosses: map[string][]string{}}
+	next := &bossPoll{at: observed.UTC(), teams: make(map[string]snapshot.BossSnapshot, len(m.Projects)), model: m}
 	for _, p := range m.Projects {
 		next.teams[p.Name] = team.BossSnapshot(p, at, idle, started, bindings)
-		for _, b := range p.Boss {
-			next.bosses[p.Name] = append(next.bosses[p.Name], b.Pane.ID)
-		}
 	}
 	cache.boss.Store(next)
 }
 
+// carryBossPoll publishes m with the last complete poll's rows.
+func carryBossPoll(cache *snapshotCache, m *team.Model) {
+	prev := cache.boss.Load()
+	cache.boss.Store(&bossPoll{at: prev.at, teams: prev.teams, model: m, degraded: true})
+}
+
+func bossPlaced(m *team.Model, project, pane string) bool {
+	return m != nil && slices.ContainsFunc(m.Projects, func(p team.Project) bool {
+		return p.Name == project && slices.ContainsFunc(p.Boss, func(b team.Worker) bool { return b.Pane.ID == pane })
+	})
+}
+
 // bossSnapshotOp reuses board placement and restricts the read to the boss
 // role. It has no board wait registry and reads only metadata (NERD-5748).
-func (o Options) bossSnapshotOp(st *store.Store, cache *snapshotCache, place placer) op {
+func (o Options) bossSnapshotOp(st *store.Store, cache *snapshotCache) op {
 	return op{budget: opBudgets[opBossSnapshot], run: func(ctx context.Context, args json.RawMessage) (any, error) {
 		if len(args) > 0 {
 			var obj map[string]json.RawMessage
@@ -54,7 +64,8 @@ func (o Options) bossSnapshotOp(st *store.Store, cache *snapshotCache, place pla
 				return nil, bossRefusal(codeBadRequest)
 			}
 		}
-		who, err := place(ctx, peerFrom(ctx))
+		first := cache.boss.Load()
+		who, err := o.boardPlacer(func() (*team.Model, map[string]string) { return first.model, nil })(ctx, peerFrom(ctx))
 		if err != nil {
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				return nil, bossRefusal(codeTimeout)
@@ -68,13 +79,10 @@ func (o Options) bossSnapshotOp(st *store.Store, cache *snapshotCache, place pla
 		defer cancel()
 		asOf := o.Now().UTC() // before the read, so no later post is older
 		board, err := st.BoardStatus(read, who.Project, store.ReaderBoss)
-		poll := cache.boss.Load() // after the read: a shift change published since placement is seen
-		if poll == nil {
-			return nil, bossRefusal(codeNotReady)
-		}
+		poll := cache.boss.Load() // after the read: a state published since placement is the one that counts
 		out, ok := poll.teams[who.Project]
-		if !ok || !slices.Contains(poll.bosses[who.Project], who.Pane) {
-			return nil, bossRefusal(codeNotReady) // the views disagree: the client asks again
+		if !ok || !bossPlaced(poll.model, who.Project, who.Pane) {
+			return nil, bossRefusal(codeNotReady) // demoted, or no model: the client asks again
 		}
 		out.At = o.Now().UTC()
 		out.Board.State = snapshot.Unavailable
@@ -85,7 +93,7 @@ func (o Options) bossSnapshotOp(st *store.Store, cache *snapshotCache, place pla
 			}
 		}
 		out.TeamPoll = snapshot.BossSource{AsOf: &poll.at, State: snapshot.Fresh}
-		if age := out.At.Sub(poll.at); age < 0 || age > bossPollMaxAge*o.Poll {
+		if age := out.At.Sub(poll.at); poll.degraded || age < 0 || age > bossPollMaxAge*o.Poll {
 			out.TeamPoll.State = snapshot.Stale
 		}
 		if err := out.Validate(); err != nil {

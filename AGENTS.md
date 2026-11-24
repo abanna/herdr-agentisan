@@ -200,8 +200,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   caller's own read mark, forward and never past the newest post, and each
   snapshot carries the user's unread count, when there is one.
   `boss.snapshot` (NERD-5748) reads the team's poll and atomic board
-  metadata from the boss place. It leaves marks and waits alone and gates
-  ctx by the start of the pane's cached agent process. The daemon keeps
+  metadata from the boss place, placed against the state every poll
+  publishes. A degraded poll serves the last complete poll's rows, stale. It
+  leaves marks and waits alone and gates ctx by the start of the pane's
+  cached agent process. The daemon keeps
   herdr's agent view on the focused team, which focus events and the poll
   feed it, and clears it outside every team and on a clean stop (`view.go`,
   the A28 addendum, A49).

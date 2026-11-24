@@ -10,6 +10,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -84,6 +85,8 @@ func TestBossSnapshotPlacesCandidateInOwnTeam(t *testing.T) {
 	require.Len(t, got.Groups, 2)
 	assert.Equal(t, "coder", got.Groups[0].Name)
 	assert.Equal(t, "review", got.Groups[1].Name)
+	shiftCaller(h, "w14:p1") // the boss pane the team lists first
+	assert.Equal(t, "alpha", shiftRead(t, sock).Team)
 	for _, pane := range []string{"w14:p3", "w14:pD", ""} {
 		shiftCaller(h, pane)
 		_, err := daemon.Workforce(t.Context(), sock, bossSnapshotOp, struct{}{})
@@ -303,10 +306,18 @@ func TestBossSnapshotFreshnessAndProjection(t *testing.T) {
 	polled(t, h.srv, 2)
 	assert.Nil(t, shiftRead(t, sock).Groups[0].Workers[0].Ctx, "report is in the future")
 
+	var seen, thaw sync.Once
+	block, blocked := make(chan struct{}), make(chan struct{})
+	t.Cleanup(func() { thaw.Do(func() { close(block) }) })
 	h.mu.Lock()
-	h.agentsErr = true
+	h.onCall = func(method string) { // the poll waits in agent.list, so the state below stays the last complete poll's
+		if method == "agent.list" {
+			seen.Do(func() { close(blocked) })
+			<-block
+		}
+	}
 	h.mu.Unlock()
-	polled(t, h.srv, 2)
+	<-blocked
 	clock.Store(int64(3 * o.Poll))
 	assert.Equal(t, snapshot.Fresh, shiftRead(t, sock).TeamPoll.State)
 	clock.Add(1)
@@ -316,10 +327,10 @@ func TestBossSnapshotFreshnessAndProjection(t *testing.T) {
 	assert.Equal(t, snapshot.Fresh, got.Board.State)
 	clock.Store(-1)
 	assert.Equal(t, snapshot.Stale, shiftRead(t, sock).TeamPoll.State, "clock moved back")
+	thaw.Do(func() { close(block) })
 
 	h.mu.Lock()
 	h.agents = append(h.agents, named("w14:p0", "al-boss"))
-	h.agentsErr = false
 	h.mu.Unlock()
 	polled(t, h.srv, 2)
 	assert.Nil(t, shiftRead(t, sock).Boss, "two panes claim the canonical name")
@@ -373,59 +384,79 @@ func TestBossSnapshotBoardAsOfPrecedesItsRead(t *testing.T) {
 	assert.True(t, *got.Unread > 0 || !got.AsOf.After(boardNow), "unread=%d as_of=%s", *got.Unread, got.AsOf)
 }
 
-// NERD-5748: a request paused after placement is refused, never served, once a shift change is published.
-func TestBossSnapshotRefusesFormerBossAfterPlacement(t *testing.T) {
-	t.Parallel()
-	h := shiftHerdr(t)
-	shiftCaller(h, "w14:p0")
-	o := shiftOpts(t, h)
-	var armed atomic.Bool
-	paused, resume := make(chan struct{}), make(chan struct{})
-	o.Now = func() time.Time {
-		if strings.Contains(string(debug.Stack()), "bossSnapshotOp") && armed.CompareAndSwap(true, false) {
-			close(paused)
-			<-resume
-		}
-		return boardNow
-	}
-	sock := startShift(t, h, o)
-	shiftRead(t, sock)
-	armed.Store(true)
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
-	got := make(chan error, 1)
-	go func() { _, err := daemon.Workforce(ctx, sock, bossSnapshotOp, struct{}{}); got <- err }()
-	<-paused
-	h.mu.Lock()
+func swapBoss(h *teamHerdr) {
 	h.tabs = append(slices.DeleteFunc(slices.Clone(h.tabs), func(tab map[string]any) bool { return tab["tab_id"] == "w14:t1" || tab["tab_id"] == "w14:t4" }),
 		tabOf("w14:t1", "w14", "al-coder-2"), tabOf("w14:t4", "w14", "al-boss"))
-	h.mu.Unlock()
-	require.Eventually(t, func() bool { // placement has moved on
-		_, err := daemon.Workforce(t.Context(), sock, daemon.OpBoardRead, daemon.BoardReadRequest{})
-		return err != nil
-	}, ready, 10*time.Millisecond)
-	close(resume)
-	assert.Contains(t, []string{"not_ready", "not_allowed"}, refusedWith(t, <-got), "never served; placement refuses the retry")
 }
 
-// NERD-5748: a degraded poll keeps the old projection while board placement moves on.
+// NERD-5748: a request paused after placement is refused once a poll moved on.
+func TestBossSnapshotRefusesFormerBossAfterPlacement(t *testing.T) {
+	t.Parallel()
+	for name, moved := range map[string]func(*teamHerdr){
+		"complete poll":            swapBoss,
+		"degraded poll":            func(h *teamHerdr) { h.agentsErr = true; swapBoss(h) },
+		"poll that built no model": func(h *teamHerdr) { h.panesErr = true },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			h := shiftHerdr(t)
+			shiftCaller(h, "w14:p0")
+			o := shiftOpts(t, h)
+			var armed atomic.Bool
+			var release sync.Once
+			paused, resume := make(chan struct{}), make(chan struct{})
+			o.Now = func() time.Time {
+				if strings.Contains(string(debug.Stack()), "bossSnapshotOp") && armed.CompareAndSwap(true, false) {
+					close(paused)
+					<-resume
+				}
+				return boardNow
+			}
+			sock := startShift(t, h, o)
+			t.Cleanup(func() { release.Do(func() { close(resume) }) }) // before the daemon's stop, which waits for the handler
+			shiftRead(t, sock)
+			armed.Store(true)
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			got := make(chan error, 1)
+			go func() { _, err := daemon.Workforce(ctx, sock, bossSnapshotOp, struct{}{}); got <- err }()
+			select {
+			case <-paused:
+			case err := <-got:
+				t.Fatalf("answered before the hook: %v", err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("the hook never ran")
+			}
+			h.mu.Lock()
+			moved(h)
+			h.mu.Unlock()
+			require.Eventually(t, func() bool { // placement has moved on
+				asked, stop := context.WithTimeout(t.Context(), 300*time.Millisecond) // not_ready is asked again
+				defer stop()
+				_, err := daemon.Workforce(asked, sock, daemon.OpBoardRead, daemon.BoardReadRequest{})
+				return err != nil
+			}, ready, 10*time.Millisecond)
+			release.Do(func() { close(resume) })
+			assert.Contains(t, []string{"not_ready", "not_allowed"}, refusedWith(t, <-got), "never served")
+		})
+	}
+}
+
+// NERD-5748: a degraded poll serves the incoming boss stale rows naming the old boss.
 func TestBossSnapshotIncomingBossDuringDegradedPoll(t *testing.T) {
 	t.Parallel()
 	h := shiftHerdr(t)
 	shiftCaller(h, "w14:p0")
 	sock := startShift(t, h, shiftOpts(t, h))
-	shiftRead(t, sock)
+	before := shiftRead(t, sock)
 	h.mu.Lock()
 	h.agentsErr = true
-	h.tabs = append(slices.DeleteFunc(slices.Clone(h.tabs), func(tab map[string]any) bool { return tab["tab_id"] == "w14:t1" || tab["tab_id"] == "w14:t4" }),
-		tabOf("w14:t1", "w14", "al-coder-2"), tabOf("w14:t4", "w14", "al-boss"))
+	swapBoss(h)
 	h.mu.Unlock()
 	shiftCaller(h, "w14:p4")
 	polled(t, h.srv, 2)
-	_, err := daemon.Workforce(t.Context(), sock, daemon.OpBoardRead, daemon.BoardReadRequest{})
-	require.NoError(t, err)
-	cold, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
-	defer cancel()
-	_, err = daemon.Workforce(cold, sock, bossSnapshotOp, struct{}{})
-	assert.Equal(t, "not_ready", refusedWith(t, err), "asked again, never not_allowed")
+	got := shiftRead(t, sock)
+	assert.Equal(t, snapshot.Stale, got.TeamPoll.State)
+	assert.Equal(t, before.TeamPoll.AsOf, got.TeamPoll.AsOf)
+	assert.Equal(t, before.Boss, got.Boss, "the rows name the old boss")
 }
