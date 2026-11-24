@@ -66,6 +66,7 @@ func NewMutes(resolve func(context.Context, string, team.Worker) (generation int
 // Mute mutes worker from now for d, DefaultMute when d is 0. worker is the
 // WorkerName of a worker in one of m's groups: a name no worker has is
 // ErrUnknownWorker, so a typo is never a mute that silences nothing.
+// A bound logical ID takes precedence over a provisional name.
 // The resolver also refuses a stale selection that would mute another row.
 // Muting a worker again sets its end anew.
 func (s *Mutes) Mute(ctx context.Context, m team.Model, worker string, d time.Duration, now time.Time) (Mute, error) {
@@ -76,7 +77,10 @@ func (s *Mutes) Mute(ctx context.Context, m team.Model, worker string, d time.Du
 		return Mute{}, fmt.Errorf("%w: got %s", ErrMuteLength, d)
 	}
 	workers := groupWorkers(m)
-	i := slices.IndexFunc(workers, func(p placed) bool { return WorkerName(p.worker) == worker })
+	i := slices.IndexFunc(workers, func(p placed) bool { return p.worker.Bound && p.worker.ID == worker })
+	if i < 0 {
+		i = slices.IndexFunc(workers, func(p placed) bool { return WorkerName(p.worker) == worker })
+	}
 	if i < 0 {
 		return Mute{}, fmt.Errorf("%w: %q", ErrUnknownWorker, worker)
 	}

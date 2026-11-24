@@ -261,6 +261,38 @@ func TestUnrelatedUnboundPaneCannotMuteALiveWorkerID(t *testing.T) {
 	assert.Empty(t, listedMutes(t, s))
 }
 
+func TestMutePrefersBoundWorkerOverEarlierUnboundNamesake(t *testing.T) {
+	t.Parallel()
+	const worker = "ha-qa-1"
+	th := newTeamHerdr(t)
+	withTeam(th)
+	addMutePane(th, worker, true)
+	// The coder pane takes the name, but the later QA pane owns the row.
+	th.setAgents(muteAgent("w14:p1", "ha-boss"), muteAgent(muteOldPane, worker), muteAgent(muteNewPane, "qa-session"))
+	th.setPane(muteOldPane, "tokens", map[string]string{"stage": "unbound pane"})
+	th.setPane(muteNewPane, "tokens", map[string]string{"stage": "bound pane"})
+	dir := shortDir(t)
+	execDB(t, dir, th, `INSERT INTO workers (logical_id, project, grp, pane_id, generation, status, created_at, terminal_id)
+VALUES (?, 'ha', 'qa', ?, 7, 'active', 0, ?)`, worker, muteNewPane, "term_"+muteNewPane)
+	s, logs := serveMuteWorkersWithGroups(t, th, dir, "[projects.ha.groups.qa]\nworkers = 0\nslots = 1\n")
+
+	muteForThreeHours(t, s, worker)
+	require.Equal(t, []string{worker}, listedMutes(t, s))
+	th.setPane(muteOldPane, "agent_status", "blocked")
+	th.setPane(muteNewPane, "agent_status", "blocked")
+	polled(t, th.srv, 2)
+	assert.Contains(t, noticeLines(logs), worker+" is blocked · unbound pane")
+	assert.NotContains(t, noticeLines(logs), worker+" is blocked · bound pane", "the row's generation is muted")
+
+	got := noticeWorkforce(t, s, daemon.OpNoticesUnmute, daemon.UnmuteRequest{Worker: worker})
+	assert.JSONEq(t, `{"worker":"ha-qa-1","ended":true}`, string(got))
+	assert.Empty(t, listedMutes(t, s))
+	th.setPane(muteNewPane, "agent_status", "idle")
+	polled(t, th.srv, 2)
+	th.setPane(muteNewPane, "agent_status", "blocked")
+	waitLine(t, logs, worker+" is blocked · bound pane")
+}
+
 func TestPendingReplacementNoticeIsDeliveredBeforeAck(t *testing.T) {
 	t.Parallel()
 	th, _, dir := haTeam(t)
@@ -308,6 +340,11 @@ func assertUnknownMuteWorker(t *testing.T, err error) {
 
 func serveMuteWorkers(t *testing.T, th *teamHerdr, dir string) (string, *lockedLog) {
 	t.Helper()
+	return serveMuteWorkersWithGroups(t, th, dir, "")
+}
+
+func serveMuteWorkersWithGroups(t *testing.T, th *teamHerdr, dir, groups string) (string, *lockedLog) {
+	t.Helper()
 	normal := th.serve(22)
 	th.mu.Lock()
 	th.other = func(r herdrtest.Request) herdrtest.Reply {
@@ -315,7 +352,7 @@ func serveMuteWorkers(t *testing.T, th *teamHerdr, dir string) (string, *lockedL
 	}
 	th.mu.Unlock()
 	logs := &lockedLog{}
-	o := teamOpts(t, dir, th, haNotices(t, "[notices]\ngap = 0\nrepeat = 0\n"))
+	o := teamOpts(t, dir, th, haNotices(t, groups+"[notices]\ngap = 0\nrepeat = 0\n"))
 	o.Hooks.Preflight = func(context.Context, string) error { return nil }
 	logger, err := logging.New(logs, "info", "json")
 	require.NoError(t, err)
