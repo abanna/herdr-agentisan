@@ -262,13 +262,11 @@ env_file = "~/.config/herdr-agentisan/elastic.env"
 [tests]
 locks = ["/run/user/1000/agentisan/gate.0.lock"]
 
-# The boss's rule library (NERD-5741), read by `herdr-agentisan recall list`
-# and `recall show <id>`: each *.md in a memory directory (MEMORY.md, the
-# index, aside) is one section, "mem:<name>", and each top-level "- " bullet
-# of a bullet file, with the lines under it indented by two spaces, is one,
-# "<prefix>:<hash of its first line>". The prefix is the table key: a lower-
-# case letter and up to 7 more letters or digits, never mem. Absolute paths or
-# under ~/. Shared file and --set only; a repo file may not set them.
+# The boss's rule library (NERD-5741), read by `recall list` and `recall show`:
+# each *.md of a memory directory (MEMORY.md aside) is a section, and so is each
+# top-level "- " bullet of a bullet file; the table key is the prefix of its IDs
+# (a lower-case letter, up to 7 more letters or digits, never mem). Absolute
+# paths or under ~/. Shared file and --set only.
 [recall]
 memory_dirs = ["~/.claude/projects/-home-you-repo/memory"]
 

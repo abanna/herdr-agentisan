@@ -1,11 +1,6 @@
 // Package recall is the boss's rule library (NERD-5741): the sections of the
-// files its standing rules are kept in, each with an ID that stays the same
-// while the section does, read word for word from those files at each call.
-//
-// A section is one memory file, whole, or one top-level bullet of a bullet
-// file with its indented lines. Nothing here is cached, so a printed section
-// is always what the file says now, and a section removed from its file is
-// simply gone.
+// files its standing rules are kept in, each with an ID that stays while the
+// section does, read word for word at each call. Nothing is cached.
 package recall
 
 import (
@@ -20,63 +15,47 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 )
 
+// What the library is cut by.
 const (
-	// MemoryPrefix starts the ID of every memory file's section.
-	MemoryPrefix = "mem"
-	// IndexFile is a memory directory's index. Its lines repeat the files'
-	// descriptions, so it is not a section.
-	IndexFile = "MEMORY.md"
-	// MaxFile is the most of one source file that is read.
-	MaxFile = 4 << 20
-	// MaxHeading is the most bytes of a section's heading, before the mark
-	// that says it was cut.
-	MaxHeading = 100
+	MemoryPrefix = "mem"       // starts the ID of every memory file's section
+	IndexFile    = "MEMORY.md" // a memory directory's index repeats the files' descriptions: no section
+	MaxFile      = 4 << 20     // the most of one source file that is read
+	MaxHeading   = 100         // the most characters of a heading, before its cut mark
 )
 
-// Sentinel errors. Callers branch on them with errors.Is.
 var (
 	// ErrNoSources means no memory directory and no bullet file is named.
 	ErrNoSources = errors.New("no recall sources: set recall.memory_dirs or recall.bullet_files in the shared herdr-agentisan.toml")
-	// ErrSource means a source cannot be read, or is not a usable source.
-	// A library without it would answer "nothing governs" for its rules, so
-	// the whole load fails.
+	// ErrSource means a source cannot be used: the whole load fails, or its rules would read as "nothing governs".
 	ErrSource = errors.New("a recall source cannot be used")
-	// ErrUnknownID means a section asked for is not in the library: removed,
-	// or its first line edited.
+	// ErrUnknownID means a section asked for is not in the library.
 	ErrUnknownID = errors.New("no such section")
 )
 
-// Sources are the files the library is cut from.
+// Sources are the files the library is cut from: directories of memory files,
+// each *.md a section, and files whose top-level bullets are sections.
 type Sources struct {
-	// MemoryDirs are directories of memory files, each *.md a section.
 	MemoryDirs []string
-	// Bullets are files whose top-level bullets are sections.
-	Bullets []Bullets
+	Bullets    []Bullets
 }
 
-// Bullets is one bullet file and the prefix its sections' IDs carry.
-type Bullets struct {
-	Prefix string
-	Path   string
-}
+// Bullets is a bullet file and the prefix its sections' IDs carry.
+type Bullets struct{ Prefix, Path string }
 
-// Section is one rule, with where it is written.
+// Section is one rule and where it is written.
 type Section struct {
-	// ID is "<prefix>:<name or hash>": mem:<name> for a memory file,
-	// <prefix>:<first 8 hex of the SHA-256 of the bullet's first line, its
-	// whitespace collapsed> for a bullet, with -2, -3 for a repeat.
+	// ID is mem:<name> for a memory file, else <prefix>:<first 8 hex of the
+	// SHA-256 of the bullet's first line, whitespace collapsed>; a repeat gets
+	// -2, -3.
 	ID string
-	// File, Start and End are the file and the 1-based lines, both
-	// inclusive, that Text is.
+	// File, Start and End are where Text is: 1-based lines, both inclusive.
 	File       string
 	Start, End int
-	// Heading is the memory file's description or the bullet's first line,
-	// at most MaxHeading bytes.
+	// Heading is the memory file's description or the bullet's first line.
 	Heading string
-	// Text is the lines word for word, without the last line's newline.
+	// Text is those lines word for word, without the last one's newline.
 	Text string
 }
 
@@ -88,15 +67,11 @@ func (s Section) Ref() string {
 	return s.File + ":" + strconv.Itoa(s.Start) + "-" + strconv.Itoa(s.End)
 }
 
-// Library is every section of the sources, memory directories first, then
-// each bullet file as given, each in file order.
-type Library struct {
-	Sections []Section
-}
+// Library is the sections: memory directories first, then each bullet file as given.
+type Library struct{ Sections []Section }
 
 var (
 	prefixPattern = regexp.MustCompile(`^[a-z][a-z0-9]{1,7}$`)
-	namePattern   = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
 	slugRuns      = regexp.MustCompile(`[^a-z0-9_-]+`)
 )
 
@@ -105,22 +80,21 @@ func Load(src Sources) (Library, error) {
 	if len(src.MemoryDirs) == 0 && len(src.Bullets) == 0 {
 		return Library{}, ErrNoSources
 	}
-	prefixes := map[string]bool{}
+	used := map[string]bool{MemoryPrefix: true}
 	for _, b := range src.Bullets {
-		switch {
-		case b.Prefix == MemoryPrefix:
-			return Library{}, fmt.Errorf("%w: the prefix %q is the memory files'", ErrSource, b.Prefix)
-		case !prefixPattern.MatchString(b.Prefix):
-			return Library{}, fmt.Errorf("%w: the prefix %q is not a lower-case letter and up to 7 more letters or digits", ErrSource, b.Prefix)
-		case prefixes[b.Prefix]:
-			return Library{}, fmt.Errorf("%w: the prefix %q is used twice", ErrSource, b.Prefix)
+		if used[b.Prefix] || !prefixPattern.MatchString(b.Prefix) {
+			return Library{}, fmt.Errorf("%w: the prefix %q is not one of a lower-case letter and up to 7 more letters or digits, other than mem, used once", ErrSource, b.Prefix)
 		}
-		prefixes[b.Prefix] = true
+		used[b.Prefix] = true
 	}
 	var lib Library
 	seen := map[string]bool{}
 	add := func(s Section) {
-		s.ID = unique(seen, s.ID)
+		base := s.ID
+		for n := 2; seen[s.ID]; n++ {
+			s.ID = base + "-" + strconv.Itoa(n)
+		}
+		seen[s.ID] = true
 		lib.Sections = append(lib.Sections, s)
 	}
 	for _, dir := range src.MemoryDirs {
@@ -140,23 +114,16 @@ func Load(src Sources) (Library, error) {
 	return lib, nil
 }
 
-// Find is the section with id.
-func (l Library) Find(id string) (Section, bool) {
-	for _, s := range l.Sections {
-		if s.ID == id {
-			return s, true
-		}
-	}
-	return Section{}, false
-}
-
-// Pick is the sections ids name, in the order asked. If any is not in the
-// library, it is ErrUnknownID naming every one that is not, and no section.
+// Pick is the sections ids name, in order; if any is gone, ErrUnknownID names them all.
 func (l Library) Pick(ids []string) ([]Section, error) {
-	out := make([]Section, 0, len(ids))
+	byID := make(map[string]Section, len(l.Sections))
+	for _, s := range l.Sections {
+		byID[s.ID] = s
+	}
+	var out []Section
 	var unknown []string
 	for _, id := range ids {
-		if s, ok := l.Find(id); ok {
+		if s, ok := byID[id]; ok {
 			out = append(out, s)
 		} else {
 			unknown = append(unknown, id)
@@ -168,18 +135,7 @@ func (l Library) Pick(ids []string) ([]Section, error) {
 	return out, nil
 }
 
-// unique is id, or id-2, id-3 … when it is taken, and marks it taken.
-func unique(seen map[string]bool, id string) string {
-	out := id
-	for n := 2; seen[out]; n++ {
-		out = id + "-" + strconv.Itoa(n)
-	}
-	seen[out] = true
-	return out
-}
-
-// readLines reads the file at path, at most MaxFile bytes of it, as the lines
-// "\n" ends; the last line's newline is not a line of its own.
+// readLines reads the file at path, at most MaxFile bytes, as the lines "\n" ends.
 func readLines(path string) ([]string, error) {
 	if !filepath.IsAbs(path) {
 		return nil, fmt.Errorf("%w: %s is not an absolute path", ErrSource, path)
@@ -193,24 +149,20 @@ func readLines(path string) ([]string, error) {
 		return nil, fmt.Errorf("%w: %s is not a regular file", ErrSource, path)
 	}
 	raw, err := io.ReadAll(io.LimitReader(f, MaxFile+1))
-	if err != nil {
+	switch {
+	case err != nil:
 		return nil, fmt.Errorf("%w: %w", ErrSource, err)
-	}
-	if len(raw) > MaxFile {
+	case len(raw) > MaxFile:
 		return nil, fmt.Errorf("%w: %s is over %d MiB", ErrSource, path, MaxFile>>20)
-	}
-	if len(raw) == 0 {
+	case len(raw) == 0:
 		return nil, nil
 	}
 	return strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n"), nil
 }
 
-// loadMemoryDir adds one section for each *.md file in dir, in name order,
-// but the index, a hidden file and a directory.
+// loadMemoryDir adds a section for each *.md in dir, in name order, but the
+// index, a hidden file and a directory.
 func loadMemoryDir(dir string, add func(Section)) error {
-	if !filepath.IsAbs(dir) {
-		return fmt.Errorf("%w: %s is not an absolute path", ErrSource, dir)
-	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("%w: %w", ErrSource, err)
@@ -229,66 +181,38 @@ func loadMemoryDir(dir string, add func(Section)) error {
 			continue
 		}
 		id, desc := frontmatter(lines)
-		if !namePattern.MatchString(id) {
-			id = slug(strings.TrimSuffix(name, ".md"))
-		}
+		id = strings.Trim(slugRuns.ReplaceAllString(strings.ToLower(cmp.Or(id, strings.TrimSuffix(name, ".md"))), "-"), "-")
 		add(Section{
-			ID: MemoryPrefix + ":" + id, File: path, Start: 1, End: len(lines),
+			ID: MemoryPrefix + ":" + cmp.Or(id, "file"), File: path, Start: 1, End: len(lines),
 			Heading: heading(cmp.Or(desc, id)), Text: strings.Join(lines, "\n"),
 		})
 	}
 	return nil
 }
 
-// frontmatter is the top-level name and description of a file that opens
-// with a --- block; both are empty for a file whose block never closes.
+// frontmatter is the top-level name and description of a closed --- block.
 func frontmatter(lines []string) (name, desc string) {
 	if strings.TrimRight(lines[0], "\r") != "---" {
 		return "", ""
 	}
-	end := -1
-	for i := 1; i < len(lines); i++ {
-		if strings.TrimRight(lines[i], "\r") == "---" {
-			end = i
-			break
+	for i, l := range lines[1:] {
+		if strings.TrimRight(l, "\r") == "---" {
+			for _, l := range lines[1 : i+1] {
+				if v, ok := strings.CutPrefix(l, "name:"); ok {
+					name = strings.Trim(strings.TrimSpace(v), `"'`)
+				} else if v, ok := strings.CutPrefix(l, "description:"); ok {
+					desc = strings.Trim(strings.TrimSpace(v), `"'`)
+				}
+			}
+			return name, desc
 		}
 	}
-	if end < 0 {
-		return "", ""
-	}
-	for _, l := range lines[1:end] {
-		if v, ok := strings.CutPrefix(l, "name:"); ok {
-			name = unquote(v)
-		} else if v, ok := strings.CutPrefix(l, "description:"); ok {
-			desc = unquote(v)
-		}
-	}
-	return name, desc
+	return "", ""
 }
 
-func unquote(v string) string {
-	v = strings.TrimSpace(v)
-	if len(v) >= 2 && (v[0] == '"' || v[0] == '\'') && v[len(v)-1] == v[0] {
-		return v[1 : len(v)-1]
-	}
-	return v
-}
-
-// slug is s as a name of the ID alphabet.
-func slug(s string) string {
-	s = strings.Trim(slugRuns.ReplaceAllString(strings.ToLower(s), "-"), "-")
-	if len(s) > 64 {
-		s = s[:64]
-	}
-	if s == "" {
-		return "file"
-	}
-	return s
-}
-
-// cutBullets cuts each top-level "- " bullet of lines, with the lines under
-// it that start with two spaces: a section ends at the first line that does
-// not, a blank one included.
+// cutBullets cuts each top-level "- " bullet of lines with the lines under it
+// that start with two spaces; a section ends at the first line that does not,
+// a blank one included.
 func cutBullets(prefix, path string, lines []string) []Section {
 	var out []Section
 	for i := 0; i < len(lines); {
@@ -310,16 +234,12 @@ func cutBullets(prefix, path string, lines []string) []Section {
 	return out
 }
 
-// heading is s trimmed, as valid UTF-8, and cut to MaxHeading bytes at a
-// character boundary with a mark that says so.
+// heading is s trimmed and cut to MaxHeading characters, with a mark that says
+// so. Converting to runes also makes it valid UTF-8.
 func heading(s string) string {
-	s = strings.TrimSpace(strings.ToValidUTF8(s, ""))
-	if len(s) <= MaxHeading {
-		return s
+	r := []rune(strings.TrimSpace(s))
+	if len(r) > MaxHeading {
+		return string(r[:MaxHeading]) + "…"
 	}
-	i := MaxHeading
-	for i > 0 && !utf8.RuneStart(s[i]) {
-		i--
-	}
-	return s[:i] + "…"
+	return string(r)
 }

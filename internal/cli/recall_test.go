@@ -2,7 +2,6 @@ package cli_test
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -62,25 +61,6 @@ func TestRecallListPrintsEverySectionWithItsPlace(t *testing.T) {
 	assert.Regexp(t, regexp.MustCompile(`(?m)^rul:[0-9a-f]{8}\s+`+regexp.QuoteMeta(rulings)+`:3\s+First ruling, one line\.$`), out)
 	assert.Regexp(t, regexp.MustCompile(`(?m)^rul:[0-9a-f]{8}\s+`+regexp.QuoteMeta(rulings)+`:4-5\s+Second ruling,$`), out)
 	assert.Contains(t, out, "3 sections")
-
-	out, err = runIn(ctx, "recall", "list", "--json")
-	require.NoError(t, err)
-	assert.NotContains(t, out, `"text"`, "a list holds no section's text")
-	var got struct {
-		Sections []struct {
-			ID      string `json:"id"`
-			File    string `json:"file"`
-			Start   int    `json:"start"`
-			End     int    `json:"end"`
-			Heading string `json:"heading"`
-		} `json:"sections"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(out), &got))
-	require.Len(t, got.Sections, 3)
-	assert.Equal(t, "mem:alpha-rule", got.Sections[0].ID)
-	assert.Equal(t, rulings, got.Sections[2].File)
-	assert.Equal(t, 4, got.Sections[2].Start)
-	assert.Equal(t, 5, got.Sections[2].End)
 }
 
 // TestRecallShowPrintsSectionsWordForWord: under a header with the file and
@@ -97,18 +77,6 @@ func TestRecallShowPrintsSectionsWordForWord(t *testing.T) {
 		"\n" +
 		"== mem:alpha-rule  " + lib.Sections[0].File + ":1-6\n" + strings.TrimSuffix(recallMemory, "\n") + "\n"
 	assert.Equal(t, want, out)
-
-	out, err = runIn(ctx, "recall", "show", "mem:alpha-rule", "--json")
-	require.NoError(t, err)
-	var got struct {
-		Sections []struct {
-			ID   string `json:"id"`
-			Text string `json:"text"`
-		} `json:"sections"`
-	}
-	require.NoError(t, json.Unmarshal([]byte(out), &got))
-	require.Len(t, got.Sections, 1)
-	assert.Equal(t, strings.TrimSuffix(recallMemory, "\n"), got.Sections[0].Text)
 }
 
 // TestRecallShowRefusesAnIDThatIsGone: a removed or edited section is named

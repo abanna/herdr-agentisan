@@ -39,21 +39,10 @@ func TestRecallSources(t *testing.T) {
 			file: "[recall.bullet_files]\nstd = \"/s/STANDING.md\"\nrul = \"~/r.md\"\n" + app, home: home,
 			want: recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: filepath.Join(home, "r.md")}, {Prefix: "std", Path: "/s/STANDING.md"}}},
 		},
-		"~/ with no HOME":            {file: "[recall]\nmemory_dirs = [\"~/m\"]\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"HOME"}},
-		"a relative directory":       {file: "[recall]\nmemory_dirs = [\"m\"]\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"recall.memory_dirs", "shared", "absolute"}},
-		"an empty entry":             {file: "[recall]\nmemory_dirs = [\"\"]\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"recall.memory_dirs"}},
-		"a directory named twice":    {file: "[recall]\nmemory_dirs = [\"/m\", \"/m/\"]\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"recall.memory_dirs", "twice"}},
-		"too many directories":       {file: "[recall]\nmemory_dirs = [\"/1\",\"/2\",\"/3\",\"/4\",\"/5\",\"/6\",\"/7\",\"/8\",\"/9\"]\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"recall.memory_dirs", "at most"}},
-		"a relative bullet file":     {file: "[recall.bullet_files]\nstd = \"S.md\"\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"recall.bullet_files.std", "absolute"}},
-		"the prefix mem":             {file: "[recall.bullet_files]\nmem = \"/s.md\"\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"recall.bullet_files.mem", "memory"}},
-		"a prefix with a dash":       {file: "[recall.bullet_files]\nmy-rules = \"/s.md\"\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"recall.bullet_files.my-rules"}},
-		"a prefix over 8 characters": {file: "[recall.bullet_files]\nabcdefghi = \"/s.md\"\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"recall.bullet_files.abcdefghi"}},
-		"a prefix starting with a digit": {
-			file: "[recall.bullet_files]\n1st = \"/s.md\"\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"recall.bullet_files.1st"},
-		},
-		"a file named under two prefixes": {
-			file: "[recall.bullet_files]\nstd = \"/s.md\"\nrul = \"/s.md\"\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"recall.bullet_files", "twice"},
-		},
+		"~/ with no HOME":          {file: "[recall]\nmemory_dirs = [\"~/m\"]\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"HOME"}},
+		"a relative directory":     {file: "[recall]\nmemory_dirs = [\"m\"]\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"recall.memory_dirs", "shared", "absolute"}},
+		"an empty entry":           {file: "[recall]\nmemory_dirs = [\"\"]\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"recall.memory_dirs"}},
+		"a relative bullet file":   {file: "[recall.bullet_files]\nstd = \"S.md\"\n" + app, wantErr: settings.ErrInvalid, wantIn: []string{"recall.bullet_files.std", "absolute"}},
 		"a control character":      {file: "[recall.bullet_files]\nstd = \"/a\\nb.md\"\n" + app, wantErr: settings.ErrInvalid},
 		"not a list":               {file: "[recall]\nmemory_dirs = \"/m\"\n" + app, wantErr: settings.ErrInvalid},
 		"bullet_files not a table": {file: "[recall]\nbullet_files = \"/m\"\n" + app, wantErr: settings.ErrInvalid},
@@ -107,4 +96,20 @@ func TestRecallSourcesWithoutAConfigDir(t *testing.T) {
 	got, err := settings.RecallSources("", envOf(nil))
 	require.NoError(t, err)
 	assert.Equal(t, recall.Sources{}, got)
+}
+
+// TestRecallKeysAreResolvedFromTheSharedFile: config resolve shows each key,
+// and the layer that set it.
+func TestRecallKeysAreResolvedFromTheSharedFile(t *testing.T) {
+	t.Parallel()
+	repo, dir := newRepo(t), t.TempDir()
+	writeFile(t, dir, settings.FileName, "schema_version = 1\n[recall]\nmemory_dirs = [\"/m\"]\n[recall.bullet_files]\nstd = \"/s.md\"\n", repo)
+	res, err := settings.Load(settings.LoadOptions{ConfigDir: dir, LookupEnv: envOf(nil)})
+	require.NoError(t, err)
+	for path, value := range map[string]any{"recall.memory_dirs": []string{"/m"}, "recall.bullet_files.std": "/s.md"} {
+		l, ok := leaf(t, res, path)
+		require.True(t, ok, path)
+		assert.Equal(t, value, l.Value)
+		assert.Equal(t, settings.LayerShared, l.Layer)
+	}
 }

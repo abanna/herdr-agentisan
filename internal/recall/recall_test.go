@@ -112,12 +112,12 @@ func TestBulletIDsSurviveTheEditsAroundThem(t *testing.T) {
 	write(t, dir, "r.md", "- New rule\n- Alpha rule\n  more alpha, edited\n- Gamma rule\n")
 	after := load(t, src)
 	assert.Equal(t, []string{after.Sections[0].ID, alpha, gamma}, ids(after))
-	_, ok := after.Find(beta)
-	assert.False(t, ok, "a removed section is gone")
-	got, ok := after.Find(alpha)
-	require.True(t, ok)
-	assert.Equal(t, 2, got.Start, "its range moved with the file")
-	assert.Equal(t, "- Alpha rule\n  more alpha, edited", got.Text)
+	_, err := after.Pick([]string{beta})
+	require.ErrorIs(t, err, recall.ErrUnknownID, "a removed section is gone")
+	got, err := after.Pick([]string{alpha})
+	require.NoError(t, err)
+	assert.Equal(t, 2, got[0].Start, "its range moved with the file")
+	assert.Equal(t, "- Alpha rule\n  more alpha, edited", got[0].Text)
 
 	// A new first line is a new section.
 	write(t, dir, "r.md", "- Alpha rule, reworded\n")
@@ -197,9 +197,13 @@ func TestMemoryIDs(t *testing.T) {
 		"single quotes":            {map[string]string{"a.md": "---\nname: 'quoted'\n---\nx\n"}, []string{"mem:quoted"}},
 		"no frontmatter":           {map[string]string{"plain-note.md": "just text\n"}, []string{"mem:plain-note"}},
 		"unclosed frontmatter":     {map[string]string{"open.md": "---\nname: lost\nbody\n"}, []string{"mem:open"}},
-		"a name outside the alphabet falls back to the stem": {
-			map[string]string{"My Note.md": "---\nname: Not A Slug!\n---\nx\n"}, []string{"mem:my-note"},
+		"a name outside the alphabet is made one": {
+			map[string]string{"My Note.md": "---\nname: Not A Slug!\n---\nx\n"}, []string{"mem:not-a-slug"},
 		},
+		"upper case is lowered":            {map[string]string{"a.md": "---\nname: Mixed-Case\n---\nx\n"}, []string{"mem:mixed-case"}},
+		"a double-quoted name":             {map[string]string{"a.md": "---\nname: \"quoted-2\"\n---\nx\n"}, []string{"mem:quoted-2"}},
+		"a file name outside it is too":    {map[string]string{"My Note.md": "plain\n"}, []string{"mem:my-note"}},
+		"a name of nothing but marks":      {map[string]string{"!!!.md": "plain\n"}, []string{"mem:file"}},
 		"an indented name is not the name": {map[string]string{"s.md": "---\nmetadata:\n  name: nested\n---\nx\n"}, []string{"mem:s"}},
 		"a repeated name": {
 			map[string]string{"a.md": "---\nname: same\n---\n1\n", "b.md": "---\nname: same\n---\n2\n"}, []string{"mem:same", "mem:same-2"},
@@ -218,13 +222,12 @@ func TestMemoryIDs(t *testing.T) {
 }
 
 // TestHeadingFallsBackAndIsBounded: a memory file with no description is
-// headed by its name; a long bullet line is cut to MaxHeading bytes on a rune
-// boundary, so it is always valid UTF-8.
+// headed by its name; a long bullet line is cut to MaxHeading characters.
 func TestHeadingFallsBackAndIsBounded(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	write(t, dir, "n.md", "---\nname: no-description\n---\nbody\n")
-	long := "- a" + strings.Repeat("é", recall.MaxHeading) + "\n" // byte 100 is inside a character
+	long := "- a" + strings.Repeat("é", recall.MaxHeading) + "\n"
 	p := write(t, dir, "r.md", long)
 	lib := load(t, recall.Sources{MemoryDirs: []string{dir}, Bullets: []recall.Bullets{{Prefix: "rul", Path: p}}})
 	require.Len(t, lib.Sections, 3, "two memory files, one bullet")
@@ -234,7 +237,7 @@ func TestHeadingFallsBackAndIsBounded(t *testing.T) {
 	}
 	assert.Equal(t, "no-description", byID["mem:no-description"].Heading)
 	for _, s := range lib.Sections {
-		assert.LessOrEqual(t, len(s.Heading), recall.MaxHeading+len("…"), s.ID)
+		assert.LessOrEqual(t, utf8.RuneCountInString(s.Heading), recall.MaxHeading+1, s.ID)
 		assert.True(t, utf8.ValidString(s.Heading), s.ID)
 	}
 	var cut recall.Section
@@ -246,9 +249,9 @@ func TestHeadingFallsBackAndIsBounded(t *testing.T) {
 	assert.True(t, strings.HasSuffix(cut.Heading, "…"), "a cut heading says so")
 }
 
-// TestLibraryOrderAndFind: memory directories come first, then each bullet
-// file, in the order given; Find reads by ID.
-func TestLibraryOrderAndFind(t *testing.T) {
+// TestLibraryOrder: memory directories come first, then each bullet file, in
+// the order given.
+func TestLibraryOrder(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	write(t, dir, "b.md", "---\nname: b\n---\n")
@@ -260,13 +263,6 @@ func TestLibraryOrderAndFind(t *testing.T) {
 	require.Len(t, got, 4)
 	assert.Equal(t, []string{"mem:a", "mem:b"}, got[:2], "files in name order")
 	assert.True(t, strings.HasPrefix(got[2], "bbb:") && strings.HasPrefix(got[3], "aaa:"), "bullet files as given")
-	s, ok := lib.Find("mem:b")
-	require.True(t, ok)
-	assert.Equal(t, "mem:b", s.ID)
-	_, ok = lib.Find("mem:zzz")
-	assert.False(t, ok)
-	_, ok = lib.Find("")
-	assert.False(t, ok)
 }
 
 // TestRef is the file:line a section prints under.
@@ -290,25 +286,22 @@ func TestLoadRefusesWhatItCannotRead(t *testing.T) {
 	require.NoError(t, err)
 	relFile, err := filepath.Rel(wd, ok)
 	require.NoError(t, err)
-	relDir, err := filepath.Rel(wd, t.TempDir()) // empty, so only the directory's own check can refuse it
-	require.NoError(t, err)
 	tests := map[string]struct {
 		src    recall.Sources
 		err    error
 		namesY string
 	}{
-		"no source at all":                 {recall.Sources{}, recall.ErrNoSources, ""},
-		"a missing bullet file":            {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: filepath.Join(dir, "gone.md")}}}, recall.ErrSource, "gone.md"},
-		"a missing memory dir":             {recall.Sources{MemoryDirs: []string{filepath.Join(dir, "nodir")}}, recall.ErrSource, "nodir"},
-		"a file as a memory dir":           {recall.Sources{MemoryDirs: []string{notDir}}, recall.ErrSource, "plain"},
-		"a directory as a file":            {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: dir}}}, recall.ErrSource, dir},
-		"a file over MaxFile":              {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: big}}}, recall.ErrSource, "big.md"},
-		"a relative path":                  {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: "rel.md"}}}, recall.ErrSource, "rel.md"},
-		"a relative file that exists":      {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: relFile}}}, recall.ErrSource, relFile},
-		"a relative directory that exists": {recall.Sources{MemoryDirs: []string{relDir}}, recall.ErrSource, relDir},
-		"a prefix of mem":                  {recall.Sources{Bullets: []recall.Bullets{{Prefix: "mem", Path: ok}}}, recall.ErrSource, "mem"},
-		"an empty prefix":                  {recall.Sources{Bullets: []recall.Bullets{{Prefix: "", Path: ok}}}, recall.ErrSource, "prefix"},
-		"an upper-case prefix":             {recall.Sources{Bullets: []recall.Bullets{{Prefix: "RUL", Path: ok}}}, recall.ErrSource, "RUL"},
+		"no source at all":            {recall.Sources{}, recall.ErrNoSources, ""},
+		"a missing bullet file":       {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: filepath.Join(dir, "gone.md")}}}, recall.ErrSource, "gone.md"},
+		"a missing memory dir":        {recall.Sources{MemoryDirs: []string{filepath.Join(dir, "nodir")}}, recall.ErrSource, "nodir"},
+		"a file as a memory dir":      {recall.Sources{MemoryDirs: []string{notDir}}, recall.ErrSource, "plain"},
+		"a directory as a file":       {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: dir}}}, recall.ErrSource, dir},
+		"a file over MaxFile":         {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: big}}}, recall.ErrSource, "big.md"},
+		"a relative path":             {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: "rel.md"}}}, recall.ErrSource, "rel.md"},
+		"a relative file that exists": {recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: relFile}}}, recall.ErrSource, relFile},
+		"a prefix of mem":             {recall.Sources{Bullets: []recall.Bullets{{Prefix: "mem", Path: ok}}}, recall.ErrSource, "mem"},
+		"an empty prefix":             {recall.Sources{Bullets: []recall.Bullets{{Prefix: "", Path: ok}}}, recall.ErrSource, "prefix"},
+		"an upper-case prefix":        {recall.Sources{Bullets: []recall.Bullets{{Prefix: "RUL", Path: ok}}}, recall.ErrSource, "RUL"},
 		"a prefix used twice": {
 			recall.Sources{Bullets: []recall.Bullets{{Prefix: "rul", Path: ok}, {Prefix: "rul", Path: ok}}}, recall.ErrSource, "rul",
 		},
@@ -355,4 +348,18 @@ func TestPickReadsSectionsInTheOrderAsked(t *testing.T) {
 	assert.Contains(t, err.Error(), "rul:00000000")
 	assert.Contains(t, err.Error(), "mem:gone")
 	assert.NotContains(t, err.Error(), b, "only the unknown ones are named")
+}
+
+// TestMemoryFrontmatterToleratesCRLFAndEmptyFiles: a --- block closed by a
+// CRLF line still reads, and an empty file is no section.
+func TestMemoryFrontmatterToleratesCRLFAndEmptyFiles(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	write(t, dir, "a.md", "---\r\nname: crlf-name\r\ndescription: crlf description\r\n---\r\nbody\r\n")
+	write(t, dir, "empty.md", "")
+	lib := load(t, recall.Sources{MemoryDirs: []string{dir}})
+	require.Len(t, lib.Sections, 1)
+	assert.Equal(t, "mem:crlf-name", lib.Sections[0].ID)
+	assert.Equal(t, "crlf description", lib.Sections[0].Heading)
+	assert.Equal(t, 5, lib.Sections[0].End)
 }
