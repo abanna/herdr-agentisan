@@ -28,7 +28,7 @@ func ReadState(s *Session, workDir string) (State, error) {
 		return State{}, s.failed
 	}
 	root := s.cmd.Dir
-	dir, err := resolveWithin(s.ctx, func() (string, error) { return contain(root, workDir) })
+	dir, err := ResolveWithin(s.ctx, func() (string, error) { return contain(root, workDir) })
 	if err != nil {
 		if s.ctx.Err() != nil {
 			return State{}, s.broken(err)
@@ -89,20 +89,22 @@ func contain(repo, workDir string) (string, error) {
 	return real, nil
 }
 
-func resolveWithin(ctx context.Context, resolve func() (string, error)) (string, error) {
-	var dir string
+// ResolveWithin bounds the wait for a read-only lookup, which may finish after cancellation.
+func ResolveWithin[T any](ctx context.Context, resolve func() (T, error)) (T, error) {
+	var value T
 	var err error
 	done := make(chan struct{})
 	go func() {
-		dir, err = resolve()
+		value, err = resolve()
 		close(done)
 	}()
 	select {
 	case <-done:
 		if ctx.Err() == nil {
-			return dir, err
+			return value, err
 		}
 	case <-ctx.Done():
 	}
-	return "", fmt.Errorf("%w: %w", ErrTimeout, ctx.Err())
+	var zero T
+	return zero, fmt.Errorf("%w: %w", ErrTimeout, ctx.Err())
 }

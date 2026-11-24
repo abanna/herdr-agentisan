@@ -17,9 +17,7 @@ var ErrNeedsFlags = errors.New("--repo and --work-dir are required")
 
 type bundleLocatorKey struct{}
 
-// WithBundleLocator returns a context whose commands find the bundle's
-// server through locate instead of bundle.Locate, so a test never starts
-// uv or the real bundle.
+// WithBundleLocator replaces bundle discovery for CLI tests.
 func WithBundleLocator(ctx context.Context, locate func(repo, clientVersion string) (bundle.Launch, error)) context.Context {
 	return context.WithValue(ctx, bundleLocatorKey{}, locate)
 }
@@ -66,7 +64,8 @@ func newStageReadCmd() *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), budget)
 			defer cancel()
-			launch, err := bundleLocatorFrom(ctx)(repo, config.Version)
+			locate := bundleLocatorFrom(ctx)
+			launch, err := bundle.ResolveWithin(ctx, func() (bundle.Launch, error) { return locate(repo, config.Version) })
 			if err != nil {
 				return fmt.Errorf("stage read: %w", err)
 			}

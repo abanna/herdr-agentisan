@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,7 +16,6 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/cli"
 )
 
-// runStageRead runs `stage read` against a stand-in server in mode.
 func runStageRead(t *testing.T, mode string, args ...string) (string, error) {
 	t.Helper()
 	ctx := cli.WithBundleLocator(t.Context(), func(repo, _ string) (bundle.Launch, error) {
@@ -42,8 +42,7 @@ func repoAndWorkDir(t *testing.T) (repo, dir string) {
 	return repo, dir
 }
 
-// TestStageReadPrintsTheWorktreesStage: the command reads one worktree's
-// stage, ticket and update time through the bundle only (NERD-5790).
+// TestStageReadPrintsTheWorktreesStage exercises the real reply fixture.
 func TestStageReadPrintsTheWorktreesStage(t *testing.T) {
 	t.Parallel()
 	repo, dir := repoAndWorkDir(t)
@@ -63,8 +62,7 @@ func TestStageReadRefusesAWorkDirOutsideTheRepo(t *testing.T) {
 	}
 }
 
-// TestStageReadFailsWithTheDomainsErrors: every state of the bundle is a
-// wrapped sentinel the command returns, so the process exits 1.
+// TestStageReadFailsWithTheDomainsErrors exercises wrapped errors and exit status.
 func TestStageReadFailsWithTheDomainsErrors(t *testing.T) {
 	t.Parallel()
 	repo, dir := repoAndWorkDir(t)
@@ -90,4 +88,17 @@ func TestStageReadFailsWithTheDomainsErrors(t *testing.T) {
 	require.Error(t, err, "--work-dir is required")
 	_, err = runStageRead(t, "ok", "--work-dir", dir, "--timeout", "0s", "--repo", repo)
 	require.Error(t, err, "--timeout must be positive")
+}
+
+func TestStageReadTimesOutDuringDiscovery(t *testing.T) {
+	t.Parallel()
+	repo, dir := repoAndWorkDir(t)
+	ctx := cli.WithBundleLocator(t.Context(), func(string, string) (bundle.Launch, error) {
+		time.Sleep(2 * time.Second)
+		return bundle.Launch{}, bundle.ErrUnavailable
+	})
+	start := time.Now()
+	_, err := runBundle(ctx, "stage", "read", "--repo", repo, "--work-dir", dir, "--timeout", "50ms")
+	require.ErrorIs(t, err, bundle.ErrTimeout)
+	assert.Less(t, time.Since(start), time.Second)
 }

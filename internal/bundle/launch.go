@@ -9,24 +9,18 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/settings"
 )
 
-// serverFile is the bundle's MCP server, under the repo.
 const serverFile = ".claude/scripts/agentisan/mcp/server.py"
 
-// Launch is how to start a server: the command, where, with what
-// environment (nil: the caller's) and the client's own version, which the
-// handshake tells the server.
+// Launch describes the server process and the client version for the handshake.
 type Launch struct {
 	Argv          []string
 	Dir           string
-	Env           []string
+	Env           []string // nil inherits the caller's environment
 	ClientVersion string
 }
 
-// Locate finds the bundle installed in repo, the project's main checkout:
-// the version marker and the server file must be regular files and uv must
-// be on the PATH. The command is the bundle's own template with
-// --no-project, so uv never syncs a project environment or writes a uv.lock
-// in the repo (safe for every read operation, not for verify or Job 1).
+// Locate finds the installed bundle and uv. For reads, --no-project skips
+// project environment sync and uv.lock writes.
 func Locate(repo, clientVersion string) (Launch, error) {
 	if !filepath.IsAbs(repo) {
 		return Launch{}, fmt.Errorf("%w: the repo %q is not an absolute path", ErrRefused, repo)
