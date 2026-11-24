@@ -228,7 +228,7 @@ func TestShiftOpenChecksPluginBeforeSplit(t *testing.T) {
 			s := setupShiftScript(t)
 			binary := s.path(name)
 			if name == "old" {
-				require.NoError(t, os.WriteFile(binary, []byte("#!/bin/bash\necho legacy-help\n"), 0o700)) // #nosec G306 -- scratch stand-in
+				binary = filepath.Join(shiftStubDir, "legacy-plugin")
 			}
 			out, err := s.invoke("old", "verified", "open", "SHIFT_PLUGIN="+binary)
 			require.Error(t, err)
@@ -281,6 +281,38 @@ func TestShiftBriefWithholdsTheCueUntilTheModelIsProved(t *testing.T) {
 			require.Equal(t, "100", s.state("model_pid"))
 			require.FileExists(t, s.path("cues"))
 		})
+	}
+}
+
+// A brief that is already running follows its own shift, not whichever one `current` names later.
+func TestShiftBriefStaysWithItsOwnShift(t *testing.T) {
+	t.Parallel()
+	swap := `rm -f "$SHIFT_ROOT/current"; ln -s "$SHIFT_ROOT/b" "$SHIFT_ROOT/current"`
+	for name, when := range map[string]string{"after the identity call": `[[ " $* " = *" --pid 0 "* ]]`, "after the model proof": `[[ " $* " != *" --pid 0 "* ]]`} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := setupShiftScript(t)
+			require.NoError(t, s.run("old", "verified", "open"))
+			require.NoError(t, os.Mkdir(s.path("b"), 0o700))
+			s.write("b/state", "replacement\n")
+			_, err := s.invoke("old", "verified", "brief", "ON_CHECK="+when+" && "+swap)
+			require.Error(t, err)
+			require.Equal(t, "replacement\n", s.read("b/state"), "the replacement's record is never written")
+			require.NoFileExists(t, s.path("cues"))
+		})
+	}
+}
+
+// The stand-ins are written once, by TestMain: one written in a parallel test can be
+// inherited, open for writing, by another test's fork (ETXTBSY, NERD-5645).
+func TestShiftStandInsAreWrittenOnce(t *testing.T) {
+	t.Parallel()
+	entries, err := os.ReadDir(setupShiftScript(t).dir)
+	require.NoError(t, err)
+	for _, e := range entries {
+		info, err := e.Info()
+		require.NoError(t, err)
+		require.Zero(t, info.Mode()&0o111, "%s is an executable written by a test", e.Name())
 	}
 }
 
@@ -415,27 +447,19 @@ type shiftScript struct {
 	dir string
 }
 
-func setupShiftScript(t *testing.T) shiftScript {
-	t.Helper()
-	s := shiftScript{t: t, dir: t.TempDir()}
-	patch, err := os.ReadFile(filepath.Join("..", "..", "docs", "boss-shift-v1.patch"))
-	require.NoError(t, err)
-	preimage, err := os.ReadFile(filepath.Join("testdata", "shift-v0.sh"))
-	require.NoError(t, err)
-	script := s.path("shift.sh")
-	require.NoError(t, os.WriteFile(script, preimage, 0o600))
-	apply := exec.CommandContext(t.Context(), "patch", "--batch", "--fuzz=0", script) // #nosec G204 -- scratch script only
-	apply.Stdin = bytes.NewReader(patch)
-	out, err := apply.CombinedOutput()
-	require.NoError(t, err, "%s", out)
+// shiftStubDir holds the stand-in herdr, herdr-agentisan, date and sleep, and a plugin
+// that predates check-model. TestMain writes them once, before any test can fork: a file
+// written while another test forks stays open for writing in the child until it execs,
+// and running it then fails with "Text file busy" (ETXTBSY, NERD-5645).
+var shiftStubDir string
 
-	for name, body := range map[string]string{
-		"date": `#!/bin/bash
+var shiftStubs = map[string]string{
+	"date": `#!/bin/bash
 [ "$1" != +%Y%m%d-%H%M%S ] || { echo 20261124-000000; exit; }
 exec /bin/date "$@"
 `,
-		"sleep": "#!/bin/bash\nprintf '%s\\n' \"$1\" >> \"$SHIFT_ROOT/sleeps\"\n",
-		"herdr": `#!/bin/bash
+	"sleep": "#!/bin/bash\nprintf '%s\\n' \"$1\" >> \"$SHIFT_ROOT/sleeps\"\n",
+	"herdr": `#!/bin/bash
 case "$1 $2" in
   "agent get") [ ! -e "$SHIFT_ROOT/close" ] || exit 1
                if [ "$3" = ha-boss ]; then
@@ -466,18 +490,45 @@ case "$1 $2" in
   *) exit 9 ;;
 esac
 `,
-		"herdr-agentisan": `#!/bin/bash
+	"herdr-agentisan": `#!/bin/bash
 [ "$4" != --help ] || { printf "%s\n" "--session-id"; exit 0; }
 [ "$1 $2 $3" = "boss shift check-model" ] || exit 9
 printf '%s\n' "$*" >> "$SHIFT_ROOT/calls"
+eval "$ON_CHECK"
 verdict=$MODEL_VERDICT
 [[ " $* " != *" --pid 0 "* ]] || verdict=${IDENTIFY_VERDICT:-identified}
 printf '{"reason":"%s","pid":%s,"start":200}\n' "$verdict" "${PLUGIN_PID:-100}"
 [[ "$verdict" = verified || "$verdict" = identified ]] || { echo "probe refused" >&2; exit 1; }
 `,
-	} {
-		require.NoError(t, os.WriteFile(s.path(name), []byte(body), 0o700)) // #nosec G306 -- executable stand-ins in the scratch directory
+	"legacy-plugin": "#!/bin/bash\necho legacy-help\n",
+}
+
+func writeShiftStubs(dir string) error {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("shift stand-ins: %w", err)
 	}
+	for name, body := range shiftStubs {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o700); err != nil { //nolint:gosec // executable stand-ins
+			return fmt.Errorf("shift stand-in %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func setupShiftScript(t *testing.T) shiftScript {
+	t.Helper()
+	s := shiftScript{t: t, dir: t.TempDir()}
+	patch, err := os.ReadFile(filepath.Join("..", "..", "docs", "boss-shift-v1.patch"))
+	require.NoError(t, err)
+	preimage, err := os.ReadFile(filepath.Join("testdata", "shift-v0.sh"))
+	require.NoError(t, err)
+	script := s.path("shift.sh")
+	require.NoError(t, os.WriteFile(script, preimage, 0o600))
+	apply := exec.CommandContext(t.Context(), "patch", "--batch", "--fuzz=0", script) // #nosec G204 -- scratch script only
+	apply.Stdin = bytes.NewReader(patch)
+	out, err := apply.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+
 	return s
 }
 
@@ -506,8 +557,8 @@ func (s shiftScript) invoke(pane, verdict, verb string, overrides ...string) (st
 	cmd := exec.CommandContext(s.t.Context(), "bash", append([]string{s.path("shift.sh"), verb}, args...)...) // #nosec G204 -- scratch script only
 	cmd.Env = append([]string{
 		"HERDR_SOCKET_PATH=" + s.path("herdr.sock"), "SHIFT_REPO=" + s.dir,
-		"PATH=" + s.dir + ":/usr/bin:/bin", "HERDR_PANE_ID=" + pane, "SHIFT_ROOT=" + s.dir,
-		"SHIFT_PLUGIN=" + s.path("herdr-agentisan"), "MODEL_VERDICT=" + verdict,
+		"PATH=" + shiftStubDir + ":/usr/bin:/bin", "HERDR_PANE_ID=" + pane, "SHIFT_ROOT=" + s.dir,
+		"SHIFT_PLUGIN=" + filepath.Join(shiftStubDir, "herdr-agentisan"), "MODEL_VERDICT=" + verdict,
 	}, env...)
 	out, err := cmd.CombinedOutput()
 	s.t.Logf("%s %s: %s", verb, verdict, out)
