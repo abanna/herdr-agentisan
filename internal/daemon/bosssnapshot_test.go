@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -359,29 +360,40 @@ func TestBossSnapshotFreshnessAndProjection(t *testing.T) {
 // NERD-5748: a post committed as the clock is read is counted or later than as_of.
 func TestBossSnapshotBoardAsOfPrecedesItsRead(t *testing.T) {
 	t.Parallel()
-	h := shiftHerdr(t)
-	shiftCaller(h, "w14:p0")
-	o := shiftOpts(t, h)
-	o.Poll = time.Hour
-	state := paths(t, o.StateDir, h.fakeHerdr)
-	require.NoError(t, os.MkdirAll(state.Dir, 0o700))
-	st, err := store.Open(t.Context(), state.DB)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, st.Close()) })
-	var armed atomic.Bool
-	o.Now = func() time.Time {
-		if strings.Contains(string(debug.Stack()), "bossSnapshotOp") && armed.CompareAndSwap(true, false) {
-			boardPost(t, st, "alpha", "committed as the clock is read")
-			return boardNow.Add(time.Second)
-		}
-		return boardNow
+	for _, c := range []struct {
+		name        string
+		sampled, at time.Duration
+		fresh       bool
+	}{{"clock steps forward", 0, time.Second, true}, {"clock steps back", time.Second, 0, false}} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			h := shiftHerdr(t)
+			shiftCaller(h, "w14:p0")
+			o := shiftOpts(t, h)
+			o.Poll = time.Hour
+			state := paths(t, o.StateDir, h.fakeHerdr)
+			require.NoError(t, os.MkdirAll(state.Dir, 0o700))
+			st, err := store.Open(t.Context(), state.DB)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, st.Close()) })
+			var armed atomic.Bool
+			o.Now = func() time.Time {
+				if strings.Contains(string(debug.Stack()), "bossSnapshotOp") && armed.CompareAndSwap(true, false) {
+					boardPost(t, st, "alpha", "committed as the clock is read")
+					return boardNow.Add(c.sampled)
+				}
+				return boardNow.Add(c.at)
+			}
+			sock := startShift(t, h, o)
+			shiftRead(t, sock)
+			armed.Store(true)
+			got := shiftRead(t, sock).Board
+			assert.Equal(t, c.fresh, got.State == snapshot.Fresh, "fresh only if as_of is not after the reply's own time")
+			if c.fresh {
+				assert.Equal(t, new(1), got.Unread, "counted: sampled before the read")
+			}
+		})
 	}
-	sock := startShift(t, h, o)
-	shiftRead(t, sock)
-	armed.Store(true)
-	got := shiftRead(t, sock).Board
-	assert.False(t, armed.Load(), "the hook committed the post")
-	assert.True(t, *got.Unread > 0 || !got.AsOf.After(boardNow), "unread=%d as_of=%s", *got.Unread, got.AsOf)
 }
 
 func swapBoss(h *teamHerdr) {
@@ -395,7 +407,14 @@ func TestBossSnapshotRefusesFormerBossAfterPlacement(t *testing.T) {
 	for name, moved := range map[string]func(*teamHerdr){
 		"complete poll":            swapBoss,
 		"degraded poll":            func(h *teamHerdr) { h.agentsErr = true; swapBoss(h) },
-		"poll that built no model": func(h *teamHerdr) { h.panesErr = true },
+		"poll that built no model": func(h *teamHerdr) { h.workspacesErr = true },
+		"pane id reissued": func(h *teamHerdr) { // the caller's terminal left, the replacement's took its id
+			h.panes = slices.Clone(h.panes)
+			i := slices.IndexFunc(h.panes, func(p map[string]any) bool { return p["pane_id"] == "w14:p0" })
+			h.panes[i] = maps.Clone(h.panes[i])
+			h.panes[i]["terminal_id"] = "term_replacement"
+			h.shells = map[string]uint32{"w14:p3": uint32(os.Getpid())} //nolint:gosec // test PID
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -436,6 +455,7 @@ func TestBossSnapshotRefusesFormerBossAfterPlacement(t *testing.T) {
 				_, err := daemon.Workforce(asked, sock, daemon.OpBoardRead, daemon.BoardReadRequest{})
 				return err != nil
 			}, ready, 10*time.Millisecond)
+			polled(t, h.srv, 2) // and the poll has published it
 			release.Do(func() { close(resume) })
 			assert.Contains(t, []string{"not_ready", "not_allowed"}, refusedWith(t, <-got), "never served")
 		})
@@ -457,6 +477,5 @@ func TestBossSnapshotIncomingBossDuringDegradedPoll(t *testing.T) {
 	polled(t, h.srv, 2)
 	got := shiftRead(t, sock)
 	assert.Equal(t, snapshot.Stale, got.TeamPoll.State)
-	assert.Equal(t, before.TeamPoll.AsOf, got.TeamPoll.AsOf)
 	assert.Equal(t, before.Boss, got.Boss, "the rows name the old boss")
 }

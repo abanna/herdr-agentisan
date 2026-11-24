@@ -48,9 +48,9 @@ func carryBossPoll(cache *snapshotCache, m *team.Model) {
 	cache.boss.Store(&bossPoll{at: prev.at, teams: prev.teams, model: m, degraded: true})
 }
 
-func bossPlaced(m *team.Model, project, pane string) bool {
+func bossPlaced(m *team.Model, project, pane, terminal string) bool {
 	return m != nil && slices.ContainsFunc(m.Projects, func(p team.Project) bool {
-		return p.Name == project && slices.ContainsFunc(p.Boss, func(b team.Worker) bool { return b.Pane.ID == pane })
+		return p.Name == project && slices.ContainsFunc(p.Boss, func(b team.Worker) bool { return b.Pane.ID == pane && b.Pane.TerminalID == terminal })
 	})
 }
 
@@ -81,12 +81,12 @@ func (o Options) bossSnapshotOp(st *store.Store, cache *snapshotCache) op {
 		board, err := st.BoardStatus(read, who.Project, store.ReaderBoss)
 		poll := cache.boss.Load() // after the read: a state published since placement is the one that counts
 		out, ok := poll.teams[who.Project]
-		if !ok || !bossPlaced(poll.model, who.Project, who.Pane) {
+		if !ok || !bossPlaced(poll.model, who.Project, who.Pane, who.Term) {
 			return nil, bossRefusal(codeNotReady) // demoted, or no model: the client asks again
 		}
 		out.At = o.Now().UTC()
 		out.Board.State = snapshot.Unavailable
-		if err == nil {
+		if err == nil && !asOf.After(out.At) { // a clock stepped back: the read may predate as_of
 			out.Board = snapshot.BossBoard{
 				BossSource: snapshot.BossSource{AsOf: &asOf, State: snapshot.Fresh},
 				Mark:       &board.Mark, Newest: &board.Newest, Unread: &board.Unread,

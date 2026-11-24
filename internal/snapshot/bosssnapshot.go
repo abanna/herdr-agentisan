@@ -102,7 +102,7 @@ func (s BossSnapshot) Validate() error {
 		s.TeamPoll.AsOf == nil || s.TeamPoll.AsOf.IsZero() ||
 		(s.TeamPoll.State != Fresh && s.TeamPoll.State != Stale) ||
 		s.MissingBossName != nil && (s.Boss != nil || !bossNamePattern.MatchString(*s.MissingBossName)) ||
-		s.Groups == nil || len(s.Groups) > MaxBossWorkers || s.WorkersOmitted < 0 || s.WorkersOmitted > math.MaxInt-MaxBossWorkers || !s.Board.valid() {
+		s.Groups == nil || len(s.Groups) > MaxBossWorkers || s.WorkersOmitted < 0 || s.WorkersOmitted > math.MaxInt-MaxBossWorkers || !s.Board.valid() || s.Board.AsOf != nil && s.Board.AsOf.After(s.At) {
 		return ErrInvalid
 	}
 	if s.Boss != nil && !s.Boss.valid() {

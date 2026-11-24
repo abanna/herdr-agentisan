@@ -36,7 +36,8 @@ type teamHerdr struct {
 	panes      []map[string]any
 	// panesErr makes pane.list fail, for the poll and the focus collector
 	// alike.
-	panesErr bool
+	panesErr      bool
+	workspacesErr bool
 	// agents is agent.list's answer; agentsErr makes it fail instead.
 	agents    []map[string]any
 	agentsErr bool
@@ -97,6 +98,9 @@ func (th *teamHerdr) serveTeam(normal herdrtest.Handler) herdrtest.Handler {
 		case "workspace.list":
 			th.mu.Lock()
 			defer th.mu.Unlock()
+			if th.workspacesErr {
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "server_unavailable", Message: "busy"}}
+			}
 			// A copy: the server encodes the reply after the lock is released.
 			return herdrtest.Reply{Result: map[string]any{"type": "workspace_list", "workspaces": slices.Clone(th.workspaces)}}
 		case "tab.list":
