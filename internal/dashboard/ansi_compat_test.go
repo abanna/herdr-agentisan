@@ -3,6 +3,7 @@ package dashboard_test
 import (
 	"crypto/sha256"
 	"fmt"
+	"image/color"
 	"os"
 	"strconv"
 	"strings"
@@ -18,17 +19,58 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/dashboard"
 )
 
+const ansi256MainCapture = "testdata/ansi256-main-f38351e.golden"
+
 func TestANSIMatchesMain(t *testing.T) {
 	t.Parallel()
 	checkCompatibilityFrames(t, colorprofile.ANSI, "testdata/ansi-main-f38351e.golden")
 }
 
+func TestANSI256MatchesMainWithoutBackground(t *testing.T) {
+	t.Parallel()
+	checkCompatibilityFrames(t, colorprofile.ANSI256, ansi256MainCapture)
+}
+
+func TestANSI256BackgroundReply(t *testing.T) {
+	t.Parallel()
+
+	m := paletteModel(t, fixture(t, "full"))
+	m, _ = update(t, m, tea.WindowSizeMsg{Width: 120, Height: 40})
+	legacy, _ := update(t, m, tea.ColorProfileMsg{Profile: colorprofile.ANSI256})
+	capture, err := os.ReadFile(ansi256MainCapture)
+	require.NoError(t, err)
+	_, overview, ok := strings.Cut(string(capture), "\noverview ")
+	require.True(t, ok)
+	quoted, _, _ := strings.Cut(overview, "\n")
+	want, err := strconv.Unquote(quoted)
+	require.NoError(t, err)
+	require.Equal(t, want, legacy.View().Content)
+
+	for _, invalid := range []color.Color{ansi.XParseColor("invalid"), color.Transparent} {
+		for _, profileFirst := range []bool{false, true} {
+			got := reportProfile(t, m, colorprofile.ANSI256, invalid, profileFirst)
+			require.Equal(t, want, got.View().Content, "invalid reply %v, profile first %v", invalid, profileFirst)
+		}
+	}
+
+	for _, bg := range []string{"#1e1e2e", "#eaeaea"} {
+		reply := lipgloss.Color(bg)
+		late, _ := update(t, legacy, tea.BackgroundColorMsg{Color: reply})
+		early := reportProfile(t, m, colorprofile.ANSI256, reply, false)
+		require.Equal(t, early.View().Content, late.View().Content)
+		require.NotEqual(t, want, late.View().Content)
+		require.NotNil(t, paintedCell(t, lineWith(t, late.View().Content, "pee01"), "pee01").fill)
+		invalidated, _ := update(t, late, tea.BackgroundColorMsg{Color: color.Transparent})
+		require.Equal(t, want, invalidated.View().Content)
+	}
+}
+
 func TestANSI256Frames(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{"dark", "light"} {
-		t.Run(name, func(t *testing.T) {
-			opts := dashboard.Options{Profile: colorprofile.ANSI256, LightBackground: name == "light"}
+	for _, variant := range []struct{ name, background string }{{"dark", "#1e1e2e"}, {"light", "#eaeaea"}} {
+		t.Run(variant.name, func(t *testing.T) {
+			opts := dashboard.Options{Profile: colorprofile.ANSI256, Background: lipgloss.Color(variant.background)}
 			golden.RequireEqual(t, captureCompatibilityFrames(t, opts))
 		})
 	}
@@ -39,12 +81,7 @@ func checkCompatibilityFrames(t *testing.T, profile colorprofile.Profile, path s
 
 	want, err := os.ReadFile(path)
 	require.NoError(t, err)
-	for _, light := range []bool{false, true} {
-		t.Run(fmt.Sprintf("light=%v", light), func(t *testing.T) {
-			opts := dashboard.Options{Profile: profile, LightBackground: light}
-			require.Equal(t, string(want), captureCompatibilityFrames(t, opts))
-		})
-	}
+	require.Equal(t, string(want), captureCompatibilityFrames(t, dashboard.Options{Profile: profile}))
 }
 
 // captureCompatibilityFrames quotes examples and hashes a length-framed
@@ -129,7 +166,7 @@ func TestSolarizedLightANSISecondaryText(t *testing.T) {
 
 	board, err := (&dashboard.FileBoard{Path: "../../docs/dashboard/sample-board.json"}).Board(t.Context())
 	require.NoError(t, err)
-	opts := dashboard.Options{Profile: colorprofile.ANSI, LightBackground: true}
+	opts := dashboard.Options{Profile: colorprofile.ANSI, Background: lipgloss.Color("#fdf6e3")}
 	frame := dashboard.Frame{Snapshot: fixture(t, "aged"), Now: at}
 	const hidden = `\x1b\[(?:[0-9]+;)*90[;m]`
 	out := dashboard.Render(frame, 120, 40, opts)

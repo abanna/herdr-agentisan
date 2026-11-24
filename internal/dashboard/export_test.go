@@ -69,7 +69,6 @@ const (
 	PaletteOrange    = int(colOrange)
 	PaletteRed       = int(colRed)
 	PaletteCyan      = int(colCyan)
-	PaletteAccent    = int(colAccent)
 )
 
 // PaletteForBackground returns the text colours drawn on the terminal and bar.
@@ -100,23 +99,12 @@ func SelectionColours(light bool) (bar, buttonInk, buttonFill color.Color) {
 
 // ProjectColour is the configured project accent drawn over the terminal.
 func ProjectColour(light bool, hex string) color.Color {
-	theme := makeRenderTheme(false, nil, light)
-	return projectColour(&snapshot.Project{Color: hex}, &theme)
-}
-
-// PalettePaints exposes the resolved colours the renderer uses for both
-// surfaces. The sweep can exercise all roles without rebuilding a frame
-// for each selectable row on each reported background.
-func PalettePaints(background color.Color, indexed bool) (bar color.Color, terminal, selected []color.Color) {
-	theme := makeRenderTheme(indexed, background, false)
-	terminal = make([]color.Color, colSelectionFill)
-	selected = make([]color.Color, colSelectionFill)
-	for role := range colSelectionFill {
-		style := lipgloss.NewStyle().Foreground(role)
-		terminal[role] = theme.style(style).GetForeground()
-		selected[role] = theme.style(style.Background(colSelectionFill)).GetForeground()
+	background := darkReferenceBackground
+	if light {
+		background = lipgloss.Color("#eaeaea")
 	}
-	return theme.bar, terminal, selected
+	theme := makeRenderTheme(false, background)
+	return projectColour(&snapshot.Project{Color: hex}, &theme)
 }
 
 // ReadableInk exercises a pair of palette shades against a surface.

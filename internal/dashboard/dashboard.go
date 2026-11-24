@@ -438,7 +438,7 @@ func (m Model) click(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 // mouse clicks and wheel events.
 func (m Model) View() tea.View {
 	opts := m.cfg.Options
-	opts.background = m.background
+	opts.Background = m.background
 	if opts.Profile == colorprofile.Unknown {
 		opts.Profile = m.profile
 	}

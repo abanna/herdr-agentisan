@@ -86,9 +86,9 @@ type Options struct {
 	// colour and attributes alike, which is what golden frames want; ASCII
 	// keeps attributes. Both use a selection pointer. Unknown means TrueColor.
 	Profile colorprofile.Profile
-	// LightBackground selects the light palette when no background was reported.
-	LightBackground bool
-	background      color.Color
+	// Background is the terminal's reported opaque colour. Nil or a
+	// translucent colour means the background is unknown.
+	Background color.Color
 }
 
 func (o Options) thresholds() Thresholds {
@@ -162,13 +162,21 @@ func Render(f Frame, w, h int, opts Options) string {
 	selection := selectionBar
 	var style func(lipgloss.Style) lipgloss.Style
 	var theme *renderTheme
-	switch opts.Profile {
-	case colorprofile.ANSI:
+	background := opts.Background
+	if background != nil {
+		_, _, _, alpha := background.RGBA()
+		if alpha != 0xffff {
+			background = nil
+		}
+	}
+	indexed := opts.Profile == colorprofile.ANSI256
+	switch {
+	case opts.Profile == colorprofile.ANSI || indexed && background == nil:
 		selection, style = selectionReverse, ansiStyle
-	case colorprofile.ASCII, colorprofile.NoTTY:
+	case opts.Profile == colorprofile.ASCII || opts.Profile == colorprofile.NoTTY:
 		selection = selectionMark
 	default:
-		chosen := makeRenderTheme(opts.Profile == colorprofile.ANSI256, opts.background, opts.LightBackground)
+		chosen := makeRenderTheme(indexed, background)
 		theme, style = &chosen, chosen.style
 	}
 	l := plan(f, w, h, selection == selectionReverse)
@@ -220,14 +228,14 @@ func Render(f Frame, w, h int, opts Options) string {
 		}
 		b.WriteString(ln.trimRight().render(style))
 	}
+	if theme != nil {
+		return b.String()
+	}
 	return downsample(b.String(), opts.Profile)
 }
 
-// downsample handles the profiles that still need colours or attributes removed.
+// downsample handles legacy colours and monochrome attributes.
 func downsample(s string, p colorprofile.Profile) string {
-	if p == colorprofile.TrueColor || p == colorprofile.Unknown || p == colorprofile.ANSI256 {
-		return s
-	}
 	var b strings.Builder
 	w := &colorprofile.Writer{Forward: &b, Profile: p}
 	// A strings.Builder never fails a write.

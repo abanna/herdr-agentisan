@@ -92,7 +92,7 @@ const (
 	selectionReverse
 )
 
-// ansiStyle restores the legacy palette before ANSI16 downsampling.
+// ansiStyle restores the palette used by the legacy ANSI renderer.
 func ansiStyle(st lipgloss.Style) lipgloss.Style {
 	if fg, ok := st.GetForeground().(colourRole); ok {
 		if c := palette[fg].legacy; c != nil {

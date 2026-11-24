@@ -66,6 +66,7 @@ func readableInk(preferred, alternate color.Color, background float64, indexed b
 // resolved against the reported terminal background, selection, or button.
 type renderTheme struct {
 	background float64
+	reported   bool
 	indexed    bool
 	terminal   [colourRoles]color.Color
 	selected   [colourRoles]color.Color
@@ -74,16 +75,13 @@ type renderTheme struct {
 	buttonInk  color.Color
 }
 
-var assumedBackground = [2]color.Color{lipgloss.Color("#1e1e2e"), lipgloss.Color("#eaeaea")}
+var darkReferenceBackground = lipgloss.Color("#1e1e2e")
 
-func makeRenderTheme(indexed bool, background color.Color, light bool) renderTheme {
+func makeRenderTheme(indexed bool, background color.Color) renderTheme {
 	side := darkPalette
 	var luminance float64
 	if background == nil {
-		if light {
-			side = lightPalette
-		}
-		luminance = relativeLuminance(assumedBackground[side])
+		luminance = relativeLuminance(darkReferenceBackground)
 	} else {
 		luminance = relativeLuminance(background)
 		text := palette[colText]
@@ -95,6 +93,7 @@ func makeRenderTheme(indexed bool, background color.Color, light bool) renderThe
 	other := lightPalette - side
 	theme := renderTheme{
 		background: luminance,
+		reported:   background != nil,
 		indexed:    indexed,
 		bar:        palette[colSelectionFill].paint(side, indexed),
 		button:     palette[colAccent].paint(side, indexed),
@@ -141,13 +140,13 @@ func (theme *renderTheme) style(st lipgloss.Style) lipgloss.Style {
 }
 
 // projectColour chooses one readable shade for the team name and border.
-// A nil theme uses the configured colour on the legacy profiles.
+// With an unknown background or on a legacy profile, use the configured colour.
 func projectColour(p *snapshot.Project, theme *renderTheme) color.Color {
 	if p == nil || !snapshot.ValidColor(p.Color) {
 		return nil
 	}
 	ink := lipgloss.Color(p.Color)
-	if theme == nil {
+	if theme == nil || !theme.reported {
 		return ink
 	}
 	background := theme.background

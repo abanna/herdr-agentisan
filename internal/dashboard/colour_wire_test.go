@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image/color"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -29,6 +30,10 @@ func paintedCell(t *testing.T, line, text string) cellPaint {
 	t.Helper()
 	before, _, ok := strings.Cut(line, text)
 	require.Truef(t, ok, "missing %q in %q", text, line)
+	const reset = "\x1b[m"
+	if i := strings.LastIndex(before, reset); i >= 0 {
+		before = before[i+len(reset):]
+	}
 	var paint cellPaint
 	for _, match := range sgr.FindAllStringSubmatch(before, -1) {
 		parts := strings.Split(match[1], ";")
@@ -111,7 +116,7 @@ func TestANSI256ClippedBlockedStageStaysRed(t *testing.T) {
 		{Name: "worker", Status: snapshot.StatusWorking, Stage: strings.Repeat("x", 80) + " blocked"},
 	}}}}
 	frame := dashboard.Frame{Snapshot: snap, Selection: dashboard.Selection{Group: -1}, Now: at}
-	out := dashboard.Render(frame, 80, 24, dashboard.Options{Profile: colorprofile.ANSI256})
+	out := dashboard.Render(frame, 80, 24, dashboard.Options{Profile: colorprofile.ANSI256, Background: lipgloss.Color("#1e1e2e")})
 	require.NotContains(t, ansi.Strip(out), "blocked", "the trigger word is clipped")
 	stage := paintedCell(t, lineWith(t, out, "worker"), "xxx").ink
 	requireRedInk(t, stage)
@@ -146,7 +151,7 @@ func TestANSI256SelectionStaysVisible(t *testing.T) {
 			f := a.Frame()
 			// Use the model to negotiate the live frame. The pure render
 			// variations exercise the same selection surface in other views.
-			opts := dashboard.Options{Profile: colorprofile.ANSI256, LightBackground: tc.fill == 189}
+			opts := dashboard.Options{Profile: colorprofile.ANSI256, Background: lipgloss.Color(tc.bg)}
 			f.Group = "coders"
 			check(dashboard.Render(f, 55, 60, opts), "pee01", "pee02")
 			f.Board = dashboard.BoardFrame{Open: true, Ready: true, Selected: 1, Posts: []daemon.BoardPostView{
@@ -194,18 +199,37 @@ func TestReportedGreyKeepsTeamNameReadable(t *testing.T) {
 	}
 }
 
+func TestTrueColorWithoutBackgroundKeepsDarkPalette(t *testing.T) {
+	t.Parallel()
+
+	snap := paletteSpecimen()
+	snap.Project = &snapshot.Project{Color: "#808080"}
+	m := paletteModel(t, snap)
+	m, _ = update(t, m, tea.ColorProfileMsg{Profile: colorprofile.TrueColor})
+	out := m.View().Content
+	name := paintedCell(t, lineWith(t, out, snap.Team), snap.Team)
+	selected := paintedCell(t, lineWith(t, out, "doing"), "doing")
+	require.Equal(t, [3]uint8{128, 128, 128}, rgbBytes(name.ink))
+	require.Equal(t, [3]uint8{54, 71, 107}, rgbBytes(selected.fill))
+}
+
 func TestPassingTeamColourIsPreserved(t *testing.T) {
 	t.Parallel()
 
-	const accent = "#870000"
-	snap := &snapshot.Snapshot{V: 1, Team: "crew", Project: &snapshot.Project{Color: accent}}
-	m := paletteModel(t, snap)
 	bg := lipgloss.Color("#eaeaea")
-	for _, p := range []colorprofile.Profile{colorprofile.TrueColor, colorprofile.ANSI256} {
-		out := reportProfile(t, m, p, bg, false).View().Content
-		ink := paintedCell(t, lineWith(t, out, snap.Team), snap.Team).ink
-		require.NotNil(t, ink)
-		require.Equal(t, rgbBytes(lipgloss.Color(accent)), rgbBytes(ink), "%s", p)
+	for _, accent := range []string{"#870000", "#696969"} {
+		snap := &snapshot.Snapshot{V: 1, Team: "crew", Project: &snapshot.Project{Color: accent}}
+		m := paletteModel(t, snap)
+		for _, p := range []colorprofile.Profile{colorprofile.TrueColor, colorprofile.ANSI256} {
+			out := reportProfile(t, m, p, bg, false).View().Content
+			ink := paintedCell(t, lineWith(t, out, snap.Team), snap.Team).ink
+			require.NotNil(t, ink)
+			want := lipgloss.Color(accent)
+			if p == colorprofile.ANSI256 && accent == "#696969" {
+				want = ansi.IndexedColor(241) // Closest passing index to the configured grey.
+			}
+			require.Equal(t, rgbBytes(want), rgbBytes(ink), "%s in %s", accent, p)
+		}
 	}
 }
 
@@ -240,60 +264,117 @@ func TestReadableInkKeepsAnAvailablePaletteShade(t *testing.T) {
 	require.Equal(t, alternate, dashboard.ReadableInk(preferred, alternate, backgroundLuminance, true))
 }
 
+// Match attributes, resets and extended colours from the standard xterm palette.
+var indexedSGR = regexp.MustCompile(`^(?:(?:[0-9]|2[0-9]|39|49|(?:38|48);5;(?:1[6-9]|[2-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]))(?:;|$))*$`)
+
 func TestDashboardContrastSweep(t *testing.T) {
 	t.Parallel()
 
 	for _, p := range []colorprofile.Profile{colorprofile.TrueColor, colorprofile.ANSI256} {
 		t.Run(p.String(), func(t *testing.T) {
 			t.Parallel()
-			snap := &snapshot.Snapshot{V: 1, Team: "crew", Project: &snapshot.Project{Color: "#a060d0"}}
-			m := paletteModel(t, snap)
-			m, _ = update(t, m, tea.ColorProfileMsg{Profile: p})
-			roleNames := map[int]string{
-				dashboard.PaletteText: "text", dashboard.PaletteSecondary: "secondary",
-				dashboard.PaletteGreen: "green", dashboard.PaletteYellow: "yellow",
-				dashboard.PaletteOrange: "orange", dashboard.PaletteRed: "red",
-				dashboard.PaletteCyan: "cyan", dashboard.PaletteAccent: "accent",
+			// Two selected rows cover every role that appears on the bar.
+			snap := &snapshot.Snapshot{
+				V:       1,
+				Team:    "crew",
+				Project: &snapshot.Project{Color: "#a060d0"},
+				Groups: []snapshot.Group{{Name: "agents", Agents: []snapshot.Agent{
+					{Name: "readying", Status: snapshot.StatusReady, Kind: "cdx", Ctx: new(70), Stage: "blocked stage"},
+					{Name: "idling", Status: snapshot.StatusIdle, Stage: "ready stage"},
+				}}},
 			}
-			indexed := p == colorprofile.ANSI256
-			darkBar, dark, _ := dashboard.PalettePaints(color.Black, indexed)
-			lightBar, light, _ := dashboard.PalettePaints(color.White, indexed)
-			neutral := make(map[int]int, len(roleNames))
+			m := paletteModel(t, snap)
+			m, _ = update(t, m, tea.WindowSizeMsg{Width: 80, Height: 16})
+			m, _ = update(t, m, tea.ColorProfileMsg{Profile: p})
+			next, _ := update(t, m, keyDown)
+			models := [2]dashboard.Model{m, next}
+
+			rowPaint := func(out, name, text string) cellPaint {
+				t.Helper()
+				return paintedCell(t, lineWith(t, out, name), text)
+			}
+			draw := func(m dashboard.Model, bg color.Color) string {
+				t.Helper()
+				live, _ := update(t, m, tea.BackgroundColorMsg{Color: bg})
+				return live.View().Content
+			}
+			dark := draw(models[0], color.Black)
+			light := draw(models[0], color.White)
+			darkText, lightText := rowPaint(dark, "idling", "idling").ink, rowPaint(light, "idling", "idling").ink
+			darkBar, lightBar := rowPaint(dark, "readying", "readying").fill, rowPaint(light, "readying", "readying").fill
+
+			neutral := make(map[string]int)
+			checkedSGR := make(map[string]bool)
 			seen := 0
+			check := func(role string, ink, bg color.Color) {
+				t.Helper()
+				require.NotNil(t, ink, role)
+				require.NotNil(t, bg, role)
+				require.GreaterOrEqualf(t, contrastRatio(ink, bg), readableContrast, "%s on %v", role, bg)
+			}
+			record := func(role string, ink, bg color.Color) {
+				t.Helper()
+				check(role, ink, bg)
+				switch rgbBytes(ink) {
+				case [3]uint8{}, [3]uint8{255, 255, 255}:
+					neutral[role]++
+				}
+			}
 			for r := 0; r <= 255; r += 17 {
 				for g := 0; g <= 255; g += 17 {
 					for b := 0; b <= 255; b += 17 {
 						bg := color.RGBA{R: uint8(r), G: uint8(g), B: uint8(b), A: 255}
-						live, _ := update(t, m, tea.BackgroundColorMsg{Color: bg})
-						out := live.View().Content
-						name := paintedCell(t, lineWith(t, out, "crew"), "crew").ink
-						require.NotNil(t, name)
-						require.GreaterOrEqualf(t, contrastRatio(name, bg), readableContrast, "team name on %v", bg)
-						button := paintedCell(t, lineWith(t, out, "[ btop ]"), "[ btop ]")
-						require.NotNil(t, button.ink)
-						require.NotNil(t, button.fill)
-						require.GreaterOrEqual(t, contrastRatio(button.ink, button.fill), readableContrast)
-
-						bar, terminal, selected := dashboard.PalettePaints(bg, indexed)
-						wantBar := darkBar
-						if contrastRatio(light[dashboard.PaletteText], bg) > contrastRatio(dark[dashboard.PaletteText], bg) {
-							wantBar = lightBar
-						}
-						require.Equalf(t, wantBar, bar, "palette with better primary text on %v", bg)
-						for role, ink := range terminal {
-							require.GreaterOrEqualf(t, contrastRatio(ink, bg), readableContrast, "%s on terminal %v", roleNames[role], bg)
-							require.GreaterOrEqualf(t, contrastRatio(selected[role], bar), readableContrast, "%s selected on %v", roleNames[role], bg)
-							switch rgbBytes(ink) {
-							case [3]uint8{}, [3]uint8{255, 255, 255}:
-								neutral[role]++
+						var frames [len(models)]string
+						for i, model := range models {
+							frames[i] = draw(model, bg)
+							if p == colorprofile.ANSI256 {
+								_, rest, ok := strings.Cut(frames[i], "\x1b[")
+								for ok {
+									params, tail, found := strings.Cut(rest, "m")
+									if !checkedSGR[params] {
+										require.Truef(t, found && indexedSGR.MatchString(params), "expected indexed SGR in slots 16–255, got %q on %v", params, bg)
+										checkedSGR[params] = true
+									}
+									_, rest, ok = strings.Cut(tail, "\x1b[")
+								}
 							}
+						}
+						out := frames[0]
+						check("team name", rowPaint(out, "crew", "crew").ink, bg)
+						check("header border", paintedCell(t, strings.SplitN(out, "\n", 2)[0], "╭").ink, bg)
+						button := rowPaint(out, "[ btop ]", "[ btop ]")
+						check("button", button.ink, button.fill)
+						record("accent", rowPaint(out, "AGENTS", "╭").ink, bg)
+
+						bar := darkBar
+						if contrastRatio(lightText, bg) > contrastRatio(darkText, bg) {
+							bar = lightBar
+						}
+						for _, sample := range []struct {
+							frame              int
+							role, worker, text string
+						}{
+							{0, "text", "readying", "readying"},
+							{0, "secondary", "readying", "cdx"},
+							{0, "orange", "readying", "70%"},
+							{0, "cyan", "readying", "⟳"},
+							{0, "red", "readying", "blocked stage"},
+							{1, "yellow", "idling", "●"},
+							{1, "green", "idling", "ready stage"},
+						} {
+							normal := rowPaint(frames[1-sample.frame], sample.worker, sample.text)
+							selected := rowPaint(frames[sample.frame], sample.worker, sample.text)
+							require.Nil(t, normal.fill, sample.role)
+							require.Equalf(t, bar, selected.fill, "selected %s on %v", sample.role, bg)
+							record(sample.role, normal.ink, bg)
+							check(sample.role+" selected", selected.ink, selected.fill)
 						}
 						seen++
 					}
 				}
 			}
-			for role := range len(roleNames) {
-				t.Logf("%s neutral fallback: %d/%d (%.2f%%)", roleNames[role], neutral[role], seen, 100*float64(neutral[role])/float64(seen))
+			for _, role := range []string{"text", "secondary", "green", "yellow", "orange", "red", "cyan", "accent"} {
+				t.Logf("%s neutral fallback: %d/%d (%.2f%%)", role, neutral[role], seen, 100*float64(neutral[role])/float64(seen))
 			}
 		})
 	}
@@ -342,7 +423,11 @@ func TestANSI256StatusColoursStayDistinct(t *testing.T) {
 		for _, selected := range []bool{false, true} {
 			t.Run(fmt.Sprintf("light=%t/selected=%t", light, selected), func(t *testing.T) {
 				f := paletteSpecimen()
-				opts := dashboard.Options{Profile: colorprofile.ANSI256, LightBackground: light}
+				bg := "#1e1e2e"
+				if light {
+					bg = "#eaeaea"
+				}
+				opts := dashboard.Options{Profile: colorprofile.ANSI256, Background: lipgloss.Color(bg)}
 				roles := cueSamples
 				colours := make([]color.Color, 0, len(roles))
 				for _, cue := range roles {

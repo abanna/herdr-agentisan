@@ -85,7 +85,7 @@ func checkFrameGolden(t *testing.T, frame dashboard.Frame, w, h int) {
 }
 
 func lightColour() dashboard.Options {
-	return dashboard.Options{Profile: colorprofile.TrueColor, LightBackground: true}
+	return dashboard.Options{Profile: colorprofile.TrueColor, Background: lipgloss.Color("#eaeaea")}
 }
 
 func TestLightSelectionForeground(t *testing.T) {
@@ -126,7 +126,7 @@ func TestMonochromeIgnoresLightPalette(t *testing.T) {
 	for _, profile := range []colorprofile.Profile{colorprofile.ASCII, colorprofile.NoTTY} {
 		opts := dashboard.Options{Profile: profile}
 		want := dashboard.Render(frame, 120, 40, opts)
-		opts.LightBackground = true
+		opts.Background = lipgloss.Color("#eaeaea")
 		require.Equal(t, want, dashboard.Render(frame, 120, 40, opts), "%s", profile)
 	}
 }
