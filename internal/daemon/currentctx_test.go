@@ -3,7 +3,9 @@ package daemon_test
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/report"
+	"github.com/abanna/herdr-agentisan/internal/settings"
 	"github.com/abanna/herdr-agentisan/internal/snapshot"
 	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
@@ -129,4 +132,170 @@ func TestTeamStatusGatesALastAgentsCtx(t *testing.T) {
 	got := coderCtx()
 	require.NotNil(t, got, "the agent's own")
 	assert.Equal(t, 70, *got)
+}
+
+// The previous agent can remain alive after a different job takes the pane.
+func TestContextDoesNotFollowABackgroundAgent(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	const pane = "wN:p1"
+	th.setAgents(named(pane, "pee01"))
+	th.setProcs(pane, agentProc(1002, "claude"))
+	// Linux rounds boot time down. This old report can appear later than
+	// the replacement's wall-clock start by several hundred milliseconds.
+	oldAt := boot.Add(20500 * time.Millisecond)
+	showCtx(th, pane, "70", report.FormatModelAt(oldAt))
+	repo := t.TempDir()
+	marker := filepath.Join(repo, settings.BundleMarker)
+	require.NoError(t, os.MkdirAll(filepath.Dir(marker), 0o750))
+	require.NoError(t, os.WriteFile(marker, []byte("1\n"), 0o600))
+	cfg := configDir(t, strings.Replace(liveTOML, "/x", repo, 1))
+	o := teamOpts(t, shortDir(t), th, cfg)
+	fg := fakeForeground(t, &o)
+	serving(t, o, th.fakeHerdr)
+	sock := socketPath(t, o.StateDir, th.path)
+	served(t, sock, func(s snapshot.Snapshot) bool {
+		ctx, _ := agentCtx(s, pane)
+		return ctx != nil && *ctx == 70
+	})
+	statusCtx := func() *int {
+		t.Helper()
+		req := workforce.StatusRequest{Selector: workforce.Selector{Project: liveProject}}
+		data, err := daemon.Workforce(t.Context(), sock, daemon.OpTeamStatus, req)
+		require.NoError(t, err)
+		var status workforce.StatusResult
+		require.NoError(t, json.Unmarshal(data, &status))
+		for _, group := range status.Groups {
+			for _, member := range group.Members {
+				if member.PaneID == pane {
+					return member.Ctx
+				}
+			}
+		}
+		t.Fatalf("team status omitted %s", pane)
+		return nil
+	}
+	assert.Equal(t, new(70), statusCtx())
+	polled(t, th.srv, 2)
+	assert.Equal(t, 1, processAsks(th.srv)[pane], "stable foreground costs no further asks")
+
+	checkUnknown := func() {
+		t.Helper()
+		polled(t, th.srv, 2)
+		ctx, present := agentCtx(served(t, sock, anySnapshot), pane)
+		require.True(t, present)
+		assert.Nil(t, ctx, "new foreground agent inherited context")
+		assert.Nil(t, statusCtx(), "team status uses the poll's gate")
+		assert.Equal(t, map[string]string{"ctx_ok": "ctx  --", "ctx_warn": "", "ctx_hot": ""}, lastBands(t, th, pane))
+	}
+
+	// Keep 1002 alive with its original start. First the probe fails, then
+	// succeeds without a process, then identifies the new foreground job.
+	th.setShell(pane, 0, true)
+	fg.Store(2002)
+	checkUnknown()
+	th.setProcs(pane)
+	th.setShell(pane, 0, false)
+	checkUnknown()
+	misses := processAsks(th.srv)[pane]
+	polled(t, th.srv, 2)
+	assert.Greater(t, processAsks(th.srv)[pane], misses, "an unresolved replacement is retried each poll")
+
+	// A poll of the plain shell in between must retain the old report stamp.
+	th.setPane(pane, "agent", nil)
+	polled(t, th.srv, 2)
+	th.setProcs(pane, agentProc(2002, "claude"))
+	th.setPane(pane, "agent", "claude")
+	checkUnknown()
+	showCtx(th, pane, "70", "")
+	checkUnknown()
+
+	showCtx(th, pane, "10", report.FormatModelAt(boot.Add(30*time.Second)))
+	polled(t, th.srv, 2)
+	ctx, present := agentCtx(served(t, sock, anySnapshot), pane)
+	require.True(t, present)
+	assert.Equal(t, new(10), ctx)
+	assert.Equal(t, new(10), statusCtx())
+	assert.Equal(t, "ctx 10%", lastBands(t, th, pane)["ctx_ok"])
+}
+
+func TestContextNoticeIgnoresAnUnreadBackgroundReport(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	const pane = "wN:p1"
+	th.setAgents(named(pane, "pee01"))
+	th.setProcs(pane, agentProc(1002, "claude"))
+	showCtx(th, pane, "10", report.FormatModelAt(boot.Add(12*time.Second)))
+	o := teamOpts(t, shortDir(t), th, noticesConfig(t, "gap = 0\n"))
+	fg := fakeForeground(t, &o)
+	var logs lockedLog
+	_, rec := ctxRun(t, o, &logs)
+	sock := socketPath(t, o.StateDir, th.path)
+	served(t, sock, func(s snapshot.Snapshot) bool {
+		ctx, _ := agentCtx(s, pane)
+		return ctx != nil && *ctx == 10
+	})
+
+	th.setProcs(pane, agentProc(2002, "claude"))
+	fg.Store(2002)
+	showCtx(th, pane, "80", report.FormatModelAt(boot.Add(15*time.Second)))
+	polled(t, th.srv, 2)
+	assert.Empty(t, ctxEvents(rec), "no old crossing to deduplicate")
+	assert.Empty(t, toasts(t, th), "no toast for the previous agent")
+
+	showCtx(th, pane, "80", report.FormatModelAt(boot.Add(30*time.Second)))
+	polled(t, th.srv, 2)
+	assert.Equal(t, []string{"wN:p1 worker ceiling 80 75 true true"}, ctxEvents(rec))
+	assert.Len(t, toasts(t, th), 1)
+}
+
+func TestContextWithoutForegroundGroupIsUnknown(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	const pane = "wN:p1"
+	th.setProcs(pane, agentProc(1002, "claude"))
+	showCtx(th, pane, "10", report.FormatModelAt(boot.Add(12*time.Second)))
+	o := teamOpts(t, shortDir(t), th, liveConfig(t, ""))
+	fg := fakeForeground(t, &o)
+	serving(t, o, th.fakeHerdr)
+	sock := socketPath(t, o.StateDir, th.path)
+	reported := func(s snapshot.Snapshot) bool {
+		ctx, _ := agentCtx(s, pane)
+		return ctx != nil && *ctx == 10
+	}
+	served(t, sock, reported)
+
+	// Equal zero groups do not verify the cached process. Even a reply
+	// still listing that PID cannot establish a current foreground job.
+	fg.Store(0)
+	polled(t, th.srv, 2)
+	ctx, present := agentCtx(served(t, sock, anySnapshot), pane)
+	require.True(t, present)
+	assert.Nil(t, ctx)
+
+	fg.Store(1002)
+	served(t, sock, reported)
+}
+
+// fakeForeground lets both agent PIDs survive while the foreground job
+// changes. Start and process group match the PID for each fake agent.
+func fakeForeground(t *testing.T, o *daemon.Options) *atomic.Int32 {
+	t.Helper()
+	fg := &atomic.Int32{}
+	fg.Store(1002)
+	pt := &procs{start: map[int]uint64{os.Getpid(): 77, 1002: 1002, 2002: 2002}}
+	o.Hooks.ProcessStat = func(pid int) (report.Stat, error) {
+		start, err := pt.startTime(pid)
+		foreground := int(fg.Load())
+		group := pid
+		if foreground == 0 {
+			group = 0
+		}
+		return report.Stat{Start: start, Pgrp: group, Tpgid: foreground}, err
+	}
+	return fg
+}
+
+func showCtx(th *teamHerdr, pane, ctx, at string) {
+	th.setPane(pane, "tokens", map[string]string{report.CtxKey: ctx, report.CtxAtKey: at})
 }

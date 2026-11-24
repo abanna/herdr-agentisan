@@ -8,6 +8,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/abanna/herdr-agentisan/internal/herdr"
+	"github.com/abanna/herdr-agentisan/internal/report"
 	"github.com/abanna/herdr-agentisan/internal/team"
 )
 
@@ -27,6 +28,8 @@ const (
 // changed. Only the poll's goroutine uses it.
 type launchModels struct {
 	byPane map[string]launchModel
+	stat   report.StatFunc
+	ctxs   map[string]processCtx
 	// failed holds each pane whose last ask failed, so that is logged once.
 	failed map[string]bool
 	// overran is set while the budget runs out before every pane is asked,
@@ -52,8 +55,32 @@ type launchModel struct {
 	asked time.Time
 }
 
-func newLaunchModels() *launchModels {
-	return &launchModels{byPane: map[string]launchModel{}, failed: map[string]bool{}, clock: time.Now}
+// processCtx remembers the last verified agent and its report across an
+// unread foreground, so dropping a model cache entry cannot revive old ctx.
+type processCtx struct {
+	terminal string
+	pid      uint32
+	start    uint64
+	reported time.Time
+	after    time.Time
+	replaced bool
+}
+
+func newLaunchModels(stat report.StatFunc) *launchModels {
+	return &launchModels{byPane: map[string]launchModel{}, stat: stat, failed: map[string]bool{}, clock: time.Now}
+}
+
+var errNotForeground = errors.New("agent process is outside the foreground job")
+
+func (lm *launchModels) foregroundStart(pid int) (uint64, error) {
+	stat, err := lm.stat(pid)
+	if err != nil {
+		return 0, err
+	}
+	if stat.Tpgid <= 0 || stat.Pgrp != stat.Tpgid {
+		return 0, errNotForeground
+	}
+	return stat.Start, nil
 }
 
 // agentPanes are the panes of m's teams, workers and bosses, where herdr
@@ -97,6 +124,9 @@ func agentPanes(m team.Model, panes []herdr.PaneInfo) []herdr.PaneInfo {
 // startTime reads a process's start time; nil, off Linux and darwin, keeps
 // an entry until its pane's terminal or agent changes.
 func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProcesses, panes []herdr.PaneInfo, startTime func(pid int) (uint64, error), now time.Time, log zerolog.Logger) (map[string]string, error) {
+	if lm.stat != nil {
+		startTime = lm.foregroundStart
+	}
 	deadline := lm.clock().Add(ModelBudget)
 	ask, cancel := context.WithTimeout(ctx, ModelBudget)
 	defer cancel()
@@ -140,7 +170,12 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 		}
 		delete(lm.failed, p.PaneID)
 		e := read(info, p, startTime, now)
-		lm.byPane[p.PaneID] = e
+		// A lost foreground agent makes ctx unknown. Retry an unresolved
+		// replacement next poll so the 60 s miss cache cannot prolong it.
+		prior := lm.ctxs[p.PaneID]
+		if e.pid != 0 || prior.pid == 0 || prior.terminal != p.TerminalID {
+			lm.byPane[p.PaneID] = e
+		}
 		if e.model != "" {
 			out[p.PaneID] = e.model
 		}
@@ -208,6 +243,39 @@ func (lm *launchModels) started(wall func(start uint64) (time.Time, error)) map[
 		out[id] = e.startedAt
 	}
 	return out
+}
+
+// ctxGates joins the current starts with the last observed report for each
+// terminal, including when it briefly shows a shell. A replacement must
+// have its own stamp even when the wall-clock start overlaps the old report.
+func (lm *launchModels) ctxGates(panes []herdr.PaneInfo, started map[string]time.Time) map[string]team.CtxGate {
+	next := make(map[string]processCtx)
+	gates := make(map[string]team.CtxGate)
+	for _, p := range panes {
+		id := p.PaneID
+		prior := lm.ctxs[id]
+		if prior.terminal != p.TerminalID {
+			prior = processCtx{terminal: p.TerminalID}
+		}
+		e := lm.byPane[id]
+		if !e.timed {
+			if prior.pid != 0 {
+				next[id], gates[id] = prior, team.CtxGate{RequireFresh: true}
+			}
+			continue
+		}
+		if prior.pid != 0 && (e.pid != prior.pid || e.start != prior.start) {
+			prior.after, prior.replaced = prior.reported, true
+		}
+		gates[id] = team.CtxGate{Start: started[id], After: prior.after, RequireFresh: prior.replaced}
+		if at, ok := report.ParseCtxAt(p.Tokens[report.CtxAtKey]); ok && at.After(prior.reported) {
+			prior.reported = at
+		}
+		prior.pid, prior.start = e.pid, e.start
+		next[id] = prior
+	}
+	lm.ctxs = next
+	return gates
 }
 
 // holds reports whether e is still pane p's: the same terminal and agent,

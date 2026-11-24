@@ -34,6 +34,9 @@ var ErrProcCmdline = errors.New("unreadable process arguments")
 // Stat is the part of a process's status a lineage needs.
 type Stat struct {
 	PPID int
+	// Pgrp and Tpgid are the process group and its terminal's foreground
+	// group. A nonpositive Tpgid gives no foreground proof.
+	Pgrp, Tpgid int
 	// Start is when the process started: in clock ticks since boot on Linux,
 	// in microseconds since the epoch on darwin. A pid is reused only by a
 	// process that starts later, so a pid with the same Start at two reads is
@@ -212,7 +215,15 @@ func parseStat(pid int, raw []byte) (Stat, error) {
 	if err != nil {
 		return Stat{}, fmt.Errorf("%w: %d: start time %q: %w", ErrProcStat, pid, fields[19], err)
 	}
-	return Stat{PPID: ppid, Start: start}, nil
+	pgrp, err := strconv.Atoi(fields[2])
+	if err != nil {
+		return Stat{}, fmt.Errorf("%w: %d: process group %q: %w", ErrProcStat, pid, fields[2], err)
+	}
+	tpgid, err := strconv.Atoi(fields[5])
+	if err != nil {
+		return Stat{}, fmt.Errorf("%w: %d: foreground group %q: %w", ErrProcStat, pid, fields[5], err)
+	}
+	return Stat{PPID: ppid, Start: start, Pgrp: pgrp, Tpgid: tpgid}, nil
 }
 
 // ProcCmdline reads argument vectors from a Linux procfs mounted at proc.

@@ -22,6 +22,8 @@ const maxProcArgs2Padding = 7
 type Kinfo struct {
 	PID       int
 	PPID      int
+	Pgrp      int
+	Tpgid     int
 	StartSec  int64
 	StartUsec int64
 }
@@ -45,7 +47,7 @@ func KinfoStat(read func(pid int) (Kinfo, error)) StatFunc {
 		case k.StartUsec < 0 || k.StartUsec >= 1_000_000:
 			return Stat{}, fmt.Errorf("%w: %d: start microsecond %d is out of range", ErrProcStat, pid, k.StartUsec)
 		}
-		return Stat{PPID: k.PPID, Start: uint64(k.StartSec*1_000_000 + k.StartUsec)}, nil // #nosec G115 -- both checked non-negative and in range above
+		return Stat{PPID: k.PPID, Pgrp: k.Pgrp, Tpgid: k.Tpgid, Start: uint64(k.StartSec*1_000_000 + k.StartUsec)}, nil // #nosec G115 -- both checked non-negative and in range above
 	}
 }
 

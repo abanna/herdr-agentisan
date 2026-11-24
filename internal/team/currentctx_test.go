@@ -45,6 +45,8 @@ func TestCurrentCtx(t *testing.T) {
 	start := modelAt.Add(-time.Minute)
 	for name, tc := range map[string]struct {
 		at, start time.Time
+		after     time.Time
+		fresh     bool
 		want      string
 	}{
 		"reported after the agent started": {at: modelAt, start: start, want: "70"},
@@ -52,9 +54,15 @@ func TestCurrentCtx(t *testing.T) {
 		"reported before it started":       {at: start.Add(-time.Millisecond), start: start, want: ""},
 		"no start known":                   {at: start.Add(-time.Hour), want: "70"},
 		"no ctx_at":                        {start: start, want: "70"},
+		"lost foreground":                  {at: modelAt, fresh: true},
+		"undated after replacement":        {start: start, fresh: true},
+		"same stamp after replacement":     {at: modelAt, start: start, after: modelAt, fresh: true},
+		"new stamp before new start":       {at: start.Add(-time.Millisecond), start: start, fresh: true},
+		"new stamp after replacement":      {at: modelAt, start: start, after: start, fresh: true, want: "70"},
 	} {
 		p := team.Pane{Agent: "codex", Ctx: "70", CtxAt: tc.at}
-		assert.Equal(t, tc.want, team.CurrentCtx(p, tc.start), name)
+		gate := team.CtxGate{Start: tc.start, After: tc.after, RequireFresh: tc.fresh}
+		assert.Equal(t, tc.want, gate.Ctx(p), name)
 	}
 }
 
@@ -70,7 +78,7 @@ func TestGateCtx(t *testing.T) {
 		inTeam(pane("wN:p2", "", "claude", "idle", stamped("40", modelAt)), "coder-1"),
 		inTeam(pane("wN:p3", "", "codex", "idle", stamped("30", start.Add(-time.Hour))), "coder-1"),
 	)
-	team.GateCtx(&m, map[string]time.Time{"wJ:p1": start, "wN:p1": start, "wN:p2": start})
+	team.GateCtx(&m, map[string]team.CtxGate{"wJ:p1": {Start: start}, "wN:p1": {Start: start}, "wN:p2": {Start: start}})
 
 	s := team.Snapshot(m, liveProject, modelAt, nil, nil)
 	require.NotNil(t, s.Boss)
@@ -99,7 +107,7 @@ func TestSidebarTokensShowTheGatedCtx(t *testing.T) {
 	})
 	l.Workspaces = append(l.Workspaces, herdr.WorkspaceInfo{WorkspaceID: "w2", Label: "notes"})
 	m := team.Build(l, liveTeam, nil)
-	team.GateCtx(&m, map[string]time.Time{"wN:p1": start, "w2:p1": start})
+	team.GateCtx(&m, map[string]team.CtxGate{"wN:p1": {Start: start}, "w2:p1": {Start: start}})
 
 	bands := map[string]map[string]string{}
 	for _, pt := range team.SidebarTokens(m, l, nil, modelAt) {
@@ -109,9 +117,8 @@ func TestSidebarTokensShowTheGatedCtx(t *testing.T) {
 	assert.Equal(t, map[string]string{"ok": "", "hot": "ctx 70%"}, bands["w2:p1"])
 }
 
-// TestStartClock: the clock holds each team pane's start, the boss's too,
-// while the pane shows the terminal the poll saw it on, so a reissued pane id
-// gets none; each Observe replaces the last, and a nil clock knows nothing.
+// TestStartClock covers each team pane's last gate, including the boss.
+// A reissued pane ID and a nil clock leave the raw report available.
 func TestStartClock(t *testing.T) {
 	t.Parallel()
 	start := modelAt.Add(-time.Minute)
@@ -122,16 +129,21 @@ func TestStartClock(t *testing.T) {
 	m, _ := modelPanes(boss, p1, inTeam(pane("wN:p2", "", "codex", "idle", nil), "coder-1"))
 
 	c := &team.StartClock{}
-	c.Observe(m, map[string]time.Time{"wJ:p1": start.Add(-time.Hour), "wN:p1": start, "w9:p9": start})
-	assert.True(t, start.Add(-time.Hour).Equal(c.Start("wJ:p1", "term_boss")), "the boss's")
-	assert.True(t, start.Equal(c.Start("wN:p1", "term_a")))
-	assert.True(t, c.Start("wN:p1", "term_b").IsZero(), "another terminal: a reissued id")
-	assert.True(t, c.Start("wN:p2", "").IsZero(), "no start held")
-	assert.True(t, c.Start("w9:p9", "").IsZero(), "a pane in no team")
+	gate := team.CtxGate{RequireFresh: true}
+	entries := map[string]team.CtxGate{"wJ:p1": {Start: start}, "wN:p1": gate, "w9:p9": gate}
+	ctx := func(id, terminal string) team.Pane {
+		return team.Pane{ID: id, TerminalID: terminal, Ctx: "70", CtxAt: start.Add(-time.Second)}
+	}
+	c.Observe(m, entries)
+	assert.Empty(t, c.Ctx(ctx("wJ:p1", "term_boss")), "the boss's")
+	assert.Empty(t, c.Ctx(ctx("wN:p1", "term_a")), "a missing replacement")
+	assert.Equal(t, "70", c.Ctx(ctx("wN:p1", "term_b")), "another terminal: a reissued id")
+	assert.Equal(t, "70", c.Ctx(ctx("wN:p2", "")), "no gate held")
+	assert.Equal(t, "70", c.Ctx(ctx("w9:p9", "")), "a pane in no team")
 
-	c.Observe(m, map[string]time.Time{})
-	assert.True(t, c.Start("wN:p1", "term_a").IsZero(), "replaced")
+	c.Observe(m, nil)
+	assert.Equal(t, "70", c.Ctx(ctx("wN:p1", "term_a")), "replaced")
 	var none *team.StartClock
-	none.Observe(m, map[string]time.Time{"wN:p1": start})
-	assert.True(t, none.Start("wN:p1", "term_a").IsZero())
+	none.Observe(m, entries)
+	assert.Equal(t, "70", none.Ctx(ctx("wN:p1", "term_a")))
 }

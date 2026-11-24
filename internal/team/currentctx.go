@@ -8,26 +8,31 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/report"
 )
 
-// CurrentCtx is p's ctx while its pane's current agent reported it (ADR-001
-// A61): "" when its ctx_at is earlier than start, when that agent's process
-// started, since an agent before it in the pane left it, as a Codex's ctx
-// lives 24 h. A pane whose start is unknown (zero) keeps it, as A56 keeps a
-// reported model. So does a ctx with no ctx_at, unlike A56's model, which
-// counts only with its model_at: a build before A61 wrote ctx with none.
-func CurrentCtx(p Pane, start time.Time) string {
-	if !start.IsZero() && !p.CtxAt.IsZero() && p.CtxAt.Before(start) {
+// CtxGate qualifies a pane's report against the last verified foreground
+// start. RequireFresh covers a lost or replaced process. After is the last
+// stamp observed before a replacement, which its own report must exceed.
+type CtxGate struct {
+	Start, After time.Time
+	RequireFresh bool
+}
+
+// Ctx keeps the legacy fallback for an initial unknown start or old token.
+func (g CtxGate) Ctx(p Pane) string {
+	if g.RequireFresh && (g.Start.IsZero() || !p.CtxAt.After(g.After)) {
+		return ""
+	}
+	if !g.Start.IsZero() && !p.CtxAt.IsZero() && p.CtxAt.Before(g.Start) {
 		return ""
 	}
 	return p.Ctx
 }
 
-// GateCtx sets, in place, the ctx of every boss and worker pane of m's teams
-// to CurrentCtx's, by its agent's start as started holds it by pane id, so
-// every reader of the model's ctx sees the same gate (A61).
-func GateCtx(m *Model, started map[string]time.Time) {
+// GateCtx applies each team's ctx gates before the poll's readers see it.
+func GateCtx(m *Model, gates map[string]CtxGate) {
 	gate := func(ws []Worker) {
 		for i := range ws {
-			ws[i].Pane.Ctx = CurrentCtx(ws[i].Pane, started[ws[i].Pane.ID])
+			p := &ws[i].Pane
+			p.Ctx = gates[p.ID].Ctx(*p)
 		}
 	}
 	for i := range m.Projects {
@@ -49,11 +54,8 @@ func ctxAtOf(p herdr.PaneInfo) time.Time {
 	return at
 }
 
-// StartClock holds, for each agent pane of the teams the poll last saw, the
-// terminal it showed and when its agent process started (A47), so a reader
-// with no process reads of its own, team status, gates ctx as the poll does
-// (A61), as fresh as the last poll. It is safe for concurrent use, and a nil
-// clock knows nothing.
+// StartClock holds the last poll's ctx gates by pane and terminal for team
+// status. It is safe for concurrent use. A nil clock applies no gate.
 type StartClock struct {
 	mu     sync.Mutex
 	byPane map[string]paneStart
@@ -61,20 +63,19 @@ type StartClock struct {
 
 type paneStart struct {
 	terminal string
-	at       time.Time
+	gate     CtxGate
 }
 
-// Observe replaces what c knows with the starts started holds for the panes
-// of m's teams, each with the terminal m shows its pane on.
-func (c *StartClock) Observe(m Model, started map[string]time.Time) {
+// Observe replaces c's gates for the team panes and terminals in m.
+func (c *StartClock) Observe(m Model, gates map[string]CtxGate) {
 	if c == nil {
 		return
 	}
 	next := map[string]paneStart{}
 	add := func(ws []Worker) {
 		for _, w := range ws {
-			if at, ok := started[w.Pane.ID]; ok {
-				next[w.Pane.ID] = paneStart{terminal: w.Pane.TerminalID, at: at}
+			if gate, ok := gates[w.Pane.ID]; ok {
+				next[w.Pane.ID] = paneStart{terminal: w.Pane.TerminalID, gate: gate}
 			}
 		}
 	}
@@ -89,18 +90,16 @@ func (c *StartClock) Observe(m Model, started map[string]time.Time) {
 	c.byPane = next
 }
 
-// Start is the start c holds for pane while it shows terminal: zero when c
-// holds none for it, the pane showed another terminal, a reissued id, or c
-// is nil.
-func (c *StartClock) Start(pane, terminal string) time.Time {
+// Ctx gates p's report while its pane still shows the same terminal.
+func (c *StartClock) Ctx(p Pane) string {
 	if c == nil {
-		return time.Time{}
+		return p.Ctx
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s, ok := c.byPane[pane]
-	if !ok || s.terminal != terminal {
-		return time.Time{}
+	s, ok := c.byPane[p.ID]
+	if !ok || s.terminal != p.TerminalID {
+		return p.Ctx
 	}
-	return s.at
+	return s.gate.Ctx(p)
 }

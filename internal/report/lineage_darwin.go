@@ -23,6 +23,8 @@ func sysctlKinfo(pid int) (Kinfo, error) {
 	return Kinfo{
 		PID:       int(k.Proc.P_pid),
 		PPID:      int(k.Eproc.Ppid),
+		Pgrp:      int(k.Eproc.Pgid),
+		Tpgid:     int(k.Eproc.Tpgid),
 		StartSec:  k.Proc.P_starttime.Sec,
 		StartUsec: int64(k.Proc.P_starttime.Usec),
 	}, nil

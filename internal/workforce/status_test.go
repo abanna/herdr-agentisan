@@ -506,7 +506,7 @@ func TestStatusGatesALastAgentsCtx(t *testing.T) {
 	f.svc.Starts = &team.StartClock{}
 	f.svc.Starts.Observe(team.Model{Projects: []team.Project{{Groups: []team.Group{{Workers: []team.Worker{
 		{Pane: team.Pane{ID: w.PaneID, TerminalID: terminal}},
-	}}}}}}, map[string]time.Time{w.PaneID: start})
+	}}}}}}, map[string]team.CtxGate{w.PaneID: {Start: start}})
 	assert.Nil(t, ctxAt(start.Add(-time.Hour)), "the last agent's 70%")
 	got := ctxAt(start.Add(time.Second))
 	require.NotNil(t, got)

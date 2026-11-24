@@ -156,7 +156,7 @@ func (o Options) pollTeam(ctx context.Context, st *store.Store, ident Identity, 
 	o.Logger.Info().Strs("tabs_teams", tabs).Msg("team poll running")
 	tp := teamPoll{
 		cfg: cfg, warned: map[string]string{}, stages: &team.StageClock{}, idle: idle, starts: starts, cache: cache, header: header,
-		models: newLaunchModels(), descriptions: newGroupDescriptions(o.Team.ConfigDir),
+		models: newLaunchModels(o.Hooks.ProcessStat), descriptions: newGroupDescriptions(o.Team.ConfigDir),
 		slots: o.newSlotCounter(), bind: &binder{ready: ready},
 		notices: n,
 	}
@@ -280,8 +280,9 @@ func (o Options) pushTeam(ctx context.Context, c herdr.Client, st *store.Store, 
 	}
 	// The boss's runtime is its agent process's (A47).
 	started := tp.models.started(o.Hooks.StartedAt)
-	team.GateCtx(&m, started)
-	tp.starts.Observe(m, started)
+	gates := tp.models.ctxGates(panes, started)
+	team.GateCtx(&m, gates)
+	tp.starts.Observe(m, gates)
 	// A pane's rest is pane.list's status, so a failed agent list does not
 	// stop the idle clock, nor the notices of a status change.
 	tp.idle.Observe(m, now)

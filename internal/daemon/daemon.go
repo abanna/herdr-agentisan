@@ -101,6 +101,9 @@ type Hooks struct {
 	// report.SystemStat (/proc on Linux, sysctl on darwin). With none, a
 	// holder is checked by pid alone.
 	StartTime func(pid int) (uint64, error)
+	// ProcessStat verifies the foreground agent for the team poll. It
+	// defaults to the system reader when StartTime is also defaulted.
+	ProcessStat report.StatFunc
 	// Preflight is the check a spawn's repo must pass before any pane opens
 	// (A34); nil means preflight.HostCheck.
 	Preflight preflight.Check
@@ -178,7 +181,10 @@ func (o Options) withDefaults() Options {
 		o.Hooks.Signal = func(pid int) error { return syscall.Kill(pid, syscall.SIGTERM) }
 	}
 	if o.Hooks.StartTime == nil {
-		o.Hooks.StartTime = startTimeFrom(report.SystemStat())
+		if o.Hooks.ProcessStat == nil {
+			o.Hooks.ProcessStat = report.SystemStat()
+		}
+		o.Hooks.StartTime = startTimeFrom(o.Hooks.ProcessStat)
 	}
 	if o.Hooks.StartedAt == nil {
 		o.Hooks.StartedAt = report.SystemStartedAt()

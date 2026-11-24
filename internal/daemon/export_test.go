@@ -282,7 +282,7 @@ func FlushNotices(o Options, b *notice.Batcher, s notice.Sink) {
 type LaunchModels struct{ m *launchModels }
 
 // NewLaunchModels is a cache with nothing in it.
-func NewLaunchModels() LaunchModels { return LaunchModels{m: newLaunchModels()} }
+func NewLaunchModels() LaunchModels { return LaunchModels{m: newLaunchModels(nil)} }
 
 // Refresh is one poll's look at panes, each a team's agent pane, with no
 // process_info reply held from earlier in the poll.
