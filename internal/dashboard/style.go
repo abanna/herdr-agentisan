@@ -63,7 +63,7 @@ func themeColor(dark, light, legacy string, darkIndex, lightIndex, lightSelectio
 // Indexed paints are hand-picked xterm colours. A zero selected index
 // inherits the light ink. The legacy column is the original ANSI16 paint.
 var palette = [colourRoles]themedColor{
-	colText:          themeColor("#eef2ff", "#17233b", "", 255, 17, 0),
+	colText:          themeColor("#eef2ff", "#17233b", "", 255, 234, 0),
 	colDim:           themeColor("#becbe3", "#3c4c69", "#6c7086", 153, 239, 0),
 	colGreen:         themeColor("#8ae99f", "#14532d", "#50fa7b", 120, 22, 0),
 	colYellow:        themeColor("#f3de82", "#644600", "#f1fa8c", 222, 58, 0),
@@ -71,7 +71,7 @@ var palette = [colourRoles]themedColor{
 	colRed:           themeColor("#ff989f", "#870000", "#ff5555", 210, 88, 0),
 	colCyan:          themeColor("#9ee6fa", "#125363", "#8be9fd", 159, 23, 0),
 	colAccent:        themeColor("#c8b5ff", "#513b81", "#bd93f9", 189, 54, 0),
-	colSelectionFill: themeColor("#36476b", "#b6c7ec", "", 20, 189, 0),
+	colSelectionFill: themeColor("#36476b", "#b6c7ec", "", 54, 189, 0),
 	colButtonText:    themeColor("#282a36", "#ffffff", "#282a36", 235, 231, 0),
 }
 

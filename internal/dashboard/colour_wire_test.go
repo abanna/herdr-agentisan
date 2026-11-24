@@ -13,6 +13,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
@@ -131,8 +132,8 @@ func TestANSI256SelectionStaysVisible(t *testing.T) {
 		bg   string
 		fill ansi.IndexedColor
 	}{
-		{"#1e1e2e", 20},
-		{"#4e4e4e", 20},
+		{"#1e1e2e", 54},
+		{"#4e4e4e", 54},
 		{"#eaeaea", 189},
 		{"#afd7ff", 189},
 	} {
@@ -260,12 +261,47 @@ func TestReadableInkKeepsAnAvailablePaletteShade(t *testing.T) {
 
 	const backgroundLuminance = 0.22
 	preferred := ansi.IndexedColor(244)
-	alternate := ansi.IndexedColor(17)
+	alternate := ansi.IndexedColor(232)
 	require.Equal(t, alternate, dashboard.ReadableInk(preferred, alternate, backgroundLuminance, true))
 }
 
 // Match attributes, resets and extended colours from the standard xterm palette.
-var indexedSGR = regexp.MustCompile(`^(?:(?:[0-9]|2[0-9]|39|49|(?:38|48);5;(?:1[6-9]|[2-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]))(?:;|$))*$`)
+var indexedSGR = regexp.MustCompile(`^(?:(?:[0-9]|2[0-9]|39|49|(?:38|48);5;(?:2[2-9]|[3-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]))(?:;|$))*$`)
+
+func TestANSI256ReservedSlots(t *testing.T) {
+	t.Parallel()
+
+	snap := paletteSpecimen()
+	snap.Project = &snapshot.Project{Color: "#000000"}
+	m := paletteModel(t, snap)
+	for _, bg := range []string{"#181818", "#fdf6e3", "#878787", "#777777"} {
+		t.Run(bg, func(t *testing.T) {
+			out := reportProfile(t, m, colorprofile.ANSI256, lipgloss.Color(bg), true).View().Content
+			for _, match := range sgr.FindAllStringSubmatch(out, -1) {
+				assert.Truef(t, indexedSGR.MatchString(match[1]), "expected indexed SGR in slots 22–255, got %q", match[0])
+			}
+		})
+	}
+}
+
+func TestANSI256UsesBestNeutralOnMidtones(t *testing.T) {
+	t.Parallel()
+
+	snap := paletteSpecimen()
+	snap.Project = &snapshot.Project{Color: "#000000"}
+	m := paletteModel(t, snap)
+	for _, tc := range []struct {
+		bg   string
+		want ansi.IndexedColor
+	}{
+		{"#777777", 231},
+		{"#777778", 232},
+	} {
+		out := reportProfile(t, m, colorprofile.ANSI256, lipgloss.Color(tc.bg), true).View().Content
+		require.Equal(t, tc.want, paintedCell(t, lineWith(t, out, snap.Team), snap.Team).ink, tc.bg)
+		require.Equal(t, tc.want, paintedCell(t, lineWith(t, out, "stopped"), "⚠").ink, tc.bg)
+	}
+}
 
 func TestDashboardContrastSweep(t *testing.T) {
 	t.Parallel()
@@ -310,13 +346,17 @@ func TestDashboardContrastSweep(t *testing.T) {
 				t.Helper()
 				require.NotNil(t, ink, role)
 				require.NotNil(t, bg, role)
-				require.GreaterOrEqualf(t, contrastRatio(ink, bg), readableContrast, "%s on %v", role, bg)
+				floor := readableContrast
+				if p == colorprofile.ANSI256 {
+					floor = min(floor, max(contrastRatio(ansi.IndexedColor(232), bg), contrastRatio(ansi.IndexedColor(231), bg)))
+				}
+				require.GreaterOrEqualf(t, contrastRatio(ink, bg), floor, "%s on %v", role, bg)
 			}
 			record := func(role string, ink, bg color.Color) {
 				t.Helper()
 				check(role, ink, bg)
 				switch rgbBytes(ink) {
-				case [3]uint8{}, [3]uint8{255, 255, 255}:
+				case [3]uint8{}, [3]uint8{8, 8, 8}, [3]uint8{255, 255, 255}:
 					neutral[role]++
 				}
 			}
@@ -332,7 +372,7 @@ func TestDashboardContrastSweep(t *testing.T) {
 								for ok {
 									params, tail, found := strings.Cut(rest, "m")
 									if !checkedSGR[params] {
-										require.Truef(t, found && indexedSGR.MatchString(params), "expected indexed SGR in slots 16–255, got %q on %v", params, bg)
+										require.Truef(t, found && indexedSGR.MatchString(params), "expected indexed SGR in slots 22–255, got %q on %v", params, bg)
 										checkedSGR[params] = true
 									}
 									_, rest, ok = strings.Cut(tail, "\x1b[")

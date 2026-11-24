@@ -46,7 +46,7 @@ func TestANSI256BackgroundReply(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, want, legacy.View().Content)
 
-	for _, invalid := range []color.Color{ansi.XParseColor("invalid"), color.Transparent} {
+	for _, invalid := range []color.Color{ansi.XParseColor("invalid"), color.Transparent, color.RGBA{R: 30, G: 30, B: 46, A: 128}} {
 		for _, profileFirst := range []bool{false, true} {
 			got := reportProfile(t, m, colorprofile.ANSI256, invalid, profileFirst)
 			require.Equal(t, want, got.View().Content, "invalid reply %v, profile first %v", invalid, profileFirst)

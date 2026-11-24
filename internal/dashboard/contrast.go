@@ -33,23 +33,28 @@ func lightTextHasHigherContrast(background, darkText, lightText float64) bool {
 	return contrast(lightText, background) > contrast(darkText, background)
 }
 
+const firstStandardIndex = 22
+
 const (
-	indexedBlack ansi.IndexedColor = 16
+	indexedBlack ansi.IndexedColor = 232
 	indexedWhite ansi.IndexedColor = 231
 )
 
-func neutralInk(background float64, indexed bool) color.Color {
-	white := contrast(1, background) > contrast(0, background)
-	switch {
-	case indexed && white:
+func indexedNeutralInk(background float64) ansi.IndexedColor {
+	if contrast(1, background) > contrast(relativeLuminance(indexedBlack), background) {
 		return indexedWhite
-	case indexed:
-		return indexedBlack
-	case white:
-		return color.White
-	default:
-		return color.Black
 	}
+	return indexedBlack
+}
+
+func neutralInk(background float64, indexed bool) color.Color {
+	if indexed {
+		return indexedNeutralInk(background)
+	}
+	if contrast(1, background) > contrast(0, background) {
+		return color.White
+	}
+	return color.Black
 }
 
 func readableInk(preferred, alternate color.Color, background float64, indexed bool) color.Color {
@@ -187,12 +192,12 @@ type indexedSample struct {
 	luminance float64
 }
 
-// The first 16 entries are configurable terminal slots. The standard xterm
-// cube and greys give us reproducible RGB and both contrast endpoints.
-var standardIndexed = func() [240]indexedSample {
-	var samples [240]indexedSample
+// Base16 Shell themes set slots 0 through 21. Use the rest of the xterm
+// cube and greys for indexed contrast calculations.
+var standardIndexed = func() [256 - firstStandardIndex]indexedSample {
+	var samples [256 - firstStandardIndex]indexedSample
 	for i := range samples {
-		c := ansi.IndexedColor(i + int(indexedBlack))
+		c := ansi.IndexedColor(i + firstStandardIndex)
 		r, g, b := colourChannels(c)
 		samples[i] = indexedSample{r: r, g: g, b: b, luminance: relativeLuminance(c)}
 	}
@@ -201,7 +206,8 @@ var standardIndexed = func() [240]indexedSample {
 
 func nearestReadableIndex(ink color.Color, background float64) ansi.IndexedColor {
 	r, g, b := colourChannels(ink)
-	best, bestDistance := indexedBlack, math.MaxInt
+	// On a narrow band of backgrounds neither indexed endpoint reaches 4.5:1.
+	best, bestDistance := indexedNeutralInk(background), math.MaxInt
 	for i, c := range standardIndexed {
 		if contrast(c.luminance, background) < textContrast {
 			continue
@@ -209,7 +215,7 @@ func nearestReadableIndex(ink color.Color, background float64) ansi.IndexedColor
 		dr, dg, db := c.r-r, c.g-g, c.b-b
 		distance := dr*dr + dg*dg + db*db
 		if distance < bestDistance {
-			best, bestDistance = ansi.IndexedColor(i+int(indexedBlack)), distance
+			best, bestDistance = ansi.IndexedColor(i+firstStandardIndex), distance
 		}
 	}
 	return best
