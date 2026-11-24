@@ -274,6 +274,9 @@ locks = ["/run/user/1000/agentisan/gate.0.lock"]
 #   [routing.bindings.<binding>]  model_id ("" is unresolved), efforts its
 #            client takes (claude: low to max, codex: minimal to xhigh) and
 #            enabled, e.g. [routing.bindings.claude_mid] model_id = "…".
+#            Order matters in the binding's efforts list because the first
+#            listed effort is the default for roles whose rules specify
+#            none, including coder, researcher, and librarian.
 #   [routing.overrides]  <role> = "<binding>": your standing choice, and the
 #            only way to a premium binding the role allows. This file only.
 #            Astra 6.2 has no eligible role.

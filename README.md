@@ -741,8 +741,9 @@ Research defaults to Sonnet 5.5 at high or Sol 6.2 at medium. Librarians
 default to Haiku 5.5 or Luna 6 at low. For small jobs, bosses can choose an
 allowed model per spawn, such as `--model claude_small` for a Claude coder
 or `--provider codex --model codex_terra` for a Codex coder. Those bindings
-use low effort by default. Coder and research take their first binding
-effort by default, including when `[routing.bindings]` sets the list.
+use low effort by default. Order matters in the binding's `efforts` list
+because the first listed effort is the default for roles whose rules
+specify none, including coder, researcher, and librarian.
 
 `worker spawn` asks routing once per spawn, and `team up` once per group it
 fills, before it opens anything: while routing is on, a group it refuses

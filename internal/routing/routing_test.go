@@ -209,6 +209,30 @@ func TestEveryRoleAndProviderResolvesToItsDefault(t *testing.T) {
 	assert.True(t, d.Applied, "a decision is applied once the user turns routing on")
 }
 
+func TestCoderDefaultEffortFollowsConfiguredBindingOrder(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		provider, binding, model, wantEffort string
+		efforts                              []string
+	}{
+		{routing.Codex, "codex_strong", "gpt-6.2-sol", "high", []string{"high", "medium", "xhigh"}},
+		{routing.Claude, "claude_mid", "claude-sonnet-5-5", "medium", []string{"medium", "high"}},
+	} {
+		t.Run(tc.provider, func(t *testing.T) {
+			t.Parallel()
+			p := policy(t, routing.Deployment{
+				Enabled:  true,
+				Bindings: map[string]routing.Facts{tc.binding: {Efforts: tc.efforts}},
+			})
+			d, err := p.Resolve(routing.Request{Role: "coder", Provider: tc.provider}, now)
+			require.NoError(t, err)
+			assert.Equal(t, tc.model, d.ModelID)
+			assert.Equal(t, tc.wantEffort, d.Effort)
+			assert.Equal(t, routing.ReasonTaskNotFound, d.FallbackReason)
+		})
+	}
+}
+
 // TestResolveOverrides: the boss's --model names an allowed binding by name
 // or model id, --effort picks among the binding's efforts, and the user's
 // override, the only way to a premium binding, stands over the boss's.
