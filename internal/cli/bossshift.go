@@ -18,14 +18,14 @@ func newBossCmd() *cobra.Command {
 }
 
 var shiftModelHints = map[string]string{
-	"invalid_candidate":     "check the recorded launch and process pin before retrying",
+	"invalid_candidate":     "check the launch time and supply all three process pin fields together",
 	"candidate_unavailable": "check the herdr connection and confirm the candidate pane is still open",
-	"candidate_changed":     "inspect shift status and confirm which candidate owns the recorded pane",
+	"candidate_changed":     "abort and open again with the intended candidate",
 	"claude_unavailable":    "wait for Claude to start or inspect the pane for an exited session",
 	"missing_model":         "check the candidate's statusline hook and wait for a report",
 	"invalid_report_time":   "check the host clock and wait for a fresh statusline report",
 	"stale_report":          "check the candidate's statusline hook and wait for it to refresh",
-	"awaiting_pin":          "record the candidate process and wait for its next report",
+	"awaiting_pin":          "wait for shift.sh open to record the candidate; if interrupted, abort and open again",
 	"report_before_pin":     "wait for the candidate's next statusline report",
 	"wrong_model":           "select the requested model with /model in the candidate pane",
 }

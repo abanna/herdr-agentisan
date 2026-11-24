@@ -30,17 +30,19 @@ func TestBossModelReadbackRejectsLaunchFallbackAndStaleToken(t *testing.T) {
 	require.NoError(t, err)
 	started, err := wall(proc.Start)
 	require.NoError(t, err)
+	launch := started.UnixMilli()
+	time.Sleep(time.Until(started.Add(7 * time.Second))) // The test process models the pinned Claude.
 	fresh := time.Now().UnixMilli()
-	launch := fresh - 2000
 	tests := []struct {
 		name, model, requested, terminal, reason string
 		stamp, launch                            int64
 		pin                                      uint64
 	}{
-		{"argv only", "", "fable", "term", "missing_model", 0, fresh, 0},
-		{"before launch", "fable", "fable", "term", "stale_report", fresh - 1, fresh, 0},
-		{"before Claude", "fable", "fable", "term", "stale_report", started.UnixMilli() - 1, started.UnixMilli() - 2, 0},
-		{"future", "fable", "fable", "term", "invalid_report_time", fresh + 60000, fresh, 0},
+		{"argv only", "", "fable", "term", "missing_model", 0, launch, 0},
+		{"before launch", "fable", "fable", "term", "stale_report", launch, launch + 1, 0},
+		{"before Claude", "fable", "fable", "term", "stale_report", launch - 1, launch - 2, 0},
+		{"future", "fable", "fable", "term", "invalid_report_time", fresh + 60000, launch, 0},
+		{"first observation", "fable", "fable", "term", "awaiting_pin", fresh, launch, 0},
 		{"wrong terminal", "fable", "fable", "different", "candidate_changed", fresh, launch, 0},
 		{"reused PID", "fable", "fable", "term", "candidate_changed", fresh, launch, proc.Start + 1},
 		{"substring", "claude-unfable-5-2", "fable", "term", "wrong_model", fresh, launch, 0},
@@ -48,6 +50,8 @@ func TestBossModelReadbackRejectsLaunchFallbackAndStaleToken(t *testing.T) {
 		{"exact", "fable", "fable", "term", "verified", fresh, launch, proc.Start},
 		{"family ID", "claude-fable-5-2", "fable", "term", "verified", fresh, launch, 0},
 		{"one-million-context Fable ID", "claude-fable-5-2[1m]", "fable", "term", "verified", fresh, launch, 0},
+		{"uppercase Fable suffix", "claude-fable-5-2[1M]", "fable", "term", "wrong_model", fresh, launch, 0},
+		{"other Fable context window", "claude-fable-5-2[200k]", "fable", "term", "wrong_model", fresh, launch, 0},
 		{"date-suffixed Fable ID", "claude-fable-5-2-20261123", "fable", "term", "verified", fresh, launch, 0},
 		{"other family ID", "claude-sonnet-4-6-20261123", "fable", "term", "wrong_model", fresh, launch, 0},
 		{"configured other family", "claude-sonnet-4-6-20261123", "claude-sonnet-4-6-20261123", "term", "verified", fresh, launch, 0},
@@ -103,6 +107,9 @@ func TestBossModelReadbackRejectsLaunchFallbackAndStaleToken(t *testing.T) {
 				if tc.reason == "wrong_model" {
 					require.ErrorContains(t, err, "select the requested model with /model")
 				}
+				if tc.reason == "candidate_changed" || tc.reason == "awaiting_pin" {
+					require.ErrorContains(t, err, reopenShiftHint)
+				}
 			}
 		})
 	}
@@ -143,9 +150,30 @@ func TestShiftScriptRetriesMissingModelWithPinnedProcess(t *testing.T) {
 	require.NoError(t, s.run("old", "missing_once", "open"))
 	launch := s.state("launched_at")
 	require.Regexp(t, `^[0-9]{13}$`, launch)
+	require.Equal(t, "1700000000001", s.state("model_pinned_at"), "take the pin after the first observation")
 	require.Equal(t,
 		shiftCheck+launch+" --pid 0 --start 0 --pinned-at 0\n"+shiftCheck+launch+" --pid 100 --start 200 --pinned-at "+s.state("model_pinned_at")+"\n",
 		s.read("calls"))
+}
+
+func TestShiftScriptWaitsForPostPinRefresh(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	out, err := s.invoke("old", "slow_refresh", "open")
+	require.NoError(t, err)
+	require.Equal(t, 52, strings.Count(s.read("calls"), shiftCheck))
+	require.Equal(t, strings.Repeat("2\n", 51), s.read("sleeps"))
+	require.Equal(t, 1, strings.Count(out, "waiting up to about a minute"))
+	require.NotContains(t, out, "probe refused")
+}
+
+func TestShiftScriptExplainsRetryableExhaustion(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	out, err := s.invoke("old", "report_before_pin", "open")
+	require.Error(t, err)
+	require.Equal(t, 50, strings.Count(s.read("calls"), shiftCheck))
+	require.Contains(t, out, "wait up to 60 s, run shift.sh status; abort only on wrong_model or candidate_changed")
 }
 
 func TestShiftScriptWithholdsCloseAfterGoOnModelRefusal(t *testing.T) {
@@ -172,28 +200,30 @@ func TestShiftScriptRefusesGoWithoutPin(t *testing.T) {
 	s := setupShiftScript(t)
 	require.NoError(t, s.run("old", "verified", "open"))
 	s.account()
-	s.write("current/state", s.read("current/state")+"model_pid=0\nmodel_start=0\nmodel_pinned_at=0\n")
-	_, err := s.invoke("old", "verified", "go")
+	s.write("current/state", s.read("current/state")+"model_pinned_at=0\n")
+	out, err := s.invoke("old", "verified", "go")
 	require.Error(t, err)
+	require.Contains(t, out, reopenShiftHint)
 	require.NoFileExists(t, s.path("current/GO"))
 	require.Equal(t, 2, strings.Count(s.read("calls"), shiftCheck))
 }
 
-func TestShiftScriptStatusRecoversInterruptedOpen(t *testing.T) {
+func TestShiftScriptStatusLeavesInterruptedOpenUnpinned(t *testing.T) {
 	t.Parallel()
 	s := setupShiftScript(t)
 	require.NoError(t, s.run("old", "verified", "open"))
 	state, _, _ := strings.Cut(s.read("current/state"), "model_pid=")
-	s.write("current/state", state+"model_pid=0\nmodel_start=0\nmodel_pinned_at=0\n")
+	state += "model_pid=0\nmodel_start=0\nmodel_pinned_at=0\n"
+	s.write("current/state", state)
 	s.account()
-	require.Error(t, s.run("old", "verified", "go"))
-	require.NoFileExists(t, s.path("current/GO"))
 	out, err := s.invoke("old", "verified", "status")
 	require.NoError(t, err)
 	require.Contains(t, out, "awaiting_pin")
-	require.Contains(t, s.read("current/state"), "model_pid=100\nmodel_start=200")
-	require.NoError(t, s.run("old", "verified", "go"))
-	require.FileExists(t, s.path("current/GO"))
+	require.Equal(t, state, s.read("current/state"))
+	out, err = s.invoke("old", "verified", "go")
+	require.Error(t, err)
+	require.Contains(t, out, reopenShiftHint)
+	require.NoFileExists(t, s.path("current/GO"))
 }
 
 func TestShiftScriptExplainsStateWithNoPin(t *testing.T) {
@@ -272,7 +302,10 @@ func TestShiftScriptRetriesFailedGoCue(t *testing.T) {
 	require.Equal(t, 1, strings.Count(s.read("cues"), "takeover"))
 }
 
-const shiftCheck = "boss shift check-model --pane new --terminal split-terminal --name ha-boss-next --model fable --launched-at "
+const (
+	shiftCheck      = "boss shift check-model --pane new --terminal split-terminal --name ha-boss-next --model fable --launched-at "
+	reopenShiftHint = "abort and open again"
+)
 
 type shiftScript struct {
 	t   *testing.T
@@ -294,7 +327,11 @@ func setupShiftScript(t *testing.T) shiftScript {
 	require.NoError(t, err, "%s", out)
 
 	for name, body := range map[string]string{
-		"sleep": "#!/bin/bash\nexit 0\n",
+		"sleep": "#!/bin/bash\nprintf '%s\\n' \"$1\" >> \"$SHIFT_ROOT/sleeps\"\n",
+		"date": `#!/bin/bash
+if [ "$1" != +%s%3N ]; then exec /bin/date "$@"; fi
+if [ -e "$SHIFT_ROOT/calls" ]; then echo 1700000000001; else echo 1700000000000; fi
+`,
 		"herdr": `#!/bin/bash
 case "$1 $2" in
   "agent get") [ ! -e "$SHIFT_ROOT/close" ] || exit 1
@@ -316,14 +353,24 @@ esac
 		"herdr-agentisan": `#!/bin/bash
 [ "$4" != --help ] || { printf "%s\n" "--pinned-at"; exit 0; }
 verdict=$MODEL_VERDICT
+pid=100 start=200
 if [ "$verdict" = missing_once ]; then
   if [ -e "$SHIFT_ROOT/calls" ]; then verdict=verified; else verdict=missing_model; fi
+fi
+if [ "$verdict" = slow_refresh ]; then
+  probes=0
+  if [ -e "$SHIFT_ROOT/calls" ]; then probes=$(wc -l < "$SHIFT_ROOT/calls"); fi
+  verdict=report_before_pin
+  if (( probes < 16 )); then verdict=claude_unavailable; pid=0 start=0
+  elif (( probes == 16 )); then verdict=awaiting_pin
+  elif (( probes == 51 )); then verdict=verified
+  fi
 fi
 printf '%s\n' "$*" >> "$SHIFT_ROOT/calls"
 [ "$1 $2 $3" = "boss shift check-model" ] || exit 9
 if [[ "$verdict" = verified || "$verdict" = wrong_model ]] && [[ " $* " = *" --pid 0 "* ]]; then verdict=awaiting_pin; fi
-printf '{"reason":"%s","pid":100,"start":200}\n' "$verdict"
-[ "$verdict" = verified ]
+printf '{"reason":"%s","pid":%s,"start":%s}\n' "$verdict" "$pid" "$start"
+[ "$verdict" = verified ] || { echo "probe refused" >&2; exit 1; }
 `,
 	} {
 		require.NoError(t, os.WriteFile(s.path(name), []byte(body), 0o700)) // #nosec G306 -- executable stand-ins in the scratch directory

@@ -86,8 +86,9 @@ func TestCheckModelRejectsZombieAtEitherRead(t *testing.T) {
 				raw := fmt.Sprintf("%d (claude) %s 99 1 1 0 -1 4194304 1 0 0 0 1 2 0 0 20 0 1 0 200", pid, state)
 				return report.ProcStat(fstest.MapFS{strconv.Itoa(pid) + "/stat": {Data: []byte(raw)}})(pid)
 			}
-			_, err := fixture.check(t)
+			verdict, err := fixture.check(t)
 			require.ErrorIs(t, err, bossshift.ErrModelProof)
+			require.Equal(t, []string{"claude_unavailable", "candidate_changed"}[deathAt-1], verdict.Reason)
 		})
 	}
 }
@@ -109,9 +110,9 @@ func TestCheckModelDoesNotVerifyRetainedReportOnFirstPin(t *testing.T) {
 func TestCheckModelRequiresReportAfterPinMargin(t *testing.T) {
 	t.Parallel()
 	fixture := newModelFixture()
-	pin := fixture.now.Add(-2 * time.Second)
+	pin := fixture.now.Add(-7 * time.Second)
 	fixture.target.PinnedAt = pin.UnixMilli()
-	fixture.stamp = pin.Add(time.Second)
+	fixture.stamp = pin.Add(6 * time.Second)
 	verdict, err := fixture.check(t)
 	require.ErrorIs(t, err, bossshift.ErrModelProof)
 	require.Equal(t, "report_before_pin", verdict.Reason)
@@ -150,6 +151,12 @@ func TestCheckModelRefusesBrokenProof(t *testing.T) {
 			f.wall = func(uint64) (time.Time, error) { return time.Time{}, fs.ErrPermission }
 		}},
 		{"pid_without_start", "invalid_candidate", func(f *modelFixture) { f.target.Start = 0 }},
+		{"pid_without_pin_time", "invalid_candidate", func(f *modelFixture) { f.target.PinnedAt = 0 }},
+		{"process_predates_launch", "candidate_changed", func(f *modelFixture) {
+			f.wall = func(uint64) (time.Time, error) {
+				return time.UnixMilli(f.target.LaunchedAt).Add(-time.Second - time.Millisecond), nil
+			}
+		}},
 		{"zero_launch", "invalid_candidate", func(f *modelFixture) { f.target.LaunchedAt = 0 }},
 		{"different_agent_name", "candidate_changed", func(f *modelFixture) { f.agent.Name = "stranger" }},
 		{"different_agent_terminal", "candidate_changed", func(f *modelFixture) { f.agent.TerminalID = "stranger" }},

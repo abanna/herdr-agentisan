@@ -14,11 +14,14 @@ herdr-agentisan boss shift check-model --pane "$pane" --terminal "$terminal" \
 ```
 
 An initial call omits the three process flags or supplies all as zero.
-Record the returned `pid` and `start` when both are nonzero, along with
-the current Unix milliseconds as `--pinned-at`. Pass the three values
-on subsequent checks. Verification requires a report strictly after
-that pin time plus one second. Inspect `requested_model`,
-`observed_model` and `reason` to diagnose a refusal.
+At open, record the returned `pid` and `start` when both are nonzero.
+Take `--pinned-at` in Unix milliseconds after the observation. Pass all
+three values on subsequent checks. The process may start at most one
+second before the recorded launch, allowing for clock rounding.
+Verification requires a report strictly more than six seconds after
+the pin, allowing an in-flight report from the previous process to
+finish. Inspect `requested_model`, `observed_model` and `reason` to
+diagnose a refusal.
 
 ## Install between shifts
 
@@ -36,18 +39,27 @@ printf '%s  %s\n' a9d92216ec0324c87372ed9fb38579568a57dcf72460d4e9366098abc3d384
   patch --batch --fuzz=0 "$script" < docs/boss-shift-v1.patch
 ```
 
-Use `shift.sh status` for the current verdict. If proof is missing or
-stale, wait for a fresh statusline report, repair the hook, or abort.
-If open was interrupted before pinning, use `shift.sh status` to record
-the candidate and wait for a later report on that same process. The `SHIFT_MODEL_SEEN`
-instruction in the old outgoing checklist is obsolete. GO requires verified model proof. If a post-GO check fails,
-the candidate must restore verified proof before retrying takeover.
+After the pin, expect to wait about a minute for the next eligible
+statusline report. Open allows 50 probes at two-second intervals, about
+105 seconds when checks respond promptly. It restarts that budget at
+a late pin, so allow a shell timeout that covers agent startup and
+the post-pin probes. If a pinned check times out with a retryable reason,
+wait up to 60 seconds and run `shift.sh status`.
+
+`shift.sh status` shows the current verdict and leaves the shift files
+untouched. If open was interrupted before it saved the pin, abort and
+open again. GO requires a verified report. Ignore the old
+`SHIFT_MODEL_SEEN` instruction. If a post-GO check fails, restore
+verified proof before retrying takeover.
 If GO was recorded but cueing failed, rerun `shift.sh go` from the
 outgoing pane to recheck the candidate and resend the cue. The script keeps
 the original GO and records a successful cue in `GO-CUED`. A failed
 prompt response can be ambiguous about whether the cue arrived.
 
-The statusline token belongs to the pane. Keep nested agents out of the
-candidate pane and verify a model switch after the next statusline report.
-Effort is a launch argument. The script still owns the shift files and
-makes separate calls to herdr for verification, close and rename.
+Takeover automatically closes the old pane after the model check passes.
+If someone switches the candidate's model with `/model` after its last
+statusline report and before takeover, the check can still see the old
+model and close the outgoing boss's pane. The switch shows up on the
+next statusline report. Keep nested agents out of the candidate pane
+because the token belongs to that pane. Effort is a launch argument.
+Verification, close and rename use separate herdr calls.

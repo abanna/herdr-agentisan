@@ -99,6 +99,9 @@ func checkModel(ctx context.Context, c herdr.Client, target Candidate, stat repo
 	if err != nil || started.IsZero() {
 		return v.refuse("claude_unavailable")
 	}
+	if started.Before(launch.Add(-time.Second)) {
+		return v.refuse("candidate_changed")
+	}
 	pane, err := c.GetPane(ctx, target.Pane)
 	if err != nil {
 		return v.unavailable(err)
@@ -129,9 +132,9 @@ func checkModel(ctx context.Context, c herdr.Client, target Candidate, stat repo
 	if target.PID == 0 {
 		return v.refuse("awaiting_pin")
 	}
-	// Start time can round down by a second. Observe the candidate first,
-	// then require a report beyond the pin and the rounding window (NERD-5262).
-	if !stamp.After(time.UnixMilli(target.PinnedAt).Add(time.Second)) {
+	// Allow an in-flight predecessor report to finish, plus the second
+	// by which the process start can round down (NERD-5262).
+	if !stamp.After(time.UnixMilli(target.PinnedAt).Add(herdr.CallTimeout + time.Second)) {
 		return v.refuse("report_before_pin")
 	}
 	fableAlias := target.Model == "fable" && fableID.MatchString(v.Observed)

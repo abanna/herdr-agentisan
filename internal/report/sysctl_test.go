@@ -159,6 +159,7 @@ func TestKinfoStatClasses(t *testing.T) {
 		err   bool
 	}{
 		"a process":                   {kinfo: report.Kinfo{PID: 900, PPID: 600, StartSec: 1_760_900_000, StartUsec: 123_456}, want: report.Stat{PPID: 600, Start: 1_760_900_000_123_456}},
+		"an exited process":           {kinfo: report.Kinfo{PID: 900, PPID: 600, StartSec: 1, Dead: true}, want: report.Stat{PPID: 600, Start: 1_000_000, Dead: true}},
 		"the same second, a later µs": {kinfo: report.Kinfo{PID: 900, PPID: 600, StartSec: 1_760_900_000, StartUsec: 123_457}, want: report.Stat{PPID: 600, Start: 1_760_900_000_123_457}},
 		"launchd's child":             {kinfo: report.Kinfo{PID: 900, PPID: 1, StartSec: 1, StartUsec: 0}, want: report.Stat{PPID: 1, Start: 1_000_000}},
 		"launchd itself":              {kinfo: report.Kinfo{PID: 900, PPID: 0, StartSec: 0, StartUsec: 999_999}, want: report.Stat{PPID: 0, Start: 999_999}},
