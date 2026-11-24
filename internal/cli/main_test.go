@@ -33,6 +33,12 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	stubDir = dir
+	shiftStubDir = filepath.Join(dir, "shift")
+	if err := writeShiftStubs(shiftStubDir); err != nil {
+		fmt.Fprintln(os.Stderr, "cli tests:", err)
+		_ = os.RemoveAll(dir)
+		os.Exit(1)
+	}
 	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(claudeStub), 0o700); err != nil { //nolint:gosec // an executable stand-in
 		fmt.Fprintln(os.Stderr, "cli tests: the stand-in claude:", err)
 		_ = os.RemoveAll(dir)

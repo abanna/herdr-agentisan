@@ -470,7 +470,7 @@ func TestCodexPushesTheTokenContract(t *testing.T) {
 	event := func(name string) func(string) string {
 		return func(path string) string { return eventHook(path, name) }
 	}
-	withModel := `{"ctx":"5","ctx_at":"1761066000900","model":"gpt-5","model_at":"1761066000900"}`
+	withModel := `{"ctx":"5","ctx_at":"1761066000900","model":"gpt-5","model_at":"1761066000900","model_session":""}`
 	for name, tc := range map[string]struct {
 		payload func(path string) string
 		model   string

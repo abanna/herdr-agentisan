@@ -134,9 +134,9 @@ func TestParseContextIgnoresTheModel(t *testing.T) {
 }
 
 // TestStatuslinePushesTheModel is the model's token contract (A56): model
-// and model_at, in Unix milliseconds from the pane's clock, in the same
-// report as ctx with its 180 s TTL, or alone before Claude has measured a
-// context.
+// and model_at, in Unix milliseconds from the pane's clock, and model_session,
+// the statusline's session_id (empty clears it), in the same report as ctx
+// with its 180 s TTL, or alone before Claude has measured a context.
 func TestStatuslinePushesTheModel(t *testing.T) {
 	t.Parallel()
 
@@ -146,14 +146,19 @@ func TestStatuslinePushesTheModel(t *testing.T) {
 		tokens string
 	}{
 		"beside ctx": {
-			in:     `{"model":{"id":"claude-opus-5-5","display_name":"Opus"},"context_window":{"used_percentage":42.6}}`,
+			in:     `{"session_id":"4f1c","model":{"id":"claude-opus-5-5","display_name":"Opus"},"context_window":{"used_percentage":42.6}}`,
 			want:   report.Result{Ctx: 43, HasCtx: true, Model: "claude-opus-5-5", PaneID: "w14:p1"},
-			tokens: `{"ctx":"43","ctx_at":"1761066000900","model":"claude-opus-5-5","model_at":"1761066000900"}`,
+			tokens: `{"ctx":"43","ctx_at":"1761066000900","model":"claude-opus-5-5","model_at":"1761066000900","model_session":"4f1c"}`,
 		},
 		"alone": {
 			in:     `{"model":{"id":"claude-sonnet-5-5","display_name":"Sonnet"}}`,
 			want:   report.Result{Model: "claude-sonnet-5-5", PaneID: "w14:p1"},
-			tokens: `{"model":"claude-sonnet-5-5","model_at":"1761066000900"}`,
+			tokens: `{"model":"claude-sonnet-5-5","model_at":"1761066000900","model_session":""}`,
+		},
+		"a session that is no string clears the key": {
+			in:     `{"session_id":7,"model":{"id":"claude-sonnet-5-5"}}`,
+			want:   report.Result{Model: "claude-sonnet-5-5", PaneID: "w14:p1"},
+			tokens: `{"model":"claude-sonnet-5-5","model_at":"1761066000900","model_session":""}`,
 		},
 	}
 	for name, tc := range tests {
@@ -300,7 +305,7 @@ func TestCodexPushesTheModelAlone(t *testing.T) {
 			assert.Equal(t, report.Result{Model: "gpt-5", PaneID: "w15:p4"}, got)
 			reqs := srv.Requests()
 			require.Equal(t, []string{process, reportM}, methods(reqs))
-			assert.JSONEq(t, `{"pane_id":"w15:p4","source":"agentisan","tokens":{"model":"gpt-5","model_at":"1761066000900"},"ttl_ms":86400000}`, string(reqs[1].Params))
+			assert.JSONEq(t, `{"pane_id":"w15:p4","source":"agentisan","tokens":{"model":"gpt-5","model_at":"1761066000900","model_session":""},"ttl_ms":86400000}`, string(reqs[1].Params))
 		})
 	}
 }

@@ -56,7 +56,8 @@ const (
 // The model token contract (ADR-001 A56). The agent reports the model it runs
 // now in the same report as its ctx, with ctx's TTL: Claude's statusline its
 // model.id, a Codex hook its model, so a /model switch shows without a
-// restart. The daemon prefers it to the launch model (A39).
+// restart. The daemon prefers it to the launch model (A39). A report that
+// sets the model also sets model_session.
 const (
 	// ModelKey is the pane token holding the model the pane's agent reported
 	// it runs, such as claude-sonnet-5-5 or gpt-5.5.
@@ -66,6 +67,14 @@ const (
 	// agent's report from one an agent before it in the pane left: herdr
 	// gives no token a time. It is set in every report that sets the model.
 	ModelAtKey = "model_at"
+	// ModelSessionKey is the pane token naming the session that reported the
+	// model: Claude's statusline session_id, which is the --session-id of a
+	// Claude launched with one. A report that sets the model sets this key
+	// too; a reporter that names no session, Codex included, clears it, as
+	// herdr clears a key set to "". The pane's model token is the pane's, not
+	// a process's, so a reader that must know which session said it compares
+	// this key (NERD-5262).
+	ModelSessionKey = "model_session"
 )
 
 // Sentinel errors. Callers branch on these with errors.Is.
@@ -159,6 +168,9 @@ type Reading struct {
 	HasCtx bool
 	// Model is the model, already ValidModel's; "" when there is none.
 	Model string
+	// Session is the statusline's session_id, kept by ValidModel's rule;
+	// "" when it names none or is no string.
+	Session string
 }
 
 // Result is what a report pushed, and where.
@@ -267,6 +279,7 @@ func ParseStatusline(r io.Reader) (Reading, error) {
 	// The model is read loosely for the same reason (modelOf).
 	var in struct {
 		Model         json.RawMessage `json:"model"`
+		SessionID     json.RawMessage `json:"session_id"`
 		ContextWindow *struct {
 			UsedPercentage *float64 `json:"used_percentage"`
 		} `json:"context_window"`
@@ -281,6 +294,7 @@ func ParseStatusline(r io.Reader) (Reading, error) {
 	if json.Unmarshal(in.Model, &model) == nil {
 		rd.Model = modelOf(model.ID)
 	}
+	rd.Session = modelOf(in.SessionID)
 	if in.ContextWindow != nil && in.ContextWindow.UsedPercentage != nil {
 		pct := *in.ContextWindow.UsedPercentage
 		if pct < 0 || pct > 100 {
@@ -344,6 +358,7 @@ func push(ctx context.Context, rep Reporter, pane Pane, rd Reading, ttl time.Dur
 	if rd.Model != "" {
 		tokens[ModelKey] = rd.Model
 		tokens[ModelAtKey] = FormatModelAt(pane.now())
+		tokens[ModelSessionKey] = rd.Session
 	}
 	m := herdr.PaneMetadata{PaneID: target, Source: Source, Tokens: tokens}
 	// ttl is CtxTTL or CodexCtxTTL; the guard keeps the conversion from
