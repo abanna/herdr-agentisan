@@ -75,6 +75,11 @@ func TestStageReadFailsWithTheDomainsErrors(t *testing.T) {
 	_, err = runStageRead(t, "hang_call", "--repo", repo, "--work-dir", dir, "--timeout", "1s")
 	assert.ErrorIs(t, err, bundle.ErrTimeout)
 
+	out, err := runStageRead(t, "tool_error_ok", "--repo", repo, "--work-dir", dir)
+	assert.ErrorIs(t, err, bundle.ErrContract)
+	assert.Equal(t, 1, cli.ExitCode(err))
+	assert.NotContains(t, out, "stage verify ·")
+
 	ctx := cli.WithBundleLocator(t.Context(), func(string, string) (bundle.Launch, error) {
 		return bundle.Launch{}, bundle.ErrUnavailable
 	})

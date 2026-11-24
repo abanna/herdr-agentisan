@@ -48,10 +48,8 @@ type Session struct {
 	failed  error
 }
 
-// Open starts the server and does the handshake. ctx is the session's
-// whole life: when it ends the server's process group is killed, whatever
-// the session was doing, and each call then answers ErrTimeout. A failed
-// Open leaves nothing running.
+// Open starts and handshakes with the server. The context bounds the session.
+// Cancellation or a failed Open tears down the server group.
 func Open(ctx context.Context, l Launch) (*Session, error) {
 	if len(l.Argv) == 0 {
 		return nil, fmt.Errorf("%w: no command to start", ErrUnavailable)
@@ -155,8 +153,7 @@ func atLeast(v string) bool {
 	return true
 }
 
-// Execute runs one read operation through the server's execute tool, always
-// with dry_run=true, and returns the `result` of its envelope.
+// Execute calls the bundle's execute tool with dry_run=true and unwraps its result.
 func (s *Session) Execute(operationID string, args map[string]any) (json.RawMessage, error) {
 	res, err := s.rpc("tools/call", map[string]any{"name": "execute", "arguments": map[string]any{
 		"operation_id": operationID, "arguments": args, "dry_run": true,
@@ -171,8 +168,7 @@ func (s *Session) Execute(operationID string, args map[string]any) (json.RawMess
 	return out, err
 }
 
-// codes maps the bundle's stable error codes (agentisan operations/policy.py
-// ErrorCode) to what a caller branches on.
+// codes maps stable ErrorCode values from agentisan operations/policy.py.
 var codes = map[string]error{
 	"unknown_operation": ErrUnknownOperation,
 	"validation_failed": ErrRefused,
@@ -181,9 +177,7 @@ var codes = map[string]error{
 	"handler_error":     ErrOperation,
 }
 
-// decodeEnvelope reads a tools/call result: the bundle's envelope in
-// structuredContent, else in the one JSON text block. Plain text with
-// isError is the SDK's own failure.
+// decodeEnvelope reads the structured envelope or its JSON text fallback.
 func decodeEnvelope(operationID string, res json.RawMessage) (json.RawMessage, error) {
 	var tr struct {
 		Content []struct{ Type, Text string } `json:"content"`
@@ -210,7 +204,7 @@ func decodeEnvelope(operationID string, res json.RawMessage) (json.RawMessage, e
 		return nil, fmt.Errorf("%w: no operation envelope in the reply", ErrProtocol)
 	}
 	switch {
-	case env.Status == "ok" && env.OperationID == operationID:
+	case !tr.IsError && env.Status == "ok" && env.OperationID == operationID:
 		return env.Result, nil
 	case env.Status == "error" && env.Error != nil:
 		kind, known := codes[env.Error.Code]
@@ -219,7 +213,7 @@ func decodeEnvelope(operationID string, res json.RawMessage) (json.RawMessage, e
 		}
 		return nil, fmt.Errorf("%w: %s: %s", kind, clip(env.Error.Code), clip(env.Error.Message))
 	}
-	return nil, fmt.Errorf("%w: status %q for operation %q", ErrContract, clip(env.Status), clip(env.OperationID))
+	return nil, fmt.Errorf("%w: status %q with isError=%t for operation %q", ErrContract, clip(env.Status), tr.IsError, clip(env.OperationID))
 }
 
 // frame is the part of a JSON-RPC message the client looks at.
@@ -233,8 +227,7 @@ type frame struct {
 	} `json:"error"`
 }
 
-// rpc sends one request and reads its reply. Any failure ends the
-// session.
+// rpc reads one request's reply and ends the session on failure.
 func (s *Session) rpc(method string, params any) (json.RawMessage, error) {
 	if s.failed != nil {
 		return nil, s.failed
@@ -278,8 +271,7 @@ func (s *Session) protocol(what string) error {
 	return fmt.Errorf("%w: %s", ErrProtocol, what)
 }
 
-// broken is the error for a read or write that failed: the context's end,
-// a line over the cap, or the server gone, in that order.
+// broken classifies failed I/O by deadline, frame limit, then server death.
 func (s *Session) broken(err error) error {
 	s.fail()
 	if cerr := s.ctx.Err(); cerr != nil {
@@ -306,8 +298,7 @@ func (s *Session) fail() {
 	s.kill()
 }
 
-// kill sends SIGKILL to the server's whole process group and closes the
-// session's pipe ends, which also frees a read or a write that is blocked.
+// kill signals the group and closes both MCP pipes to free blocked I/O.
 func (s *Session) kill() {
 	s.once.Do(func() {
 		if err := syscall.Kill(-s.guard.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
@@ -317,10 +308,7 @@ func (s *Session) kill() {
 	})
 }
 
-// Close ends the session: stdin closed first, which ends a server that
-// reads it; after grace the group is killed, and always once the leader is
-// gone, for any child still holding a pipe. It reports a kill that failed
-// for a reason other than the group being gone. Close is safe to repeat.
+// Close gives stdin EOF time to stop the server before group kill and is safe to repeat.
 func (s *Session) Close() error {
 	if s.failed == nil {
 		s.failed = fmt.Errorf("%w: the session is closed", ErrServerDied)

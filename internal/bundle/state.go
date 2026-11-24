@@ -1,6 +1,7 @@
 package bundle
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -21,14 +22,17 @@ type State struct {
 	StateFile string
 }
 
-// ReadState reads the workflow state of one worktree through the bundle's
-// convergence.read_state. It requires an absolute directory that resolves
-// at or under the repo's real path. An empty work dir would make the server
-// search upward from its launch directory. The reply's updated_at must be
-// RFC 3339. Stage and ticket are optional strings.
+// ReadState reads a canonical worktree at or under the repo through convergence.read_state.
 func ReadState(s *Session, workDir string) (State, error) {
-	dir, err := s.contain(workDir)
+	if s.failed != nil {
+		return State{}, s.failed
+	}
+	root := s.cmd.Dir
+	dir, err := resolveWithin(s.ctx, func() (string, error) { return contain(root, workDir) })
 	if err != nil {
+		if s.ctx.Err() != nil {
+			return State{}, s.broken(err)
+		}
 		return State{}, err
 	}
 	raw, err := s.Execute("convergence.read_state", map[string]any{"work_dir": dir})
@@ -63,9 +67,8 @@ func ReadState(s *Session, workDir string) (State, error) {
 	return st, nil
 }
 
-// contain returns workDir's real path when it is a directory at or under
-// the session's repo, compared component by component.
-func (s *Session) contain(workDir string) (string, error) {
+// contain resolves workDir and compares path components against the repo.
+func contain(repo, workDir string) (string, error) {
 	if !filepath.IsAbs(workDir) {
 		return "", fmt.Errorf("%w: the work dir %q is not an absolute path", ErrRefused, workDir)
 	}
@@ -76,7 +79,7 @@ func (s *Session) contain(workDir string) (string, error) {
 	if info, err := os.Stat(real); err != nil || !info.IsDir() {
 		return "", fmt.Errorf("%w: the work dir %s is not a directory", ErrRefused, real)
 	}
-	root, err := filepath.EvalSymlinks(s.cmd.Dir)
+	root, err := filepath.EvalSymlinks(repo)
 	if err != nil {
 		return "", fmt.Errorf("%w: the repo: %w", ErrRefused, err)
 	}
@@ -84,4 +87,22 @@ func (s *Session) contain(workDir string) (string, error) {
 		return "", fmt.Errorf("%w: the work dir %s is outside the repo %s", ErrRefused, real, root)
 	}
 	return real, nil
+}
+
+func resolveWithin(ctx context.Context, resolve func() (string, error)) (string, error) {
+	var dir string
+	var err error
+	done := make(chan struct{})
+	go func() {
+		dir, err = resolve()
+		close(done)
+	}()
+	select {
+	case <-done:
+		if ctx.Err() == nil {
+			return dir, err
+		}
+	case <-ctx.Done():
+	}
+	return "", fmt.Errorf("%w: %w", ErrTimeout, ctx.Err())
 }

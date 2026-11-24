@@ -215,7 +215,7 @@ func call(mode string, getenv func(string) string, out io.Writer, send func(json
 			send(id, toolResult(fixture("unknown-op")["result"].(map[string]any)["structuredContent"].(map[string]any), true, true))
 			return 0, false
 		}
-		send(id, toolResult(readState(getenv), false, mode != "text_only"))
+		send(id, toolResult(readState(getenv), mode == "tool_error_ok", mode != "text_only"))
 	}
 	return 0, false
 }
