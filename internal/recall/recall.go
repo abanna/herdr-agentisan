@@ -140,7 +140,7 @@ func readLines(path string) ([]string, error) {
 	if !filepath.IsAbs(path) {
 		return nil, fmt.Errorf("%w: %s is not an absolute path", ErrSource, path)
 	}
-	f, err := os.Open(path)
+	f, err := os.Open(path) // #nosec G304 -- a source path the shared config names; only read.
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrSource, err)
 	}
