@@ -186,6 +186,32 @@ func TestTrueColorClippedStagesKeepTheirHueOnGrey(t *testing.T) {
 	requireRedInk(t, blocked)
 }
 
+// The fifth review's case, a stated limit (NERD-5792): on #b0b0b0 neither the
+// queued stage's yellow (3.10:1) nor the ordinary stage's secondary ink
+// (3.84:1) reaches 4.5:1, and no stock slot of their hues does, so both draw
+// the shared neutral and a clipped queued stage looks like an ordinary one.
+// Main drew slots 228 and 60. A change to this behaviour must show here.
+func TestANSI256ClippedQueuedStageDrawsLikeAnOrdinaryOneOnGrey(t *testing.T) {
+	t.Parallel()
+
+	const bg = "#b0b0b0"
+	prefix := strings.Repeat("x", 80)
+	snap := &snapshot.Snapshot{V: 1, Team: "crew", Groups: []snapshot.Group{{Name: "coders", Agents: []snapshot.Agent{
+		{Name: "alpha1", Status: snapshot.StatusWorking, Stage: prefix + " queued"},
+		{Name: "alpha2", Status: snapshot.StatusWorking, Stage: prefix + " reviewing"},
+	}}}}
+	frame := dashboard.Frame{Snapshot: snap, Selection: dashboard.Selection{Group: -1}, Now: at}
+	out := dashboard.Render(frame, 80, 24, dashboard.Options{Profile: colorprofile.ANSI256, Background: lipgloss.Color(bg)})
+	plain := ansi.Strip(out)
+	require.NotContains(t, plain, "queued", "the trigger word is clipped")
+	require.NotContains(t, plain, "reviewing", "the suffix is clipped")
+	queued := paintedCell(t, lineWith(t, out, "alpha1"), "xxx").ink
+	ordinary := paintedCell(t, lineWith(t, out, "alpha2"), "xxx").ink
+	require.Equal(t, ansi.IndexedColor(232), queued)
+	require.Equal(t, ansi.IndexedColor(232), ordinary)
+	require.GreaterOrEqual(t, contrastRatio(queued, lipgloss.Color(bg)), readableContrast)
+}
+
 func TestANSI256SelectionStaysVisible(t *testing.T) {
 	t.Parallel()
 
@@ -396,9 +422,21 @@ func TestANSI256UsesBestNeutralOnMidtones(t *testing.T) {
 	}
 }
 
-// sameBlockedReady is the number of the sweep's 4,096 backgrounds on which a
-// blocked and a ready stage draw the same 256-colour ink.
-const sameBlockedReady = 913
+// sameStageInk is, for each pair of stage cues, the number of the sweep's
+// 4,096 backgrounds on which the two draw the same 256-colour ink: a ready
+// (green), a blocked (red), a waiting or queued (yellow) and an ordinary
+// stage (secondary). A stage can be clipped to its colour (ADR-001 A38). No
+// stock slot of a hue reaches 4.5:1 on a band of backgrounds, so the cues
+// meet in the shared neutral there. The owner ruled on 2026-11-24 07:08 that
+// the floor stays and a non-colour cue is a separate item (NERD-5792).
+var sameStageInk = map[string]int{
+	"red/green":        913,
+	"yellow/green":     1861,
+	"red/yellow":       802,
+	"secondary/green":  1874,
+	"secondary/yellow": 1763,
+	"secondary/red":    1373,
+}
 
 func TestDashboardContrastSweep(t *testing.T) {
 	t.Parallel()
@@ -551,6 +589,11 @@ func TestDashboardContrastSweep(t *testing.T) {
 								}
 							}
 						}
+						for _, other := range hueRoles {
+							if inks["secondary"] == inks[other] {
+								sameSlot["secondary/"+other]++
+							}
+						}
 						for i, a := range hueRoles {
 							for _, b := range hueRoles[:i] {
 								if inks[a] == inks[b] {
@@ -584,7 +627,13 @@ func TestDashboardContrastSweep(t *testing.T) {
 				}
 				t.Logf("near-identical hue inks: %v; main's: %v", nearInk, mainNear)
 			}
+			for _, other := range hueRoles {
+				t.Logf("secondary and %s draw the same ink: %d/%d", other, sameSlot["secondary/"+other], seen)
+			}
 			if p == colorprofile.ANSI256 {
+				for pair, want := range sameStageInk {
+					require.Equalf(t, want, sameSlot[pair], "%s stage inks", pair)
+				}
 				// A ladder slot must stay tellable from every other hue ink on
 				// its background; a hue with no such slot keeps the neutral.
 				require.Empty(t, nearInk, "distinct hue inks closer than %.3f in OKLab", minimumInkDistance)
@@ -593,7 +642,6 @@ func TestDashboardContrastSweep(t *testing.T) {
 				// of relative luminance 0.159 to 0.284, so there the two share the
 				// neutral. A stated limit: the owner ruled on 2026-11-24 07:08 that the
 				// floor stays and a non-colour cue is a separate item (NERD-5792).
-				require.Equal(t, sameBlockedReady, sameSlot["red/green"], "blocked and ready stage inks")
 			}
 		})
 	}
