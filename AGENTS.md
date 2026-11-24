@@ -474,6 +474,13 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   Taskfile must have `tdaddy:index` and `tdaddy:impact`; each failure is a
   sentinel whose message says how to fix it. Tests inject PATH, files and the
   runner.
+- `internal/bundle/` — the client of the installed Agentisan bundle's MCP
+  server (NERD-5790); the plugin reaches the bundle only through it. `Locate`
+  finds the bundle in a repo, `Open` starts one server over stdio in its own
+  process group under one context, `ReadState` reads a worktree's workflow
+  state through `convergence.read_state`; each failure is a sentinel.
+  `herdr-agentisan stage read` is its caller. `bundletest` is the stand-in
+  server (the test binary run again, answering with captured 0.19.0 replies).
 - `internal/config/` — environment-backed config. No secret has a default.
   Also carries build provenance (`Version`, `Commit`, injected at link time):
   it is configuration resolved from the environment the binary was BUILT in,

@@ -1,0 +1,308 @@
+package bundle
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+)
+
+// What the client pins of the bundle 0.19.0 server and its MCP SDK 2.3.0.
+const (
+	ProtocolVersion = "2025-11-25"
+	serverName      = "agentisan"
+)
+
+var minVersion = [3]int{0, 19, 0}
+
+const (
+	// grace is how long Close waits for the server to end on its own once
+	// its stdin is closed, and waitDelay how long a failed call waits to
+	// learn how the server ended.
+	grace     = 2 * time.Second
+	waitDelay = 2 * time.Second
+)
+
+// Session is one running server; its calls are serial.
+type Session struct {
+	ctx     context.Context //nolint:containedctx // the one deadline of the session's life
+	cmd     *exec.Cmd
+	in, out *os.File
+	rd      *bufio.Reader
+	exited  chan struct{} // closed once the server is reaped
+	waitErr error         // the reap's result, read after exited
+	once    sync.Once
+	killErr error
+	nextID  int
+	failed  error
+}
+
+// Open starts the server and does the handshake. ctx is the session's
+// whole life: when it ends the server's process group is killed, whatever
+// the session was doing, and each call then answers ErrTimeout. A failed
+// Open leaves nothing running.
+func Open(ctx context.Context, l Launch) (*Session, error) {
+	if len(l.Argv) == 0 {
+		return nil, fmt.Errorf("%w: no command to start", ErrUnavailable)
+	}
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		_, _ = inR.Close(), inW.Close()
+		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	s := &Session{ctx: ctx, in: inW, out: outR, rd: bufio.NewReaderSize(outR, 64<<10), exited: make(chan struct{})}
+	cmd := exec.CommandContext(ctx, l.Argv[0], l.Argv[1:]...) //nolint:gosec // argv is Locate's, or a test's
+	s.cmd = cmd
+	// The context's end kills the whole group, not just the leader.
+	cmd.Cancel = func() error { s.kill(); return nil }
+	cmd.Dir, cmd.Env = l.Dir, l.Env
+	cmd.Stdin, cmd.Stdout = inR, outW
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	startErr := cmd.Start()
+	_, _ = inR.Close(), outW.Close() // the server's ends; ours are in and out
+	if startErr != nil {
+		_, _ = inW.Close(), outR.Close()
+		return nil, fmt.Errorf("%w: start %s: %w", ErrUnavailable, l.Argv[0], startErr)
+	}
+	go func() { s.waitErr = cmd.Wait(); close(s.exited) }()
+	if err := s.handshake(l.ClientVersion); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *Session) handshake(clientVersion string) error {
+	res, err := s.rpc("initialize", map[string]any{
+		"protocolVersion": ProtocolVersion,
+		"capabilities":    map[string]any{},
+		"clientInfo":      map[string]any{"name": "herdr-agentisan", "version": clientVersion},
+	})
+	if errors.Is(err, ErrServerDied) {
+		return fmt.Errorf("%w: before the handshake: %w", ErrUnavailable, err)
+	}
+	if err != nil {
+		return err
+	}
+	var r struct {
+		ProtocolVersion string `json:"protocolVersion"`
+		Capabilities    struct {
+			Tools *json.RawMessage `json:"tools"`
+		} `json:"capabilities"`
+		ServerInfo struct{ Name, Version string } `json:"serverInfo"`
+	}
+	if json.Unmarshal(res, &r) != nil || r.ProtocolVersion != ProtocolVersion || r.ServerInfo.Name != serverName || r.Capabilities.Tools == nil || !atLeast(r.ServerInfo.Version) {
+		return fmt.Errorf("%w: protocol %q, server %q %q", ErrVersion, clip(r.ProtocolVersion), clip(r.ServerInfo.Name), clip(r.ServerInfo.Version))
+	}
+	if err := s.send(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}); err != nil {
+		return s.broken(err)
+	}
+	return nil
+}
+
+// atLeast reports whether v is a major.minor.patch of at least minVersion.
+func atLeast(v string) bool {
+	parts := strings.Split(v, ".")
+	if len(parts) != len(minVersion) {
+		return false
+	}
+	newer := false
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return false
+		}
+		if !newer && n < minVersion[i] {
+			return false
+		}
+		newer = newer || n > minVersion[i]
+	}
+	return true
+}
+
+// Execute runs one read operation through the server's execute tool, always
+// with dry_run=true, and returns the `result` of its envelope.
+func (s *Session) Execute(operationID string, args map[string]any) (json.RawMessage, error) {
+	res, err := s.rpc("tools/call", map[string]any{"name": "execute", "arguments": map[string]any{
+		"operation_id": operationID, "arguments": args, "dry_run": true,
+	}})
+	if err != nil {
+		return nil, err
+	}
+	out, err := decodeEnvelope(operationID, res)
+	if errors.Is(err, ErrProtocol) {
+		s.fail()
+	}
+	return out, err
+}
+
+// codes maps the bundle's stable error codes (agentisan operations/policy.py
+// ErrorCode) to what a caller branches on.
+var codes = map[string]error{
+	"unknown_operation": ErrUnknownOperation,
+	"validation_failed": ErrRefused,
+	"policy_denied":     ErrRefused,
+	"operation_failed":  ErrOperation,
+	"handler_error":     ErrOperation,
+}
+
+// decodeEnvelope reads a tools/call result: the bundle's envelope in
+// structuredContent, else in the one JSON text block. Plain text with
+// isError is the SDK's own failure.
+func decodeEnvelope(operationID string, res json.RawMessage) (json.RawMessage, error) {
+	var tr struct {
+		Content []struct{ Type, Text string } `json:"content"`
+		Payload json.RawMessage               `json:"structuredContent"`
+		IsError bool                          `json:"isError"`
+	}
+	if err := json.Unmarshal(res, &tr); err != nil {
+		return nil, fmt.Errorf("%w: tools/call result: %w", ErrProtocol, err)
+	}
+	text := ""
+	if len(tr.Content) == 1 && tr.Content[0].Type == "text" {
+		text = tr.Content[0].Text
+	}
+	if len(tr.Payload) == 0 || string(tr.Payload) == "null" {
+		tr.Payload = json.RawMessage(text)
+	}
+	var env struct {
+		Status      string          `json:"status"`
+		OperationID string          `json:"operation_id"`
+		Result      json.RawMessage `json:"result"`
+		Error       *struct{ Code, Message string }
+	}
+	if len(tr.Payload) == 0 || json.Unmarshal(tr.Payload, &env) != nil || env.Status == "" {
+		return nil, fmt.Errorf("%w: no operation envelope in the reply", ErrProtocol)
+	}
+	switch {
+	case env.Status == "ok" && env.OperationID == operationID:
+		return env.Result, nil
+	case env.Status == "error" && env.Error != nil:
+		kind, known := codes[env.Error.Code]
+		if !known {
+			kind = ErrContract
+		}
+		return nil, fmt.Errorf("%w: %s: %s", kind, clip(env.Error.Code), clip(env.Error.Message))
+	}
+	return nil, fmt.Errorf("%w: status %q for operation %q", ErrContract, clip(env.Status), clip(env.OperationID))
+}
+
+// frame is the part of a JSON-RPC message the client looks at.
+type frame struct {
+	ID     json.RawMessage `json:"id"`
+	Method string          `json:"method"`
+	Result json.RawMessage `json:"result"`
+	Error  *struct {
+		Code    int
+		Message string
+	} `json:"error"`
+}
+
+// rpc sends one request and reads its reply. Any failure ends the
+// session.
+func (s *Session) rpc(method string, params any) (json.RawMessage, error) {
+	if s.failed != nil {
+		return nil, s.failed
+	}
+	s.nextID++
+	id := s.nextID
+	if err := s.send(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params}); err != nil {
+		return nil, s.broken(err)
+	}
+	line, err := s.rd.ReadBytes('\n')
+	if err != nil {
+		return nil, s.broken(err)
+	}
+	var f frame
+	switch err := json.Unmarshal(line, &f); {
+	case err != nil:
+		return nil, s.protocol("a line that is not JSON-RPC: " + clip(string(line)))
+	case f.Method != "":
+		return nil, s.protocol("a request or notification of the server's own: " + clip(f.Method))
+	case string(f.ID) != strconv.Itoa(id):
+		return nil, s.protocol("a reply to request " + clip(string(f.ID)) + ", not " + strconv.Itoa(id))
+	case f.Error != nil:
+		return nil, s.protocol(fmt.Sprintf("a JSON-RPC error: code %d: %s", f.Error.Code, clip(f.Error.Message)))
+	}
+	return f.Result, nil
+}
+
+func (s *Session) send(v any) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("encode a request: %w", err)
+	}
+	if _, err := s.in.Write(append(b, '\n')); err != nil {
+		return fmt.Errorf("write to the server: %w", err)
+	}
+	return nil
+}
+
+func (s *Session) protocol(what string) error {
+	s.fail()
+	return fmt.Errorf("%w: %s", ErrProtocol, what)
+}
+
+// broken is the error for a read or write that failed: the context's end,
+// a line over the cap, or the server gone, in that order.
+func (s *Session) broken(err error) error {
+	s.fail()
+	if cerr := s.ctx.Err(); cerr != nil {
+		return fmt.Errorf("%w: %w", ErrTimeout, cerr)
+	}
+	select {
+	case <-s.exited:
+		return fmt.Errorf("%w: %w", ErrServerDied, s.waitErr)
+	case <-time.After(waitDelay):
+		return fmt.Errorf("%w: %w", ErrServerDied, err)
+	}
+}
+
+// fail ends the session: the group is killed and later calls fail.
+func (s *Session) fail() {
+	if s.failed == nil {
+		s.failed = fmt.Errorf("%w: the session has ended", ErrServerDied)
+	}
+	s.kill()
+}
+
+// kill sends SIGKILL to the server's whole process group and closes the
+// session's pipe ends, which also frees a read or a write that is blocked.
+func (s *Session) kill() {
+	s.once.Do(func() {
+		if err := syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			s.killErr = fmt.Errorf("kill the server's process group: %w", err)
+		}
+		_, _ = s.in.Close(), s.out.Close()
+	})
+}
+
+// Close ends the session: stdin closed first, which ends a server that
+// reads it; after grace the group is killed, and always once the leader is
+// gone, for any child still holding a pipe. It reports a kill that failed
+// for a reason other than the group being gone. Close is safe to repeat.
+func (s *Session) Close() error {
+	if s.failed == nil {
+		s.failed = fmt.Errorf("%w: the session is closed", ErrServerDied)
+	}
+	_ = s.in.Close()
+	select {
+	case <-s.exited:
+	case <-time.After(grace):
+	}
+	s.kill()
+	<-s.exited
+	return s.killErr
+}
