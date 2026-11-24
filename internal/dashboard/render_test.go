@@ -15,7 +15,6 @@ import (
 
 	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/charmbracelet/x/exp/golden"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -31,8 +30,7 @@ var at = time.Date(2026, 10, 9, 17, 19, 0, 0, time.UTC)
 // holds exactly what a reader sees, and nothing a terminal interprets.
 var plain = dashboard.Options{Profile: colorprofile.NoTTY}
 
-// attrs keeps attributes such as reverse video and drops colour, so the
-// selected line can be found.
+// attrs keeps text attributes and drops colour, as in a NO_COLOR terminal.
 var attrs = dashboard.Options{Profile: colorprofile.ASCII}
 
 // fullColour keeps every colour and attribute, for tests that compare
@@ -166,7 +164,7 @@ func TestRenderGolden(t *testing.T) {
 			t.Parallel()
 			// The trailing newline matches what end-of-file tooling expects
 			// of a text file, so a golden never differs by its last byte.
-			golden.RequireEqual(t, dashboard.Render(tc.frame(t), tc.w, tc.h, plain)+"\n")
+			checkFrameGolden(t, tc.frame(t), tc.w, tc.h)
 		})
 	}
 }
@@ -322,19 +320,16 @@ func TestRenderNothingWithoutASize(t *testing.T) {
 // sgr matches one SGR sequence and captures its parameters.
 var sgr = regexp.MustCompile(`\x1b\[([0-9;:]*)m`)
 
-// selectedLine returns the text of the one line drawn in reverse video.
+// selectedLine returns the one line marked as selected in monochrome.
 func selectedLine(t *testing.T, frame string) string {
 	t.Helper()
 	var found []string
-	for line := range strings.SplitSeq(frame, "\n") {
-		for _, m := range sgr.FindAllStringSubmatch(line, -1) {
-			if hasParam(m[1], "7") {
-				found = append(found, ansi.Strip(line))
-				break
-			}
+	for line := range strings.SplitSeq(ansi.Strip(frame), "\n") {
+		if strings.Contains(line, "│▸") || strings.Contains(line, "╭▸") {
+			found = append(found, line)
 		}
 	}
-	require.Len(t, found, 1, "exactly one line must be in reverse video")
+	require.Len(t, found, 1, "exactly one line must show the selection pointer")
 	return found[0]
 }
 
@@ -349,7 +344,7 @@ func hasParam(params, want string) bool {
 
 // TestRenderKeepsTheSelectionVisible: whichever agent is selected, whatever
 // the previous scroll and however short the terminal, the selected agent's
-// row is on screen, in reverse video, and it is the only such row.
+// row is on screen, and it is the only row with the selection pointer.
 func TestRenderKeepsTheSelectionVisible(t *testing.T) {
 	t.Parallel()
 
@@ -604,6 +599,7 @@ func TestRenderContents(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			f, w, h := tc.frame(t)
+			f.Selection = dashboard.Selection{Group: -1}
 			out := dashboard.Render(f, w, h, plain)
 			for _, s := range tc.want {
 				assert.Contains(t, out, s)
@@ -774,8 +770,8 @@ func TestHeaderDegradesWithHeight(t *testing.T) {
 		"9: box and gap": {h: 9, first: []string{"╭───", "│ agentisan", "│ boss ▸", "╰───", "", "╭─ CODERS"}, last: " enter jump"},
 		"8: bare":        {h: 8, first: []string{" agentisan", " boss ▸", "╭─ CODERS"}, last: " enter jump"},
 		// One line for the groups: it is the selected agent's.
-		"4: bare":      {h: 4, first: []string{" agentisan", " boss ▸", "│ ◐ pee01"}, last: " enter jump"},
-		"3: one line":  {h: 3, first: []string{" agentisan", "│ ◐ pee01"}, last: " enter jump"},
+		"4: bare":      {h: 4, first: []string{" agentisan", " boss ▸", "│▸◐ pee01"}, last: " enter jump"},
+		"3: one line":  {h: 3, first: []string{" agentisan", "│▸◐ pee01"}, last: " enter jump"},
 		"2: no groups": {h: 2, first: []string{" agentisan"}, last: " enter jump"},
 		"1: the name":  {h: 1, first: []string{" agentisan"}, last: " agentisan"},
 	}
@@ -798,7 +794,7 @@ func TestHeaderDegradesWithHeight(t *testing.T) {
 
 // TestBtopButton: the button sits at the right edge of the header's first
 // line, only when herdr can open btop and the line has room for it, and it
-// is never drawn in reverse video (that is the selection's).
+// retains its own style.
 func TestBtopButton(t *testing.T) {
 	t.Parallel()
 
@@ -827,7 +823,7 @@ func TestBtopButton(t *testing.T) {
 				first = lines(out)[0]
 			}
 			assert.True(t, strings.HasSuffix(first, tc.want), "%q", first)
-			assert.Contains(t, selectedLine(t, dashboard.Render(f, tc.w, tc.h, attrs)), "pee02", "the button is not the reverse-video line")
+			assert.Contains(t, selectedLine(t, dashboard.Render(f, tc.w, tc.h, attrs)), "pee02", "the button is not the selected line")
 		})
 	}
 }
@@ -1181,11 +1177,11 @@ func truecolor(hex string) string {
 func TestCtxColour(t *testing.T) {
 	t.Parallel()
 
-	const (
-		green  = "#50fa7b"
-		yellow = "#f1fa8c"
-		orange = "#ffb86c"
-		red    = "#ff5555"
+	var (
+		green  = paletteHex(dashboard.PaletteGreen)
+		yellow = paletteHex(dashboard.PaletteYellow)
+		orange = paletteHex(dashboard.PaletteOrange)
+		red    = paletteHex(dashboard.PaletteRed)
 	)
 	tests := map[string]struct {
 		ctx  int
@@ -1213,7 +1209,7 @@ func TestCtxColour(t *testing.T) {
 			snap := &snapshot.Snapshot{V: 1, Team: "t", Boss: &boss, Groups: []snapshot.Group{{Name: "coders", Agents: []snapshot.Agent{a}}}}
 			opts := dashboard.Options{Profile: colorprofile.TrueColor, Thresholds: tc.th}
 
-			// Select nothing: reverse video would change the row's SGR.
+			// Select nothing so the cue is measured without selection styling.
 			out := dashboard.Render(dashboard.Frame{Snapshot: snap, Selection: dashboard.Selection{Group: -1}, Now: at}, 80, 24, opts)
 			pct := regexp.MustCompile(regexp.QuoteMeta(truecolor(tc.want)) + `[0-9;]*m\s*` + fmt.Sprint(tc.ctx) + `%`)
 			assert.Len(t, pct.FindAllString(out, -1), 2, "the row and the boss line each colour %d%% %s", tc.ctx, tc.want)
@@ -1240,7 +1236,7 @@ func TestRenderStatusIcons(t *testing.T) {
 			snap := &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{
 				{Name: "g", Agents: []snapshot.Agent{{Name: "a1", Status: status, Model: "opus", Ctx: new(1)}}},
 			}}
-			out := dashboard.Render(dashboard.Frame{Snapshot: snap, Now: at}, 80, 24, plain)
+			out := dashboard.Render(dashboard.Frame{Snapshot: snap, Selection: dashboard.Selection{Group: -1}, Now: at}, 80, 24, plain)
 			assert.Contains(t, out, "│ "+icon+" a1 ")
 			assert.Contains(t, out, "╭─ G · 1 "+icon+"1 ─", "the title counts it with the same glyph")
 		})
@@ -1253,11 +1249,11 @@ func TestRenderStatusColours(t *testing.T) {
 	t.Parallel()
 
 	tests := map[snapshot.Status]string{
-		snapshot.StatusWorking: "#50fa7b",
-		snapshot.StatusIdle:    "#f1fa8c",
-		snapshot.StatusBlocked: "#ff5555",
-		snapshot.StatusDone:    "#6c7086",
-		snapshot.StatusReady:   "#8be9fd",
+		snapshot.StatusWorking: paletteHex(dashboard.PaletteGreen),
+		snapshot.StatusIdle:    paletteHex(dashboard.PaletteYellow),
+		snapshot.StatusBlocked: paletteHex(dashboard.PaletteRed),
+		snapshot.StatusDone:    paletteHex(dashboard.PaletteSecondary),
+		snapshot.StatusReady:   paletteHex(dashboard.PaletteCyan),
 	}
 	for status, hex := range tests {
 		t.Run(string(status), func(t *testing.T) {
@@ -1265,7 +1261,7 @@ func TestRenderStatusColours(t *testing.T) {
 			snap := &snapshot.Snapshot{V: 1, Team: "t", Groups: []snapshot.Group{
 				{Name: "g", Agents: []snapshot.Agent{{Name: "a1", Status: status, Model: "opus"}, {Name: "a2", Status: status}}},
 			}}
-			// Select the second agent: reverse video on the first would
+			// Select the second agent: selection styling on the first would
 			// change its SGR.
 			f := dashboard.Frame{Snapshot: snap, Selection: dashboard.Selection{Agent: 1}, Now: at}
 			out := dashboard.Render(f, 80, 24, dashboard.Options{Profile: colorprofile.TrueColor})
@@ -1308,15 +1304,15 @@ func TestRenderSlotsColour(t *testing.T) {
 			snap := &snapshot.Snapshot{V: 1, Team: "t", Project: &snapshot.Project{Slots: &tc.slots}}
 			out := dashboard.Render(dashboard.Frame{Snapshot: snap, Now: at}, 80, 24, dashboard.Options{Profile: colorprofile.TrueColor})
 			require.Contains(t, ansi.Strip(out), tc.text)
-			note := regexp.MustCompile(regexp.QuoteMeta(truecolor("#f1fa8c")) + `[0-9;]*m` + regexp.QuoteMeta(tc.text))
+			note := regexp.MustCompile(regexp.QuoteMeta(truecolor(paletteHex(dashboard.PaletteYellow))) + `[0-9;]*m` + regexp.QuoteMeta(tc.text))
 			assert.Equal(t, tc.note, note.MatchString(out), "drawn as a note")
 		})
 	}
 }
 
-// TestRenderSelectionIsReverseVideo: the selected agent's row, and only that
-// row, is drawn in reverse video.
-func TestRenderSelectionIsReverseVideo(t *testing.T) {
+// TestRenderSelectionPointer: the selected agent's row, and only that
+// row, carries the monochrome selection pointer.
+func TestRenderSelectionPointer(t *testing.T) {
 	t.Parallel()
 
 	f := dashboard.Frame{Snapshot: fixture(t, "full"), Selection: dashboard.Selection{Agent: 1}, Now: at}
@@ -1472,7 +1468,7 @@ func cellsOf(l string, w int) []cell {
 // TestHelpOverWideCharacters: the help box covers its own cells and no
 // others. A wide character the box cuts at either edge leaves a space in its
 // cell outside the box, in its own style, so the rest of the line, a
-// selected row's reverse video included, stays as it was, in the overview
+// selected row's styling included, stays as it was, in the overview
 // and in a group's view. A zero-width character goes with the cell before
 // it, so one the box covers is not drawn beside it, and one beside the box
 // is, also where it starts the item's segment: every item starts with one,

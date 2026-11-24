@@ -8,7 +8,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/charmbracelet/x/exp/golden"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -629,7 +628,7 @@ func TestRenderSearchGolden(t *testing.T) {
 				Snapshot: dashboard.Filter(fixture(t, "full"), tc.query), Now: at, Btop: true,
 				Search: true, Query: tc.query,
 			}
-			golden.RequireEqual(t, dashboard.Render(f, tc.w, tc.h, plain)+"\n")
+			checkFrameGolden(t, f, tc.w, tc.h)
 		})
 	}
 }

@@ -6,7 +6,7 @@
 ╭─ CODER · 4 ◐3 ●1 ─────────────────────────────────────────────────────────────────────────────╮
 │ write the code                                                                                │
 │   Worker          Status   Model   Ctx         Item         Stage                         Age │
-│ ◐ ha-coder-1      working  opus    ▓▓▓░░  57%  NERD-5504    review loop cycle 1           14m │
+│▸◐ ha-coder-1      working  opus    ▓▓▓░░  57%  NERD-5504    review loop cycle 1           14m │
 │ ◐ ha-coder-2      working  sol6.1  ▓▓░░░  33%  NERD-5289    go-review Job 1                5m │
 │ ● ha-coder-3      idle     sol6    ▓░░░░  12%  PR#118       BOSS: PR #118 open            39m │
 │ ◐ ha-coder-4      working  codex   ░░░░░   --  NERD-5524    reading the issue              1m │

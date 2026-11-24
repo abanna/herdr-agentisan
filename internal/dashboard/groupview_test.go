@@ -12,7 +12,6 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/charmbracelet/x/exp/golden"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -70,7 +69,7 @@ func TestGroupViewGolden(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
-			golden.RequireEqual(t, dashboard.Render(tc.frame(t), tc.w, tc.h, plain)+"\n")
+			checkFrameGolden(t, tc.frame(t), tc.w, tc.h)
 		})
 	}
 }
@@ -152,7 +151,7 @@ func TestGroupViewContents(t *testing.T) {
 
 	assert.Contains(t, lineWith(t, frame, "◀ back"), "CODERS · 6", "the title is the overview's group title")
 	assert.Contains(t, frame, " write the code", "the description sits under the title")
-	assert.Contains(t, lineWith(t, frame, "◐ pee01 · working"), "╭─", "a box's title is its top border")
+	assert.Contains(t, lineWith(t, frame, "◐ pee01 · working"), "╭▸", "the selected box's title is its top border")
 	assert.Contains(t, lineWith(t, frame, "⟳ pee02 · ready"), "⟳ READY ─╮", "a ready agent's badge is at the top right")
 	assert.Contains(t, lineWith(t, frame, "▸ scratch · shell"), "╭─", "a plain shell's box title is its row's: ▸ and shell (A38)")
 	assert.NotContains(t, frame, "? scratch", "a shell is not drawn as an unknown agent")
@@ -192,9 +191,8 @@ func TestGroupViewTwoColumns(t *testing.T) {
 	assert.Contains(t, lineWith(t, one, "qa · working"), strings.Repeat("─", 150), "one agent takes the whole width")
 }
 
-// TestGroupViewSelectionIsReverseVideo: the selected box's title is in
-// reverse video, and nothing else is.
-func TestGroupViewSelectionIsReverseVideo(t *testing.T) {
+// TestGroupViewSelectionPointer: the selected box's title carries the pointer.
+func TestGroupViewSelectionPointer(t *testing.T) {
 	t.Parallel()
 
 	f := dashboard.Frame{Snapshot: fixture(t, "group"), Now: at, Group: "coders", Selection: dashboard.Selection{Agent: 3}}

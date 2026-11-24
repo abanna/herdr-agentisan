@@ -6,7 +6,7 @@
 ╭─ CODERS · 9 ✔1 ◐│ home/end    start/end of expanded post   │─────────────────╮
 │ write the code  │ enter       jump; expand/collapse post   │                 │
 │   Worker     Sta│ click       jump to agent or open group  │             Age │
-│ ◐ pee01      wor│ 1-9         open that group's view       │             12m │
+│▸◐ pee01      wor│ 1-9         open that group's view       │             12m │
 │ ◐ pee02      wor│ esc / ←     back; esc closes post/help   │ued          21m │
 │ ● pee03      idl│ /           search name/group/item/stage │           1h39m │
 │ ◐ pee04      wor│ b           open or close the board      │              3m │

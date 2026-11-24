@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/charmbracelet/x/ansi"
-	"github.com/charmbracelet/x/exp/golden"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/abanna/herdr-agentisan/internal/daemon"
@@ -178,7 +177,7 @@ func TestBoardGolden(t *testing.T) {
 			f := dashboard.Frame{Snapshot: fixture(t, "full"), Now: time.Date(2026, 10, 23, 17, 19, 0, 0, time.UTC), Board: dashboard.BoardFrame{Open: true, Available: true, Ready: true, Posts: r.Posts, OpenMark: r.Mark, Selected: 1, Expanded: tc.expanded, Filter: tc.filter}}
 			f.Snapshot.At = f.Now
 			f.Snapshot.Project.BoardUnread = 3
-			golden.RequireEqual(t, dashboard.Render(f, tc.w, tc.h, plain)+"\n")
+			checkFrameGolden(t, f, tc.w, tc.h)
 		})
 	}
 }
@@ -337,6 +336,7 @@ func TestBoardClicksAndReturnToGroup(t *testing.T) {
 	cfg, err := dashboard.FixtureConfig(t.Context(), "testdata/full.json", "", "")
 	require.NoError(t, err)
 	cfg.Board = b
+	cfg.Options = plain
 	m = dashboard.New(t.Context(), cfg)
 	next, _ := m.Update(m.Init()())
 	m = next.(dashboard.Model)

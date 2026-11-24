@@ -84,8 +84,10 @@ type Options struct {
 	Thresholds Thresholds
 	// Profile is the colour profile the frame is written for. NoTTY strips
 	// colour and attributes alike, which is what golden frames want; ASCII
-	// keeps attributes such as reverse video. Unknown means TrueColor.
+	// keeps attributes. Both use a selection pointer. Unknown means TrueColor.
 	Profile colorprofile.Profile
+	// LightBackground selects the TrueColor palette for a light terminal background.
+	LightBackground bool
 }
 
 func (o Options) thresholds() Thresholds {
@@ -156,14 +158,28 @@ func Render(f Frame, w, h int, opts Options) string {
 		return ""
 	}
 	th := opts.thresholds()
-	l := plan(f, w, h)
+	selection := selectionBar
+	var style func(lipgloss.Style) lipgloss.Style
+	light := false
+	switch opts.Profile {
+	case colorprofile.ANSI, colorprofile.ANSI256:
+		selection, style = selectionReverse, ansiStyle
+	case colorprofile.ASCII, colorprofile.NoTTY:
+		selection = selectionMark
+	default:
+		light = opts.LightBackground
+		if light {
+			style = lightStyle
+		}
+	}
+	l := plan(f, w, h, selection == selectionReverse)
 
 	canvas := make([]line, h)
-	l.drawHeader(canvas, f, th)
+	l.drawHeader(canvas, f, th, light)
 	switch {
 	case l.avail == 0:
 	case l.board != nil:
-		l.drawBoard(canvas)
+		l.drawBoard(canvas, f.Board.Selected, selection)
 	case f.Snapshot == nil && f.NoTeam != nil:
 		body := noTeamToShow
 		if errors.Is(f.NoTeam, ErrNotATeamsWorkspace) {
@@ -177,13 +193,13 @@ func Render(f Frame, w, h int, opts Options) string {
 	case len(l.groups) == 0:
 		canvas[l.top] = line{{" ", plainStyle}, {noTeam, dimStyle}}
 	case l.view != nil:
-		l.drawView(canvas, th)
+		l.drawView(canvas, th, selection)
 	default:
 		for i := range l.avail {
 			if l.offset+i >= len(l.rows) {
 				break
 			}
-			canvas[l.top+i] = l.drawRow(l.rows[l.offset+i], th)
+			canvas[l.top+i] = l.drawRow(l.rows[l.offset+i], th, selection)
 		}
 	}
 	if l.footer >= 0 {
@@ -200,7 +216,10 @@ func Render(f Frame, w, h int, opts Options) string {
 		}
 		// The last word on width: at a few columns a box's corners alone
 		// are wider than the terminal, and nothing may spill past it.
-		b.WriteString(ln.cut(0, w).trimRight().render())
+		if ln.width() > w {
+			ln = ln.cut(0, w)
+		}
+		b.WriteString(ln.trimRight().render(style))
 	}
 	return downsample(b.String(), opts.Profile)
 }
@@ -273,7 +292,7 @@ type layout struct {
 // plan lays f out on a w x h terminal. The header gives way as h shrinks:
 // a box and a gap from boxedHeight lines, two bare lines from 4, one line at
 // 3 and 2 (with the footer), and the project line alone at 1.
-func plan(f Frame, w, h int) layout {
+func plan(f Frame, w, h int, reverseBoard bool) layout {
 	l := layout{w: w, h: h, line1: -1, line2: -1, footer: -1, now: f.Now}
 	if w <= 0 || h <= 0 {
 		return l
@@ -298,7 +317,7 @@ func plan(f Frame, w, h int) layout {
 		l.btop = l.btopSpan()
 	}
 	if f.Board.Open {
-		l.board = planBoard(l, f.Board)
+		l.board = planBoard(l, f.Board, reverseBoard)
 		return l
 	}
 	if f.Snapshot == nil {
@@ -465,14 +484,15 @@ func boxed(body line, inner int, border lipgloss.Style) line {
 }
 
 // drawHeader draws the project line and the boss line, boxed or bare.
-func (l layout) drawHeader(canvas []line, f Frame, th Thresholds) {
+func (l layout) drawHeader(canvas []line, f Frame, th Thresholds, light bool) {
 	var project *snapshot.Project
 	if f.Snapshot != nil {
 		project = f.Snapshot.Project
 	}
 	border := dimStyle
-	if c := projectColour(project); c != nil {
-		border = lipgloss.NewStyle().Foreground(c)
+	accent := projectColour(project, light)
+	if accent != nil {
+		border = lipgloss.NewStyle().Foreground(accent)
 	}
 	margin := 1
 	if l.boxed {
@@ -499,7 +519,7 @@ func (l layout) drawHeader(canvas []line, f Frame, th Thresholds) {
 	if tail != nil {
 		oneW = max(0, right-colGap-margin)
 	}
-	one := projectLine(f.Snapshot, oneW)
+	one := projectLine(f.Snapshot, oneW, accent)
 	if tail != nil {
 		one = slices.Concat(one.pad(max(0, right-margin)), tail)
 	}
@@ -530,13 +550,22 @@ func boardBadge(p *snapshot.Project) string {
 	return "board " + strconv.Itoa(p.BoardUnread)
 }
 
-// projectColour is the project's colour, or nil when it has none the
-// contract allows.
-func projectColour(p *snapshot.Project) color.Color {
+// projectColour preserves the configured hue. On light backgrounds it
+// caps the channels proportionally so even a near-white accent stays legible.
+func projectColour(p *snapshot.Project, light bool) color.Color {
 	if p == nil || !snapshot.ValidColor(p.Color) {
 		return nil
 	}
-	return lipgloss.Color(p.Color)
+	c := lipgloss.Color(p.Color)
+	if light {
+		r, g, b, _ := c.RGBA()
+		const maxChannel = 0x68
+		peak := max(r, g, b)
+		if peak > maxChannel*0x101 {
+			return lipgloss.Color(fmt.Sprintf("#%02x%02x%02x", r*maxChannel/peak, g*maxChannel/peak, b*maxChannel/peak))
+		}
+	}
+	return c
 }
 
 // prDetail is how much of each PR the project line shows.
@@ -552,13 +581,13 @@ const (
 // · slots 2/2", at most width cells. The PRs give way first: to their
 // compact form, then to a count. What the snapshot does not report is not
 // shown, never shown as zero.
-func projectLine(s *snapshot.Snapshot, width int) line {
+func projectLine(s *snapshot.Snapshot, width int, accent color.Color) line {
 	if s == nil || width <= 0 {
 		return nil
 	}
 	nameStyle := boldStyle
-	if c := projectColour(s.Project); c != nil {
-		nameStyle = nameStyle.Foreground(c)
+	if accent != nil {
+		nameStyle = nameStyle.Foreground(accent)
 	}
 	name := line{{clean(s.Team), nameStyle}}
 	p := s.Project
@@ -789,7 +818,7 @@ func (l layout) borderStyle(g int) lipgloss.Style {
 }
 
 // drawRow draws one line of the groups, w cells wide.
-func (l layout) drawRow(r row, th Thresholds) line {
+func (l layout) drawRow(r row, th Thresholds, selection selectionMode) line {
 	g := l.groups[r.group]
 	border := l.borderStyle(r.group)
 	inner := rowWidth(l.w)
@@ -809,9 +838,10 @@ func (l layout) drawRow(r row, th Thresholds) line {
 	default:
 		body := l.cols.row(g.Agents[r.agent], l.now, th).truncate(inner).pad(inner)
 		if l.selOK && l.sel == (Selection{Group: r.group, Agent: r.agent}) {
-			for i := range body {
-				body[i].style = body[i].style.Reverse(true)
+			if selection != selectionReverse {
+				return selectBox(boxed(body, inner, border), selection == selectionBar, true)
 			}
+			reverseLine(body)
 		}
 		return boxed(body, inner, border)
 	}
@@ -1309,11 +1339,15 @@ func (l line) width() int {
 	return n
 }
 
-func (l line) render() string {
+func (l line) render(style func(lipgloss.Style) lipgloss.Style) string {
 	var b strings.Builder
 	for _, s := range l {
 		if s.text != "" {
-			b.WriteString(s.style.Render(s.text))
+			st := s.style
+			if style != nil {
+				st = style(st)
+			}
+			b.WriteString(st.Render(s.text))
 		}
 	}
 	return b.String()
@@ -1348,7 +1382,7 @@ func (l line) truncate(w int) line {
 // pad extends l with spaces to w cells.
 func (l line) pad(w int) line {
 	if gap := w - l.width(); gap > 0 {
-		return append(l, seg{strings.Repeat(" ", gap), plainStyle})
+		return append(l, seg{text: strings.Repeat(" ", gap)})
 	}
 	return l
 }

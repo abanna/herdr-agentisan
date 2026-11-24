@@ -24,11 +24,11 @@ import (
 func TestStageColour(t *testing.T) {
 	t.Parallel()
 
-	const (
-		green  = "#50fa7b"
-		red    = "#ff5555"
-		yellow = "#f1fa8c"
-		dim    = "#6c7086"
+	var (
+		green  = paletteHex(dashboard.PaletteGreen)
+		red    = paletteHex(dashboard.PaletteRed)
+		yellow = paletteHex(dashboard.PaletteYellow)
+		dim    = paletteHex(dashboard.PaletteSecondary)
 	)
 	tests := map[string]struct {
 		stage string
@@ -73,7 +73,7 @@ func TestStageColour(t *testing.T) {
 			boss := snapshot.Boss{Agent: a}
 			boss.Name = "boss"
 			snap := &snapshot.Snapshot{V: 1, Team: "t", Boss: &boss, Groups: []snapshot.Group{{Name: "coders", Agents: []snapshot.Agent{a}}}}
-			// Select nothing: reverse video would change the row's SGR.
+			// Select nothing so the cue is measured without selection styling.
 			f := dashboard.Frame{Snapshot: snap, Selection: dashboard.Selection{Group: -1}, Now: at}
 			out := dashboard.Render(f, 80, 24, dashboard.Options{Profile: colorprofile.TrueColor})
 
@@ -102,7 +102,7 @@ func TestStageColourWhenCut(t *testing.T) {
 	}}}}
 	out := dashboard.Render(dashboard.Frame{Snapshot: snap, Selection: dashboard.Selection{Group: -1}, Now: at}, 80, 24, dashboard.Options{Profile: colorprofile.TrueColor})
 	assert.NotContains(t, out, "READY", "the word itself is cut off")
-	assert.Regexp(t, `\x1b\[[0-9;]*`+regexp.QuoteMeta(truecolor("#50fa7b"))+`[0-9;]*mxxx`, out)
+	assert.Regexp(t, `\x1b\[[0-9;]*`+regexp.QuoteMeta(truecolor(paletteHex(dashboard.PaletteGreen)))+`[0-9;]*mxxx`, out)
 }
 
 // TestDataAge: once the snapshot drawn is more than 15 whole seconds older
@@ -162,7 +162,7 @@ func TestDataAge(t *testing.T) {
 	t.Run("in the note's yellow", func(t *testing.T) {
 		t.Parallel()
 		out := dashboard.Render(dashboard.Frame{Snapshot: aged(16 * time.Second), Now: at}, 80, 24, dashboard.Options{Profile: colorprofile.TrueColor})
-		assert.Regexp(t, regexp.QuoteMeta(truecolor("#f1fa8c"))+`[0-9;]*mdata 16s old`, out)
+		assert.Regexp(t, regexp.QuoteMeta(truecolor(paletteHex(dashboard.PaletteYellow)))+`[0-9;]*mdata 16s old`, out)
 	})
 	t.Run("while searching a stale snapshot", func(t *testing.T) {
 		t.Parallel()
@@ -201,12 +201,12 @@ func TestStageColourInTheGroupView(t *testing.T) {
 		hex, text string
 		bold      bool
 	}{
-		{"#50fa7b", "READY for review: word", true},
-		{"#50fa7b", "word word", true}, // the second line keeps the colour
-		{"#ff5555", "blocked: 1Password agent", true},
-		{"#ff5555", "step step", true}, // coloured by a word on the next line
-		{"#ff5555", "BLOCKED", true},
-		{"#6c7086", "no stage reported", false},
+		{paletteHex(dashboard.PaletteGreen), "READY for review: word", true},
+		{paletteHex(dashboard.PaletteGreen), "word word", true}, // the second line keeps the colour
+		{paletteHex(dashboard.PaletteRed), "blocked: 1Password agent", true},
+		{paletteHex(dashboard.PaletteRed), "step step", true}, // coloured by a word on the next line
+		{paletteHex(dashboard.PaletteRed), "BLOCKED", true},
+		{paletteHex(dashboard.PaletteSecondary), "no stage reported", false},
 	} {
 		found := styled(tc.text).FindAllStringSubmatch(out, -1)
 		require.NotEmpty(t, found, "%q is drawn", tc.text)
@@ -217,7 +217,7 @@ func TestStageColourInTheGroupView(t *testing.T) {
 	}
 	require.Contains(t, ansi.Strip(out), "│ restored ")
 	for _, m := range styled("restored").FindAllStringSubmatch(out, -1) {
-		assert.Contains(t, []string{"", "0"}, m[1], "a stage no rule matches is plain: only a reset comes before it")
+		assert.Contains(t, m[1], truecolor(paletteHex(dashboard.PaletteText)), "a stage with no matching rule uses the primary foreground")
 	}
 }
 
@@ -232,14 +232,12 @@ func TestHandoffShellInTheGroupView(t *testing.T) {
 	out := dashboard.Render(dashboard.Frame{Snapshot: snap, Now: at, Group: "coders"}, 80, 24, dashboard.Options{Profile: colorprofile.NoTTY})
 	title := lineWith(t, out, "⟳ w2:p4 · ready")
 	assert.Contains(t, title, "⟳ READY ─╮")
-	assert.NotContains(t, title, "▸", "a shell with a handoff is no plain shell")
+	assert.NotContains(t, title, "▸ w2:p4", "a shell with a handoff is no plain shell")
 }
 
-// TestShellGlyphColour: a plain shell's ▸ is drawn in unknown's style, which
-// is no colour at all, in its row, in its group's title count and in its
-// box in the group's view (ADR-001 A38), so it never reads as a status
-// colour. A mutant that draws the count plain (QA's SD10) is equivalent:
-// unknown's style is plain.
+// TestShellGlyphColour: a plain shell's ▸ uses the primary foreground in
+// its row, group count and group card, distinct from coloured agent statuses
+// (ADR-001 A38).
 func TestShellGlyphColour(t *testing.T) {
 	t.Parallel()
 
@@ -248,7 +246,7 @@ func TestShellGlyphColour(t *testing.T) {
 		{Name: "pee01", Status: snapshot.StatusWorking},
 	}}}}
 	tc := dashboard.Options{Profile: colorprofile.TrueColor}
-	coloured := regexp.MustCompile(`\x1b\[[0-9;:]*38;[0-9;:]*m▸`)
+	primary := regexp.MustCompile(regexp.QuoteMeta(truecolor(paletteHex(dashboard.PaletteText))) + `[0-9;]*m▸`)
 	for name, f := range map[string]dashboard.Frame{
 		"the overview":     {Snapshot: snap, Selection: dashboard.Selection{Group: -1}, Now: at},
 		"the group's view": {Snapshot: snap, Selection: dashboard.Selection{Group: -1}, Now: at, Group: "coders"},
@@ -256,9 +254,8 @@ func TestShellGlyphColour(t *testing.T) {
 		out := dashboard.Render(f, 80, 24, tc)
 		assert.Contains(t, ansi.Strip(out), "▸1", "%s: the title counts the shell", name)
 		assert.Contains(t, ansi.Strip(out), "▸ notes", "%s: the shell's own glyph", name)
-		assert.NotRegexp(t, coloured, out, "%s: no ▸ carries a colour", name)
-		// The working agent's glyph is coloured in the same frame, so a
-		// colour, had ▸ one, would show.
-		assert.Regexp(t, regexp.MustCompile(regexp.QuoteMeta(truecolor("#50fa7b"))+`[0-9;]*m◐`), out, name)
+		assert.Regexp(t, primary, out, "%s: a shell uses the primary foreground", name)
+		// A working agent's glyph uses the green status foreground.
+		assert.Regexp(t, regexp.MustCompile(regexp.QuoteMeta(truecolor(paletteHex(dashboard.PaletteGreen)))+`[0-9;]*m◐`), out, name)
 	}
 }

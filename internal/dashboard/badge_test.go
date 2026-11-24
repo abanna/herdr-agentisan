@@ -74,7 +74,7 @@ func TestBadgeHeaderStyle(t *testing.T) {
 	t.Parallel()
 	out := dashboard.Render(dashboard.Frame{Snapshot: unread(t, 3), Now: at, Btop: true}, 80, 24, fullColour)
 	first := lines(out)[1]
-	assert.Contains(t, first, "\x1b[1;38;2;241;250;140mboard 3\x1b[m", "bold, in the note colour")
+	assert.Contains(t, first, "\x1b[1;"+truecolor(paletteHex(dashboard.PaletteYellow))+"mboard 3\x1b[m", "bold, in the note colour")
 	assert.Contains(t, first, "[ btop ]")
 }
 

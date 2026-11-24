@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"image/color"
 	"strings"
 	"time"
 
@@ -56,4 +57,44 @@ func ClipText(base []string, reverse []bool, w int) string {
 func ModelLabel(a snapshot.Agent) string {
 	text, _ := modelLabel(a)
 	return text
+}
+
+const (
+	PaletteText      = colText
+	PaletteSecondary = colDim
+	PaletteGreen     = colGreen
+	PaletteYellow    = colYellow
+	PaletteOrange    = colOrange
+	PaletteRed       = colRed
+	PaletteCyan      = colCyan
+)
+
+// PaletteForBackground returns the text colours drawn on the terminal and bar.
+func PaletteForBackground(light bool) []color.Color {
+	text := make([]color.Color, len(palette))
+	for i, fg := range palette {
+		text[i] = fg.Color
+		if light {
+			text[i] = fg.light
+		}
+	}
+	return text
+}
+
+// LightTextHasHigherContrast compares the two text luminances on the given background luminance.
+func LightTextHasHigherContrast(background, darkText, lightText float64) bool {
+	return lightTextHasHigherContrast(background, darkText, lightText)
+}
+
+// SelectionColours returns the bar fill and button colours used by the renderer.
+func SelectionColours(light bool) (bar, buttonInk, buttonFill color.Color) {
+	if light {
+		return selectionBackground.light, buttonForeground.light, palette[colAccent].light
+	}
+	return selectionBackground.Color, buttonForeground.Color, palette[colAccent].Color
+}
+
+// ProjectColour is the configured project accent drawn over the terminal.
+func ProjectColour(light bool, hex string) color.Color {
+	return projectColour(&snapshot.Project{Color: hex}, light)
 }

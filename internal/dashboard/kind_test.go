@@ -14,7 +14,7 @@ import (
 )
 
 // dimSGR is the SGR fragment of the dashboard's dim text.
-var dimSGR = regexp.QuoteMeta(truecolor("#6c7086")) + `[0-9;]*m`
+var dimSGR = regexp.QuoteMeta(truecolor(paletteHex(dashboard.PaletteSecondary))) + `[0-9;]*m`
 
 // TestModelLabel: a row's model column is its model as ShortModel names it;
 // with none reported, the agent herdr detects in its pane, cleaned and cut
@@ -113,7 +113,7 @@ func TestGroupViewNamesTheAgent(t *testing.T) {
 		t.Helper()
 		ls := lines(frame)
 		for i, l := range ls {
-			if regexp.MustCompile(`╭─ . ` + name + ` · `).MatchString(l) {
+			if regexp.MustCompile(`╭[─▸] . ` + name + ` · `).MatchString(l) {
 				require.Less(t, i+1, len(ls))
 				return ls[i+1]
 			}
@@ -152,7 +152,7 @@ func TestGroupViewModelLineStyles(t *testing.T) {
 
 	for name, tc := range map[string]struct{ text, sgr string }{
 		"the dot is dim":     {text: "·", sgr: dimSGR + `[^\x1b]*$`},
-		"the model is plain": {text: "sol6.1", sgr: `^\x1b\[(0|39)?m[^\x1b]*$`},
+		"the model is plain": {text: "sol6.1", sgr: regexp.QuoteMeta(truecolor(paletteHex(dashboard.PaletteText))) + `[0-9;]*m[^\x1b]*$`},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

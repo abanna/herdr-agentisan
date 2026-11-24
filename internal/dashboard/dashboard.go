@@ -20,6 +20,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/colorprofile"
 
 	"github.com/abanna/herdr-agentisan/internal/daemon"
 	"github.com/abanna/herdr-agentisan/internal/herdr"
@@ -180,12 +181,14 @@ type Model struct {
 	// that was drawn.
 	scroll int
 
-	clock         time.Time
-	width, height int
-	help          bool
-	sourceErr     error
-	focusErr      error
-	btopErr       error
+	clock           time.Time
+	width, height   int
+	profile         colorprofile.Profile
+	lightBackground bool
+	help            bool
+	sourceErr       error
+	focusErr        error
+	btopErr         error
 	// noTeam is set while the source says there is no team here
 	// (ErrNoTeamHere): no board is drawn then, not the last one.
 	noTeam error
@@ -251,14 +254,23 @@ func New(ctx context.Context, cfg Config) Model {
 	return Model{ctx: ctx, cfg: cfg, clock: cfg.Now()}
 }
 
-// Init fetches the first snapshot at once.
+// Init fetches the first snapshot and asks the terminal for its background.
 func (m Model) Init() tea.Cmd {
-	return m.fetch()
+	if m.cfg.Options.Profile == colorprofile.ASCII || m.cfg.Options.Profile == colorprofile.NoTTY {
+		return m.fetch()
+	}
+	return tea.Batch(m.fetch(), tea.RequestBackgroundColor)
 }
 
 // Update handles one message.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		m.lightBackground = prefersLightPalette(msg.Color)
+		return m, nil
+	case tea.ColorProfileMsg:
+		m.profile = msg.Profile
+		return m, nil
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.settle()
@@ -387,7 +399,7 @@ func (m Model) click(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 		m.help = false
 		return m, nil
 	}
-	l := plan(m.Frame(), m.Width(), m.Height())
+	l := plan(m.Frame(), m.Width(), m.Height(), false)
 	what, sel := l.hit(msg.X, msg.Y)
 	switch what {
 	case hitAgent:
@@ -424,7 +436,12 @@ func (m Model) click(msg tea.MouseClickMsg) (tea.Model, tea.Cmd) {
 // View draws the frame full-screen, asking herdr to forward
 // mouse clicks and wheel events.
 func (m Model) View() tea.View {
-	v := tea.NewView(Render(m.Frame(), m.Width(), m.Height(), m.cfg.Options))
+	opts := m.cfg.Options
+	opts.LightBackground = m.lightBackground
+	if opts.Profile == colorprofile.Unknown {
+		opts.Profile = m.profile
+	}
+	v := tea.NewView(Render(m.Frame(), m.Width(), m.Height(), opts))
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	return v
@@ -532,7 +549,7 @@ func (m *Model) settle() {
 	if m.board.Open {
 		return
 	}
-	m.scroll = plan(m.Frame(), m.Width(), m.Height()).offset
+	m.scroll = plan(m.Frame(), m.Width(), m.Height(), false).offset
 }
 
 // rowKey is the identity the selection follows across refreshes: a named

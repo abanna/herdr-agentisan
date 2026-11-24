@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 
@@ -64,5 +66,78 @@ func TestRunOnATerminal(t *testing.T) {
 		require.NoError(t, err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("q did not quit")
+	}
+}
+
+func TestRunDetectsNoColorSelection(t *testing.T) {
+	t.Parallel()
+
+	master, slave := openPTY(t, 120, 40)
+	var out syncBuffer
+	go func() { _, _ = io.Copy(&out, master) }()
+	src := &script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "full"))}}
+	cfg := config(src, &recorder{})
+	cfg.Options = dashboard.Options{}
+	env := tea.WithEnvironment([]string{"TERM=xterm-256color", "COLORTERM=truecolor", "NO_COLOR=1"})
+
+	done := make(chan error, 1)
+	go func() { done <- dashboard.Run(t.Context(), cfg, slave, slave, env) }()
+	require.Eventually(t, func() bool {
+		return strings.Contains(ansi.Strip(out.String()), "│▸◐ pee01")
+	}, 5*time.Second, 10*time.Millisecond, "NO_COLOR should select a pointer with default program options")
+
+	_, err := master.Write([]byte("q"))
+	require.NoError(t, err)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("q did not quit")
+	}
+}
+
+func TestRunSelectsPaletteFromTerminal(t *testing.T) {
+	t.Parallel()
+
+	const darkText = "38;2;238;242;255"
+	for _, tc := range []struct {
+		name, reply, want string
+	}{
+		{name: "no answer", want: darkText},
+		{name: "dark", reply: "1e1e/1e1e/2e2e", want: darkText},
+		{name: "light", reply: "ffff/ffff/ffff", want: "38;2;23;35;59"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			master, slave := openPTY(t, 120, 40)
+			var out syncBuffer
+			go func() { _, _ = io.Copy(&out, master) }()
+			cfg := config(&script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "full"))}}, nil)
+			cfg.Options = dashboard.Options{}
+			env := tea.WithEnvironment([]string{"TERM=xterm-256color", "COLORTERM=truecolor"})
+			done := make(chan error, 1)
+			go func() { done <- dashboard.Run(t.Context(), cfg, slave, slave, env) }()
+
+			require.Eventually(t, func() bool {
+				return strings.Contains(out.String(), darkText)
+			}, 5*time.Second, 10*time.Millisecond, "the first frame uses dark before a reply")
+			require.Eventually(t, func() bool {
+				return strings.Contains(out.String(), ansi.RequestBackgroundColor)
+			}, 5*time.Second, 10*time.Millisecond, "request the terminal background")
+			if tc.reply != "" {
+				_, err := fmt.Fprintf(master, "\x1b]11;rgb:%s\x1b\\", tc.reply)
+				require.NoError(t, err)
+			}
+			require.Eventually(t, func() bool {
+				return strings.Contains(out.String(), tc.want)
+			}, 5*time.Second, 10*time.Millisecond, "use the palette for the terminal background")
+			_, err := master.Write([]byte("q"))
+			require.NoError(t, err)
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("q did not quit")
+			}
+		})
 	}
 }

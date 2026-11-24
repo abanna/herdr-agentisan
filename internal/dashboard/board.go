@@ -344,7 +344,7 @@ func (m Model) boardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 // scrollBoard moves within the expanded post, never changing its selection or
 // read mark. The renderer supplies the same wrapped-line bounds it draws.
 func (m *Model) scrollBoard(key string) bool {
-	v := plan(m.Frame(), m.Width(), m.Height()).board
+	v := plan(m.Frame(), m.Width(), m.Height(), false).board
 	scroll := min(max(0, m.board.Scroll), v.scrollMax)
 	switch key {
 	case keyUp:
