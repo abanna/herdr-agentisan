@@ -1,0 +1,105 @@
+--- shift.sh
++++ shift.sh
+@@ -29,0 +30,2 @@
++PLUGIN=${SHIFT_PLUGIN:-herdr-agentisan}
++ROLE=${SHIFT_ROLE:-$REPO/roles/boss-shift.md}
+@@ -39,5 +41,11 @@
+-# model_of <agent>: the model that agent's own statusline reports on its pane
+-# (the plugin's `model` token, ADR-001 A56); empty when it has reported none.
+-model_of(){ { herdr agent get "$1" 2>/dev/null | field result.agent.tokens.model 2>/dev/null; } || true; }
+-# model_ok <reported> <wanted>: an alias ("fable") matches a full id ("claude-fable-5-2").
+-model_ok(){ case "$(printf %s "$1" | tr '[:upper:]' '[:lower:]')" in *"$(printf %s "$2" | tr '[:upper:]' '[:lower:]')"*) return 0 ;; esac; return 1; }
++check_model(){
++    "$PLUGIN" boss shift check-model --pane "$(val new)" --terminal "$(val terminal)" \
++        --name "$(val next)" --model "$(val model)" --launched-at "$(val launched_at)" \
++        --pid "$(val model_pid)" --start "$(val model_start)"
++}
++candidate_ready(){ [ "$(val model_pid)" -gt 0 ] && check_model; }
++round_wait(){
++    local record
++    record=$(readlink "$CUR") || return
++    "$PLUGIN" boss shift wait --record "$record" --attempt "${record##*/}" "$@"
++}
+@@ -52,4 +60,8 @@
+-    dir=$ROOT/$(date +%Y%m%d-%H%M%S); mkdir -p "$dir"
+-    new=$(herdr pane split "$old" --direction right --no-focus --cwd "$REPO" | field result.pane.pane_id)
+-    [ -n "$new" ] || die "the split returned no pane id"
+-    printf 'old=%s\nnew=%s\nboss=%s\nnext=%s\nopened=%s\nmodel=%s\neffort=%s\n' "$old" "$new" "$BOSS" "$NEXT" "$(date +%H:%M:%S)" "$MODEL" "$EFFORT" > "$dir/state"
++    mkdir -p "$ROOT"
++    dir=$(mktemp -d "$ROOT/$(date +%Y%m%d-%H%M%S)-XXXXXXXX")
++    split=$(herdr pane split "$old" --direction right --no-focus --cwd "$REPO")
++    new=$(field result.pane.pane_id <<< "$split")
++    terminal=$(field result.pane.terminal_id <<< "$split")
++    [ -n "$new" ] && [ -n "$terminal" ] || die "the split returned no pane or terminal id"
++    launched_at=$(date +%s%3N)
++    printf 'old=%s\nnew=%s\nboss=%s\nnext=%s\nopened=%s\nmodel=%s\neffort=%s\nterminal=%s\nlaunched_at=%s\nmodel_pid=0\nmodel_start=0\n' "$old" "$new" "$BOSS" "$NEXT" "$(date +%H:%M:%S)" "$MODEL" "$EFFORT" "$terminal" "$launched_at" > "$dir/state"
+@@ -60,8 +72,22 @@
+-    # what it was asked for is not what it runs: read the model back from its pane
+-    got=; for _ in $(seq 1 30); do got=$(model_of "$NEXT"); [ -n "$got" ] && break; sleep 2; done
+-    if [ -z "$got" ]; then
+-      echo "warning: $NEXT has reported no model yet (asked for $MODEL); 'shift.sh go' checks again and refuses a wrong one"
+-    elif ! model_ok "$got" "$MODEL"; then
+-      die "the incoming boss runs on '$got', not '$MODEL' (pane $new left open; run: shift.sh abort, then open again)"
+-    fi
+-    echo "opened: incoming boss $NEXT on $new, model ${got:-not reported yet}; shift folder $dir" ;;
++    for ((i=0; i<30; i++)); do
++      verified=0
++      verdict=$(check_model) && verified=1
++      if [ "$(val model_pid)" = 0 ]; then
++        pid=$(field pid <<< "$verdict")
++        start=$(field start <<< "$verdict")
++        if [ "${pid:-0}" != 0 ] && [ "${start:-0}" != 0 ]; then
++          printf 'model_pid=%s\nmodel_start=%s\n' "$pid" "$start" >> "$dir/state"
++        fi
++      fi
++      if [ "$verified" = 1 ]; then
++        printf '%s\n' "$verdict"
++        echo "opened: incoming boss $NEXT on $new; shift folder $dir"
++        exit 0
++      fi
++      case $(field reason <<< "$verdict") in
++        candidate_unavailable|claude_unavailable|missing_model|invalid_report_time|stale_report) sleep 2 ;;
++        *) break ;;
++      esac
++    done
++    printf '%s\n' "$verdict"
++    die "the candidate's model is unverified; inspect status, fix the report or abort" ;;
+@@ -70 +96,3 @@
+-    text="You are the INCOMING boss of the herdr-agentisan team, starting a shift change. The outgoing boss is still in charge in the pane beside you. Read $here/INCOMING.md now and follow it exactly. Your shift folder is $(readlink "$CUR"). Do not message workers, do not run 'herdr-agentisan board read', and never type into the other pane."
++    dir=$(readlink "$CUR")
++    brief=$("$PLUGIN" boss shift brief --record "$dir" --attempt "${dir##*/}" --role "$ROLE")
++    text="Read $(field role <<< "$brief"). Shift record: $(field record <<< "$brief"). Attempt: $(field attempt <<< "$brief")."
+@@ -74,4 +102,3 @@
+-    n=${1:-}; if [ -z "$n" ]; then n=1; while [ -e "$CUR/account-$n.md" ] && [ -e "$CUR/reply-$n.md" ]; do n=$((n+1)); done; fi
+-    until [ -s "$CUR/account-$n.md" ] || [ -e "$CUR/ABORTED" ]; do sleep 5; done
+-    [ -e "$CUR/ABORTED" ] && { echo aborted; exit 0; }
+-    echo "$CUR/account-$n.md is in" ;;
++    opt=()
++    if [ "$#" -gt 0 ]; then opt=(--round "$1"); fi
++    round_wait "${opt[@]}" ;;
+@@ -84,7 +111,4 @@
+-    ls "$CUR"/account-*.md >/dev/null 2>&1 || die "the incoming boss has written no account yet"
+-    # no GO to a boss on the wrong model: the team is not handed to it
+-    want=$(val model); want=${want:-$MODEL}; got=$(model_of "$(val next)")
+-    if [ -z "$got" ]; then
+-      [ -n "${SHIFT_MODEL_SEEN:-}" ] || die "the incoming boss's pane reports no model, so I cannot check it is on '$want'. Look yourself ('herdr agent read $(val next)' shows the model under its prompt); if it is right, run: SHIFT_MODEL_SEEN=1 shift.sh go. GO not written."
+-    elif ! model_ok "$got" "$want"; then
+-      die "the incoming boss runs on '$got'; the boss must run on '$want'. Ask the user to switch it with /model in pane $(val new), or abort and open again. GO not written."
++    [ ! -e "$CUR/GO" ] || die "GO already recorded; inspect status"
++    if ! candidate_ready; then
++      touch "$CUR/MODEL-BLOCKED"
++      die "GO withheld; fix model proof and publish a fresh account and reply"
+@@ -92 +116,4 @@
+-    date +%H:%M:%S > "$CUR/GO"
++    ready=$(round_wait --ready --timeout 0) || die "GO withheld; latest account needs a current ready reply"
++    [ "$(field decision <<< "$ready")" = ready ] || die "GO withheld; no ready reply"
++    date +%H:%M:%S > "$CUR/GO.tmp"
++    mv "$CUR/GO.tmp" "$CUR/GO"
+@@ -94 +121 @@
+-    echo "GO written; the incoming boss takes over now. Stop your board wait and timers and write nothing more." ;;
++    echo "GO written; keep the board reader, inbox watcher and timers stopped." ;;
+@@ -104,0 +132 @@
++    candidate_ready || die "candidate model unverified; old pane left open"
+@@ -114 +142 @@
+-    if [ -L "$CUR" ]; then cat "$CUR/state"; echo "reported_model=$(model_of "$(val next)")"; ls "$CUR"; else echo "no shift open"; fi ;;
++    if [ -L "$CUR" ]; then cat "$CUR/state"; check_model || true; ls "$CUR"; else echo "no shift open"; fi ;;
