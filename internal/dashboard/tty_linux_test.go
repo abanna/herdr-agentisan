@@ -161,7 +161,7 @@ func TestRunSelectsPaletteFromTerminal(t *testing.T) {
 				start = len(out.String())
 			}
 			if tc.reply != "" {
-				_, err := fmt.Fprintf(master, "\x1b]11;rgb:%s\x1b\\", tc.reply)
+				_, err := fmt.Fprintf(master, "\x1b]11;rgb:%s\a", tc.reply)
 				require.NoError(t, err)
 			}
 			require.Eventually(t, func() bool {

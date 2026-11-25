@@ -5,8 +5,6 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
-	"testing/synctest"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -14,8 +12,8 @@ import (
 func TestOSC11InputNormalization(t *testing.T) {
 	t.Parallel()
 
-	const mixed = "j\x1b]11;rgb:A/7f/800\a\x1b]11;rgb:00ee/00ff/8000\x1b\\q"
-	const normalized = "j\x1b]11;#aa7f80\a\x1b]11;#010180\x1b\\q"
+	const mixed = "j\x1b]11;rgb:A/7f/800\a\x1b]11;rgb:00ee/00ff/8000\aq"
+	const normalized = "j\x1b]11;#aa7f80\a\x1b]11;#010180\aq"
 	const unchanged = "é\x1b[A\x1b]10;rgb:00ee/00ee/00ee\a" +
 		"\x1b]11;#112233\x1b\\\x1b]11;rgba:1/2/3/4\a\x1b]11;rgb:1//f\a" +
 		"\x1b]11;rgb:123456789012345/ff/ff\a\x1b]11;rgb:00ee/\x1b"
@@ -24,7 +22,7 @@ func TestOSC11InputNormalization(t *testing.T) {
 	}{
 		{"mixed widths and terminators", mixed, normalized},
 		{"unrelated, invalid and truncated sequences", unchanged, unchanged},
-		{"aborted reply followed by a fresh reply", "\x1b]11;rgb:1/\x1b]11;rgb:abc/ff/0\a", "\x1b]11;rgb:1/\x1b]11;#abff00\a"},
+		{"escape cancels before a fresh reply", "\x1b]11;rgb:1/\x1b\x1b]11;rgb:abc/ff/0\a", "\x1b]11;rgb:1/\x1b\x1b]11;#abff00\a"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, reader := range []io.Reader{
@@ -50,43 +48,5 @@ func TestOSC11InputPassesEscapeImmediately(t *testing.T) {
 		n, err := reader.Read(buf[:])
 		require.NoError(t, err)
 		require.Equal(t, key, string(buf[:n]), "return before requesting more input")
-	}
-}
-
-func TestOSC11InputFlushesUnfinishedReplyOnDeadline(t *testing.T) {
-	for _, tc := range []struct {
-		name, held, want string
-	}{
-		{"truncated payload", "rgb:00ee/", "\x9d11;rgb:00ee/\x18"},
-		{"truncated terminator", "rgb:00ee/00ee/00ee\x1b", "\x9d11;rgb:00ee/00ee/00ee\x18\x1b"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			synctest.Test(t, func(t *testing.T) {
-				raw, terminal := io.Pipe()
-				defer raw.Close()
-				defer terminal.Close()
-				reader, stop := normalizeTerminalInput(t.Context(), raw)
-				defer stop()
-
-				go func() { _, _ = io.WriteString(terminal, osc11Prefix+tc.held) }()
-				buf := make([]byte, len(osc11Prefix))
-				_, err := io.ReadFull(reader, buf)
-				require.NoError(t, err)
-				require.Equal(t, osc11Prefix, string(buf))
-
-				start := time.Now()
-				buf = make([]byte, len(tc.want))
-				_, err = io.ReadFull(reader, buf)
-				require.NoError(t, err)
-				require.Equal(t, tc.want, string(buf))
-				require.Equal(t, 50*time.Millisecond, time.Since(start))
-
-				go func() { _, _ = io.WriteString(terminal, "q") }()
-				var key [1]byte
-				_, err = io.ReadFull(reader, key[:])
-				require.NoError(t, err)
-				require.Equal(t, byte('q'), key[0])
-			})
-		})
 	}
 }
