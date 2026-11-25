@@ -13,6 +13,11 @@ func systemReaders() (StatFunc, CmdlineFunc) {
 	return KinfoStat(sysctlKinfo), ProcArgs2Cmdline(sysctlProcArgs2)
 }
 
+const (
+	xnuZombie  = 5      // SZOMB in bsd/sys/proc.h.
+	xnuExiting = 0x2000 // P_WEXIT in bsd/sys/proc.h.
+)
+
 // sysctlKinfo reads pid's kinfo_proc. A pid with no process fails, since
 // the kernel returns no record and x/sys then reports EIO.
 func sysctlKinfo(pid int) (Kinfo, error) {
@@ -23,6 +28,7 @@ func sysctlKinfo(pid int) (Kinfo, error) {
 	return Kinfo{
 		PID:       int(k.Proc.P_pid),
 		PPID:      int(k.Eproc.Ppid),
+		Dead:      k.Proc.P_stat == xnuZombie || k.Proc.P_flag&xnuExiting != 0,
 		StartSec:  k.Proc.P_starttime.Sec,
 		StartUsec: int64(k.Proc.P_starttime.Usec),
 	}, nil
