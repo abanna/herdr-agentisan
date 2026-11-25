@@ -164,8 +164,9 @@ func FixtureConfig(ctx context.Context, path, boardPath, socketPath string) (Con
 type Model struct {
 	// ctx bounds every poll and focus the model starts; it is the
 	// program's context, held because tea.Cmd takes none.
-	ctx context.Context
-	cfg Config
+	ctx       context.Context
+	cfg       Config
+	stopInput func()
 
 	// raw is the last snapshot as it arrived; snap is the one drawn: raw,
 	// narrowed by the query while one is typed (search.go).
@@ -359,7 +360,7 @@ func (m Model) key(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		cmd := m.openBoard()
 		return m, cmd
 	case "q", keyQuit:
-		return m, tea.Quit
+		return m.quit()
 	case "/":
 		m.closeGroup()
 		m.startSearch()
@@ -722,6 +723,14 @@ func nextGroup(groups []snapshot.Group, g, step int) int {
 	return -1
 }
 
+func (m Model) quit() (tea.Model, tea.Cmd) {
+	// Release the descriptor before Bubble Tea flushes the final frame.
+	if m.stopInput != nil {
+		m.stopInput()
+	}
+	return m, tea.Quit
+}
+
 // Run runs the dashboard on in and out until q, Ctrl-C or ctx ends it. opts
 // come after Run's own options, so a caller can override them.
 func Run(ctx context.Context, cfg Config, in io.Reader, out io.Writer, opts ...tea.ProgramOption) error {
@@ -737,7 +746,9 @@ func Run(ctx context.Context, cfg Config, in io.Reader, out io.Writer, opts ...t
 		// pipe gets a 0x0 screen and nothing is drawn.
 		tea.WithWindowSize(fallbackWidth, fallbackHeight),
 	}
-	_, err := tea.NewProgram(New(ctx, cfg), append(base, opts...)...).Run()
+	model := New(ctx, cfg)
+	model.stopInput = stopInput
+	_, err := tea.NewProgram(model, append(base, opts...)...).Run()
 	switch {
 	case err == nil, errors.Is(err, tea.ErrInterrupted):
 		return nil

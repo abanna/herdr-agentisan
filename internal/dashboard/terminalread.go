@@ -29,11 +29,13 @@ type terminalChunk struct {
 // Bubble Tea still sees the terminal's descriptor for raw mode, but its
 // reader calls through here so a quiet descriptor cannot stall expiry.
 type terminalReads struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-	input  io.Reader
-	start  sync.Once
-	result chan terminalChunk
+	ctx      context.Context
+	cancel   context.CancelFunc
+	input    io.Reader
+	start    sync.Once
+	request  chan struct{}
+	result   chan terminalChunk
+	inFlight int
 
 	cancelDone  chan struct{}
 	done        chan struct{}
@@ -44,6 +46,7 @@ func newTerminalReads(ctx context.Context, input io.Reader) *terminalReads {
 	ctx, cancel := context.WithCancel(ctx)
 	return &terminalReads{
 		ctx: ctx, cancel: cancel, input: input,
+		request:    make(chan struct{}, terminalReadAhead),
 		result:     make(chan terminalChunk, terminalReadAhead),
 		cancelDone: make(chan struct{}), done: make(chan struct{}),
 	}
@@ -63,7 +66,7 @@ func (r *terminalReads) stop() {
 	}
 }
 
-func (r *terminalReads) next(deadline time.Time) terminalChunk {
+func (r *terminalReads) next(deadline time.Time, readAhead bool) terminalChunk {
 	var timeout <-chan time.Time
 	if !deadline.IsZero() {
 		remaining := time.Until(deadline)
@@ -75,6 +78,14 @@ func (r *terminalReads) next(deadline time.Time) terminalChunk {
 		timeout = timer.C
 	}
 	r.start.Do(func() { go r.readLoop() })
+	limit := 1
+	if readAhead {
+		limit = terminalReadAhead
+	}
+	for r.inFlight < limit {
+		r.request <- struct{}{}
+		r.inFlight++
+	}
 	select {
 	case <-r.ctx.Done():
 		return terminalChunk{err: io.EOF}
@@ -84,6 +95,7 @@ func (r *terminalReads) next(deadline time.Time) terminalChunk {
 		if !ok {
 			return terminalChunk{err: io.EOF}
 		}
+		r.inFlight--
 		return chunk
 	}
 }
@@ -111,6 +123,11 @@ func (r *terminalReads) readLoop() {
 	}()
 
 	for r.ctx.Err() == nil {
+		select {
+		case <-r.ctx.Done():
+			return
+		case <-r.request:
+		}
 		var buf [terminalReadSize]byte
 		n, err := source.Read(buf[:])
 		r.send(terminalChunk{data: buf[:n], at: time.Now(), err: err})

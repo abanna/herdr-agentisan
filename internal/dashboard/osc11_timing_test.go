@@ -62,7 +62,7 @@ func decodeTimedInput(t *testing.T, fragments []timedFragment, wrap bool) []uv.E
 	for event := range events {
 		if color, ok := event.(uv.BackgroundColorEvent); ok {
 			if wrap {
-				require.Equal(t, "#eeee11", color.String())
+				require.Equal(t, "#010180", color.String())
 			}
 			event = uv.BackgroundColorEvent{}
 		}
@@ -79,9 +79,10 @@ func TestOSC11TimedDifferential(t *testing.T) {
 		{"escape cancels", []timedFragment{{0, osc11Prefix + "rgb:00ee/"}, {25 * time.Millisecond, "\x1b"}, {60 * time.Millisecond, "q"}}},
 		{"timeout preserves the unknown event", []timedFragment{{0, osc11Prefix}, {20 * time.Millisecond, "rgb:00ee/"}, {65 * time.Millisecond, "q"}}},
 		{"escape after expiry stays separate", []timedFragment{{0, osc11Prefix + "rgb:00ee/"}, {67 * time.Millisecond, "\x1b"}, {67 * time.Millisecond, "q"}}},
-		{"split ST cancels", []timedFragment{{0, osc11Prefix + "rgb:eeee/eeee/1111"}, {10 * time.Millisecond, "\x1b"}, {10 * time.Millisecond, "\\"}}},
-		{"joined ST terminates", []timedFragment{{0, osc11Prefix + "rgb:eeee/eeee/1111"}, {10 * time.Millisecond, "\x1b\\"}}},
-		{"fragments refresh idle deadline", []timedFragment{{0, osc11Prefix + "rgb:eeee/"}, {30 * time.Millisecond, "eeee/"}, {30 * time.Millisecond, "1111\a"}}},
+		{"pending escape allows split ST", []timedFragment{{0, "\x1b"}, {10 * time.Millisecond, osc11Prefix + "rgb:00ee/00ff/8000\x1b"}, {10 * time.Millisecond, "\\"}}},
+		{"split ST cancels", []timedFragment{{0, osc11Prefix + "rgb:00ee/00ff/8000"}, {10 * time.Millisecond, "\x1b"}, {10 * time.Millisecond, "\\"}}},
+		{"joined ST terminates", []timedFragment{{0, osc11Prefix + "rgb:00ee/00ff/8000"}, {10 * time.Millisecond, "\x1b\\"}}},
+		{"fragments refresh idle deadline", []timedFragment{{0, osc11Prefix + "rgb:00ee/"}, {30 * time.Millisecond, "00ff/"}, {30 * time.Millisecond, "8000\a"}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
@@ -97,7 +98,14 @@ func TestOSC11RandomTimedDifferential(t *testing.T) {
 		rng := rand.New(rand.NewPCG(5719, 11))
 		gaps := []time.Duration{7, 17, 31, 49, 51, 67, 93, 125}
 		for trial := range 300 {
-			reply := osc11Prefix + "rgb:eeee/eeee/1111"
+			reply := osc11Prefix + "rgb:00ee/00ff/8000"
+			if trial%4 == 0 {
+				gap := time.Duration(1+rng.IntN(25)) * time.Millisecond
+				in := []timedFragment{{0, "\x1b"}, {gap, reply + "\x1b"}, {gap, "\\"}, {gap, "q"}, {gap, "after q"}}
+				base := decodeTimedInput(t, in, false)
+				require.Equal(t, base, decodeTimedInput(t, in, true), "trial %d: %v", trial, in)
+				continue
+			}
 			terminators := []string{"\a", "\x9c", "\x1b\\", "\x1b"}
 			term := terminators[rng.IntN(len(terminators))]
 			if term == "\x1b" {

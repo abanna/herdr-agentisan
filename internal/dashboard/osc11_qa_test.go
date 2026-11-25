@@ -20,10 +20,10 @@ import (
 
 var qa4Candidate = regexp.MustCompile(`^(?i:r|rg|rgb|rgb:[0-9a-fA-F/]*)?\x1b?$`)
 
-var qa4Reply = regexp.MustCompile(`\x1b\]11;(?i:rgb:)([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})(\a|\x1b\\|\x{fffd})`)
+var qa4Reply = regexp.MustCompile(`\x1b\]11;(?i:rgb:)([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})/([0-9a-fA-F]{1,4})(\a|\x1b|\x{fffd})`)
 
-// qa4Reference is the specification: only a complete, well-formed reply is
-// rewritten, to the 8-bit hex spelling; every other byte passes untouched.
+// qa4Reference is the specification: only a complete candidate colour before
+// BEL, ST or ESC is rewritten. The decoder handles ESC cancellation.
 func qa4Reference(in []byte) []byte {
 	return qa4Reply.ReplaceAllFunc(in, func(m []byte) []byte {
 		s := qa4Reply.FindSubmatch(m)
@@ -42,7 +42,7 @@ func qa4Reference(in []byte) []byte {
 
 func qa4Reader(src io.Reader) *osc11Reader {
 	var buf [terminalReadSize]byte
-	return &osc11Reader{next: func(time.Time) terminalChunk {
+	return &osc11Reader{next: func(time.Time, bool) terminalChunk {
 		n, err := src.Read(buf[:])
 		return terminalChunk{data: buf[:n], at: time.Now(), err: err}
 	}}
@@ -130,7 +130,7 @@ func TestQA4WithheldIsBoundedAndIsACandidate(t *testing.T) {
 		var reader osc11Reader
 		var out []byte
 		for i, b := range in {
-			out = reader.consume(out, b, false)
+			out = reader.consume(out, b)
 			if len(reader.body) > 0 {
 				require.LessOrEqual(t, len(reader.body), 19)
 				require.Regexp(t, qa4Candidate, string(reader.body), "only a possible x11 payload may be withheld")
@@ -146,7 +146,7 @@ func TestQA4TypedInputAfterIntroducerSplit(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ reads []string }{
 		{[]string{"\x1b]", "11;", "rgb:", "1e1e/", "1e1e/2e2e\a", "qq"}},
-		{[]string{"\x1b]11;rgb:1e1e/1e1e/2e2e", "\x1b\\", "x"}},
+		{[]string{"\x1b]11;rgb:1e1e/1e1e/2e2e\x1b", "\\", "x"}},
 		{[]string{"\x1b]11;rgb:1e", "q", "\x1b", "[A"}},
 		{[]string{"\x1b]11;", "\x1b", "x"}},
 	} {
