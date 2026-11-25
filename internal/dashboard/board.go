@@ -298,7 +298,7 @@ func (m Model) boardKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	switch k := msg.String(); k {
 	case "q", keyQuit:
-		return m, tea.Quit
+		return m.quit()
 	case "?":
 		m.help = !m.help
 	case "b":

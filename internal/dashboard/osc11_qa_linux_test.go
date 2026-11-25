@@ -5,12 +5,15 @@ package dashboard_test
 import (
 	"context"
 	"io"
+	"math/rand/v2"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 
@@ -151,4 +154,86 @@ func TestQA4PTYRawModeAndHandBack(t *testing.T) {
 	m, err := r.slave.Read(buf)
 	require.NoError(t, err)
 	require.Equal(t, "hand\n", string(buf[:m]))
+}
+
+type pausedTerminalExit struct {
+	*os.File
+	exiting chan struct{}
+	release chan struct{}
+}
+
+func (out pausedTerminalExit) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), ansi.ResetModeAltScreenSaveCursor) {
+		close(out.exiting)
+		<-out.release
+	}
+	return out.File.Write(p)
+}
+
+func TestOSC11QuitHandbackDifferential(t *testing.T) {
+	rng := rand.New(rand.NewPCG(5719, 3))
+	for range 3 {
+		trailing := "echo " + strings.Repeat("x", 1+rng.IntN(24)) + "\n"
+		for _, wrap := range []bool{false, true} {
+			testOSC11QuitHandback(t, trailing, wrap)
+		}
+	}
+}
+
+func testOSC11QuitHandback(t *testing.T, trailing string, wrap bool) {
+	t.Helper()
+	master, slave := openPTY(t, 120, 40)
+	go func() { _, _ = io.Copy(io.Discard, master) }()
+	out := pausedTerminalExit{slave, make(chan struct{}), make(chan struct{})}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	cfg := config(&script{steps: []func() (snapshot.Snapshot, error){serve(fixture(t, "full"))}}, nil)
+	cfg.Options = dashboard.Options{}
+	opts := []tea.ProgramOption{tea.WithEnvironment([]string{"TERM=xterm-256color"})}
+	if !wrap {
+		opts = append(opts, tea.WithInput(slave))
+	}
+	done, exited := make(chan error, 1), make(chan struct{})
+	go func() {
+		defer close(exited)
+		done <- dashboard.Run(ctx, cfg, slave, out, opts...)
+	}()
+	resume := sync.OnceFunc(func() { close(out.release) })
+	defer func() {
+		resume()
+		cancel()
+		<-exited
+	}()
+	require.Eventually(t, func() bool {
+		state, err := unix.IoctlGetTermios(int(slave.Fd()), unix.TCGETS)
+		return err == nil && state.Lflag&unix.ICANON == 0
+	}, time.Second, time.Millisecond)
+	_, err := master.WriteString("q")
+	require.NoError(t, err)
+	select {
+	case <-out.exiting:
+	case <-ctx.Done():
+		t.Fatal("dashboard did not begin teardown")
+	}
+
+	_, err = master.WriteString(trailing)
+	require.NoError(t, err)
+	// Leave teardown paused long enough for an uncanceled reader to take
+	// the command. Then read it in cooked mode as the shell would.
+	time.Sleep(30 * time.Millisecond)
+	resume()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("dashboard did not finish teardown")
+	}
+	fd := []unix.PollFd{{Fd: int32(slave.Fd()), Events: unix.POLLIN}} //nolint:gosec
+	n, err := unix.Poll(fd, 500)
+	require.NoError(t, err)
+	require.Equal(t, 1, n, "shell bytes must survive teardown (wrapped input: %v)", wrap)
+	buf := make([]byte, len(trailing))
+	n, err = slave.Read(buf)
+	require.NoError(t, err)
+	require.Equal(t, trailing, string(buf[:n]))
 }

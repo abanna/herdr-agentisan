@@ -90,7 +90,7 @@ func Filter(s *snapshot.Snapshot, query string) *snapshot.Snapshot {
 func (m Model) searchKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case keyQuit:
-		return m, tea.Quit
+		return m.quit()
 	case keyEsc:
 		m.endSearch()
 	case keyEnter:

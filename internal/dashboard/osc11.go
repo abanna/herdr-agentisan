@@ -49,7 +49,7 @@ func normalizeTerminalInput(ctx context.Context, in io.Reader) (io.Reader, func(
 // osc11Reader holds only candidate colour bytes. An empty read tells the
 // decoder about progress while those bytes are still being collected.
 type osc11Reader struct {
-	next      func(time.Time) terminalChunk
+	next      func(time.Time, bool) terminalChunk
 	matched   int
 	body      []byte
 	passOSC   bool
@@ -107,11 +107,8 @@ func (r *osc11Reader) readChunk(out []byte) ([]byte, error) {
 	if !r.expires.IsZero() && !chunk.at.Before(r.expires) {
 		r.resetReply()
 	}
-	for i, b := range chunk.data {
-		// Ultraviolet consumes a final Escape as cancellation when the
-		// backslash is absent from the same read.
-		st := b == ansi.ESC && i+1 < len(chunk.data) && chunk.data[i+1] == '\\'
-		out = r.consume(out, b, st)
+	for _, b := range chunk.data {
+		out = r.consume(out, b)
 	}
 	if r.matched > 0 {
 		r.expires = time.Now().Add(uv.DefaultEscTimeout)
@@ -128,7 +125,7 @@ func (r *osc11Reader) readChunk(out []byte) ([]byte, error) {
 func (r *osc11Reader) nextChunk(deadline time.Time) terminalChunk {
 	var chunk terminalChunk
 	if r.deferred == nil {
-		chunk = r.next(deadline)
+		chunk = r.next(deadline, r.lag > 0 || !r.resume.IsZero())
 		if chunk.at.IsZero() {
 			return chunk
 		}
@@ -181,12 +178,15 @@ func (r *osc11Reader) resetReply() {
 	r.keepalive = time.Time{}
 }
 
-func (r *osc11Reader) consume(out []byte, b byte, st bool) []byte {
+func (r *osc11Reader) consume(out []byte, b byte) []byte {
 	if r.matched == len(osc11Prefix) {
 		switch {
-		case b == ansi.BEL || b == ansi.ST || st:
+		case b == ansi.BEL || b == ansi.ST || b == ansi.ESC:
+			// The decoder decides whether Escape cancels the OSC or
+			// terminates it with the next backslash. In either case it
+			// needs the Escape immediately, with any complete colour.
 			return r.finish(out, b)
-		case b == ansi.ESC || b == ansi.CAN || b == ansi.SUB:
+		case b == ansi.CAN || b == ansi.SUB:
 			return append(r.release(out), b)
 		case !r.passOSC && xRGBByte(len(r.body), b):
 			r.body = append(r.body, b)
