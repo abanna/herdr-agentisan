@@ -1,0 +1,43 @@
+--- shift.sh
++++ shift.sh
+@@ -11,5 +11,5 @@
+ #   outgoing boss:  shift.sh open            split a pane beside me, start the incoming boss
+ #                   shift.sh brief           send the incoming boss its first instructions
+-#                   shift.sh wait [N]        block until the incoming boss writes account-N.md (default: next)
++#                   shift.sh wait [N]        wait 2 minutes for account-N.md (default: the account awaiting a reply); run it again on a timeout
+ #                   shift.sh say "<text>"    tell the incoming boss something (typed into ITS pane)
+ #                   shift.sh go              write GO: the incoming boss may take over
+@@ -32,4 +32,5 @@
+ PLUGIN=${SHIFT_PLUGIN:-herdr-agentisan}
+ here=$(cd "$(dirname "$0")" && pwd)
++ROLE=${SHIFT_ROLE:-$REPO/roles/boss-shift.md}
+ die(){ echo "shift: $*" >&2; exit 1; }
+ field(){ python3 -c 'import json,sys
+@@ -88,5 +89,5 @@
+     ! ended "$dir" || { close_checked "$new" "$terminal"; die "the shift ended during the split; closed the new pane $new if it was the candidate's"; }
+     # the pane needs a moment to reach its shell prompt
+-    herdr agent start "$NEXT" --kind claude --pane "$new" --timeout 90000 -- --name "$NEXT" --model "$MODEL" --effort "$EFFORT" --session-id "$session" >/dev/null || started=no
++    started=; herdr agent start "$NEXT" --kind claude --pane "$new" --timeout 90000 -- --name "$NEXT" --model "$MODEL" --effort "$EFFORT" --session-id "$session" >/dev/null || started=no
+     # an abort while Claude started leaves no shift to clean up later: only an aborted shift loses its pane here
+     [ ! -e "$dir/ABORTED" ] || { close_checked "$new" "$terminal"; die "the shift ended while Claude started; closed the new pane $new if it was the candidate's"; }
+@@ -95,15 +96,14 @@
+   brief)
+     own_shift; live
++    pointers=$("$PLUGIN" boss shift brief --record "$CUR" --attempt "${CUR##*/}" --role "$ROLE") && role=$(field role <<< "$pointers") && [ -n "$role" ] ||
++      die "the role or the record is unavailable, so nothing was sent: check $ROLE"
+     pinned || pin_model || die "the candidate Claude is not identified, so nothing was sent: wait for it to start and run brief again, or abort"
+     candidate_ready || die "the candidate's model is not proved, so nothing was sent: run brief again once it has reported, or abort"
+     live
+-    text="You are the INCOMING boss of the herdr-agentisan team, starting a shift change. The outgoing boss is still in charge in the pane beside you. Read $here/INCOMING.md now and follow it exactly. Your shift folder is $CUR. Do not message workers, do not run 'herdr-agentisan board read', and never type into the other pane."
++    text="You are the INCOMING boss of the herdr-agentisan team, starting a shift change. The outgoing boss is still in charge in the pane beside you. Read $role now and follow its Candidate section exactly. Your attempt directory is $CUR and its attempt ID is ${CUR##*/}. Do not message workers, do not run 'herdr-agentisan board read', and never type into the other pane."
+     herdr agent prompt "$(val next)" "$text" >/dev/null && echo "briefed $(val next)" ;;
+   wait)
+-    need_cur
+-    n=${1:-}; if [ -z "$n" ]; then n=1; while [ -e "$CUR/account-$n.md" ] && [ -e "$CUR/reply-$n.md" ]; do n=$((n+1)); done; fi
+-    until [ -s "$CUR/account-$n.md" ] || [ -e "$CUR/ABORTED" ]; do sleep 5; done
+-    [ -e "$CUR/ABORTED" ] && { echo aborted; exit 0; }
+-    echo "$CUR/account-$n.md is in" ;;
++    need_cur; dir=$(readlink "$CUR")
++    "$PLUGIN" boss shift wait --record "$dir" --attempt "${dir##*/}" ${1:+--round "$1"} --timeout 2m ;;
+   say)
+     own_shift; live; [ $# -ge 1 ] || die "say what?"

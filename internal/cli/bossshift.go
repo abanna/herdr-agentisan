@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -13,7 +14,7 @@ func newBossCmd() *cobra.Command {
 	boss := &cobra.Command{Use: "boss", Short: "Boss shift handoff helpers"}
 	shift := &cobra.Command{Use: "shift", Short: "Verify the shift candidate"}
 	boss.AddCommand(shift)
-	shift.AddCommand(newShiftModelCmd())
+	shift.AddCommand(newShiftModelCmd(), newShiftBriefCmd(), newShiftWaitCmd())
 	return boss
 }
 
@@ -61,5 +62,63 @@ func newShiftModelCmd() *cobra.Command {
 	f.Uint32Var(&target.PID, "pid", 0, "recorded Claude PID, with --start; omit both to name the launched Claude")
 	f.StringVar(&target.SessionID, "session-id", "", "the --session-id the candidate was launched with")
 	f.Uint64Var(&target.Start, "start", 0, "recorded raw process start, with --pid")
+	return c
+}
+
+// roundResult prints a verb's JSON, whatever its outcome, and fails with its error.
+func roundResult(cmd *cobra.Command, result any, err error) error {
+	if result != nil {
+		if writeErr := render(cmd.OutOrStdout(), true, result, nil); writeErr != nil {
+			return writeErr
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", cmd.CommandPath(), err)
+	}
+	return nil
+}
+
+func newShiftBriefCmd() *cobra.Command {
+	var record bossshift.Record
+	var role string
+	c := &cobra.Command{
+		Use:   "brief",
+		Short: "Print the candidate's role and attempt pointers",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			v, err := bossshift.Brief(record, role)
+			if err != nil {
+				return roundResult(cmd, nil, err)
+			}
+			return roundResult(cmd, v, nil)
+		},
+	}
+	f := c.Flags()
+	f.StringVar(&record.Dir, "record", "", "absolute attempt directory")
+	f.StringVar(&record.Attempt, "attempt", "", "attempt ID, the directory's name")
+	f.StringVar(&role, "role", "", "absolute path to roles/boss-shift.md")
+	return c
+}
+
+func newShiftWaitCmd() *cobra.Command {
+	var req bossshift.WaitRequest
+	c := &cobra.Command{
+		Use:   "wait",
+		Short: "Wait for a published account or reply in one attempt",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			v, err := bossshift.Wait(cmd.Context(), req)
+			if v.Status == "" {
+				return roundResult(cmd, nil, err)
+			}
+			return roundResult(cmd, v, err)
+		},
+	}
+	f := c.Flags()
+	f.StringVar(&req.Dir, "record", "", "absolute attempt directory")
+	f.StringVar(&req.Attempt, "attempt", "", "attempt ID, the directory's name")
+	f.IntVar(&req.Round, "round", 0, "round number (default: the account that awaits a reply)")
+	f.BoolVar(&req.Reply, "reply", false, "wait for the reply to --round")
+	f.DurationVar(&req.Timeout, "timeout", 2*time.Minute, "wait limit (0 probes once, maximum 5m)")
 	return c
 }
