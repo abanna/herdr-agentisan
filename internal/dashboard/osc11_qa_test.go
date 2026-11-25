@@ -130,7 +130,7 @@ func TestQA4WithheldIsBoundedAndIsACandidate(t *testing.T) {
 		var reader osc11Reader
 		var out []byte
 		for i, b := range in {
-			out = reader.consume(out, b)
+			out = reader.consume(out, b, false)
 			if len(reader.body) > 0 {
 				require.LessOrEqual(t, len(reader.body), 19)
 				require.Regexp(t, qa4Candidate, string(reader.body), "only a possible x11 payload may be withheld")
@@ -146,7 +146,7 @@ func TestQA4TypedInputAfterIntroducerSplit(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ reads []string }{
 		{[]string{"\x1b]", "11;", "rgb:", "1e1e/", "1e1e/2e2e\a", "qq"}},
-		{[]string{"\x1b]11;rgb:1e1e/1e1e/2e2e\x1b", "\\", "x"}},
+		{[]string{"\x1b]11;rgb:1e1e/1e1e/2e2e", "\x1b\\", "x"}},
 		{[]string{"\x1b]11;rgb:1e", "q", "\x1b", "[A"}},
 		{[]string{"\x1b]11;", "\x1b", "x"}},
 	} {

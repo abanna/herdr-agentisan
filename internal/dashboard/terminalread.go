@@ -11,7 +11,11 @@ import (
 	uv "github.com/charmbracelet/ultraviolet"
 )
 
-const terminalReadSize = 4096
+const (
+	terminalReadSize = 4096
+	// Keep recording arrival times while the decoder expires a held reply.
+	terminalReadAhead = 8
+)
 
 var errTerminalReadTimeout = errors.New("terminal reply timed out")
 
@@ -25,13 +29,11 @@ type terminalChunk struct {
 // Bubble Tea still sees the terminal's descriptor for raw mode, but its
 // reader calls through here so a quiet descriptor cannot stall expiry.
 type terminalReads struct {
-	ctx     context.Context
-	cancel  context.CancelFunc
-	input   io.Reader
-	start   sync.Once
-	request chan struct{}
-	result  chan terminalChunk
-	waiting bool
+	ctx    context.Context
+	cancel context.CancelFunc
+	input  io.Reader
+	start  sync.Once
+	result chan terminalChunk
 
 	cancelDone  chan struct{}
 	done        chan struct{}
@@ -42,7 +44,7 @@ func newTerminalReads(ctx context.Context, input io.Reader) *terminalReads {
 	ctx, cancel := context.WithCancel(ctx)
 	return &terminalReads{
 		ctx: ctx, cancel: cancel, input: input,
-		request: make(chan struct{}), result: make(chan terminalChunk),
+		result:     make(chan terminalChunk, terminalReadAhead),
 		cancelDone: make(chan struct{}), done: make(chan struct{}),
 	}
 }
@@ -73,27 +75,16 @@ func (r *terminalReads) next(deadline time.Time) terminalChunk {
 		timeout = timer.C
 	}
 	r.start.Do(func() { go r.readLoop() })
-	var request chan<- struct{}
-	if !r.waiting {
-		request = r.request
-	}
-
-	for {
-		select {
-		case <-r.ctx.Done():
+	select {
+	case <-r.ctx.Done():
+		return terminalChunk{err: io.EOF}
+	case <-timeout:
+		return terminalChunk{err: errTerminalReadTimeout}
+	case chunk, ok := <-r.result:
+		if !ok {
 			return terminalChunk{err: io.EOF}
-		case <-timeout:
-			return terminalChunk{err: errTerminalReadTimeout}
-		case request <- struct{}{}:
-			r.waiting = true
-			request = nil
-		case chunk, ok := <-r.result:
-			r.waiting = false
-			if !ok {
-				return terminalChunk{err: io.EOF}
-			}
-			return chunk
 		}
+		return chunk
 	}
 }
 
@@ -119,15 +110,13 @@ func (r *terminalReads) readLoop() {
 		_ = source.Close()
 	}()
 
-	for {
-		select {
-		case <-r.ctx.Done():
-			return
-		case <-r.request:
-		}
+	for r.ctx.Err() == nil {
 		var buf [terminalReadSize]byte
 		n, err := source.Read(buf[:])
 		r.send(terminalChunk{data: buf[:n], at: time.Now(), err: err})
+		if err != nil {
+			return
+		}
 	}
 }
 
