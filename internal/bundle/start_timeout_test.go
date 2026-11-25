@@ -1,4 +1,4 @@
-package bundle
+package bundle_test
 
 import (
 	"context"
@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/abanna/herdr-agentisan/internal/bundle"
 )
 
 func TestReadInstalledStateTimesOutDuringStart(t *testing.T) {
@@ -25,8 +27,8 @@ func TestReadInstalledStateTimesOutDuringStart(t *testing.T) {
 	release := make(chan struct{})
 	defer close(release)
 	begin := time.Now()
-	_, err = ReadInstalledState(ctx, func(string) (Launch, error) {
-		return Launch{Argv: []string{"/bin/sleep", "10"}, Dir: dir, start: func(cmd *exec.Cmd) error {
+	_, err = bundle.ReadInstalledState(ctx, func(string) (bundle.Launch, error) {
+		return (bundle.Launch{Argv: []string{"/bin/sleep", "10"}, Dir: dir}).WithStart(func(cmd *exec.Cmd) error {
 			cmd.Stderr = out
 			err := cmd.Start()
 			_ = out.Close()
@@ -36,9 +38,9 @@ func TestReadInstalledStateTimesOutDuringStart(t *testing.T) {
 			case <-time.After(2 * time.Second):
 			}
 			return err
-		}}, nil
+		}), nil
 	}, dir, dir)
-	require.ErrorIs(t, err, ErrTimeout)
+	require.ErrorIs(t, err, bundle.ErrTimeout)
 	require.Less(t, time.Since(begin), time.Second)
 	select {
 	case startErr := <-started:
@@ -58,9 +60,9 @@ func TestReadInstalledStateRefusesLateLauncher(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 400*time.Millisecond)
 	defer cancel()
 	exited := make(chan error, 1)
-	_, err := ReadInstalledState(ctx, func(string) (Launch, error) {
-		l := Launch{Dir: dir, Argv: []string{"/bin/sh", "-c", "printf ran > \"$1\"", "probe", marker}}
-		l.start = func(cmd *exec.Cmd) error {
+	_, err := bundle.ReadInstalledState(ctx, func(string) (bundle.Launch, error) {
+		l := bundle.Launch{Dir: dir, Argv: []string{"/bin/sh", "-c", "printf ran > \"$1\"", "probe", marker}}
+		return l.WithStart(func(cmd *exec.Cmd) error {
 			<-ctx.Done()
 			time.Sleep(50 * time.Millisecond)
 			late := exec.Command(cmd.Path)
@@ -69,10 +71,9 @@ func TestReadInstalledStateRefusesLateLauncher(t *testing.T) {
 			late.ExtraFiles, late.SysProcAttr = cmd.ExtraFiles, cmd.SysProcAttr
 			exited <- late.Run()
 			return errors.New("stub ran the late bootstrap")
-		}
-		return l, nil
+		}), nil
 	}, dir, dir)
-	require.ErrorIs(t, err, ErrTimeout)
+	require.ErrorIs(t, err, bundle.ErrTimeout)
 	select {
 	case err := <-exited:
 		require.NoError(t, err)

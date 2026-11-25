@@ -1,4 +1,4 @@
-package bundle
+package bundle_test
 
 import (
 	"context"
@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/abanna/herdr-agentisan/internal/bundle"
+	"github.com/abanna/herdr-agentisan/internal/bundle/bundletest"
 )
 
 func TestWorkDirResolutionHonorsDeadline(t *testing.T) {
@@ -16,11 +19,11 @@ func TestWorkDirResolutionHonorsDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
 	defer cancel()
 	start := time.Now()
-	_, err := resolveWithin(ctx, 0, func() (string, error) {
+	_, err := bundle.ResolveWithinString(ctx, 0, func() (string, error) {
 		time.Sleep(2 * time.Second)
 		return "/late", nil
 	})
-	require.ErrorIs(t, err, ErrTimeout)
+	require.ErrorIs(t, err, bundle.ErrTimeout)
 	require.Less(t, time.Since(start), time.Second)
 }
 
@@ -47,16 +50,18 @@ func TestReadInstalledStateSendsOnDiskSpelling(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	gitTop := func(ctx context.Context, dir string) string { return gitTopLevel(ctx, names.Replace(dir)) }
-	_, err = readInstalledState(ctx, func(string) (Launch, error) {
-		return Launch{Argv: []string{os.Args[0]}, Env: append(os.Environ(), "BUNDLETEST_MODE=ok", "BUNDLETEST_WORKDIR="+dir)}, nil
-	}, func() (worktree, error) { return volumeWorktree(ctx, aliasRepo, dir, lstat, gitTop) })
+	gitTop := func(ctx context.Context, dir string) string { return bundle.GitTopLevel(ctx, names.Replace(dir)) }
+	_, err = bundle.ReadInstalledStateWithResolver(ctx, func(string) (bundle.Launch, error) {
+		return bundletest.Launch(t, repo, "ok", bundletest.WorkDirEnv+"="+dir), nil
+	}, func() (bundle.Worktree, error) { return bundle.VolumeWorktree(ctx, aliasRepo, dir, lstat, gitTop) })
 	require.NoError(t, err)
-	paths, err := volumeWorktree(ctx, aliasRepo, alias, lstat, gitTop)
+	paths, err := bundle.VolumeWorktree(ctx, aliasRepo, alias, lstat, gitTop)
 	require.NoError(t, err)
-	require.Equal(t, worktree{repo: repo, dir: dir}, paths)
+	resolvedRepo, resolvedDir := paths.Paths()
+	require.Equal(t, repo, resolvedRepo)
+	require.Equal(t, dir, resolvedDir)
 	if os.Geteuid() != 0 {
-		_, err := volumeWorktree(ctx, aliasRepo, dir, lstat, func(context.Context, string) string { return "" })
+		_, err := bundle.VolumeWorktree(ctx, aliasRepo, dir, lstat, func(context.Context, string) string { return "" })
 		require.ErrorContains(t, err, "cannot confirm the on-disk spelling")
 	}
 }
