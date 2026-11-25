@@ -371,6 +371,24 @@ func TestShiftOpenClosesItsPaneWhenTheShiftEndedDuringTheStart(t *testing.T) {
 	}
 }
 
+// A launch that fails with no abort leaves the pane for the operator and says so; a
+// cleanup that finds another terminal on the pane closes nothing.
+func TestShiftOpenFailedStartAndCleanupGuards(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	out, err := s.invoke("old", "verified", "open", "START_FAIL=1")
+	require.Error(t, err)
+	require.Contains(t, out, "did not start")
+	require.NotContains(t, out, "opened:")
+	require.NoFileExists(t, s.path("close"))
+
+	s = setupShiftScript(t)
+	hook := `touch "$SHIFT_ROOT/pane-get-fails"; bash "$SHIFT_ROOT/shift.sh" abort >/dev/null 2>&1; rm "$SHIFT_ROOT/pane-get-fails"`
+	_, err = s.invoke("old", "verified", "open", "ON_START="+hook, "NEW_TERMINAL=reused-terminal")
+	require.Error(t, err)
+	require.NoFileExists(t, s.path("close"), "another terminal's pane is not closed")
+}
+
 // A late open, whose shift was promoted while it waited, must not close the new boss.
 func TestShiftOpenLeavesAPromotedShiftsPaneAlone(t *testing.T) {
 	t.Parallel()
@@ -454,12 +472,16 @@ func TestShiftGoRetriesAFailedCue(t *testing.T) {
 	_, err := s.invoke("old", "verified", "go", "FAIL_PROMPT=1")
 	require.Error(t, err)
 	require.Equal(t, 1, strings.Count(s.read("cues"), "INCOMING.md"))
-	s.write("current/GO", "saved GO\n")
+	require.FileExists(t, s.path("current/GO"), "the failed cue left the GO it recorded")
+	old := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, os.Chtimes(s.path("current/GO"), old, old))
 	out, err := s.invoke("old", "wrong_model", "go")
 	require.Error(t, err)
-	require.NotContains(t, out, "GO not written", "the saved GO is still there")
+	require.NotContains(t, out, "GO not written", "the recorded GO is still there")
 	require.NoError(t, s.run("old", "verified", "go"))
-	require.Equal(t, "saved GO\n", s.read("current/GO"))
+	info, err := os.Stat(s.path("current/GO"))
+	require.NoError(t, err)
+	require.True(t, info.ModTime().Equal(old), "the retry kept the GO it found")
 	require.Equal(t, 1, strings.Count(s.read("cues"), "takeover"))
 	require.Error(t, s.run("old", "verified", "go"), "a delivered cue cannot be repeated")
 }
