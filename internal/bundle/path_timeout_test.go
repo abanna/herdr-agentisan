@@ -25,24 +25,38 @@ func TestWorkDirResolutionHonorsDeadline(t *testing.T) {
 }
 
 func TestReadInstalledStateSendsOnDiskSpelling(t *testing.T) {
-	t.Parallel()
 	base, err := filepath.EvalSymlinks(t.TempDir())
 	require.NoError(t, err)
-	repo := filepath.Join(base, "Repo")
+	searchOnly := filepath.Join(base, "search-only")
+	repo := filepath.Join(searchOnly, "Repo")
+	aliasRepo := filepath.Join(searchOnly, "repo")
 	dir := filepath.Join(repo, "Generations", "G001")
-	alias := filepath.Join(base, "repo", "generations", "g001")
+	alias := filepath.Join(aliasRepo, "generations", "g001")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
+	require.NoError(t, os.Chmod(searchOnly, 0o111))
+	t.Cleanup(func() { require.NoError(t, os.Chmod(searchOnly, 0o700)) })
+	t.Setenv("PATH", base)
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "safe.directory")
+	t.Setenv("GIT_CONFIG_VALUE_0", repo)
+	git := "#!/bin/sh\n[ \"$GIT_CONFIG_COUNT:$GIT_CONFIG_KEY_0\" = 1:safe.directory ] && printf '%s\\n' \"$GIT_CONFIG_VALUE_0\"\n"
+	require.NoError(t, os.WriteFile(filepath.Join(base, "git"), []byte(git), 0o700))
 	names := strings.NewReplacer("/repo", "/Repo", "/generations", "/Generations", "/g001", "/G001")
-	stat := func(path string) (os.FileInfo, error) {
-		return os.Stat(names.Replace(path))
+	lstat := func(path string) (os.FileInfo, error) {
+		return os.Lstat(names.Replace(path))
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
+	gitTop := func(ctx context.Context, dir string) string { return gitTopLevel(ctx, names.Replace(dir)) }
 	_, err = readInstalledState(ctx, func(string) (Launch, error) {
 		return Launch{Argv: []string{os.Args[0]}, Env: append(os.Environ(), "BUNDLETEST_MODE=ok", "BUNDLETEST_WORKDIR="+dir)}, nil
-	}, func() (worktree, error) { return volumeWorktree(repo, alias, stat) })
+	}, func() (worktree, error) { return volumeWorktree(ctx, aliasRepo, dir, lstat, gitTop) })
 	require.NoError(t, err)
-	paths, err := volumeWorktree(filepath.Join(base, "repo"), alias, stat)
+	paths, err := volumeWorktree(ctx, aliasRepo, alias, lstat, gitTop)
 	require.NoError(t, err)
 	require.Equal(t, worktree{repo: repo, dir: dir}, paths)
+	if os.Geteuid() != 0 {
+		_, err := volumeWorktree(ctx, aliasRepo, dir, lstat, func(context.Context, string) string { return "" })
+		require.ErrorContains(t, err, "cannot confirm the on-disk spelling")
+	}
 }

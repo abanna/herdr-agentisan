@@ -5,7 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
+	"sync"
 	"time"
 )
 
@@ -23,7 +27,7 @@ type State struct {
 
 // ReadInstalledState discovers, starts, reads and closes the bundle session.
 func ReadInstalledState(ctx context.Context, locate func(string) (Launch, error), repo, workDir string) (State, error) {
-	return readInstalledState(ctx, locate, func() (worktree, error) { return resolveWorktree(repo, workDir) })
+	return readInstalledState(ctx, locate, func() (worktree, error) { return resolveWorktree(ctx, repo, workDir) })
 }
 
 func readInstalledState(ctx context.Context, locate func(string) (Launch, error), resolve func() (worktree, error)) (State, error) {
@@ -56,7 +60,7 @@ func ReadState(s *Session, workDir string) (State, error) {
 		return State{}, s.failed
 	}
 	root := s.cmd.Dir
-	paths, err := resolveWithin(s.ctx, 0, func() (worktree, error) { return resolveWorktree(root, workDir) })
+	paths, err := resolveWithin(s.ctx, 0, func() (worktree, error) { return resolveWorktree(s.ctx, root, workDir) })
 	if err != nil {
 		if s.ctx.Err() != nil {
 			return State{}, s.broken(err)
@@ -101,7 +105,7 @@ func readResolvedState(s *Session, dir string) (State, error) {
 
 type worktree struct{ repo, dir string }
 
-func resolveWorktree(repo, workDir string) (worktree, error) {
+func resolveWorktree(ctx context.Context, repo, workDir string) (worktree, error) {
 	root, err := canonicalDir(repo, ErrUnavailable)
 	if err != nil {
 		return worktree{}, err
@@ -110,33 +114,34 @@ func resolveWorktree(repo, workDir string) (worktree, error) {
 	if err != nil {
 		return worktree{}, err
 	}
-	return volumeWorktree(root, dir, os.Stat)
+	return volumeWorktree(ctx, root, dir, os.Lstat, gitTopLevel)
 }
 
-func volumeWorktree(root, dir string, stat func(string) (os.FileInfo, error)) (worktree, error) {
-	ancestor := repoAncestor(root, dir, stat)
+func volumeWorktree(ctx context.Context, root, dir string, lstat func(string) (os.FileInfo, error), gitTop func(context.Context, string) string) (worktree, error) {
+	ancestor := repoAncestor(root, dir, lstat)
 	if ancestor == "" {
 		return worktree{}, fmt.Errorf("%w: the work dir %s is outside the repo %s", ErrRefused, dir, root)
 	}
-	// The bundle's Git-derived roots use the filesystem spelling.
-	repo, err := diskPath(root, "/", "/", stat)
+	repoTop := sync.OnceValue(func() string { return gitTop(ctx, root) })
+	repo, err := diskPath(root, "/", "/", lstat, repoTop)
 	if err != nil {
 		return worktree{}, fmt.Errorf("%w: repo spelling: %w", ErrUnavailable, err)
 	}
-	workDir, err := diskPath(dir, ancestor, repo, stat)
+	worktreeTop := sync.OnceValue(func() string { return gitTop(ctx, dir) })
+	workDir, err := diskPath(dir, ancestor, repo, lstat, worktreeTop)
 	if err != nil {
 		return worktree{}, fmt.Errorf("%w: work dir spelling: %w", ErrRefused, err)
 	}
 	return worktree{repo: repo, dir: workDir}, nil
 }
 
-func repoAncestor(root, dir string, stat func(string) (os.FileInfo, error)) string {
-	repo, err := stat(root)
+func repoAncestor(root, dir string, lstat func(string) (os.FileInfo, error)) string {
+	repo, err := lstat(root)
 	if err != nil {
 		return ""
 	}
 	for {
-		info, err := stat(dir)
+		info, err := lstat(dir)
 		if err != nil {
 			return ""
 		}
@@ -152,29 +157,36 @@ func repoAncestor(root, dir string, stat func(string) (os.FileInfo, error)) stri
 }
 
 // diskPath rebases dir below the on-disk spelling of its ancestor.
-func diskPath(dir, ancestor, spelledAncestor string, stat func(string) (os.FileInfo, error)) (string, error) {
+func diskPath(dir, ancestor, spelledAncestor string, lstat func(string) (os.FileInfo, error), gitTop func() string) (string, error) {
 	if dir == ancestor {
 		return spelledAncestor, nil
 	}
-	parent, err := diskPath(filepath.Dir(dir), ancestor, spelledAncestor, stat)
+	parent, err := diskPath(filepath.Dir(dir), ancestor, spelledAncestor, lstat, gitTop)
 	if err != nil {
 		return "", err
 	}
-	info, err := stat(dir)
+	info, err := lstat(dir)
 	if err != nil {
 		return "", fmt.Errorf("stat %q: %w", dir, err)
 	}
+	name := filepath.Base(dir)
+	exact := filepath.Join(parent, name)
+	match, matchErr := lstat(exact)
+	same := matchErr == nil && match.IsDir() && os.SameFile(info, match)
+	// Lstat also resolves alternate spellings on a case-insensitive volume.
 	entries, err := os.ReadDir(parent)
+	if os.IsPermission(err) {
+		if entry := gitSpelling(gitTop(), parent, info, lstat); entry != "" {
+			return entry, nil
+		}
+		return "", fmt.Errorf("cannot confirm the on-disk spelling of %q: Git did not identify the directory entry", exact)
+	}
 	if err != nil {
 		return "", fmt.Errorf("read entries in %q: %w", parent, err)
 	}
-	name := filepath.Base(dir)
 	for _, entry := range entries {
-		if entry.Name() == name && entry.IsDir() {
-			entryInfo, err := entry.Info()
-			if err == nil && os.SameFile(info, entryInfo) {
-				return filepath.Join(parent, name), nil
-			}
+		if entry.Name() == name && same {
+			return exact, nil
 		}
 	}
 	for _, entry := range entries {
@@ -186,6 +198,35 @@ func diskPath(dir, ancestor, spelledAncestor string, stat func(string) (os.FileI
 		}
 	}
 	return "", fmt.Errorf("no directory entry in %q matches %q", parent, dir)
+}
+
+func gitTopLevel(ctx context.Context, dir string) string {
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-toplevel")
+	cmd.Dir = dir
+	cmd.Env = slices.DeleteFunc(os.Environ(), func(value string) bool {
+		return strings.HasPrefix(value, "GIT_") && !strings.HasPrefix(value, "GIT_CONFIG")
+	})
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(string(out), "\n")
+}
+
+// gitSpelling only trusts the reported ancestor when it names the same directory.
+func gitSpelling(top, parent string, info os.FileInfo, lstat func(string) (os.FileInfo, error)) string {
+	if !filepath.IsAbs(top) {
+		return ""
+	}
+	for path := filepath.Clean(top); path != "/"; path = filepath.Dir(path) {
+		if filepath.Dir(path) == parent {
+			if entry, err := lstat(path); err == nil && entry.IsDir() && os.SameFile(info, entry) {
+				return path
+			}
+			break
+		}
+	}
+	return ""
 }
 
 func canonicalDir(path string, unavailable error) (string, error) {
