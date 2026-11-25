@@ -50,8 +50,9 @@ type launchModel struct {
 	pid   uint32
 	start uint64
 	timed bool
-	// notForeground marks a listed process the kernel ruled out.
-	notForeground bool
+	// unverified marks a listed process whose start the kernel did not give
+	// as the foreground agent's: ruled out, or gone before it was read.
+	unverified bool
 	// lostSince is when the pane's agent was last verified or ruled out and
 	// nothing has replaced it: a miss is asked again at every poll for
 	// ModelRetry from then, so the replacement's ctx is not held back by a
@@ -77,7 +78,9 @@ func (lm *launchModels) foregroundStart(pid int) (uint64, error) {
 		return 0, err
 	}
 	if stat.Tpgid <= 0 || stat.Pgrp != stat.Tpgid {
-		return 0, errNotForeground
+		// The start is still the process's: it dates a report a ctx_owner
+		// does not name its writer of.
+		return stat.Start, errNotForeground
 	}
 	return stat.Start, nil
 }
@@ -192,7 +195,7 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 		e := read(info, p, startTime, now)
 		if e.pid == 0 {
 			e.lostSince = since
-			if e.notForeground {
+			if e.unverified {
 				e.lostSince = cmp.Or(since, now)
 			}
 		}
@@ -224,8 +227,9 @@ func (lm *launchModels) refresh(ctx context.Context, c herdr.Client, pp paneProc
 
 // read is the entry for pane p from its processes. A pane with no agent
 // process, or whose agent's start time cannot be read, as when it has just
-// exited, is a miss. A process the kernel ruled out as foreground is
-// retried next poll.
+// exited, is a miss. A process the kernel ruled out as foreground, or that
+// went before it was read, is retried next poll; a ruled-out one keeps its
+// start, which dates a legacy report.
 func read(info herdr.ProcessInfo, p herdr.PaneInfo, startTime func(pid int) (uint64, error), now time.Time) launchModel {
 	e := launchModel{terminal: p.TerminalID, agent: p.Agent, asked: now}
 	model, pid, found := team.LaunchModel(info.ForegroundProcesses)
@@ -235,7 +239,10 @@ func read(info herdr.ProcessInfo, p herdr.PaneInfo, startTime func(pid int) (uin
 	if startTime != nil {
 		start, err := startTime(int(pid))
 		if err != nil {
-			e.notForeground = errors.Is(err, errNotForeground)
+			e.unverified = true
+			if errors.Is(err, errNotForeground) {
+				e.start, e.timed = start, true
+			}
 			return e
 		}
 		e.start, e.timed = start, true

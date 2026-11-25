@@ -292,9 +292,10 @@ func TestLaunchModelsAskOnlyWhenAPaneChanged(t *testing.T) {
 	now = now.Add(3 * time.Second)
 	poll(wantAll, "not asked again")
 	got := processAsks(ph.srv)
-	for _, p := range []string{"w2:p1", "w2:p2", "w2:p3"} {
+	for _, p := range []string{"w2:p1", "w2:p2"} {
 		assert.Equal(t, 1, got[p], p)
 	}
+	assert.Equal(t, 2, got["w2:p3"], "an agent gone before its start time is read is asked again at the next poll (review of cf0df58, P1 4)")
 	assert.Empty(t, logs.String(), "nothing here is logged")
 }
 
@@ -746,6 +747,32 @@ func TestLaunchModelsDeferredLostPaneIsAskedAtTheNextPoll(t *testing.T) {
 	c.Dialed = nil
 	assert.Equal(t, "20", poll(later.Add(time.Second)).Ctx(byY), "the next poll asks, with budget to spare")
 	assert.Greater(t, processAsks(ph.srv)[y.PaneID], asks)
+}
+
+// The first look at a pane finds an agent that exits before the kernel is
+// read (review of cf0df58, P1 4). Its replacement's reports are not held
+// back by that miss: the pane is asked at the next poll.
+func TestLaunchModelsColdReadFailureIsRetried(t *testing.T) {
+	t.Parallel()
+	ph := newProcHerdr(t)
+	lm := daemon.NewLaunchModels()
+	c := herdr.Client{SocketPath: ph.srv.Path}
+	pt := &procs{start: map[int]uint64{3: 3}} // 2 has exited
+	lm.SetProcessStat(func(pid int) (report.Stat, error) {
+		start, err := pt.startTime(pid)
+		return report.Stat{Start: start, Pgrp: pid, Tpgid: pid}, err
+	})
+	panes := []herdr.PaneInfo{agentPane("w1:p1", "t1", "codex")}
+	poll := func(pid int, now time.Time) team.CtxGate {
+		t.Helper()
+		ph.set(panes[0].PaneID, agentProc(pid, "codex"))
+		_, err := lm.Refresh(t.Context(), c, panes, pt.startTime, now, zerolog.Nop())
+		require.NoError(t, err)
+		return lm.CtxGates(panes)[panes[0].PaneID]
+	}
+	byB := team.Pane{Ctx: "20", CtxOwner: []report.Proc{{PID: 3, Start: 3}}}
+	assert.Empty(t, poll(2, t0).Ctx(byB), "A is gone and B unknown")
+	assert.Equal(t, "20", poll(3, t0.Add(time.Second)).Ctx(byB), "B's own report counts at the next poll")
 }
 
 // lostPane is one pane whose agent, process 2, can be put behind its shell.

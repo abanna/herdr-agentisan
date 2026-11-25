@@ -68,15 +68,15 @@ var unreadableOwner = []report.Proc{{}}
 // ctxOwnerOf is the processes p's ctx_owner token names for the ctx stamped
 // ctxAt; none when it is absent, or when herdr detects no agent in p, as for
 // ctxOf. A token that is not a value the report writes, or that belongs to
-// another stamp, as when an older build wrote ctx and ctx_at over it, names
-// the processes of nobody.
+// another stamp or another ctx, as when an older build wrote ctx and ctx_at
+// over it, even in the same millisecond, names the processes of nobody.
 func ctxOwnerOf(p herdr.PaneInfo, ctxAt time.Time) []report.Proc {
 	v := p.Tokens[report.CtxOwnerKey]
 	if p.Agent == "" || v == "" {
 		return nil
 	}
-	at, owner, ok := report.ParseCtxOwner(v)
-	if !ok || ctxAt.IsZero() || at.UnixMilli() != ctxAt.UnixMilli() {
+	at, ctx, owner, ok := report.ParseCtxOwner(v)
+	if !ok || ctxAt.IsZero() || at.UnixMilli() != ctxAt.UnixMilli() || ctx != p.Tokens[report.CtxKey] {
 		return unreadableOwner
 	}
 	return owner

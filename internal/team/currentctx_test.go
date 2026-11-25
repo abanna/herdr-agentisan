@@ -22,13 +22,18 @@ func stamped(ctx string, at time.Time) map[string]string {
 // with its ctx_at and the processes that wrote it.
 func owned(ctx string, at time.Time, owner ...report.Proc) map[string]string {
 	t := stamped(ctx, at)
-	t[report.CtxOwnerKey] = report.FormatCtxOwner(at, owner)
+	t[report.CtxOwnerKey] = report.FormatCtxOwner(at, ctx, owner)
 	return t
+}
+
+// ownerOf is the ctx_owner of a report of ctx made at at by owner.
+func ownerOf(ctx string, at time.Time, owner ...report.Proc) string {
+	return report.FormatCtxOwner(at, ctx, owner)
 }
 
 // withOwner is tokens with the ctx_owner a report stamped at wrote.
 func withOwner(tokens map[string]string, at time.Time, owner ...report.Proc) map[string]string {
-	tokens[report.CtxOwnerKey] = report.FormatCtxOwner(at, owner)
+	tokens[report.CtxOwnerKey] = report.FormatCtxOwner(at, tokens[report.CtxKey], owner)
 	return tokens
 }
 
@@ -48,12 +53,18 @@ func TestPaneReadsCtxOwner(t *testing.T) {
 		inTeam(pane("wN:p4", "", "codex", "idle", stamped("70", modelAt)), "coder-1"),
 		// An older build wrote ctx and ctx_at over the previous owner.
 		inTeam(pane("wN:p5", "", "codex", "idle", withOwner(stamped("70", modelAt.Add(time.Minute)), modelAt, agentA)), "coder-1"),
+		// The same second, and the same millisecond: an older build wrote B's
+		// ctx and ctx_at over A's owner.
+		inTeam(pane("wN:p6", "", "codex", "idle", withOwner(stamped("70", modelAt.Add(50*time.Millisecond)), modelAt, agentA)), "coder-1"),
+		inTeam(pane("wN:p7", "", "codex", "idle", map[string]string{
+			report.CtxKey: "80", report.CtxAtKey: report.FormatModelAt(modelAt), report.CtxOwnerKey: ownerOf("20", modelAt, agentA),
+		}), "coder-1"),
 	)
 	assert.Equal(t, []report.Proc{agentA, agentB}, got["wN:p1"].CtxOwner)
 	for id, why := range map[string]string{"wN:p2": "no agent in the pane", "wN:p4": "no ctx_owner"} {
 		assert.Empty(t, got[id].CtxOwner, why)
 	}
-	for id, why := range map[string]string{"wN:p3": "an owner the report never writes", "wN:p5": "an owner written with another ctx_at"} {
+	for id, why := range map[string]string{"wN:p3": "an owner the report never writes", "wN:p5": "an owner written with another ctx_at", "wN:p6": "an owner written 50 ms earlier, in the same second", "wN:p7": "an owner written for another ctx"} {
 		assert.Equal(t, []report.Proc{{}}, got[id].CtxOwner, why+": the processes of nobody")
 		assert.Empty(t, team.CtxGate{Agent: agentA}.Ctx(got[id]), why)
 	}
@@ -216,6 +227,12 @@ func TestStartClock(t *testing.T) {
 		p.CtxOwner = nil
 		assert.Equal(t, "70", c.Ctx(p), name+", ctx of no writer")
 	}
+
+	// A reissued id: the gate's agent was verified on the old terminal.
+	same := &team.StartClock{}
+	same.Observe(m, map[string]team.CtxGate{"wN:p1": {Agent: agentA}})
+	assert.Equal(t, "70", same.Ctx(ctx("wN:p1", "term_a")), "its writer is in front of its terminal")
+	assert.Empty(t, same.Ctx(ctx("wN:p1", "term_b")), "another terminal's pane")
 
 	c.Observe(m, nil)
 	assert.Empty(t, c.Ctx(ctx("wN:p1", "term_a")), "replaced")

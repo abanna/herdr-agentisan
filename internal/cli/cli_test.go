@@ -347,7 +347,7 @@ func stampedCtx(t *testing.T, params []byte, before time.Time) (rest, owner stri
 	assert.False(t, at.After(time.Now()), "stamped during the report")
 	owner, _ = tokens[report.CtxOwnerKey].(string)
 	if owner != "" {
-		ownedAt, _, ok := report.ParseCtxOwner(owner)
+		ownedAt, _, _, ok := report.ParseCtxOwner(owner)
 		require.True(t, ok, "ctx_owner is a value the daemon reads: %q", owner)
 		assert.True(t, ownedAt.Equal(at), "ctx_owner belongs to the ctx_at it is written with")
 	}

@@ -349,7 +349,7 @@ func push(ctx context.Context, rep Reporter, pane Pane, rd Reading, ttl time.Dur
 		tokens[CtxKey] = strconv.Itoa(rd.Ctx)
 		tokens[CtxAtKey] = FormatModelAt(at)
 		// An empty value clears a previous report's owner.
-		tokens[CtxOwnerKey] = FormatCtxOwner(at, pane.Lineage.AgentProcs())
+		tokens[CtxOwnerKey] = FormatCtxOwner(at, tokens[CtxKey], pane.Lineage.AgentProcs())
 	}
 	if rd.Model != "" {
 		tokens[ModelKey] = rd.Model

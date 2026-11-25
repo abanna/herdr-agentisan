@@ -45,18 +45,23 @@ func TestIsAgentArgv(t *testing.T) {
 func TestCtxOwnerValues(t *testing.T) {
 	t.Parallel()
 	owner := []report.Proc{{PID: 900, Start: 500}, {PID: 899, Start: 31337}}
-	assert.Equal(t, "1761066000900@900:500,899:31337", report.FormatCtxOwner(reportedAt(), owner))
-	assert.Empty(t, report.FormatCtxOwner(reportedAt(), nil), "none clears the token")
-	at, got, ok := report.ParseCtxOwner("1761066000900@900:500,899:31337")
+	assert.Equal(t, "1761066000900/42@900:500,899:31337", report.FormatCtxOwner(reportedAt(), "42", owner))
+	assert.Empty(t, report.FormatCtxOwner(reportedAt(), "42", nil), "none clears the token")
+	at, ctx, got, ok := report.ParseCtxOwner("1761066000900/42@900:500,899:31337")
 	require.True(t, ok)
 	assert.Equal(t, owner, got)
+	assert.Equal(t, "42", ctx, "the ctx it belongs to")
 	assert.True(t, at.Equal(reportedAt()), "the stamp it belongs to")
 	// The widest value, a darwin start in microseconds, fits herdr's 80.
 	wide := report.Proc{PID: 9999999, Start: 1761066000123456}
-	assert.LessOrEqual(t, len(report.FormatCtxOwner(reportedAt(), []report.Proc{wide, wide})), report.MaxValueChars)
+	assert.LessOrEqual(t, len(report.FormatCtxOwner(reportedAt(), "100", []report.Proc{wide, wide})), report.MaxValueChars)
 
-	for _, bad := range []string{"", "900:500", "@900:500", "1761066000900", "1761066000900@", "1761066000900@900", "1761066000900@900:", "1761066000900@:500", "1761066000900@0:500", "1761066000900@900:0", "1761066000900@-1:500", "1761066000900@0900:500", "1761066000900@900:05", "1761066000900@900:500,", "1761066000900@a:b", "1761066000900@1:1,2:2,3:3", "1761066000900@900:500 ", "01761066000900@900:500", "0@900:500", "1761066000900@900:500;899:1"} {
-		_, _, ok := report.ParseCtxOwner(bad)
+	const stamp = "1761066000900/42@"
+	for _, bad := range []string{
+		"", "900:500", "@900:500", "1761066000900", "1761066000900@900:500", "1761066000900/@900:500", "1761066000900/042@900:500", "1761066000900/1234@900:500", "1761066000900/-1@900:500", "1761066000900/4 @900:500", "1761066000900/4/2@900:500",
+		stamp, stamp + "900", stamp + "900:", stamp + ":500", stamp + "0:500", stamp + "900:0", stamp + "-1:500", stamp + "0900:500", stamp + "900:05", stamp + "900:500,", stamp + "a:b", stamp + "1:1,2:2,3:3", stamp + "900:500 ", "01761066000900/42@900:500", "0/42@900:500", stamp + "900:500;899:1",
+	} {
+		_, _, _, ok := report.ParseCtxOwner(bad)
 		assert.False(t, ok, "%q", bad)
 	}
 }
@@ -96,6 +101,27 @@ func TestAgentProcs(t *testing.T) {
 	assert.Equal(t, 50, got[0].PID)
 }
 
+// TestAgentProcsNameOnlyTheNearestKind: a Codex run by a Claude tool, or a
+// Claude by a Codex, reports as itself, never as the agent that runs it
+// (review of cf0df58, P1 1).
+func TestAgentProcsNameOnlyTheNearestKind(t *testing.T) {
+	t.Parallel()
+	procs := map[int]report.Stat{
+		5000: {PPID: 4998, Start: 900}, 4998: {PPID: 900, Start: 800}, 900: {PPID: 600, Start: 500}, 600: {PPID: 100, Start: 400}, 100: {Start: 1},
+	}
+	for name, tc := range map[string]struct {
+		inner, outer string
+		want         report.Proc
+	}{
+		"a Codex under a Claude": {"/vendor/codex", "/usr/bin/claude", report.Proc{PID: 900, Start: 500}},
+		"a Claude under a Codex": {"/usr/bin/claude", "/vendor/codex", report.Proc{PID: 900, Start: 500}},
+	} {
+		cmds := map[int][]string{5000: {"herdr-agentisan"}, 4998: {"/bin/sh"}, 900: {tc.inner}, 600: {tc.outer}, 100: {"herdr"}}
+		l := report.ReadLineage(5000, newProcTable(procs).stat).WithCmdline(argv(cmds))
+		assert.Equal(t, []report.Proc{tc.want}, l.AgentProcs(), name)
+	}
+}
+
 // TestReportsNameTheirWriter: a report that carries ctx names the agent it
 // ran under in the same report, and one that cannot clears the previous
 // owner, so a ctx never stands beside another agent's owner.
@@ -105,7 +131,7 @@ func TestReportsNameTheirWriter(t *testing.T) {
 		lineage *report.Lineage
 		want    string
 	}{
-		"under an agent":  {codexLineage(embeddedProcs(), embeddedArgv), "1761066000900@900:500,899:500"},
+		"under an agent":  {codexLineage(embeddedProcs(), embeddedArgv), "1761066000900/42@900:500,899:500"},
 		"no agent in it":  {codexLineage(embeddedProcs(), map[int][]string{5000: {"herdr-agentisan"}}), ""},
 		"no lineage read": {nil, ""},
 	} {
@@ -137,7 +163,7 @@ func TestHelperProcessTree(t *testing.T) {
 	name, tail, _ := strings.Cut(rest, ",")
 	if name == "reporter" {
 		l := report.SelfLineage(func(string) (string, bool) { return "", false })
-		_, _ = os.Stdout.WriteString(report.FormatCtxOwner(time.Now(), l.AgentProcs()) + "\n")
+		_, _ = os.Stdout.WriteString(report.FormatCtxOwner(time.Now(), "1", l.AgentProcs()) + "\n")
 		// Stay until the test has read the whole tree.
 		_, _ = io.Copy(io.Discard, os.Stdin)
 		return
@@ -196,7 +222,7 @@ func TestOwnerIsTheAgentTheDaemonVerifies(t *testing.T) {
 			require.NoError(t, in.Close())
 			require.NoError(t, cmd.Wait(), stderr.String())
 
-			_, owner, ok := report.ParseCtxOwner(strings.TrimSpace(line))
+			_, _, owner, ok := report.ParseCtxOwner(strings.TrimSpace(line))
 			require.True(t, ok, "owner %q", line)
 			// Whoever runs the tests is an ancestor too, so only the tree's
 			// own agents, the nearest ones, are asserted.

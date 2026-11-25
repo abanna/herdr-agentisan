@@ -273,49 +273,70 @@ func SystemCmdline() CmdlineFunc {
 }
 
 // MaxOwnerProcs bounds the processes a ctx_owner names: a node launcher and
-// its native child. With the stamp it is bound to, 13 digits and an "@", the
-// widest value, with darwin's microsecond starts, is 63 characters, inside
-// herdr's 80 for a token value.
+// its native child. With the stamp it is bound to, 13 digits, "/", up to
+// three of the ctx and an "@", the widest value, with darwin's microsecond
+// starts, is 67 characters, inside herdr's 80 for a token value.
 const MaxOwnerProcs = 2
 
-// IsAgentArgv reports whether argv runs Claude or Codex: argv[0] named
-// claude or codex, or node running codex or codex.js. It is the agent the
-// daemon finds in a pane's foreground job (team.LaunchModel).
-func IsAgentArgv(argv []string) bool {
-	return isCodex(argv) || len(argv) > 0 && filepath.Base(argv[0]) == "claude"
+// The kinds of agent a ctx_owner names (agentKind).
+const (
+	kindCodex  = "codex"
+	kindClaude = "claude"
+)
+
+// agentKind is the agent argv runs, "claude" or "codex": argv[0] named
+// claude, or Codex as isCodex reads it. It is the agent the daemon finds in
+// a pane's foreground job (team.LaunchModel). "" is neither.
+func agentKind(argv []string) string {
+	switch {
+	case isCodex(argv):
+		return kindCodex
+	case len(argv) > 0 && filepath.Base(argv[0]) == kindClaude:
+		return kindClaude
+	}
+	return ""
 }
 
+// IsAgentArgv reports whether argv runs Claude or Codex.
+func IsAgentArgv(argv []string) bool { return agentKind(argv) != "" }
+
 // AgentProcs are the processes of l, nearest first and at most MaxOwnerProcs,
-// whose arguments are an agent's (IsAgentArgv) and which are still the
-// process the lineage read: the agent that runs the reporting command. A
-// lineage that cannot read arguments names none.
+// of the agent that runs the reporting command: the nearest process whose
+// arguments are an agent's (IsAgentArgv), and the others of its kind, each
+// still the process the lineage read. A Codex run by a Claude's tool names
+// itself, never that Claude. A lineage that cannot read arguments names none.
 func (l *Lineage) AgentProcs() []Proc {
 	if l == nil || l.stat == nil || l.cmdline == nil {
 		return nil
 	}
 	var out []Proc
+	var kind string
 	for _, p := range l.Procs {
 		if len(out) == MaxOwnerProcs {
 			break
 		}
 		argv, err := l.cmdline(p.PID)
-		if err != nil || !IsAgentArgv(argv) {
+		k := agentKind(argv)
+		if err != nil || k == "" || kind != "" && k != kind {
 			continue
 		}
 		if s, err := l.stat(p.PID); err == nil && s.Start == p.Start {
 			out = append(out, p)
+			kind = k
 		}
 	}
 	return out
 }
 
-// FormatCtxOwner is a ctx_owner value: the ctx_at stamp the owner belongs to,
-// as FormatModelAt writes it, "@", then ps as "pid:start" in decimal, comma
-// separated. It is "" for no process, which clears the token. A ctx_owner
-// names its stamp because herdr patches each key on its own: a writer that
-// knows no ctx_owner updates ctx and ctx_at and leaves the previous owner
-// beside them, and the stamp tells that owner from the ctx's.
-func FormatCtxOwner(at time.Time, ps []Proc) string {
+// FormatCtxOwner is a ctx_owner value: the ctx_at stamp and the ctx the owner
+// belongs to, as "stamp/ctx", where the stamp is as FormatModelAt writes it,
+// then "@" and ps as "pid:start" in decimal, comma separated. It is "" for
+// no process, which clears the token. A ctx_owner names its stamp and ctx
+// because herdr patches each key on its own: a writer that knows no
+// ctx_owner updates ctx and ctx_at and leaves the previous owner beside
+// them, even in the same millisecond, and the pair tells that owner from the
+// ctx's.
+func FormatCtxOwner(at time.Time, ctx string, ps []Proc) string {
 	if len(ps) == 0 {
 		return ""
 	}
@@ -323,18 +344,20 @@ func FormatCtxOwner(at time.Time, ps []Proc) string {
 	for _, p := range ps {
 		parts = append(parts, strconv.Itoa(p.PID)+":"+strconv.FormatUint(p.Start, 10))
 	}
-	return FormatModelAt(at) + "@" + strings.Join(parts, ",")
+	return FormatModelAt(at) + "/" + ctx + "@" + strings.Join(parts, ",")
 }
 
 // ParseCtxOwner reads a ctx_owner value as FormatCtxOwner writes it: a
-// stamp, "@", and one to MaxOwnerProcs positive pid:start pairs in canonical
-// decimal. Anything else is not one.
-func ParseCtxOwner(v string) (at time.Time, owner []Proc, ok bool) {
-	stamp, pairs, found := strings.Cut(v, "@")
+// stamp, "/", a ctx of one to three digits, "@", and one to MaxOwnerProcs
+// positive pid:start pairs in canonical decimal. Anything else is not one.
+func ParseCtxOwner(v string) (at time.Time, ctx string, owner []Proc, ok bool) {
+	head, pairs, found := strings.Cut(v, "@")
+	stamp, ctx, slash := strings.Cut(head, "/")
 	at, valid := parseMillis(stamp)
+	n, err := strconv.Atoi(ctx)
 	fields := strings.Split(pairs, ",")
-	if !found || !valid || len(fields) > MaxOwnerProcs {
-		return time.Time{}, nil, false
+	if !found || !slash || !valid || len(ctx) > 3 || err != nil || n < 0 || strconv.Itoa(n) != ctx || len(fields) > MaxOwnerProcs {
+		return time.Time{}, "", nil, false
 	}
 	owner = make([]Proc, 0, len(fields))
 	for _, f := range fields {
@@ -342,9 +365,9 @@ func ParseCtxOwner(v string) (at time.Time, owner []Proc, ok bool) {
 		n, err := strconv.Atoi(pid)
 		s, err2 := strconv.ParseUint(start, 10, 64)
 		if !ok || err != nil || err2 != nil || n <= 0 || s == 0 || strconv.Itoa(n) != pid || strconv.FormatUint(s, 10) != start {
-			return time.Time{}, nil, false
+			return time.Time{}, "", nil, false
 		}
 		owner = append(owner, Proc{PID: n, Start: s})
 	}
-	return at, owner, true
+	return at, ctx, owner, true
 }

@@ -120,7 +120,7 @@ type Service struct {
 	// Idle is the poll's idle clock, for team status.
 	Idle *team.IdleClock
 	// Starts holds the poll's ctx gates for team status (A61);
-	// nil gates nothing.
+	// nil holds no gate: an owned ctx is hidden.
 	Starts *team.StartClock
 	// Now is the clock rows are stamped and idle times read with; nil means
 	// time.Now.

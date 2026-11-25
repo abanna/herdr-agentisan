@@ -472,7 +472,7 @@ func TestContextOwnerNeverOutlivesItsCtx(t *testing.T) {
 	// old owner stays. B then exits and A is in front again.
 	tokens := map[string]string{
 		report.CtxKey: "80", report.CtxAtKey: report.FormatModelAt(boot.Add(2 * time.Hour)),
-		report.CtxOwnerKey: report.FormatCtxOwner(boot.Add(time.Hour), []report.Proc{{PID: 1002, Start: 1002}}),
+		report.CtxOwnerKey: report.FormatCtxOwner(boot.Add(time.Hour), "20", []report.Proc{{PID: 1002, Start: 1002}}),
 	}
 	th.setPane(pane, "tokens", tokens)
 	polled(t, th.srv, 3)
@@ -487,6 +487,67 @@ func TestContextOwnerNeverOutlivesItsCtx(t *testing.T) {
 	polled(t, th.srv, 2)
 	ctx, _ = agentCtx(served(t, sock, anySnapshot), pane)
 	assert.Equal(t, new(30), ctx, "A's own next report counts")
+}
+
+// Two jobs report in one millisecond (review of cf0df58, P1 2): A's report
+// is stamped, then an older build's B writes ctx and ctx_at, the same
+// millisecond, over A's owner. B's 80% is not A's.
+func TestContextOfALegacyWriterInTheSameMillisecondIsHidden(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	const pane = "wN:p1"
+	th.setAgents(named(pane, "pee01"))
+	th.setPane(pane, "agent", "codex")
+	th.setProcs(pane, agentProc(1002, "codex"))
+	at := boot.Add(time.Hour)
+	showCtxAt(th, pane, "20", at, 1002)
+	o := teamOpts(t, shortDir(t), th, noticesConfig(t, "gap = 0\n"))
+	fakeForeground(t, &o)
+	var logs lockedLog
+	_, rec := ctxRun(t, o, &logs)
+	sock := socketPath(t, o.StateDir, th.path)
+	served(t, sock, func(s snapshot.Snapshot) bool {
+		ctx, _ := agentCtx(s, pane)
+		return ctx != nil && *ctx == 20
+	})
+
+	th.setPane(pane, "tokens", map[string]string{
+		report.CtxKey: "80", report.CtxAtKey: report.FormatModelAt(at), report.CtxOwnerKey: ownerOf("20", at, 1002),
+	})
+	polled(t, th.srv, 3)
+	ctx, present := agentCtx(served(t, sock, anySnapshot), pane)
+	require.True(t, present)
+	assert.Nil(t, ctx, "B's 80% is not A's")
+	assert.Empty(t, ctxEvents(rec))
+	assert.Empty(t, toasts(t, th))
+}
+
+// A restart finds an exited A's 99% from a build that wrote no owner. B is
+// listed, but is suspended when the kernel is read (review of cf0df58, P1 3):
+// B's start still dates the report, as it did before the foreground check,
+// so A's older 99% is hidden and raises nothing.
+func TestLegacyContextOfAnExitedAgentStaysHiddenWhenItsReplacementIsRejected(t *testing.T) {
+	t.Parallel()
+	th := newTeamHerdr(t)
+	const pane = "wN:p1"
+	th.setAgents(named(pane, "pee01"))
+	th.setPane(pane, "agent", "codex")
+	th.setProcs(pane, agentProc(2002, "codex"))
+	// B, 2002, started at boot+20.02 s: A's report is older.
+	th.setPane(pane, "tokens", map[string]string{report.CtxKey: "99", report.CtxAtKey: report.FormatModelAt(boot.Add(time.Second))})
+	o := teamOpts(t, shortDir(t), th, noticesConfig(t, "gap = 0\n"))
+	fg := fakeForeground(t, &o)
+	fg.Store(1002)
+	var logs lockedLog
+	_, rec := ctxRun(t, o, &logs)
+	sock := socketPath(t, o.StateDir, th.path)
+	polled(t, th.srv, 2)
+	ctx, present := agentCtx(served(t, sock, anySnapshot), pane)
+	require.True(t, present)
+	assert.Nil(t, ctx, "A's 99% is older than B")
+	assert.Equal(t, "ctx  --", lastBands(t, th, pane)["ctx_ok"])
+	assert.Empty(t, ctxEvents(rec))
+	assert.Empty(t, toasts(t, th))
 }
 
 // fakeForeground lets the agent PIDs survive while the foreground job
@@ -517,11 +578,17 @@ func showCtx(th *teamHerdr, pane, ctx string, owner ...int) {
 
 // showCtxAt is showCtx stamped at.
 func showCtxAt(th *teamHerdr, pane, ctx string, at time.Time, owner ...int) {
+	th.setPane(pane, "tokens", map[string]string{
+		report.CtxKey: ctx, report.CtxAtKey: report.FormatModelAt(at), report.CtxOwnerKey: ownerOf(ctx, at, owner...),
+	})
+}
+
+// ownerOf is the ctx_owner a report of ctx made at at by the fake agents
+// owner writes.
+func ownerOf(ctx string, at time.Time, owner ...int) string {
 	procs := make([]report.Proc, 0, len(owner))
 	for _, pid := range owner {
 		procs = append(procs, report.Proc{PID: pid, Start: uint64(pid)}) //nolint:gosec // small test pids
 	}
-	th.setPane(pane, "tokens", map[string]string{
-		report.CtxKey: ctx, report.CtxAtKey: report.FormatModelAt(at), report.CtxOwnerKey: report.FormatCtxOwner(at, procs),
-	})
+	return report.FormatCtxOwner(at, ctx, procs)
 }
