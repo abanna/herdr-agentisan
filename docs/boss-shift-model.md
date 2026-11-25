@@ -26,15 +26,58 @@ JSON verdict and a hint.
 ## Install between shifts
 
 Finish or abort any open shift; install a build whose `report statusline`
-writes `model_session`. Check the preimage SHA-256, then dry run and apply.
+writes `model_session`. Check the preimage SHA-256, then dry run and apply. `--forward` makes a second run fail
+where plain `patch` would take the applied patch for a reversed one and undo it.
 
 ```sh
 script=~/.local/share/ha-team/boss-shift/shift.sh
 printf '%s  %s\n' a9d92216ec0324c87372ed9fb38579568a57dcf72460d4e9366098abc3d38402 "$script" |
   sha256sum --check &&
-  patch --batch --dry-run --fuzz=0 "$script" < docs/boss-shift-v1.patch &&
-  patch --batch --fuzz=0 "$script" < docs/boss-shift-v1.patch
+  patch --batch --forward --dry-run --fuzz=0 "$script" < docs/boss-shift-v1.patch &&
+  patch --batch --forward --fuzz=0 "$script" < docs/boss-shift-v1.patch
 ```
+
+## Written rounds
+
+The candidate and the outgoing boss review in files in the shift folder, by the
+[role](../roles/boss-shift.md): `account-N.md`, then `reply-N.md`, N from 1 to 3,
+each naming the attempt (the folder's name), its round and an end marker. A
+reply adds `decision: ready|revise` and `account: <sha256>`. The files are
+advice for people: nothing reads them to decide GO, and `go` is unchanged (it
+proves the candidate's model). The verbs read only the folder they are given,
+bounded and strict:
+
+```sh
+herdr-agentisan boss shift brief --record "$dir" --attempt "${dir##*/}" --role "$role"
+herdr-agentisan boss shift wait --record "$dir" --attempt "${dir##*/}" [--round N] [--reply] [--timeout 2m]
+```
+
+`wait` answers `published`, `timeout` (nonzero), `aborted`, `done` or `exhausted`
+(round 3 was revised). An account verdict carries the account's `text` and the
+`sha256` of exactly that text: the reviewer reads the text, not the file, and a
+reply names that digest. A reply counts only for the bytes it names. Without a
+round, `wait` returns the first account that has no such reply, so a round
+published after a refusal is found. A reply is read before the account it must
+name, but the poll is not locked: a verdict can briefly describe a pair that
+changed a moment later, which the next poll corrects.
+
+The script's `brief` sends the role's path and `wait` calls the verb. Install
+after v1, with a build that has both verbs (`SHIFT_ROLE` names a role file
+outside the script's repo); the patch changes only the script's `brief`, `wait`
+and `open` lines, so it applies to an installed script whose model default is
+edited:
+
+```sh
+script=~/.local/share/ha-team/boss-shift/shift.sh
+patch --batch --forward --dry-run --fuzz=0 "$script" < docs/boss-shift-v2.patch &&
+  patch --batch --forward --fuzz=0 "$script" < docs/boss-shift-v2.patch
+```
+
+A script that is not v1's output, or has v2 already, is refused by the dry run.
+v1's stock output has SHA-256
+`ce75b6c4d4cd9d666e259dc41f8623ff9b8537696e504407941d59e5055fb1c1`. The patch
+also stops a lowercase `started` in the caller's environment from failing a good
+`open`. Cutoff and consumer quiescence are the role's procedure, not enforced here.
 
 ## What each command does
 
@@ -78,7 +121,7 @@ id in the same process), after the candidate's last statusline report and before
 `takeover` is not seen, so the check can still close the outgoing boss's pane.
 It lasts until a report of the new session is the last one written (a refresh,
 60 s here), after which every check refuses `wrong_session`; if reports
-stall, the last one expires after 180 s and every check refuses `stale_report`. A report of the old session still in flight can be written
+stall, the last one expires after 180 s and, once herdr drops it, every check refuses `missing_model` (`stale_report` is a report still there but older than the launch, the process start or 180 s). A report of the old session still in flight can be written
 after it, because herdr keeps the last write, and reopens the window. Verification, close and rename
 are separate herdr calls, and a pane can change between the terminal check and
 the close. The session proof assumes the statusline's `session_id` equals

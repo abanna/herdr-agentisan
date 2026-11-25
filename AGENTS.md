@@ -160,7 +160,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   `boss shift check-model` names the Claude launched with the shift's
   `--session-id`, then proves that process reports a fresh model on the
   recorded terminal. The team script calls it at brief (once), GO and
-  takeover through the adapter in `docs/boss-shift-model.md`.
+  takeover through the adapter in `docs/boss-shift-model.md`. `boss shift
+  brief` names the role and the attempt, and `wait` reads the written rounds
+  (`rounds.go`) of the one attempt folder it is given; the files are advice
+  (`roles/boss-shift.md`, `docs/boss-shift-v2.patch`).
 - `internal/codexhooks/` — installing the `ctx` Codex hooks (ADR-001 A43):
   `codex hooks` writes them into `$CODEX_HOME/hooks.json`, after every entry
   already there, which it keeps as written, and never edits `config.toml` or

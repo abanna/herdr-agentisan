@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"cmp"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"os/exec"
@@ -256,10 +257,10 @@ func TestShiftBriefPinsTheLaunchedClaudeOnce(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "100", s.state("model_pid"), "a pinned Claude is never pinned again")
 	require.Equal(t, 1, strings.Count(s.read("calls"), "--pid 0"))
-	require.Equal(t, 2, strings.Count(s.read("cues"), "INCOMING.md"))
+	require.Equal(t, 2, strings.Count(s.read("cues"), "boss-shift.md"))
 	require.Empty(t, s.glob("current/state.*"))
 	require.Error(t, s.run("old", "candidate_changed", "brief"), "a retry rechecks the process")
-	require.Equal(t, 2, strings.Count(s.read("cues"), "INCOMING.md"))
+	require.Equal(t, 2, strings.Count(s.read("cues"), "boss-shift.md"))
 }
 
 func TestShiftBriefWithholdsTheCueUntilTheModelIsProved(t *testing.T) {
@@ -341,7 +342,7 @@ func TestShiftAbortWaitsForARunningBrief(t *testing.T) {
 	abort := `[[ " $* " != *" --pid 0 "* ]] && { bash "$SHIFT_ROOT/shift.sh" abort 9>&- >"$SHIFT_ROOT/abort.out" 2>&1 & /bin/sleep 0.5; }`
 	_, err := s.invoke("old", "verified", "brief", "ON_CHECK="+abort)
 	require.NoError(t, err)
-	require.Equal(t, 1, strings.Count(s.read("cues"), "INCOMING.md"))
+	require.Equal(t, 1, strings.Count(s.read("cues"), "boss-shift.md"))
 	require.Eventually(t, func() bool { _, err := os.Lstat(s.path("last-aborted")); return err == nil }, 10*time.Second, 50*time.Millisecond)
 }
 
@@ -471,7 +472,7 @@ func TestShiftGoRetriesAFailedCue(t *testing.T) {
 	s.account()
 	_, err := s.invoke("old", "verified", "go", "FAIL_PROMPT=1")
 	require.Error(t, err)
-	require.Equal(t, 1, strings.Count(s.read("cues"), "INCOMING.md"))
+	require.Equal(t, 1, strings.Count(s.read("cues"), "boss-shift.md"))
 	require.FileExists(t, s.path("current/GO"), "the failed cue left the GO it recorded")
 	old := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 	require.NoError(t, os.Chtimes(s.path("current/GO"), old, old))
@@ -550,6 +551,143 @@ func TestShiftStatusShowsTheVerdictAndWritesNothing(t *testing.T) {
 	require.Equal(t, before, s.snapshot())
 }
 
+// The script asks the verbs for its own folder and the role, and what it sends is what the real verbs take.
+func TestShiftScriptAsksTheRealVerbsWhatTheyTake(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	require.NoError(t, s.run("old", "verified", "open"))
+	require.NoError(t, os.Mkdir(s.path("roles"), 0o700))
+	s.write("roles/boss-shift.md", "role\n")
+	require.NoError(t, s.run("old", "verified", "brief"))
+	own, err := os.Readlink(s.path("current"))
+	require.NoError(t, err)
+	id := filepath.Base(own)
+	account := "attempt: " + id + "\nround: 1\n\nAccount.\n<!-- end shift round -->\n"
+	s.write("current/account-1.md", account)
+	_, _ = s.invoke("old", "verified", "wait", "1")
+	_, _ = s.invoke("old", "verified", "wait")
+	for _, fail := range []string{"BRIEF_FAIL=1", "BRIEF_FAIL=2"} { // the verb refuses, or names no role
+		_, err = s.invoke("old", "verified", "brief", fail)
+		require.Error(t, err, fail)
+	}
+	require.Equal(t, 1, strings.Count(s.read("cues"), "boss-shift.md"), "a refused brief sends nothing")
+	require.Contains(t, s.read("cues"), s.path("roles/boss-shift.md"))
+	none := func(string) (string, bool) { return "", false }
+	asked := strings.Fields(strings.SplitN(s.read("briefs"), "\n", 2)[0])
+	require.Equal(t, []string{"boss", "shift", "brief", "--record", own, "--attempt", id, "--role", s.path("roles/boss-shift.md")}, asked)
+	out, _, err := runOut(t, none, asked...)
+	require.NoError(t, err)
+	require.Equal(t, s.path("roles/boss-shift.md"), oneJSONObject(t, out)["role"])
+	waits := strings.Split(strings.TrimSpace(s.read("waits")), "\n")
+	require.Equal(t, []string{
+		"boss shift wait --record " + own + " --attempt " + id + " --round 1 --timeout 2m",
+		"boss shift wait --record " + own + " --attempt " + id + " --timeout 2m",
+	}, waits)
+	sum := sha256.Sum256([]byte(account))
+	for _, line := range waits {
+		out, _, err := runOut(t, none, strings.Fields(line)...)
+		require.NoError(t, err, line)
+		verdict := oneJSONObject(t, out)
+		require.Equal(t, "published", verdict["status"], line)
+		require.Equal(t, account, verdict["text"], line)
+		require.Equal(t, fmt.Sprintf("%x", sum), verdict["sha256"], line)
+	}
+	_, _, err = runOut(t, none, "boss", "shift", "wait", "--record", "relative", "--attempt", id)
+	require.ErrorContains(t, err, "invalid boss shift record")
+}
+
+// The adapter is a patch of the released one: it must apply to the installed script, whose model
+// default is the boss's own line, and only to the script v1 left.
+func TestShiftV2PatchAppliesToTheInstalledScript(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	script := filepath.Join(dir, "shift.sh")
+	preimage, err := os.ReadFile(filepath.Join("testdata", "shift-v0.sh"))
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(script, preimage, 0o600))
+	applyShiftPatch(t, script, "boss-shift-v1.patch")
+	v1, err := os.ReadFile(script)
+	require.NoError(t, err)
+	require.Equal(t, "ce75b6c4d4cd9d666e259dc41f8623ff9b8537696e504407941d59e5055fb1c1", fmt.Sprintf("%x", sha256.Sum256(v1)))
+	local := strings.NewReplacer("MODEL=${SHIFT_MODEL:-fable}", "MODEL=${SHIFT_MODEL:-claude-opus-5-5}", "# The boss runs on Fable", "# The boss runs on Opus").Replace(string(v1))
+	require.NotEqual(t, string(v1), local)
+	require.NoError(t, os.WriteFile(script, []byte(local), 0o600))
+	applyShiftPatch(t, script, "boss-shift-v2.patch")
+	out, err := os.ReadFile(script)
+	require.NoError(t, err)
+	require.Contains(t, string(out), "claude-opus-5-5")
+	require.NoError(t, os.WriteFile(script, preimage, 0o600))
+	patch, err := os.ReadFile(filepath.Join("..", "..", "docs", "boss-shift-v2.patch"))
+	require.NoError(t, err)
+	apply := exec.CommandContext(t.Context(), "patch", "--batch", "--dry-run", "--fuzz=0", script) // #nosec G204 -- scratch script only
+	apply.Stdin = bytes.NewReader(patch)
+	require.Error(t, apply.Run(), "v2 applies only to the script v1 left")
+}
+
+// A lowercase `started` in the caller's environment must not make a good start look failed.
+func TestShiftOpenIgnoresAnExportedStarted(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	s.write("bashenv", "export started=exported\n")
+	out, err := s.invoke("old", "verified", "open", "BASH_ENV="+s.path("bashenv"))
+	require.NoError(t, err)
+	require.Contains(t, out, "opened:")
+}
+
+// The install blocks in the guide run verbatim, and a second run changes nothing: GNU patch
+// would otherwise take the applied patch for a reversed one and undo it.
+func TestShiftGuideInstallBlocksAreSafeToRepeat(t *testing.T) {
+	t.Parallel()
+	guide, err := os.ReadFile(filepath.Join("..", "..", "docs", "boss-shift-model.md"))
+	require.NoError(t, err)
+	preimage, err := os.ReadFile(filepath.Join("testdata", "shift-v0.sh"))
+	require.NoError(t, err)
+	script := filepath.Join(t.TempDir(), "shift.sh")
+	require.NoError(t, os.WriteFile(script, preimage, 0o600))
+	for _, name := range []string{"boss-shift-v1.patch", "boss-shift-v2.patch"} {
+		var block string
+		for b := range strings.SplitSeq(string(guide), "```sh\n") {
+			if b, _, ok := strings.Cut(b, "```"); ok && strings.Contains(b, "docs/"+name) {
+				block = b
+			}
+		}
+		require.NotEmpty(t, block, name)
+		var lines []string
+		for line := range strings.SplitSeq(block, "\n") {
+			if strings.HasPrefix(line, "script=") {
+				line = "script=" + script
+			}
+			lines = append(lines, line)
+		}
+		install := func() error {
+			cmd := exec.CommandContext(t.Context(), "bash", "-c", strings.Join(lines, "\n")) // #nosec G204 -- the guide's own block, on a scratch script
+			cmd.Dir = filepath.Join("..", "..")
+			out, err := cmd.CombinedOutput()
+			t.Logf("%s: %s", name, out)
+			return err
+		}
+		require.NoError(t, install(), name)
+		applied, err := os.ReadFile(script)
+		require.NoError(t, err)
+		require.Error(t, install(), name+" run twice")
+		again, err := os.ReadFile(script)
+		require.NoError(t, err)
+		require.Equal(t, string(applied), string(again), name+" run twice changed the script")
+	}
+}
+
+// The hooks job strips trailing whitespace: a patch with any would be rewritten and stop applying.
+func TestShiftPatchesSurviveTheWhitespaceHook(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"boss-shift-v1.patch", "boss-shift-v2.patch"} {
+		patch, err := os.ReadFile(filepath.Join("..", "..", "docs", name))
+		require.NoError(t, err)
+		for n, line := range strings.Split(strings.TrimSuffix(string(patch), "\n"), "\n") {
+			require.Equal(t, strings.TrimRight(line, " \t"), line, "%s line %d", name, n+1)
+		}
+	}
+}
+
 const reopenShiftHint = "abort and open again"
 
 type shiftScript struct {
@@ -602,7 +740,14 @@ esac
 `,
 	"herdr-agentisan": `#!/bin/bash
 [ "$4" != --help ] || { printf "%s\n" "--session-id"; exit 0; }
-[ "$1 $2 $3" = "boss shift check-model" ] || exit 9
+rec=; role=; prev=; for a in "$@"; do case "$prev" in --record) rec=$a ;; --role) role=$a ;; esac; prev=$a; done
+case "$1 $2 $3" in
+  "boss shift wait") printf '%s\n' "$*" >> "$SHIFT_ROOT/waits"; echo '{"status":"timeout"}'; exit 1 ;;
+  "boss shift brief") printf '%s\n' "$*" >> "$SHIFT_ROOT/briefs"; case "${BRIEF_FAIL:-0}" in 1) exit 1 ;; 2) echo '{}'; exit 0 ;; esac
+    printf '{"record":"%s","attempt":"%s","role":"%s"}\n' "$rec" "${rec##*/}" "$role"; exit 0 ;;
+  "boss shift check-model") ;;
+  *) exit 9 ;;
+esac
 printf '%s\n' "$*" >> "$SHIFT_ROOT/calls"
 eval "$ON_CHECK"
 verdict=$MODEL_VERDICT
@@ -629,18 +774,23 @@ func writeShiftStubs(dir string) error {
 func setupShiftScript(t *testing.T) shiftScript {
 	t.Helper()
 	s := shiftScript{t: t, dir: t.TempDir()}
-	patch, err := os.ReadFile(filepath.Join("..", "..", "docs", "boss-shift-v1.patch"))
-	require.NoError(t, err)
 	preimage, err := os.ReadFile(filepath.Join("testdata", "shift-v0.sh"))
 	require.NoError(t, err)
 	script := s.path("shift.sh")
 	require.NoError(t, os.WriteFile(script, preimage, 0o600))
+	applyShiftPatch(t, script, "boss-shift-v1.patch")
+	applyShiftPatch(t, script, "boss-shift-v2.patch")
+	return s
+}
+
+func applyShiftPatch(t *testing.T, script, name string) {
+	t.Helper()
+	patch, err := os.ReadFile(filepath.Join("..", "..", "docs", name))
+	require.NoError(t, err)
 	apply := exec.CommandContext(t.Context(), "patch", "--batch", "--fuzz=0", script) // #nosec G204 -- scratch script only
 	apply.Stdin = bytes.NewReader(patch)
 	out, err := apply.CombinedOutput()
-	require.NoError(t, err, "%s", out)
-
-	return s
+	require.NoError(t, err, "%s: %s", name, out)
 }
 
 func (s shiftScript) path(name string) string {
