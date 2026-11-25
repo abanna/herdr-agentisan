@@ -646,7 +646,7 @@ func TestShiftGuideInstallBlocksAreSafeToRepeat(t *testing.T) {
 	require.NoError(t, os.WriteFile(script, preimage, 0o600))
 	for _, name := range []string{"boss-shift-v1.patch", "boss-shift-v2.patch"} {
 		var block string
-		for _, b := range strings.Split(string(guide), "```sh\n") {
+		for b := range strings.SplitSeq(string(guide), "```sh\n") {
 			if b, _, ok := strings.Cut(b, "```"); ok && strings.Contains(b, "docs/"+name) {
 				block = b
 			}
