@@ -42,9 +42,9 @@ printf '%s  %s\n' a9d92216ec0324c87372ed9fb38579568a57dcf72460d4e9366098abc3d384
 The candidate and the outgoing boss review in files in the shift folder, by the
 [role](../roles/boss-shift.md): `account-N.md`, then `reply-N.md`, N from 1 to 3,
 each naming the attempt (the folder's name), its round and an end marker. A
-reply adds `decision: ready|revise` and `account: <sha256>`. The files are
-advice for people: nothing reads them to decide GO, and `go` is unchanged (it
-proves the candidate's model). The verbs read only the folder they are given,
+reply adds `decision: ready|revise` and `account: <sha256>`. Replies guide the
+review. The approval gate below checks the newest account against the approval
+record. The verbs read only the folder they are given,
 bounded and strict:
 
 ```sh
@@ -79,6 +79,44 @@ v1's stock output has SHA-256
 also stops a lowercase `started` in the caller's environment from failing a good
 `open`. Cutoff and consumer quiescence are the role's procedure, not enforced here.
 
+## Approval gate
+
+The outgoing boss's approval is ONE record, `approval` in the shift folder, written
+only by `shift.sh approve N SHA` and `shift.sh withdraw`, under the shift lock, by
+tmp file and rename: `state: approved|withdrawn`, `round`, `account` (the SHA-256
+of account-N.md) and `at`. `SHA` is the `sha256` that `wait` printed with the
+text the boss read; `approve` refuses when round N has no valid account, when the
+account is not those bytes now, when a later round exists, after GO, and after a
+withdrawal. `withdraw` is for good and works at any time, even after GO: the
+shift is then aborted and opened again.
+
+`go` proves the record against the files as they are (approved, the newest
+account is round N with the recorded digest) and then the candidate's model, and
+a refusal writes nothing, so the same approval serves once the cause is fixed.
+`takeover` proves the record again as its last step before the close, after its
+own pane lookup and model proof: a rewritten account, a round added, a
+withdrawal, or a missing record stops it, even after GO, and the answer is to
+abort and open again. The approval checks and writes share the shift lock.
+The candidate publishes an account only with `shift.sh account N` (the
+body on stdin, read and checked before the lock is taken, so a stalled writer
+never holds up `takeover` or `abort`): it lands before `takeover`'s check, which
+then sees it, or waits until the shift is over and is refused; after GO or a
+withdrawal it is refused. What remains: an account file renamed in by hand, which
+takes no lock.
+
+```sh
+script=~/.local/share/ha-team/boss-shift/shift.sh
+patch --batch --forward --dry-run --fuzz=0 "$script" < docs/boss-shift-v3.patch &&
+  patch --batch --forward --fuzz=0 "$script" < docs/boss-shift-v3.patch
+```
+
+Install it after the v2 patch; it applies only to v2's output. Install the current
+`roles/boss-shift.md` with it (or point `SHIFT_ROLE` at the current copy).
+`brief` copies the role into the attempt directory and checks that the copy has
+the line `<!-- boss-shift-role: 3 -->`, which marks the procedure that uses
+`account N`. It sends the checked copy's path. Each cue gets its own copy so a
+checkout change or another brief leaves the earlier cue's instructions intact.
+
 ## What each command does
 
 - `open` makes a shift folder of its own, `<root>/YYYYMMDD-HHMMSS-XXXXXX`, and
@@ -88,12 +126,12 @@ also stops a lowercase `started` in the caller's environment from failing a good
   starts Claude with that id. It reads no model. If the shift ended during the
   split (`current` gone, or `ABORTED`), or was aborted while Claude started, it
   closes the new pane and stops.
-- `brief` saves the Claude's pid and start once, then proves it and its model
-  on every run, and only then sends the instructions.
+- `brief` checks the role copy, saves the Claude's pid and start once, then
+  proves it and its model on every run before sending the instructions.
 - `go` and `takeover` prove the same again. `takeover` looks up the old pane's
-  terminal first, proves the candidate last, and closes the pane only while it
-  holds the terminal recorded at `open`; `abort` does the same for the
-  candidate's, and only for a shift that has not ended.
+  terminal first, proves the candidate, then checks the approval before it
+  closes the pane. `abort` verifies the candidate's terminal before closing its
+  pane in an active shift.
 - `status` shows the record and the verdict; it writes nothing. `brief`, `say`,
   `go`, `abort` and `takeover` wait 30 s for the shift's lock, then say "the
   shift is busy; try again"; `open` and `wait` take no lock.

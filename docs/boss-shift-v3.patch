@@ -1,0 +1,106 @@
+--- shift.sh
++++ shift.sh
+@@ -13,5 +13,8 @@
+ #                   shift.sh wait [N]        wait 2 minutes for account-N.md (default: the account awaiting a reply); run it again on a timeout
+ #                   shift.sh say "<text>"    tell the incoming boss something (typed into ITS pane)
+-#                   shift.sh go              write GO: the incoming boss may take over
++#                   shift.sh approve N SHA   approve round N's account, the digest wait printed with the text I read
++#                   shift.sh account N       (incoming boss) publish round N's account, the body on stdin, under the lock
++#                   shift.sh withdraw        withdraw the approval for good (even after GO): abort and open again
++#                   shift.sh go              write GO once the newest account is approved
+ #                   shift.sh abort "<why>"   close the incoming pane; I stay in charge
+ #   incoming boss:  shift.sh takeover        after GO: close the old pane, take the name
+@@ -65,4 +68,17 @@
+ live(){ ! ended || die "the shift changed or was aborted; nothing was done"; }
+ candidate_ready(){ pinned || { echo "shift: no candidate process pin; run shift.sh brief, or abort and open again" >&2; return 1; }; check_model; }
++# The approval is ONE record, `approval`, written only by approve and withdraw under the shift lock. approval_ok proves it
++# against the files as they are now: approved, account N valid with the recorded digest, no later round.
++aval(){ { sed -n "s/^$1: //p" "$CUR/approval" 2>/dev/null | tail -1; } || true; }
++approval_ok(){
++    local r=$(aval round) got k
++    [ "$(aval state)" = approved ] && [[ "$r" =~ ^[1-3]$ ]] || return 1
++    got=$("$PLUGIN" boss shift wait --record "$CUR" --attempt "${CUR##*/}" --round "$r" --timeout 0) && [ "$(field sha256 <<< "$got")" = "$(aval account)" ] || return 1
++    for k in 1 2 3; do [ "$k" -le "$r" ] || [ ! -e "$CUR/account-$k.md" ] || return 1; done
++}
++record(){
++    local t; t=$(mktemp "$CUR/approval.XXXXXXXX") && printf 'state: %s\nround: %s\naccount: %s\nat: %s\n' "$1" "$2" "$3" "$(date +%H:%M:%S)" > "$t" &&
++      mv -T "$t" "$CUR/approval" || { rm -f "$t"; die "the approval record could not be written"; }
++}
+ holds(){ [ -n "$2" ] && [ "$({ herdr pane get "$1" 2>/dev/null | field result.pane.terminal_id 2>/dev/null; } || true)" = "$2" ]; }
+ close_checked(){ holds "$@" && herdr pane close "$1" >/dev/null; }
+@@ -98,12 +114,53 @@
+     pointers=$("$PLUGIN" boss shift brief --record "$CUR" --attempt "${CUR##*/}" --role "$ROLE") && role=$(field role <<< "$pointers") && [ -n "$role" ] ||
+       die "the role or the record is unavailable, so nothing was sent: check $ROLE"
++    # Cue the checked bytes. A checkout change or a repeat brief must leave an earlier cue's role intact.
++    role_copy=$(mktemp "$CUR/brief.XXXXXXXX.boss-shift.md") || die "the role copy could not be created; nothing was sent"
++    trap 'rm -f -- "$role_copy"' EXIT
++    cat -- "$role" > "$role_copy" || die "the role file $role could not be copied; nothing was sent"
++    grep -Fqx -- '<!-- boss-shift-role: 3 -->' "$role_copy" ||
++      die "the role file $role is older than this script (it sends a candidate to a procedure that takes no lock): install the current role, or set SHIFT_ROLE to it; nothing was sent"
+     pinned || pin_model || die "the candidate Claude is not identified, so nothing was sent: wait for it to start and run brief again, or abort"
+     candidate_ready || die "the candidate's model is not proved, so nothing was sent: run brief again once it has reported, or abort"
+     live
+-    text="You are the INCOMING boss of the herdr-agentisan team, starting a shift change. The outgoing boss is still in charge in the pane beside you. Read $role now and follow its Candidate section exactly. Your attempt directory is $CUR and its attempt ID is ${CUR##*/}. Do not message workers, do not run 'herdr-agentisan board read', and never type into the other pane."
++    text="You are the INCOMING boss of the herdr-agentisan team, starting a shift change. The outgoing boss is still in charge in the pane beside you. Read $role_copy now and follow its Candidate section exactly. Your attempt directory is $CUR and its attempt ID is ${CUR##*/}. Do not message workers, do not run 'herdr-agentisan board read', and never type into the other pane."
++    # A failed prompt response can still leave a delivered cue, so keep its copy from here on.
++    trap - EXIT
+     herdr agent prompt "$(val next)" "$text" >/dev/null && echo "briefed $(val next)" ;;
+   wait)
+     need_cur; dir=$(readlink "$CUR")
+     "$PLUGIN" boss shift wait --record "$dir" --attempt "${dir##*/}" ${1:+--round "$1"} --timeout 2m ;;
++  approve)
++    own_shift; live
++    [ "${HERDR_PANE_ID:-}" = "$(val old)" ] || die "only the outgoing boss (pane $(val old)) approves"
++    n=${1:-}; sha=${2:-}
++    [[ "$n" =~ ^[1-3]$ && "$sha" =~ ^[0-9a-f]{64}$ ]] || die "usage: shift.sh approve <1-3> <account sha256 that wait printed with the text you read>"
++    [ ! -e "$CUR/GO" ] || die "GO is recorded; the approval cannot change (withdraw, or abort and open again)"
++    [ "$(aval state)" != withdrawn ] || die "the approval was withdrawn for good: abort and open again"
++    got=$("$PLUGIN" boss shift wait --record "$CUR" --attempt "${CUR##*/}" --round "$n" --timeout 0) && [ "$(field sha256 <<< "$got")" = "$sha" ] ||
++      die "round $n's account is not the one you read (digest $sha), or there is none; nothing recorded: review it again"
++    for k in 1 2 3; do [ "$k" -le "$n" ] || [ ! -e "$CUR/account-$k.md" ] || die "a later round exists; approve the newest account"; done
++    record approved "$n" "$sha"; echo "approved round $n ($sha)" ;;
++  withdraw)
++    own_shift; live
++    [ "${HERDR_PANE_ID:-}" = "$(val old)" ] || die "only the outgoing boss (pane $(val old)) withdraws"
++    record withdrawn "$(aval round)" "$(aval account)"; echo "approval withdrawn for good: abort and open again" ;;
++  account)
++    # account N (the incoming boss), the body on stdin. It is published under the shift lock, so it never lands while
++    # takeover runs; the body is read and checked before the lock, so a stalled writer never holds up takeover or abort.
++    need_cur; dir=$(readlink "$CUR"); n=${1:-}
++    [[ "$n" =~ ^[1-3]$ ]] || die "usage: shift.sh account <1-3>, the body on stdin"
++    [ "${HERDR_PANE_ID:-}" = "$(val new)" ] || die "only the incoming boss (pane $(val new)) writes an account"
++    [ ! -t 0 ] || die "the body goes on stdin"
++    tmp=$(mktemp "$dir/account.XXXXXXXX"); bodyf=$(mktemp "$dir/account.XXXXXXXX"); trap 'rm -f "$tmp" "$bodyf"' EXIT
++    head -c 122881 > "$bodyf"
++    [ "$(wc -c < "$bodyf")" -le 122880 ] && python3 -c 'import sys;sys.exit(0 if sys.stdin.buffer.read().decode("utf-8").strip() else 1)' < "$bodyf" 2>/dev/null ||
++      die "the body must be UTF-8 text, not blank, at most 120 KiB; nothing written"
++    { printf 'attempt: %s\nround: %s\n\n' "${dir##*/}" "$n"; cat "$bodyf"; printf '\n<!-- end shift round -->\n'; } > "$tmp" || die "the account could not be written"
++    CUR=$dir; exec 9>"$CUR/lock"; flock -w 30 9 || die "the shift is busy; try again"
++    live
++    [ ! -e "$CUR/GO" ] || die "GO is recorded; the account is final (abort and open again to change it)"
++    [ "$(aval state)" != withdrawn ] || die "the approval was withdrawn: abort and open again"
++    mv -T "$tmp" "$CUR/account-$n.md" || die "the account could not be written"
++    echo "account $n written" ;;
+   say)
+     own_shift; live; [ $# -ge 1 ] || die "say what?"
+@@ -112,5 +169,5 @@
+     own_shift; live
+     [ "${HERDR_PANE_ID:-}" = "$(val old)" ] || die "only the outgoing boss (pane $(val old)) writes GO"
+-    ls "$CUR"/account-*.md >/dev/null 2>&1 || die "the incoming boss has written no account yet"
++    [ -e "$CUR/GO" ] || approval_ok || die "the newest account is not approved (or it changed): shift.sh approve N <sha256 from wait>; nothing was sent"
+     [ ! -e "$CUR/GO-CUED" ] || die "GO is already recorded and the candidate cued (run: shift.sh status)"
+     candidate_ready || die "the candidate is not verified; nothing was sent"
+@@ -136,4 +193,6 @@
+     holds "$old" "$(val old_terminal)" || die "the old pane $old is not the recorded terminal; nothing closed"
+     candidate_ready || die "candidate model unverified; old pane left open"
++    # the approval is proved last: nothing runs between this and the close but `live`
++    approval_ok || die "the approval was withdrawn, or its account changed or a round was added: abort and open again; the old pane stays open"
+     live
+     herdr pane close "$old" >/dev/null || die "the old pane $old did not close; nothing renamed"
+@@ -145,5 +204,5 @@
+     echo "took over as $boss on $me (shift folder $CUR). Now: read the board, start ONE board wait, the inbox watcher and the timer, renew the mutes, and tell the user in two lines." ;;
+   status)
+-    if [ -L "$CUR" ]; then cat "$CUR/state"; ls "$CUR"
++    if [ -L "$CUR" ]; then cat "$CUR/state"; ls "$CUR"; [ ! -e "$CUR/approval" ] || cat "$CUR/approval"
+       if [ -n "$(val new)" ]; then check_model || true
+       else echo "no candidate pane was recorded: the split may have made one. Look (herdr pane list), close it by hand, then run: shift.sh abort"; fi

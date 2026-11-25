@@ -278,6 +278,7 @@ func TestShiftBriefWithholdsTheCueUntilTheModelIsProved(t *testing.T) {
 			require.Error(t, err)
 			require.Equal(t, tc.pid, s.state("model_pid"), "a refused identity is never saved")
 			require.NoFileExists(t, s.path("cues"))
+			require.Empty(t, s.glob("current/brief.*.boss-shift.md"))
 			require.Empty(t, s.glob("current/state.*"))
 			require.NoError(t, s.run("old", "verified", "brief"), "brief reruns")
 			require.Equal(t, "100", s.state("model_pid"))
@@ -417,6 +418,9 @@ func TestShiftStandInsAreWrittenOnce(t *testing.T) {
 	entries, err := os.ReadDir(setupShiftScript(t).dir)
 	require.NoError(t, err)
 	for _, e := range entries {
+		if e.IsDir() {
+			continue // the stand-in repo's roles folder
+		}
 		info, err := e.Info()
 		require.NoError(t, err)
 		require.Zero(t, info.Mode()&0o111, "%s is an executable written by a test", e.Name())
@@ -474,6 +478,7 @@ func TestShiftGoRetriesAFailedCue(t *testing.T) {
 	require.Error(t, err)
 	require.Equal(t, 1, strings.Count(s.read("cues"), "boss-shift.md"))
 	require.FileExists(t, s.path("current/GO"), "the failed cue left the GO it recorded")
+	require.NoError(t, os.Remove(s.path("current/approval")), "a retry needs no approval record")
 	old := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 	require.NoError(t, os.Chtimes(s.path("current/GO"), old, old))
 	out, err := s.invoke("old", "wrong_model", "go")
@@ -556,8 +561,6 @@ func TestShiftScriptAsksTheRealVerbsWhatTheyTake(t *testing.T) {
 	t.Parallel()
 	s := setupShiftScript(t)
 	require.NoError(t, s.run("old", "verified", "open"))
-	require.NoError(t, os.Mkdir(s.path("roles"), 0o700))
-	s.write("roles/boss-shift.md", "role\n")
 	require.NoError(t, s.run("old", "verified", "brief"))
 	own, err := os.Readlink(s.path("current"))
 	require.NoError(t, err)
@@ -571,7 +574,7 @@ func TestShiftScriptAsksTheRealVerbsWhatTheyTake(t *testing.T) {
 		require.Error(t, err, fail)
 	}
 	require.Equal(t, 1, strings.Count(s.read("cues"), "boss-shift.md"), "a refused brief sends nothing")
-	require.Contains(t, s.read("cues"), s.path("roles/boss-shift.md"))
+	require.Contains(t, s.read("cues"), "Read "+filepath.Join(own, "brief."))
 	none := func(string) (string, bool) { return "", false }
 	asked := strings.Fields(strings.SplitN(s.read("briefs"), "\n", 2)[0])
 	require.Equal(t, []string{"boss", "shift", "brief", "--record", own, "--attempt", id, "--role", s.path("roles/boss-shift.md")}, asked)
@@ -598,7 +601,7 @@ func TestShiftScriptAsksTheRealVerbsWhatTheyTake(t *testing.T) {
 
 // The adapter is a patch of the released one: it must apply to the installed script, whose model
 // default is the boss's own line, and only to the script v1 left.
-func TestShiftV2PatchAppliesToTheInstalledScript(t *testing.T) {
+func TestShiftV2AndV3PatchesApplyToTheInstalledScript(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	script := filepath.Join(dir, "shift.sh")
@@ -613,15 +616,18 @@ func TestShiftV2PatchAppliesToTheInstalledScript(t *testing.T) {
 	require.NotEqual(t, string(v1), local)
 	require.NoError(t, os.WriteFile(script, []byte(local), 0o600))
 	applyShiftPatch(t, script, "boss-shift-v2.patch")
+	applyShiftPatch(t, script, "boss-shift-v3.patch")
 	out, err := os.ReadFile(script)
 	require.NoError(t, err)
 	require.Contains(t, string(out), "claude-opus-5-5")
 	require.NoError(t, os.WriteFile(script, preimage, 0o600))
-	patch, err := os.ReadFile(filepath.Join("..", "..", "docs", "boss-shift-v2.patch"))
-	require.NoError(t, err)
-	apply := exec.CommandContext(t.Context(), "patch", "--batch", "--dry-run", "--fuzz=0", script) // #nosec G204 -- scratch script only
-	apply.Stdin = bytes.NewReader(patch)
-	require.Error(t, apply.Run(), "v2 applies only to the script v1 left")
+	for _, name := range []string{"boss-shift-v2.patch", "boss-shift-v3.patch"} {
+		patch, err := os.ReadFile(filepath.Join("..", "..", "docs", name))
+		require.NoError(t, err)
+		apply := exec.CommandContext(t.Context(), "patch", "--batch", "--dry-run", "--fuzz=0", script) // #nosec G204 -- scratch script only
+		apply.Stdin = bytes.NewReader(patch)
+		require.Error(t, apply.Run(), name+" applies only to the script the one before it left")
+	}
 }
 
 // A lowercase `started` in the caller's environment must not make a good start look failed.
@@ -644,7 +650,7 @@ func TestShiftGuideInstallBlocksAreSafeToRepeat(t *testing.T) {
 	require.NoError(t, err)
 	script := filepath.Join(t.TempDir(), "shift.sh")
 	require.NoError(t, os.WriteFile(script, preimage, 0o600))
-	for _, name := range []string{"boss-shift-v1.patch", "boss-shift-v2.patch"} {
+	for _, name := range []string{"boss-shift-v1.patch", "boss-shift-v2.patch", "boss-shift-v3.patch"} {
 		var block string
 		for b := range strings.SplitSeq(string(guide), "```sh\n") {
 			if b, _, ok := strings.Cut(b, "```"); ok && strings.Contains(b, "docs/"+name) {
@@ -676,10 +682,345 @@ func TestShiftGuideInstallBlocksAreSafeToRepeat(t *testing.T) {
 	}
 }
 
+// The approval is ONE record under the shift lock; every case below is a way the written approval has been
+// carried to bytes nobody read, or kept after it was withdrawn.
+func (s shiftScript) opened(t *testing.T) {
+	t.Helper()
+	require.NoError(t, s.run("old", "verified", "open"))
+	require.NoError(t, s.run("old", "verified", "brief"))
+}
+
+func TestShiftApproveWritesOneRecordAndRefusesWhatIsNotTheReviewedAccount(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	s.opened(t)
+	s.accountOnly()
+	read := s.digest(1)
+	require.NoError(t, os.Chmod(s.path("current/account-1.md"), 0o600))
+	s.write("current/account-1.md", "Corrected after the review.\n")
+	for name, args := range map[string][]string{
+		"a digest read of an account since replaced": {"1", read},
+		"no digest":               {"1"},
+		"a digest that is none":   {"1", "abc"},
+		"a round with no account": {"2", s.digest(1)},
+		"a round outside 1 to 3":  {"4", s.digest(1)},
+	} {
+		_, err := s.invoke("old", "verified", "approve", args...)
+		require.Error(t, err, name)
+		require.NoFileExists(t, s.path("current/approval"), name)
+	}
+	_, err := s.invoke("new", "verified", "approve", "1", s.digest(1))
+	require.Error(t, err, "only the outgoing boss approves")
+	s.write("current/account-2.md", "A later round.\n")
+	_, err = s.invoke("old", "verified", "approve", "1", s.digest(1))
+	require.Error(t, err, "the newest account is approved, not an older one")
+	_, err = s.invoke("old", "verified", "approve", "2", s.digest(2))
+	require.NoError(t, err)
+	require.Regexp(t, `^state: approved\nround: 2\naccount: `+s.digest(2)+`\nat: [0-9:]{8}\n$`, s.read("current/approval"))
+	require.Empty(t, s.glob("current/approval.*"), "no temporary file is left")
+	out, err := s.invoke("old", "verified", "status")
+	require.NoError(t, err)
+	require.Contains(t, out, "state: approved", "status shows the record")
+}
+
+// GO is the cue after the approval is final: approve is refused once GO exists, and withdraw is for good.
+func TestShiftWithdrawIsTerminalAndApproveStopsAtGo(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	s.opened(t)
+	s.account()
+	_, err := s.invoke("new", "verified", "withdraw")
+	require.Error(t, err, "only the outgoing boss withdraws")
+	_, err = s.invoke("old", "verified", "withdraw")
+	require.NoError(t, err)
+	require.Contains(t, s.read("current/approval"), "state: withdrawn")
+	_, err = s.invoke("old", "verified", "approve", "1", s.digest(1))
+	require.Error(t, err, "a withdrawn approval is not given again")
+	require.Error(t, s.run("old", "verified", "go"), "nor does go use it")
+	require.NoFileExists(t, s.path("current/GO"))
+	s = setupShiftScript(t)
+	s.opened(t)
+	s.account()
+	require.NoError(t, s.run("old", "verified", "go"))
+	_, err = s.invoke("old", "verified", "approve", "1", s.digest(1))
+	require.Error(t, err, "approve after GO is refused")
+}
+
+func TestShiftGoNeedsTheNewestAccountApproved(t *testing.T) {
+	t.Parallel()
+	for name, spoil := range map[string]func(*shiftScript){
+		"no approval":                      func(s *shiftScript) { _ = os.Remove(s.path("current/approval")) },
+		"the account changed since":        func(s *shiftScript) { s.write("current/account-1.md", "changed\n") },
+		"a later round exists":             func(s *shiftScript) { s.write("current/account-2.md", "later\n") },
+		"a round skipped to a later one":   func(s *shiftScript) { s.write("current/account-3.md", "skipped\n") },
+		"the approval was withdrawn":       func(s *shiftScript) { _, _ = s.invoke("old", "verified", "withdraw") },
+		"an approval that is not a record": func(s *shiftScript) { s.write("current/approval", "approved\n") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := setupShiftScript(t)
+			s.opened(t)
+			s.account()
+			spoil(&s)
+			out, err := s.invoke("old", "verified", "go")
+			require.Error(t, err)
+			require.Contains(t, out, "not approved")
+			require.NoFileExists(t, s.path("current/GO"))
+			require.Zero(t, strings.Count(s.read("cues"), "takeover"))
+		})
+	}
+}
+
+// A refused go writes nothing, so the same approval serves once the cause is fixed.
+func TestShiftGoRefusalsChangeNoRoundFile(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	s.opened(t)
+	s.account()
+	files := s.snapshot()
+	for _, reason := range []string{"wrong_model", "missing_model", "stale_report", "candidate_changed", "wrong_session", "claude_unavailable", ""} {
+		require.Error(t, s.run("old", reason, "go"), reason)
+		require.NoFileExists(t, s.path("current/GO"))
+		require.Equal(t, files, s.snapshot(), "after "+reason)
+	}
+	require.NoError(t, s.run("old", "verified", "go"), "the model is right: the same approval serves")
+}
+
+// A go that paused over its check must not write into, or cue, the shift that replaced it.
+func TestShiftGoNeverWritesIntoAReplacementShift(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	s.opened(t)
+	s.account()
+	own, err := os.Readlink(s.path("current"))
+	require.NoError(t, err)
+	require.NoError(t, os.Mkdir(s.path("b"), 0o700))
+	s.write("b/state", "replacement\n")
+	swap := `rm -f "$SHIFT_ROOT/current"; ln -s "$SHIFT_ROOT/b" "$SHIFT_ROOT/current"`
+	out, err := s.invoke("old", "verified", "go", "ON_WAIT="+swap)
+	require.Error(t, err)
+	require.Contains(t, out, "changed or was aborted")
+	for _, f := range []string{"b/GO", "b/GO.tmp", "b/GO-CUED", own + "/GO", own + "/GO-CUED"} {
+		require.NoFileExists(t, s.path(f))
+	}
+	require.Zero(t, strings.Count(s.read("cues"), "takeover"), "the replacement's candidate gets no cue")
+}
+
+// takeover proves the approval last, under the lock: whatever happened to the account or the record
+// before the close, even after GO, stops it, and the answer is to open again.
+func TestShiftTakeoverReprovesTheApprovalBeforeTheClose(t *testing.T) {
+	t.Parallel()
+	changes := map[string]func(*shiftScript){
+		"the account rewritten after GO": func(s *shiftScript) { s.write("current/account-1.md", "rewritten\n") },
+		"a newer round":                  func(s *shiftScript) { s.write("current/account-2.md", "next\n") },
+		"a round skipped":                func(s *shiftScript) { s.write("current/account-3.md", "skipped ahead\n") },
+		"the approval withdrawn":         func(s *shiftScript) { _, _ = s.invoke("old", "verified", "withdraw") },
+		"the record removed":             func(s *shiftScript) { _ = os.Remove(s.path("current/approval")) },
+	}
+	for name, change := range changes {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			s := setupShiftScript(t)
+			s.opened(t)
+			s.account()
+			require.NoError(t, s.run("old", "verified", "go"))
+			change(&s)
+			out, err := s.invoke("new", "verified", "takeover")
+			require.Error(t, err)
+			require.Contains(t, out, "abort and open again")
+			require.NoFileExists(t, s.path("close"))
+			require.NoFileExists(t, s.path("rename"))
+		})
+	}
+	t.Run("rewritten while takeover proves the model", func(t *testing.T) {
+		t.Parallel()
+		s := setupShiftScript(t)
+		s.opened(t)
+		s.account()
+		require.NoError(t, s.run("old", "verified", "go"))
+		change := `[[ " $* " = *" --pid 0 "* ]] || echo more >> "$SHIFT_ROOT/current/account-1.md"`
+		_, err := s.invoke("new", "verified", "takeover", "ON_CHECK="+change)
+		require.Error(t, err)
+		require.NoFileExists(t, s.path("close"))
+	})
+	t.Run("rewritten between go's check and the GO write", func(t *testing.T) {
+		t.Parallel()
+		s := setupShiftScript(t)
+		s.opened(t)
+		s.account()
+		change := `[[ " $* " = *" --pid 0 "* ]] || echo more >> "$SHIFT_ROOT/current/account-1.md"`
+		_, err := s.invoke("old", "verified", "go", "ON_CHECK="+change)
+		require.NoError(t, err, "the window is not closed for go: takeover is what refuses")
+		_, err = s.invoke("new", "verified", "takeover")
+		require.Error(t, err)
+		require.NoFileExists(t, s.path("close"))
+	})
+	t.Run("an approved account takes over", func(t *testing.T) {
+		t.Parallel()
+		s := setupShiftScript(t)
+		s.opened(t)
+		s.account()
+		require.NoError(t, s.run("old", "verified", "go"))
+		require.NoError(t, s.run("new", "verified", "takeover"))
+		require.Equal(t, "old\n", s.read("close"))
+	})
+}
+
+// The candidate publishes an account only through the script, under the shift lock, so it never lands while
+// takeover runs; the body is read and checked before the lock, so nothing stalls takeover or abort.
+func TestShiftAccountVerbPublishesWhatTheReaderAccepts(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	s.opened(t)
+	own, err := os.Readlink(s.path("current"))
+	require.NoError(t, err)
+	none := func(string) (string, bool) { return "", false }
+	_, err = s.invoke("new", "verified", "account", "1")
+	require.NoError(t, err)
+	out, _, err := runOut(t, none, "boss", "shift", "wait", "--record", own, "--attempt", filepath.Base(own), "--round", "1", "--timeout", "0")
+	require.NoError(t, err, "the reader takes the file the verb wrote")
+	verdict := oneJSONObject(t, out)
+	require.Equal(t, "published", verdict["status"])
+	require.Equal(t, s.digest(1), verdict["sha256"])
+	_, err = s.invoke("old", "verified", "account", "1")
+	require.Error(t, err, "only the incoming boss publishes an account")
+	_, err = s.invoke("new", "verified", "account", "4")
+	require.Error(t, err)
+	before := s.read("current/account-1.md")
+	for name, body := range map[string]string{
+		"blank": " \n\n", "a non-breaking space": "\u00a0\n", "oversized": strings.Repeat("x", 121<<10),
+		"a tail beyond the limit": strings.Repeat("x", 122880) + "\nthe final instruction\n", "not UTF-8": "bad \xff",
+	} {
+		cmd := s.command("new", "verified", "account", "1")
+		cmd.Stdin = strings.NewReader(body)
+		require.Error(t, cmd.Run(), name)
+		require.Equal(t, before, s.read("current/account-1.md"), name+" must not replace a valid round")
+	}
+	require.Empty(t, s.glob("current/account.*"), "no temporary file is left")
+}
+
+func TestShiftAccountWaitsForTakeover(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	s.opened(t)
+	s.account()
+	require.NoError(t, s.run("old", "verified", "go"))
+	before := s.read("current/account-1.md")
+	own, err := os.Readlink(s.path("current"))
+	require.NoError(t, err)
+	late := `[[ " $* " = *" --pid 0 "* ]] || { HERDR_PANE_ID=new bash "$SHIFT_ROOT/shift.sh" account 1 <<<"A late publication." 9>&- >"$SHIFT_ROOT/account.out" 2>&1 & /bin/sleep 0.5; }`
+	_, err = s.invoke("new", "verified", "takeover", "ON_CHECK="+late)
+	require.NoError(t, err, "a publication that waits cannot stop it")
+	require.Equal(t, "old\n", s.read("close"))
+	require.Eventually(t, func() bool { b, _ := os.ReadFile(s.path("account.out")); return len(b) > 0 }, 10*time.Second, 50*time.Millisecond)
+	require.Contains(t, s.read("account.out"), "changed or was aborted")
+	require.Equal(t, before, s.read(strings.TrimPrefix(own, s.dir+"/")+"/account-1.md"), "nothing was written after the close")
+}
+
+func TestShiftAccountIsFinalAfterGoAndAfterAWithdrawal(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	s.opened(t)
+	s.account()
+	_, err := s.invoke("old", "verified", "withdraw")
+	require.NoError(t, err)
+	out, err := s.invoke("new", "verified", "account", "1")
+	require.Error(t, err)
+	require.Contains(t, out, "withdrawn")
+	s = setupShiftScript(t)
+	s.opened(t)
+	s.account()
+	require.NoError(t, s.run("old", "verified", "go"))
+	out, err = s.invoke("new", "verified", "account", "1")
+	require.Error(t, err)
+	require.Contains(t, out, "final")
+}
+
+func TestShiftAccountStalledBodyDoesNotBlockAbort(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	s.opened(t)
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	stalled := s.command("new", "verified", "account", "1")
+	var held bytes.Buffer
+	stalled.Stdin, stalled.Stdout, stalled.Stderr = r, &held, &held
+	require.NoError(t, stalled.Start())
+	require.NoError(t, r.Close())
+	time.Sleep(300 * time.Millisecond) // the publisher is waiting for its body
+	out, err := s.invoke("old", "verified", "abort", "while a body is awaited")
+	require.NoError(t, err, "abort is not held up: %s", out)
+	_, err = w.WriteString("Late body.\n")
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
+	require.Error(t, stalled.Wait())
+	require.Contains(t, held.String(), "changed or was aborted")
+}
+
+// brief points the candidate at a role file the script does not control (SHIFT_ROLE): a role older than the script
+// would send it to a procedure that takes no lock, so a role without the script's protocol line is refused.
+func TestShiftBriefRefusesARoleOlderThanTheScript(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	require.NoError(t, s.run("old", "verified", "open"))
+	shipped := s.read("roles/boss-shift.md")
+	require.Contains(t, shipped, "<!-- boss-shift-role: 3 -->")
+	s.write("roles/boss-shift.md", strings.Replace(shipped, "<!-- boss-shift-role: 3 -->\n", "", 1))
+	out, err := s.invoke("old", "verified", "brief")
+	require.Error(t, err)
+	require.Contains(t, out, "older than this script")
+	require.NoFileExists(t, s.path("cues"), "nothing was sent")
+	require.Equal(t, "0", s.state("model_pid"), "nothing was pinned")
+	s.write("roles/boss-shift.md", strings.Replace(shipped, "role: 3 -->", "role: 2 -->", 1))
+	_, err = s.invoke("old", "verified", "brief")
+	require.Error(t, err, "another version is as old as none")
+	s.write("roles/boss-shift.md", shipped)
+	require.NoError(t, s.run("old", "verified", "brief"))
+}
+
+func TestShiftBriefCuesTheCheckedRoleCopy(t *testing.T) {
+	t.Parallel()
+	s := setupShiftScript(t)
+	require.NoError(t, s.run("old", "verified", "open"))
+	attempt, err := os.Readlink(s.path("current"))
+	require.NoError(t, err)
+	cuedRole := func(cue string) string {
+		_, rest, ok := strings.Cut(cue, "Read ")
+		require.True(t, ok, cue)
+		path, _, ok := strings.Cut(rest, " now")
+		require.True(t, ok, cue)
+		require.Equal(t, attempt, filepath.Dir(path))
+		return path
+	}
+	shipped := s.read("roles/boss-shift.md")
+	s.write("external-role.md", shipped)
+	stale := strings.Replace(shipped, "role: 3 -->", "role: 2 -->", 1)
+	s.write("replacement-role.md", stale)
+	role := "SHIFT_ROLE=" + s.path("external-role.md")
+	// A checkout switch or a role install can replace the source during model proof.
+	swap := `[[ " $* " = *" --pid 100 "* ]] && mv -T "$SHIFT_ROOT/replacement-role.md" "$SHIFT_ROOT/external-role.md"`
+	_, err = s.invoke("old", "verified", "brief", role, "ON_CHECK="+swap)
+	require.NoError(t, err)
+	require.Equal(t, stale, s.read("external-role.md"))
+	first := cuedRole(s.read("cues"))
+	require.Equal(t, shipped, s.read(filepath.Join(filepath.Base(attempt), filepath.Base(first))))
+
+	revised := shipped + "\nUpdated instructions.\n"
+	s.write("external-role.md", revised)
+	_, err = s.invoke("old", "verified", "brief", role)
+	require.NoError(t, err)
+	cues := strings.Split(strings.TrimSpace(s.read("cues")), "\n")
+	require.Len(t, cues, 2)
+	second := cuedRole(cues[1])
+	require.NotEqual(t, first, second)
+	require.Equal(t, revised, s.read(filepath.Join(filepath.Base(attempt), filepath.Base(second))))
+	require.Equal(t, shipped, s.read(filepath.Join(filepath.Base(attempt), filepath.Base(first))))
+}
+
 // The hooks job strips trailing whitespace: a patch with any would be rewritten and stop applying.
 func TestShiftPatchesSurviveTheWhitespaceHook(t *testing.T) {
 	t.Parallel()
-	for _, name := range []string{"boss-shift-v1.patch", "boss-shift-v2.patch"} {
+	for _, name := range []string{"boss-shift-v1.patch", "boss-shift-v2.patch", "boss-shift-v3.patch"} {
 		patch, err := os.ReadFile(filepath.Join("..", "..", "docs", name))
 		require.NoError(t, err)
 		for n, line := range strings.Split(strings.TrimSuffix(string(patch), "\n"), "\n") {
@@ -742,7 +1083,10 @@ esac
 [ "$4" != --help ] || { printf "%s\n" "--session-id"; exit 0; }
 rec=; role=; prev=; for a in "$@"; do case "$prev" in --record) rec=$a ;; --role) role=$a ;; esac; prev=$a; done
 case "$1 $2 $3" in
-  "boss shift wait") printf '%s\n' "$*" >> "$SHIFT_ROOT/waits"; echo '{"status":"timeout"}'; exit 1 ;;
+  "boss shift wait") printf '%s\n' "$*" >> "$SHIFT_ROOT/waits"; eval "$ON_WAIT"
+    case " $* " in *" --round "*) n=$(sed 's/.* --round \([0-9]*\).*/\1/' <<< "$*"); acc=$(sha256sum "$rec/account-$n.md" 2>/dev/null | cut -d' ' -f1)
+      [ -z "$acc" ] || { printf '{"status":"published","round":%s,"sha256":"%s"}\n' "$n" "$acc"; exit 0; } ;; esac
+    echo '{"status":"timeout"}'; exit 1 ;;
   "boss shift brief") printf '%s\n' "$*" >> "$SHIFT_ROOT/briefs"; case "${BRIEF_FAIL:-0}" in 1) exit 1 ;; 2) echo '{}'; exit 0 ;; esac
     printf '{"record":"%s","attempt":"%s","role":"%s"}\n' "$rec" "${rec##*/}" "$role"; exit 0 ;;
   "boss shift check-model") ;;
@@ -780,6 +1124,12 @@ func setupShiftScript(t *testing.T) shiftScript {
 	require.NoError(t, os.WriteFile(script, preimage, 0o600))
 	applyShiftPatch(t, script, "boss-shift-v1.patch")
 	applyShiftPatch(t, script, "boss-shift-v2.patch")
+	applyShiftPatch(t, script, "boss-shift-v3.patch")
+	// The shipped role next to the script: every brief test then proves it has the line the shipped script demands.
+	role, err := os.ReadFile(filepath.Join("..", "..", "roles", "boss-shift.md"))
+	require.NoError(t, err)
+	require.NoError(t, os.Mkdir(s.path("roles"), 0o700))
+	require.NoError(t, os.WriteFile(s.path("roles/boss-shift.md"), role, 0o600))
 	return s
 }
 
@@ -807,6 +1157,16 @@ func (s shiftScript) run(pane, verdict, verb string) error {
 // stand-ins; anything else is an argument to the verb.
 func (s shiftScript) invoke(pane, verdict, verb string, overrides ...string) (string, error) {
 	s.t.Helper()
+	cmd := s.command(pane, verdict, verb, overrides...)
+	cmd.Stdin = strings.NewReader("Written by the verb.\n")
+	out, err := cmd.CombinedOutput()
+	s.t.Logf("%s %s: %s", verb, verdict, out)
+	return string(out), err
+}
+
+// command is one shift.sh verb ready to run, with invoke's environment and no stdin.
+func (s shiftScript) command(pane, verdict, verb string, overrides ...string) *exec.Cmd {
+	s.t.Helper()
 	var env, args []string
 	for _, o := range overrides {
 		if name, _, ok := strings.Cut(o, "="); ok && name == strings.ToUpper(name) {
@@ -821,9 +1181,7 @@ func (s shiftScript) invoke(pane, verdict, verb string, overrides ...string) (st
 		"PATH=" + shiftStubDir + ":/usr/bin:/bin", "HERDR_PANE_ID=" + pane, "SHIFT_ROOT=" + s.dir,
 		"SHIFT_PLUGIN=" + filepath.Join(shiftStubDir, "herdr-agentisan"), "MODEL_VERDICT=" + verdict,
 	}, env...)
-	out, err := cmd.CombinedOutput()
-	s.t.Logf("%s %s: %s", verb, verdict, out)
-	return string(out), err
+	return cmd
 }
 
 func (s shiftScript) write(name, content string) {
@@ -875,7 +1233,23 @@ func (s shiftScript) state(key string) string {
 	return found
 }
 
-func (s shiftScript) account() {
+// accountOnly publishes round 1 without approving it.
+func (s shiftScript) accountOnly() {
 	s.t.Helper()
 	s.write("current/account-1.md", "Account.\n")
+}
+
+// digest is the SHA-256 of the open shift's account n, as wait prints it with the text.
+func (s shiftScript) digest(n int) string {
+	s.t.Helper()
+	sum := sha256.Sum256([]byte(s.read(fmt.Sprintf("current/account-%d.md", n))))
+	return fmt.Sprintf("%x", sum)
+}
+
+// account publishes round 1 and has the outgoing boss approve it.
+func (s shiftScript) account() {
+	s.t.Helper()
+	s.accountOnly()
+	_, err := s.invoke("old", "verified", "approve", "1", s.digest(1))
+	require.NoError(s.t, err)
 }

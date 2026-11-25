@@ -162,8 +162,10 @@ BOSS: #100 fix pushed 273f69f; QA re-checks
   recorded terminal. The team script calls it at brief (once), GO and
   takeover through the adapter in `docs/boss-shift-model.md`. `boss shift
   brief` names the role and the attempt, and `wait` reads the written rounds
-  (`rounds.go`) of the one attempt folder it is given; the files are advice
-  (`roles/boss-shift.md`, `docs/boss-shift-v2.patch`).
+  (`rounds.go`) of the one attempt folder it is given; the files are advice,
+  and GO is gated on the approval record that `approve` and `withdraw` write
+  under the shift lock (`roles/boss-shift.md`, `docs/boss-shift-v2.patch`,
+  `docs/boss-shift-v3.patch`).
 - `internal/codexhooks/` — installing the `ctx` Codex hooks (ADR-001 A43):
   `codex hooks` writes them into `$CODEX_HOME/hooks.json`, after every entry
   already there, which it keeps as written, and never edits `config.toml` or
