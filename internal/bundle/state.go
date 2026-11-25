@@ -23,8 +23,12 @@ type State struct {
 
 // ReadInstalledState discovers, starts, reads and closes the bundle session.
 func ReadInstalledState(ctx context.Context, locate func(string) (Launch, error), repo, workDir string) (State, error) {
+	return readInstalledState(ctx, locate, func() (worktree, error) { return resolveWorktree(repo, workDir) })
+}
+
+func readInstalledState(ctx context.Context, locate func(string) (Launch, error), resolve func() (worktree, error)) (State, error) {
 	return resolveWithin(ctx, 250*time.Millisecond, func() (st State, err error) {
-		paths, err := resolveWorktree(repo, workDir)
+		paths, err := resolve()
 		if err != nil {
 			return State{}, err
 		}
@@ -106,29 +110,82 @@ func resolveWorktree(repo, workDir string) (worktree, error) {
 	if err != nil {
 		return worktree{}, err
 	}
-	if !withinRepo(root, dir, os.Stat) {
-		return worktree{}, fmt.Errorf("%w: the work dir %s is outside the repo %s", ErrRefused, dir, root)
-	}
-	return worktree{repo: root, dir: dir}, nil
+	return volumeWorktree(root, dir, os.Stat)
 }
 
-func withinRepo(root, dir string, stat func(string) (os.FileInfo, error)) bool {
+func volumeWorktree(root, dir string, stat func(string) (os.FileInfo, error)) (worktree, error) {
+	ancestor := repoAncestor(root, dir, stat)
+	if ancestor == "" {
+		return worktree{}, fmt.Errorf("%w: the work dir %s is outside the repo %s", ErrRefused, dir, root)
+	}
+	// The bundle's Git-derived roots use the filesystem spelling.
+	repo, err := diskPath(root, "/", "/", stat)
+	if err != nil {
+		return worktree{}, fmt.Errorf("%w: repo spelling: %w", ErrUnavailable, err)
+	}
+	workDir, err := diskPath(dir, ancestor, repo, stat)
+	if err != nil {
+		return worktree{}, fmt.Errorf("%w: work dir spelling: %w", ErrRefused, err)
+	}
+	return worktree{repo: repo, dir: workDir}, nil
+}
+
+func repoAncestor(root, dir string, stat func(string) (os.FileInfo, error)) string {
 	repo, err := stat(root)
 	if err != nil {
-		return false
+		return ""
 	}
 	for {
 		info, err := stat(dir)
 		if err != nil {
-			return false
+			return ""
+		}
+		if os.SameFile(repo, info) {
+			return dir
 		}
 		parent := filepath.Dir(dir)
-		same := os.SameFile(repo, info)
-		if same || parent == dir {
-			return same
+		if parent == dir {
+			return ""
 		}
 		dir = parent
 	}
+}
+
+// diskPath rebases dir below the on-disk spelling of its ancestor.
+func diskPath(dir, ancestor, spelledAncestor string, stat func(string) (os.FileInfo, error)) (string, error) {
+	if dir == ancestor {
+		return spelledAncestor, nil
+	}
+	parent, err := diskPath(filepath.Dir(dir), ancestor, spelledAncestor, stat)
+	if err != nil {
+		return "", err
+	}
+	info, err := stat(dir)
+	if err != nil {
+		return "", fmt.Errorf("stat %q: %w", dir, err)
+	}
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return "", fmt.Errorf("read entries in %q: %w", parent, err)
+	}
+	name := filepath.Base(dir)
+	for _, entry := range entries {
+		if entry.Name() == name && entry.IsDir() {
+			entryInfo, err := entry.Info()
+			if err == nil && os.SameFile(info, entryInfo) {
+				return filepath.Join(parent, name), nil
+			}
+		}
+	}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			entryInfo, err := entry.Info()
+			if err == nil && os.SameFile(info, entryInfo) {
+				return filepath.Join(parent, entry.Name()), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no directory entry in %q matches %q", parent, dir)
 }
 
 func canonicalDir(path string, unavailable error) (string, error) {

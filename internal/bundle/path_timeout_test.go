@@ -24,14 +24,25 @@ func TestWorkDirResolutionHonorsDeadline(t *testing.T) {
 	require.Less(t, time.Since(start), time.Second)
 }
 
-func TestWorktreeContainmentOnCaseInsensitiveVolume(t *testing.T) {
+func TestReadInstalledStateSendsOnDiskSpelling(t *testing.T) {
 	t.Parallel()
-	base := t.TempDir()
-	repo, alias := filepath.Join(base, "Repo"), filepath.Join(base, "repo")
-	dir := filepath.Join(repo, "worktree")
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	repo := filepath.Join(base, "Repo")
+	dir := filepath.Join(repo, "Generations", "G001")
+	alias := filepath.Join(base, "repo", "generations", "g001")
 	require.NoError(t, os.MkdirAll(dir, 0o700))
+	names := strings.NewReplacer("/repo", "/Repo", "/generations", "/Generations", "/g001", "/G001")
 	stat := func(path string) (os.FileInfo, error) {
-		return os.Stat(strings.Replace(path, alias, repo, 1))
+		return os.Stat(names.Replace(path))
 	}
-	require.True(t, withinRepo(alias, dir, stat))
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	_, err = readInstalledState(ctx, func(string) (Launch, error) {
+		return Launch{Argv: []string{os.Args[0]}, Env: append(os.Environ(), "BUNDLETEST_MODE=ok", "BUNDLETEST_WORKDIR="+dir)}, nil
+	}, func() (worktree, error) { return volumeWorktree(repo, alias, stat) })
+	require.NoError(t, err)
+	paths, err := volumeWorktree(filepath.Join(base, "repo"), alias, stat)
+	require.NoError(t, err)
+	require.Equal(t, worktree{repo: repo, dir: dir}, paths)
 }
