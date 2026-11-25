@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/abanna/herdr-agentisan/internal/bundle/bundletest"
 	"github.com/abanna/herdr-agentisan/internal/testtmp"
 )
 
@@ -26,6 +27,9 @@ const claudeStub = "#!/bin/sh\npwd\nprintf '%s\\n' \"$HERDR_PLUGIN_CONFIG_DIR\"\
 // busy" (ETXTBSY, NERD-5645). Nothing forks before m.Run, so no child ever
 // holds the stub's write descriptor.
 func TestMain(m *testing.M) {
+	if bundletest.Active() {
+		bundletest.Main() // a stand-in bundle server: stageread_test.go
+	}
 	testtmp.Use()
 	dir, err := os.MkdirTemp("", "claude-stub-")
 	if err != nil {
