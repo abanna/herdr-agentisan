@@ -2,6 +2,9 @@ package bundle
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,4 +22,16 @@ func TestWorkDirResolutionHonorsDeadline(t *testing.T) {
 	})
 	require.ErrorIs(t, err, ErrTimeout)
 	require.Less(t, time.Since(start), time.Second)
+}
+
+func TestWorktreeContainmentOnCaseInsensitiveVolume(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	repo, alias := filepath.Join(base, "Repo"), filepath.Join(base, "repo")
+	dir := filepath.Join(repo, "worktree")
+	require.NoError(t, os.MkdirAll(dir, 0o700))
+	stat := func(path string) (os.FileInfo, error) {
+		return os.Stat(strings.Replace(path, alias, repo, 1))
+	}
+	require.True(t, withinRepo(alias, dir, stat))
 }

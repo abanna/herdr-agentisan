@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 )
 
@@ -107,10 +106,29 @@ func resolveWorktree(repo, workDir string) (worktree, error) {
 	if err != nil {
 		return worktree{}, err
 	}
-	if rel, err := filepath.Rel(root, dir); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if !withinRepo(root, dir, os.Stat) {
 		return worktree{}, fmt.Errorf("%w: the work dir %s is outside the repo %s", ErrRefused, dir, root)
 	}
 	return worktree{repo: root, dir: dir}, nil
+}
+
+func withinRepo(root, dir string, stat func(string) (os.FileInfo, error)) bool {
+	repo, err := stat(root)
+	if err != nil {
+		return false
+	}
+	for {
+		info, err := stat(dir)
+		if err != nil {
+			return false
+		}
+		parent := filepath.Dir(dir)
+		same := os.SameFile(repo, info)
+		if same || parent == dir {
+			return same
+		}
+		dir = parent
+	}
 }
 
 func canonicalDir(path string, unavailable error) (string, error) {
