@@ -150,6 +150,19 @@ func (th *teamHerdr) serveTeam(normal herdrtest.Handler) herdrtest.Handler {
 				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "pane_not_found", Message: "pane " + params.PaneID + " not found"}}
 			}
 			return herdrtest.Reply{Result: map[string]any{"type": "pane_info", "pane": maps.Clone(th.panes[i])}}
+		case "pane.close":
+			var params struct {
+				PaneID string `json:"pane_id"`
+			}
+			_ = json.Unmarshal(r.Params, &params)
+			th.mu.Lock()
+			defer th.mu.Unlock()
+			if !slices.ContainsFunc(th.panes, func(p map[string]any) bool { return p["pane_id"] == params.PaneID }) {
+				return herdrtest.Reply{Error: &herdrtest.ErrorBody{Code: "pane_not_found", Message: "pane " + params.PaneID + " not found"}}
+			}
+			th.panes = slices.DeleteFunc(slices.Clone(th.panes), func(p map[string]any) bool { return p["pane_id"] == params.PaneID })
+			th.agents = slices.DeleteFunc(th.agents, func(a map[string]any) bool { return a["pane_id"] == params.PaneID })
+			return herdrtest.Reply{Result: map[string]any{"type": "ok"}}
 		case "workspace.report_metadata":
 			var params struct {
 				WorkspaceID string `json:"workspace_id"`

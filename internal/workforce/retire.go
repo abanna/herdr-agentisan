@@ -141,6 +141,9 @@ func (s *Service) finish(ctx context.Context, tg target, gone bool) (RetireResul
 	if replaced {
 		res.HandoffFailed = h.LogicalID
 	}
+	if tg.row != nil && s.Retired != nil {
+		s.Retired(tg.row.LogicalID)
+	}
 	return res, nil
 }
 

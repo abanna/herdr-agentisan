@@ -309,6 +309,7 @@ func Run(ctx context.Context, o Options) (err error) {
 	mutes := notice.NewMutes()
 	var ops map[string]op
 	if svc := o.newWorkforce(st, ident, idle, starts, paths.Dir); svc != nil {
+		svc.Retired = func(worker string) { mutes.Unmute(worker, o.Now()) }
 		ops = workforceOps(svc, ready, o.queued(in), o.marked)
 		maps.Copy(ops, o.noticeOps(in, mutes))
 		maps.Copy(ops, o.newBoardOps(st, in.view))

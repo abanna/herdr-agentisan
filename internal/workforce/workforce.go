@@ -156,6 +156,8 @@ type Service struct {
 	// through (A33); nil records nothing. The daemon sends it as a workflow
 	// event.
 	HandoffSteps func(context.Context, HandoffStep)
+	// Retired runs after explicit retirement of a worker row under the workforce lock.
+	Retired func(worker string)
 	// Dashboard is the plugin pane team up opens as a team's dashboard; zero
 	// opens none (A18, A23).
 	Dashboard DashboardPane

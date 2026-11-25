@@ -12,6 +12,7 @@ import (
 	"github.com/abanna/herdr-agentisan/internal/logging"
 	"github.com/abanna/herdr-agentisan/internal/notice"
 	"github.com/abanna/herdr-agentisan/internal/team"
+	"github.com/abanna/herdr-agentisan/internal/workforce"
 )
 
 // opsTeam is "ha" with its boss and one coder, bound as ha-coder-1.
@@ -160,4 +161,45 @@ func TestMuteOverTheSocket(t *testing.T) {
 	var re *daemon.RequestError
 	require.ErrorAs(t, err, &re)
 	assert.Equal(t, "unknown_worker", re.Code)
+}
+
+func TestRetireClearsOnlyItsWorkersMute(t *testing.T) {
+	t.Parallel()
+	th, _, dir := haTeam(t)
+	th.setAgents(named("w14:p1", "ha-boss"), named("w14:p2", "ha-coder-1"), turned("wN:p1", "pee01", 1))
+	var logs lockedLog
+	o := teamOpts(t, dir, th, haNotices(t, liveTOML+"[notices]\ngap = 0\n"))
+	logger, err := logging.New(&logs, "info", "json")
+	require.NoError(t, err)
+	o.Logger = logger
+	serving(t, o, th.fakeHerdr)
+	sock := socketPath(t, dir, th.path)
+	waitLine(t, &logs, "the daemon started")
+
+	call := func(op string, req any) string {
+		t.Helper()
+		data, err := daemon.Workforce(t.Context(), sock, op, req)
+		require.NoError(t, err)
+		return string(data)
+	}
+	call(daemon.OpNoticesMute, daemon.MuteRequest{Worker: "ha-coder-1"})
+	call(daemon.OpNoticesMute, daemon.MuteRequest{Worker: "pee01"})
+
+	st := stateStore(t, dir, th)
+	_, err = st.BeginHandoff(t.Context(), "ha-coder-1", "w14:p3", "term_w14:p3", time.Now())
+	require.NoError(t, err)
+	req := workforce.RetireRequest{Target: "w14:p2"}
+	_, err = daemon.Workforce(t.Context(), sock, daemon.OpWorkerRetire, req)
+	var refused *daemon.RequestError
+	require.ErrorAs(t, err, &refused)
+	require.Equal(t, "handoff_pending", refused.Code)
+	require.Contains(t, call(daemon.OpNoticesList, struct{}{}), `"worker":"ha-coder-1"`)
+
+	replacement := call(daemon.OpWorkerRetire, workforce.RetireRequest{Target: "w14:p3"})
+	assert.Contains(t, replacement, `"handoff_failed":"ha-coder-1"`)
+	require.Contains(t, call(daemon.OpNoticesList, struct{}{}), `"worker":"ha-coder-1"`, "retiring its replacement leaves the worker muted")
+	assert.JSONEq(t, `{"id":"ha-coder-1","pane_id":"w14:p2","changed":true,"outcome":"retired"}`, call(daemon.OpWorkerRetire, req))
+	list := call(daemon.OpNoticesList, struct{}{})
+	assert.NotContains(t, list, `"worker":"ha-coder-1"`, "the successful retire clears the mute before it returns")
+	assert.Contains(t, list, `"worker":"pee01"`, "the other agent stays muted")
 }
